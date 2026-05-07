@@ -50,10 +50,7 @@ type PromptDraftAction =
   | { type: "password.set"; password: string }
   | { type: "error.set"; error: string | null };
 
-function promptDraftReducer(
-  state: PromptDraftState,
-  action: PromptDraftAction,
-): PromptDraftState {
+function promptDraftReducer(state: PromptDraftState, action: PromptDraftAction): PromptDraftState {
   switch (action.type) {
     case "prompt.reset":
       return {
