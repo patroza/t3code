@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Cause, Effect, Exit } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
 import { describe, expect } from "vitest";
 
 import { scopedSafeTeardown } from "./scopedSafeTeardown.ts";
@@ -89,6 +89,25 @@ describe("scopedSafeTeardown", () => {
         const squashed = Cause.squash(exit.cause);
         expect(squashed).toBeInstanceOf(BodyError);
       }
+    }),
+  );
+
+  it.effect("runs finalizers when the body is interrupted", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const finalized = yield* Deferred.make<void>();
+      const wrapped = Effect.gen(function* () {
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(finalized, undefined).pipe(Effect.asVoid),
+        );
+        yield* Deferred.succeed(started, undefined);
+        return yield* Effect.never;
+      }).pipe(scopedSafeTeardown("test"));
+
+      const fiber = yield* wrapped.pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      yield* Deferred.await(finalized);
     }),
   );
 });
