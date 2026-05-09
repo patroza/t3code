@@ -108,12 +108,6 @@ vi.mock("~/orchestrationEventEffects", () => ({
   })),
 }));
 
-vi.mock("~/lib/projectReactQuery", () => ({
-  projectQueryKeys: {
-    all: ["projects"],
-  },
-}));
-
 vi.mock("~/lib/providerReactQuery", () => ({
   providerQueryKeys: {
     all: ["providers"],

@@ -4,6 +4,8 @@ import type {
   VcsListRefsResult,
   VcsRef as ContractVcsRef,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 import type { WsRpcClient } from "./wsRpcClient.ts";
@@ -12,6 +14,11 @@ export interface VcsRefTarget {
   readonly environmentId: EnvironmentId | null;
   readonly cwd: string | null;
   readonly query?: string | null;
+}
+
+export interface VcsRefScope {
+  readonly environmentId: EnvironmentId | null;
+  readonly cwd: string | null;
 }
 
 export interface VcsRefState {
@@ -82,6 +89,7 @@ export interface VcsRefManagerConfig {
   readonly getClient: (environmentId: EnvironmentId) => VcsRefClient | null;
   readonly subscribeClientChanges?: (listener: () => void) => () => void;
   readonly watchLimit?: number;
+  readonly staleTimeMs?: number;
   readonly onBackgroundError?: (error: unknown) => void;
 }
 
@@ -102,8 +110,11 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
   >();
   const loadVersions = new Map<string, number>();
   const watched = new Map<string, WatchedEntry>();
+  const lastLoadedAt = new Map<string, number>();
   const watchLoadOptions =
-    config.watchLimit === undefined ? undefined : { limit: config.watchLimit };
+    config.watchLimit === undefined
+      ? undefined
+      : { limit: config.watchLimit, preserveLoadedRefs: true };
 
   function getLoadVersion(targetKey: string): number {
     return loadVersions.get(targetKey) ?? 0;
@@ -136,6 +147,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
   }
 
   function setData(targetKey: string, data: VcsListRefsResult): void {
+    lastLoadedAt.set(targetKey, Effect.runSync(Clock.currentTimeMillis));
     setState(targetKey, {
       data,
       isPending: false,
@@ -159,6 +171,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
       readonly cursor?: number;
       readonly limit?: number;
       readonly append?: boolean;
+      readonly preserveLoadedRefs?: boolean;
     },
   ): Promise<VcsListRefsResult | null> {
     const targetKey = getVcsRefTargetKey(target);
@@ -196,7 +209,14 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
                 ...result,
                 refs: mergeRefs(current.refs, result.refs),
               }
-            : result;
+            : options?.preserveLoadedRefs && current && current.refs.length > result.refs.length
+              ? {
+                  ...result,
+                  refs: mergeRefs(result.refs, current.refs),
+                  nextCursor: current.nextCursor,
+                  totalCount: Math.max(result.totalCount, current.totalCount),
+                }
+              : result;
         if (getLoadVersion(targetKey) === loadVersion) {
           setData(targetKey, nextData);
         }
@@ -227,6 +247,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
       readonly cursor?: number;
       readonly limit?: number;
       readonly append?: boolean;
+      readonly preserveLoadedRefs?: boolean;
     },
   ): void {
     void load(target, client, options).catch((error: unknown) => {
@@ -264,9 +285,21 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     }
 
     let teardown: () => void;
+    const shouldRefresh = () => {
+      if (config.staleTimeMs === undefined) {
+        return true;
+      }
+      const lastLoaded = lastLoadedAt.get(targetKey);
+      return (
+        lastLoaded === undefined ||
+        Effect.runSync(Clock.currentTimeMillis) - lastLoaded >= config.staleTimeMs
+      );
+    };
 
     if (client) {
-      loadInBackground(target, client, watchLoadOptions);
+      if (shouldRefresh()) {
+        loadInBackground(target, client, watchLoadOptions);
+      }
       teardown = NOOP;
     } else if (config.subscribeClientChanges) {
       let currentClient: VcsRefClient | null = null;
@@ -281,7 +314,9 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
         }
 
         currentClient = resolved;
-        loadInBackground(target, resolved, watchLoadOptions);
+        if (shouldRefresh()) {
+          loadInBackground(target, resolved, watchLoadOptions);
+        }
       };
 
       const unsubscribe = config.subscribeClientChanges(sync);
@@ -292,7 +327,9 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
       if (!resolved) {
         return NOOP;
       }
-      loadInBackground(target, resolved, watchLoadOptions);
+      if (shouldRefresh()) {
+        loadInBackground(target, resolved, watchLoadOptions);
+      }
       teardown = NOOP;
     }
 
@@ -329,6 +366,26 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     }
   }
 
+  function invalidateScope(scope: VcsRefScope): void {
+    if (scope.environmentId === null || scope.cwd === null) {
+      return;
+    }
+
+    const keyPrefix = `${scope.environmentId}:${scope.cwd}:`;
+    for (const key of knownVcsRefKeys) {
+      if (key.startsWith(keyPrefix)) {
+        bumpLoadVersion(key);
+        setState(key, EMPTY_VCS_REF_STATE);
+      }
+    }
+
+    for (const key of inFlight.keys()) {
+      if (key.startsWith(keyPrefix)) {
+        inFlight.delete(key);
+      }
+    }
+  }
+
   function reset(): void {
     for (const entry of watched.values()) {
       entry.teardown();
@@ -336,6 +393,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     watched.clear();
     inFlight.clear();
     loadVersions.clear();
+    lastLoadedAt.clear();
     invalidate();
   }
 
@@ -345,6 +403,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     load,
     loadNext,
     invalidate,
+    invalidateScope,
     reset,
   };
 }

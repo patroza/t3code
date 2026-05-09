@@ -1,5 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useEffect, useMemo } from "react";
 import {
   type VcsRefState,
   type VcsRefTarget,
@@ -9,22 +8,20 @@ import {
   getVcsRefTargetKey,
   vcsRefStateAtom,
 } from "@t3tools/client-runtime";
+import { useEffect, useMemo } from "react";
 
-import { appAtomRegistry } from "./atom-registry";
 import {
-  getEnvironmentClient,
+  readEnvironmentConnection,
   subscribeEnvironmentConnections,
-} from "./environment-session-registry";
+} from "../environments/runtime";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 
 const VCS_REF_LIST_LIMIT = 100;
 const VCS_REF_STALE_TIME_MS = 5_000;
 
 export const vcsRefManager = createVcsRefManager({
   getRegistry: () => appAtomRegistry,
-  getClient: (environmentId) => {
-    const client = getEnvironmentClient(environmentId);
-    return client ? client.git : null;
-  },
+  getClient: (environmentId) => readEnvironmentConnection(environmentId)?.client.vcs ?? null,
   subscribeClientChanges: subscribeEnvironmentConnections,
   watchLimit: VCS_REF_LIST_LIMIT,
   staleTimeMs: VCS_REF_STALE_TIME_MS,
