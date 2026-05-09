@@ -1,4 +1,4 @@
-import { assert, beforeEach, it } from "vitest";
+import { assert, beforeEach, it, vi } from "vitest";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 
@@ -60,6 +60,80 @@ it("stores path search results in atom state", async () => {
     isPending: false,
     error: null,
   });
+});
+
+it("reuses fresh cached path search results", async () => {
+  const searchEntries = vi.fn(async () => ({
+    entries: [{ path: "src/index.ts", kind: "file" as const }],
+    truncated: false,
+  }));
+  const manager = createComposerPathSearchManager({
+    getRegistry: () => registry,
+    debounceMs: 0,
+    staleTimeMs: 15_000,
+    getClient: () => ({ searchEntries }),
+  });
+
+  manager.search(TARGET);
+  await flushAsyncWork();
+  manager.search(TARGET);
+  await flushAsyncWork();
+
+  assert.strictEqual(searchEntries.mock.calls.length, 1);
+  assert.deepStrictEqual(manager.getSnapshot(TARGET), {
+    entries: [{ path: "src/index.ts", kind: "file" }],
+    isPending: false,
+    error: null,
+  });
+});
+
+it("invalidates watched path searches and refreshes without clearing entries", async () => {
+  type SearchResult = Awaited<ReturnType<ComposerPathSearchClient["searchEntries"]>>;
+
+  let resolveSecond: (value: SearchResult) => void = noop;
+  let callCount = 0;
+  const searchEntries = vi.fn((() => {
+    callCount += 1;
+    if (callCount === 1) {
+      return Promise.resolve({
+        entries: [{ path: "src/old.ts", kind: "file" as const }],
+        truncated: false,
+      });
+    }
+    return new Promise((resolve) => {
+      resolveSecond = resolve;
+    });
+  }) satisfies ComposerPathSearchClient["searchEntries"]);
+  const manager = createComposerPathSearchManager({
+    getRegistry: () => registry,
+    debounceMs: 0,
+    staleTimeMs: 15_000,
+    getClient: () => ({ searchEntries }),
+  });
+
+  const unwatch = manager.watch(TARGET);
+  await flushAsyncWork();
+  manager.invalidate();
+
+  assert.deepStrictEqual(manager.getSnapshot(TARGET), {
+    entries: [{ path: "src/old.ts", kind: "file" }],
+    isPending: true,
+    error: null,
+  });
+
+  resolveSecond({
+    entries: [{ path: "src/new.ts", kind: "file" }],
+    truncated: false,
+  });
+  await flushAsyncWork();
+
+  assert.deepStrictEqual(manager.getSnapshot(TARGET), {
+    entries: [{ path: "src/new.ts", kind: "file" }],
+    isPending: false,
+    error: null,
+  });
+  assert.strictEqual(searchEntries.mock.calls.length, 2);
+  unwatch();
 });
 
 it("ignores stale path search results after a newer request starts", async () => {

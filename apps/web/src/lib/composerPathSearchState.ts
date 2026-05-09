@@ -14,11 +14,13 @@ import { useEffect, useMemo } from "react";
 import {
   readEnvironmentConnection,
   subscribeEnvironmentConnections,
+  subscribeProviderInvalidations,
 } from "../environments/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 
 const COMPOSER_PATH_SEARCH_LIMIT = 80;
 const COMPOSER_PATH_SEARCH_DEBOUNCE_MS = 120;
+const COMPOSER_PATH_SEARCH_STALE_TIME_MS = 15_000;
 
 const composerPathSearchManager = createComposerPathSearchManager({
   getRegistry: () => appAtomRegistry,
@@ -26,7 +28,14 @@ const composerPathSearchManager = createComposerPathSearchManager({
   subscribeClientChanges: subscribeEnvironmentConnections,
   limit: COMPOSER_PATH_SEARCH_LIMIT,
   debounceMs: COMPOSER_PATH_SEARCH_DEBOUNCE_MS,
+  staleTimeMs: COMPOSER_PATH_SEARCH_STALE_TIME_MS,
 });
+
+export function invalidateComposerPathSearches(): void {
+  composerPathSearchManager.invalidate();
+}
+
+subscribeProviderInvalidations(invalidateComposerPathSearches);
 
 export function useComposerPathSearch(target: ComposerPathSearchTarget): ComposerPathSearchState {
   const stableTarget = useMemo(

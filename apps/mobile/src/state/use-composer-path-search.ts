@@ -17,10 +17,13 @@ import {
   subscribeEnvironmentConnections,
 } from "./environment-session-registry";
 
+const COMPOSER_PATH_SEARCH_STALE_TIME_MS = 15_000;
+
 const composerPathSearchManager = createComposerPathSearchManager({
   getRegistry: () => appAtomRegistry,
   getClient: (environmentId) => getEnvironmentClient(environmentId)?.projects ?? null,
   subscribeClientChanges: subscribeEnvironmentConnections,
+  staleTimeMs: COMPOSER_PATH_SEARCH_STALE_TIME_MS,
 });
 
 export function useComposerPathSearch(target: ComposerPathSearchTarget): ComposerPathSearchState {

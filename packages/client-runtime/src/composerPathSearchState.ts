@@ -1,4 +1,5 @@
 import type { EnvironmentId, ProjectSearchEntriesResult } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -32,6 +33,10 @@ export interface ComposerPathSearchClient {
 
 interface WatchedEntry {
   refCount: number;
+  target: ComposerPathSearchTarget & {
+    readonly environmentId: EnvironmentId;
+    readonly cwd: string;
+  };
   teardown: () => void;
 }
 
@@ -92,10 +97,12 @@ export function createComposerPathSearchManager(config: {
   readonly subscribeClientChanges?: (listener: () => void) => () => void;
   readonly debounceMs?: number;
   readonly limit?: number;
+  readonly staleTimeMs?: number;
 }) {
   const watched = new Map<string, WatchedEntry>();
   const versions = new Map<string, number>();
   const timers = new Map<string, Fiber.Fiber<void, never>>();
+  const lastLoadedAt = new Map<string, number>();
   const debounceMs = config.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const limit = config.limit ?? DEFAULT_LIMIT;
 
@@ -148,20 +155,26 @@ export function createComposerPathSearchManager(config: {
           isPending: false,
           error: null,
         });
+        lastLoadedAt.set(targetKey, Effect.runSync(Clock.currentTimeMillis));
       })
       .catch((error: unknown) => {
         if (versions.get(targetKey) !== version) {
           return;
         }
+        const current = config.getRegistry().get(composerPathSearchStateAtom(targetKey));
         setState(targetKey, {
-          entries: [],
+          entries: current.entries,
           isPending: false,
           error: error instanceof Error ? error.message : "Failed to search project files.",
         });
       });
   }
 
-  function search(target: ComposerPathSearchTarget, client?: ComposerPathSearchClient): void {
+  function search(
+    target: ComposerPathSearchTarget,
+    client?: ComposerPathSearchClient,
+    options?: { readonly force?: boolean },
+  ): void {
     const targetKey = getComposerPathSearchTargetKey(target);
     if (targetKey === null || target.environmentId === null || target.cwd === null) {
       return;
@@ -177,9 +190,25 @@ export function createComposerPathSearchManager(config: {
       return;
     }
 
+    const lastLoaded = lastLoadedAt.get(targetKey);
+    if (
+      !options?.force &&
+      lastLoaded !== undefined &&
+      config.staleTimeMs !== undefined &&
+      Effect.runSync(Clock.currentTimeMillis) - lastLoaded < config.staleTimeMs
+    ) {
+      return;
+    }
+
     const version = bumpVersion(targetKey);
     clearTimer(targetKey);
-    setState(targetKey, PENDING_COMPOSER_PATH_SEARCH_STATE);
+    const current = config.getRegistry().get(composerPathSearchStateAtom(targetKey));
+    setState(
+      targetKey,
+      current.entries.length === 0
+        ? PENDING_COMPOSER_PATH_SEARCH_STATE
+        : { ...current, isPending: true, error: null },
+    );
 
     const readyTarget = {
       ...target,
@@ -211,6 +240,12 @@ export function createComposerPathSearchManager(config: {
       return NOOP;
     }
 
+    const readyTarget = {
+      ...target,
+      environmentId: target.environmentId,
+      cwd: target.cwd,
+    };
+
     const existing = watched.get(targetKey);
     if (existing) {
       existing.refCount += 1;
@@ -235,7 +270,7 @@ export function createComposerPathSearchManager(config: {
       }
 
       currentClient = client;
-      search(target, client);
+      search(readyTarget, client);
     };
 
     const unsubscribe = config.subscribeClientChanges?.(sync) ?? NOOP;
@@ -243,6 +278,7 @@ export function createComposerPathSearchManager(config: {
 
     watched.set(targetKey, {
       refCount: 1,
+      target: readyTarget,
       teardown: () => {
         unsubscribe();
         clearTimer(targetKey);
@@ -277,9 +313,31 @@ export function createComposerPathSearchManager(config: {
     for (const targetKey of timers.keys()) {
       clearTimer(targetKey);
     }
+    lastLoadedAt.clear();
+  }
+
+  function invalidate(target?: ComposerPathSearchTarget): void {
+    if (target) {
+      const targetKey = getComposerPathSearchTargetKey(target);
+      if (targetKey === null) {
+        return;
+      }
+      lastLoadedAt.delete(targetKey);
+      const watchedEntry = watched.get(targetKey);
+      if (watchedEntry) {
+        search(watchedEntry.target, undefined, { force: true });
+      }
+      return;
+    }
+
+    lastLoadedAt.clear();
+    for (const watchedEntry of watched.values()) {
+      search(watchedEntry.target, undefined, { force: true });
+    }
   }
 
   return {
+    invalidate,
     getSnapshot,
     search,
     watch,

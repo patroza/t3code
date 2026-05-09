@@ -292,10 +292,14 @@ describe("createVcsRefManager", () => {
       watchLimit: 100,
     });
 
-    await manager.load(TARGET, mock.client, { limit: 100 });
-    const unwatch = manager.watch(TARGET);
-    await Promise.resolve();
+    const firstUnwatch = manager.watch(TARGET);
+    await vi.waitFor(() => {
+      expect(manager.getSnapshot(TARGET).data).toEqual(FIRST_PAGE);
+    });
+    firstUnwatch();
 
+    const secondUnwatch = manager.watch(TARGET);
+    await Promise.resolve();
     expect(mock.listRefs).toHaveBeenCalledTimes(1);
     expect(manager.getSnapshot(TARGET)).toEqual({
       data: FIRST_PAGE,
@@ -303,7 +307,7 @@ describe("createVcsRefManager", () => {
       error: null,
     });
 
-    unwatch();
+    secondUnwatch();
   });
 
   it("swallows watched refresh failures after storing error state", async () => {

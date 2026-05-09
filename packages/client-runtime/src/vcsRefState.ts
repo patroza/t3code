@@ -6,7 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
+import { Atom, type AtomRegistry, type AsyncResult } from "effect/unstable/reactivity";
 
 import type { WsRpcClient } from "./wsRpcClient.ts";
 
@@ -111,10 +111,26 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
   const loadVersions = new Map<string, number>();
   const watched = new Map<string, WatchedEntry>();
   const lastLoadedAt = new Map<string, number>();
+  const refreshTargets = new Map<string, VcsRefTarget>();
   const watchLoadOptions =
     config.watchLimit === undefined
       ? undefined
       : { limit: config.watchLimit, preserveLoadedRefs: true };
+
+  const watchedRefreshAtom = Atom.family((targetKey: string) =>
+    Atom.make(() =>
+      Effect.promise(() => {
+        const target = refreshTargets.get(targetKey);
+        return target ? load(target, undefined, watchLoadOptions) : Promise.resolve(null);
+      }),
+    ).pipe(
+      Atom.swr({
+        staleTime: config.staleTimeMs ?? 0,
+        revalidateOnMount: true,
+      }),
+      Atom.withLabel(`vcs-refs:watched-refresh:${targetKey}`),
+    ),
+  );
 
   function getLoadVersion(targetKey: string): number {
     return loadVersions.get(targetKey) ?? 0;
@@ -178,6 +194,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     if (targetKey === null || target.environmentId === null || target.cwd === null) {
       return null;
     }
+    refreshTargets.set(targetKey, target);
 
     const resolved = client ?? config.getClient(target.environmentId);
     if (!resolved) {
@@ -272,6 +289,37 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     });
   }
 
+  function refreshWatchedTarget(targetKey: string, target: VcsRefTarget, client?: VcsRefClient) {
+    refreshTargets.set(targetKey, target);
+
+    if (client || config.staleTimeMs === undefined) {
+      const resolved =
+        client ?? (target.environmentId ? config.getClient(target.environmentId) : null);
+      if (resolved) {
+        loadInBackground(target, resolved, watchLoadOptions);
+      }
+      return;
+    }
+
+    const lastLoaded = lastLoadedAt.get(targetKey);
+    if (
+      lastLoaded !== undefined &&
+      Effect.runSync(Clock.currentTimeMillis) - lastLoaded < config.staleTimeMs
+    ) {
+      return;
+    }
+
+    const result = config
+      .getRegistry()
+      .get(watchedRefreshAtom(targetKey)) as AsyncResult.AsyncResult<
+      VcsListRefsResult | null,
+      unknown
+    >;
+    if (result._tag === "Failure") {
+      config.onBackgroundError?.(result.cause);
+    }
+  }
+
   function watch(target: VcsRefTarget, client?: VcsRefClient): () => void {
     const targetKey = getVcsRefTargetKey(target);
     if (targetKey === null || target.environmentId === null || target.cwd === null) {
@@ -285,21 +333,9 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     }
 
     let teardown: () => void;
-    const shouldRefresh = () => {
-      if (config.staleTimeMs === undefined) {
-        return true;
-      }
-      const lastLoaded = lastLoadedAt.get(targetKey);
-      return (
-        lastLoaded === undefined ||
-        Effect.runSync(Clock.currentTimeMillis) - lastLoaded >= config.staleTimeMs
-      );
-    };
 
     if (client) {
-      if (shouldRefresh()) {
-        loadInBackground(target, client, watchLoadOptions);
-      }
+      refreshWatchedTarget(targetKey, target, client);
       teardown = NOOP;
     } else if (config.subscribeClientChanges) {
       let currentClient: VcsRefClient | null = null;
@@ -313,10 +349,9 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
           return;
         }
 
+        const hadClient = currentClient !== null;
         currentClient = resolved;
-        if (shouldRefresh()) {
-          loadInBackground(target, resolved, watchLoadOptions);
-        }
+        refreshWatchedTarget(targetKey, target, hadClient ? resolved : undefined);
       };
 
       const unsubscribe = config.subscribeClientChanges(sync);
@@ -327,9 +362,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
       if (!resolved) {
         return NOOP;
       }
-      if (shouldRefresh()) {
-        loadInBackground(target, resolved, watchLoadOptions);
-      }
+      refreshWatchedTarget(targetKey, target);
       teardown = NOOP;
     }
 
@@ -394,6 +427,7 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     inFlight.clear();
     loadVersions.clear();
     lastLoadedAt.clear();
+    refreshTargets.clear();
     invalidate();
   }
 

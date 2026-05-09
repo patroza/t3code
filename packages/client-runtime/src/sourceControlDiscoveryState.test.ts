@@ -234,6 +234,31 @@ it("watches a discovery target with ref-counted client-change subscriptions", as
   assert.strictEqual(unsubscribeCalls, 1);
 });
 
+it("reuses fresh watched discovery results on remount", async () => {
+  let discoveryCalls = 0;
+  const client = {
+    discoverSourceControl: async () => {
+      discoveryCalls += 1;
+      return EMPTY_RESULT;
+    },
+  };
+  const manager = createSourceControlDiscoveryManager({
+    getRegistry: () => registry,
+    getClient: () => client,
+    staleTimeMs: 60_000,
+  });
+
+  const firstUnwatch = manager.watch({ key: "primary" });
+  await flushAsyncWork();
+  firstUnwatch();
+
+  const secondUnwatch = manager.watch({ key: "primary" });
+  await flushAsyncWork();
+  secondUnwatch();
+
+  assert.strictEqual(discoveryCalls, 1);
+});
+
 it("refreshes a watched discovery target when the resolved client is replaced", async () => {
   let listener: () => void = noop;
   let activeResult = EMPTY_RESULT;

@@ -20,3 +20,4 @@ export * from "./wsTransport.ts";
 export * from "./wsRpcClient.ts";
 export * from "./environmentConnection.ts";
 export * from "./composerPathSearchState.ts";
+export * from "./archivedThreadsState.ts";

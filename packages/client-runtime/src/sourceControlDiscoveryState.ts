@@ -1,4 +1,5 @@
 import type { SourceControlDiscoveryResult } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 /* --- Types ---------------------------------------------------------- */
@@ -83,9 +84,13 @@ export interface SourceControlDiscoveryManagerConfig<TKey extends string = strin
    * instead of relying on React hooks to manually kick discovery.
    */
   readonly subscribeClientChanges?: (listener: () => void) => () => void;
+  readonly staleTimeMs?: number;
+  readonly idleTtlMs?: number;
 }
 
 const NOOP: () => void = () => undefined;
+const DEFAULT_STALE_TIME_MS = 30_000;
+const DEFAULT_IDLE_TTL_MS = 5 * 60_000;
 
 export function createSourceControlDiscoveryManager<TKey extends string = string>(
   config: SourceControlDiscoveryManagerConfig<TKey>,
@@ -99,6 +104,25 @@ export function createSourceControlDiscoveryManager<TKey extends string = string
   >();
   const refreshVersions = new Map<string, number>();
   const watched = new Map<string, WatchedEntry>();
+  const refreshTargets = new Map<string, SourceControlDiscoveryTarget<TKey>>();
+  const staleTimeMs = config.staleTimeMs ?? DEFAULT_STALE_TIME_MS;
+  const idleTtlMs = config.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
+
+  const watchedRefreshAtom = Atom.family((targetKey: string) =>
+    Atom.make(() =>
+      Effect.promise(() => {
+        const target = refreshTargets.get(targetKey);
+        return target ? refresh(target) : Promise.resolve(null);
+      }),
+    ).pipe(
+      Atom.swr({
+        staleTime: staleTimeMs,
+        revalidateOnMount: true,
+      }),
+      Atom.setIdleTTL(idleTtlMs),
+      Atom.withLabel(`source-control-discovery:watched-refresh:${targetKey}`),
+    ),
+  );
 
   function getRefreshVersion(targetKey: string): number {
     return refreshVersions.get(targetKey) ?? 0;
@@ -174,6 +198,7 @@ export function createSourceControlDiscoveryManager<TKey extends string = string
     if (targetKey === null) {
       return Promise.resolve(null);
     }
+    refreshTargets.set(targetKey, target);
 
     const resolvedClient = client ?? config.getClient(targetKey);
     if (!resolvedClient) {
@@ -271,6 +296,7 @@ export function createSourceControlDiscoveryManager<TKey extends string = string
     if (targetKey === null) {
       return NOOP;
     }
+    refreshTargets.set(targetKey, target);
 
     const existing = watched.get(targetKey);
     if (existing) {
@@ -298,19 +324,19 @@ export function createSourceControlDiscoveryManager<TKey extends string = string
           return;
         }
 
+        const isClientReplacement = currentClient !== null;
         currentClient = resolved;
-        void refresh(target, resolved);
+        refreshWatchedTarget(targetKey, target, isClientReplacement ? resolved : undefined);
       };
 
       const unsubChanges = config.subscribeClientChanges(sync);
       sync();
       teardown = unsubChanges;
     } else {
-      const resolved = config.getClient(targetKey);
-      if (!resolved) {
+      if (!config.getClient(targetKey)) {
         return NOOP;
       }
-      void refresh(target, resolved);
+      refreshWatchedTarget(targetKey, target);
       teardown = NOOP;
     }
 
@@ -333,6 +359,20 @@ export function createSourceControlDiscoveryManager<TKey extends string = string
     watched.delete(targetKey);
   }
 
+  function refreshWatchedTarget(
+    targetKey: string,
+    target: SourceControlDiscoveryTarget<TKey>,
+    client?: SourceControlDiscoveryClient,
+  ): void {
+    refreshTargets.set(targetKey, target);
+    if (client) {
+      void refresh(target, client);
+      return;
+    }
+
+    config.getRegistry().get(watchedRefreshAtom(targetKey));
+  }
+
   /**
    * Clear in-flight refresh tracking and reset every known discovery atom.
    * Primarily used by tests and runtime teardown.
@@ -343,6 +383,7 @@ export function createSourceControlDiscoveryManager<TKey extends string = string
       entry.teardown();
     }
     watched.clear();
+    refreshTargets.clear();
     refreshInFlight.clear();
     for (const key of keys) {
       bumpRefreshVersion(key);
