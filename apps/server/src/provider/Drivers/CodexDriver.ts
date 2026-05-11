@@ -46,6 +46,7 @@ import {
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
+import { enrichProviderSnapshotWithCompatibilityAdvisory } from "../providerCompatibility.ts";
 import {
   codexContinuationIdentity,
   materializeCodexShadowHome,
@@ -171,6 +172,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         checkProvider,
         enrichSnapshot: ({ snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities).pipe(
+            Effect.flatMap(enrichProviderSnapshotWithCompatibilityAdvisory),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),

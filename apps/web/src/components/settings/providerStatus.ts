@@ -1,4 +1,8 @@
-import type { ServerProvider, ServerProviderVersionAdvisory } from "@t3tools/contracts";
+import type {
+  ServerProvider,
+  ServerProviderCompatibilityAdvisory,
+  ServerProviderVersionAdvisory,
+} from "@t3tools/contracts";
 
 /**
  * Visual treatment for each server-reported provider status. Centralized so
@@ -113,5 +117,31 @@ export function getProviderVersionAdvisoryPresentation(
         : `${label}: install the latest provider version.`),
     updateCommand: advisory.updateCommand,
     emphasis: "normal" as const,
+  };
+}
+
+export function getProviderCompatibilityAdvisoryPresentation(
+  advisory: ServerProviderCompatibilityAdvisory | undefined,
+): {
+  readonly title: string;
+  readonly detail: string;
+  readonly emphasis: "normal" | "strong";
+} | null {
+  if (!advisory || advisory.status === "supported") {
+    return null;
+  }
+
+  const recommendedTarget = advisory.recommendedVersion ?? advisory.recommendedRange;
+  const recommended = recommendedTarget ? ` Recommended: ${recommendedTarget}.` : "";
+  const fallback =
+    advisory.status === "unknown"
+      ? `Compatibility unknown.${recommended}`
+      : `This provider harness is outside the supported range.${recommended}`;
+
+  return {
+    title:
+      advisory.status === "broken" ? "Incompatible provider version" : "Provider version warning",
+    detail: advisory.message ?? fallback,
+    emphasis: advisory.severity === "error" ? "strong" : "normal",
   };
 }

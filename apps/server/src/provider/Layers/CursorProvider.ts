@@ -41,6 +41,7 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
+import { enrichProviderSnapshotWithCompatibilityAdvisory } from "../providerCompatibility.ts";
 import { AcpSessionRuntime } from "../acp/AcpSessionRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("cursor");
@@ -1242,6 +1243,7 @@ export const enrichCursorSnapshot = (input: {
     snapshot,
     input.maintenanceCapabilities,
   ).pipe(
+    Effect.flatMap(enrichProviderSnapshotWithCompatibilityAdvisory),
     Effect.provideService(HttpClient.HttpClient, input.httpClient),
     Effect.flatMap((enrichedSnapshot) =>
       publishSnapshot(stampIdentity(enrichedSnapshot)).pipe(Effect.as(enrichedSnapshot)),

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangleIcon,
   ArrowUpCircleIcon,
   ChevronDownIcon,
   CopyIcon,
@@ -41,6 +42,7 @@ import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
+  getProviderCompatibilityAdvisoryPresentation,
   getProviderSummary,
   getProviderVersionLabel,
   type ProviderStatusKey,
@@ -482,6 +484,9 @@ export function ProviderInstanceCard({
     : null;
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
+  const compatibilityAdvisory = getProviderCompatibilityAdvisoryPresentation(
+    liveProvider?.compatibilityAdvisory,
+  );
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
@@ -678,6 +683,45 @@ export function ProviderInstanceCard({
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {titleHeadNode}
               {versionCodeNode}
+              {compatibilityAdvisory ? (
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        className={cn(
+                          "size-5 rounded-sm p-0",
+                          compatibilityAdvisory.emphasis === "strong"
+                            ? "text-destructive hover:text-destructive"
+                            : "text-warning hover:text-warning",
+                        )}
+                        aria-label={`${compatibilityAdvisory.title} — view details`}
+                      >
+                        <AlertTriangleIcon className="size-3.5" />
+                      </Button>
+                    }
+                  />
+                  <PopoverPopup side="bottom" align="start" className="w-84">
+                    <div className="grid gap-1">
+                      <p className="text-[13px] font-semibold leading-tight text-foreground">
+                        {compatibilityAdvisory.title}
+                      </p>
+                      <p
+                        className={cn(
+                          "text-xs leading-snug",
+                          compatibilityAdvisory.emphasis === "strong"
+                            ? "text-destructive"
+                            : "text-warning",
+                        )}
+                      >
+                        {compatibilityAdvisory.detail}
+                      </p>
+                    </div>
+                  </PopoverPopup>
+                </Popover>
+              ) : null}
               {versionAdvisory ? (
                 <Popover>
                   <PopoverTrigger
