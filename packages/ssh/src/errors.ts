@@ -84,9 +84,9 @@ export type SshReadinessError =
 
 export function isSshReadinessError(cause: unknown): cause is SshReadinessError {
   return (
-    cause instanceof SshReadinessProbeFailedError ||
-    cause instanceof SshReadinessProbeTimedOutError ||
-    cause instanceof SshReadinessTimedOutError
+    Schema.is(SshReadinessProbeFailedError)(cause) ||
+    Schema.is(SshReadinessProbeTimedOutError)(cause) ||
+    Schema.is(SshReadinessTimedOutError)(cause)
   );
 }
 
