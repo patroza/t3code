@@ -18,9 +18,9 @@
 //     readiness latch) only for instances that want them — the primary's
 //     spec passes the window's handleBackendReady/handleBackendNotReady,
 //     other pool instances pass nothing.
-//   - log writes still go through the shared `DesktopBackendOutputLog`
-//     service for now; step 3 of the migration will split that per
-//     instance.
+//   - log writes go through a per-instance writer that the factory
+//     pulls from `DesktopBackendOutputLogFactory.forInstance(spec.id)`,
+//     so each instance lands in its own rotating file.
 
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
@@ -342,12 +342,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   | FileSystem.FileSystem
   | ChildProcessSpawner.ChildProcessSpawner
   | HttpClient.HttpClient
-  | DesktopObservability.DesktopBackendOutputLog
+  | DesktopObservability.DesktopBackendOutputLogFactory
   | Scope.Scope
 > {
   const parentScope = yield* Scope.Scope;
   const fileSystem = yield* FileSystem.FileSystem;
-  const backendOutputLog = yield* DesktopObservability.DesktopBackendOutputLog;
+  const backendOutputLogFactory = yield* DesktopObservability.DesktopBackendOutputLogFactory;
+  const backendOutputLog = yield* backendOutputLogFactory.forInstance(spec.id);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
   const state = yield* Ref.make(initialState);
@@ -483,7 +484,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 if (Option.isSome(pid)) {
                   yield* backendOutputLog.writeSessionBoundary({
                     phase: "END",
-                    details: `instance=${spec.id} pid=${pid.value} ${reason}`,
+                    details: `pid=${pid.value} ${reason}`,
                   });
                 }
                 yield* spec.onShutdown?.() ?? Effect.void;
@@ -505,7 +506,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             }));
             yield* backendOutputLog.writeSessionBoundary({
               phase: "START",
-              details: `instance=${spec.id} pid=${pid} port=${config.bootstrap.port} cwd=${config.cwd}`,
+              details: `pid=${pid} port=${config.bootstrap.port} cwd=${config.cwd}`,
             });
           }),
           onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {

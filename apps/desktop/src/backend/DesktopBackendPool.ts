@@ -2,7 +2,7 @@
 // point for the concurrent-Windows+WSL-backend feature; see the design
 // notes below before extending it.
 //
-// Current state (step 2):
+// Current state (step 3):
 //   - `DesktopBackendManager.ts` no longer exposes a Context.Service. It
 //     is a per-instance factory (`makeBackendInstance(spec)`); the pool
 //     calls it once for the Windows primary at startup.
@@ -32,11 +32,13 @@
 // Migration sequence (each step is its own commit):
 //   1. Reshape `DesktopBackendManager` into an instance factory and route
 //      consumers through the pool. Pool still holds a single instance.
-//   2. (this commit) Drop `DesktopState.backendReady`. The window owns
-//      its own readiness latch, driven by the primary instance's
-//      onReady/onShutdown callbacks.
-//   3. Per-instance log routing: split `DesktopBackendOutputLog` into a
-//      factory keyed by instance id.
+//   2. Drop `DesktopState.backendReady`. The window owns its own
+//      readiness latch, driven by the primary instance's onReady /
+//      onShutdown callbacks.
+//   3. (this commit) Per-instance log routing: replace the singleton
+//      DesktopBackendOutputLog with a factory that vends one rotating
+//      writer per instance id (primary keeps server-child.log; others go
+//      to server-child-<sanitized-id>.log).
 //   4. Add register/unregister so WSL backend can be added on demand.
 //   5. Wire WSL distro startup through the pool; remove `setWslBackend`
 //      mode-swap IPC in favor of `enableWslBackend` / `setWslDistro`.

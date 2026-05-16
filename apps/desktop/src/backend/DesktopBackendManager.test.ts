@@ -113,21 +113,24 @@ interface MakeInstanceInput {
 
 // Helper that constructs a primary backend instance using the factory
 // directly. The factory's deps (FileSystem, ChildProcessSpawner,
-// HttpClient, DesktopBackendOutputLog) are provided per-test via a
-// scoped layer; tests yield the returned Effect inside `Effect.scoped`
+// HttpClient, DesktopBackendOutputLogFactory) are provided per-test via
+// a scoped layer; tests yield the returned Effect inside `Effect.scoped`
 // to drive the instance's lifecycle.
 function makeTestInstance(input: MakeInstanceInput) {
+  const stubLog: DesktopObservability.DesktopBackendOutputLogShape = {
+    writeSessionBoundary: () => Effect.void,
+    writeOutputChunk: () => Effect.void,
+    ...input.backendOutputLog,
+  };
   const servicesLayer = Layer.mergeAll(
     FileSystem.layerNoop({
       exists: () => Effect.succeed(true),
     }),
     input.spawnerLayer,
     input.httpClientLayer ?? healthyHttpClientLayer,
-    Layer.succeed(DesktopObservability.DesktopBackendOutputLog, {
-      writeSessionBoundary: () => Effect.void,
-      writeOutputChunk: () => Effect.void,
-      ...input.backendOutputLog,
-    } satisfies DesktopObservability.DesktopBackendOutputLogShape),
+    Layer.succeed(DesktopObservability.DesktopBackendOutputLogFactory, {
+      forInstance: () => Effect.succeed(stubLog),
+    } satisfies DesktopObservability.DesktopBackendOutputLogFactoryShape),
   );
 
   const instance = DesktopBackendManager.makeBackendInstance({
