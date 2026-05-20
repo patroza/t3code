@@ -44,6 +44,7 @@ interface SubscribeOptions {
 }
 
 const DEFAULT_SUBSCRIPTION_RETRY_DELAY = Duration.millis(250);
+const HEARTBEAT_FRESH_THRESHOLD_MS = 30_000;
 const NOOP: () => void = () => undefined;
 
 interface TransportSession {
@@ -68,6 +69,7 @@ export class WsTransport {
   private hasReportedTransportDisconnect = false;
   private reconnectChain: Promise<void> = Promise.resolve();
   private session: TransportSession;
+  private lastActivityAt = performance.now();
 
   constructor(
     url: WsRpcProtocolSocketUrlProvider,
@@ -89,7 +91,9 @@ export class WsTransport {
 
     const session = this.session;
     const client = await session.clientPromise;
-    return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    const result = await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    this.lastActivityAt = performance.now();
+    return result;
   }
 
   async requestStream<TValue>(
@@ -105,6 +109,7 @@ export class WsTransport {
     await session.runtime.runPromise(
       Stream.runForEach(connect(client), (value) =>
         Effect.sync(() => {
+          this.lastActivityAt = performance.now();
           try {
             listener(value);
           } catch {
@@ -228,6 +233,10 @@ export class WsTransport {
     await this.closeSession(this.session);
   }
 
+  isHeartbeatFresh(): boolean {
+    return performance.now() - this.lastActivityAt < HEARTBEAT_FRESH_THRESHOLD_MS;
+  }
+
   private closeSession(session: TransportSession) {
     return session.runtime.runPromise(Scope.close(session.clientScope, Exit.void)).finally(() => {
       session.runtime.dispose();
@@ -283,6 +292,7 @@ export class WsTransport {
                 return;
               }
 
+              this.lastActivityAt = performance.now();
               markValueReceived();
               try {
                 listener(value);

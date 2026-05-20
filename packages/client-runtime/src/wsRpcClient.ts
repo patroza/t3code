@@ -171,7 +171,7 @@ export function createWsRpcClient(
 ): WsRpcClient {
   return {
     dispose: () => transport.dispose(),
-    isHeartbeatFresh: () => false,
+    isHeartbeatFresh: () => transport.isHeartbeatFresh(),
     reconnect: async () => {
       options?.beforeReconnect?.();
       await transport.reconnect();
