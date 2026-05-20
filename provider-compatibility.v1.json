@@ -39,13 +39,13 @@
       "recommendedVersion": "1.14.40",
       "ranges": [
         {
-          "status": "supported",
+          "status": "broken",
           "range": ">1.14.40",
           "label": "Known incompatible OpenCode harness"
         },
         {
           "status": "supported",
-          "range": ">=1.14.19",
+          "range": ">=1.14.19 <=1.14.40",
           "label": "Known working OpenCode harness"
         },
         {
