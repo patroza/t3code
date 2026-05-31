@@ -208,6 +208,44 @@ type EnvironmentUnavailableState = {
   readonly connectionState: "connecting" | "disconnected" | "error";
 };
 
+function modelSelectionOptionsEqual(
+  left: ModelSelection["options"] | undefined,
+  right: ModelSelection["options"] | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function modelSelectionsEqual(
+  left: ModelSelection | null | undefined,
+  right: ModelSelection | null | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left == null || right == null) return left === right;
+  return (
+    left.instanceId === right.instanceId &&
+    left.model === right.model &&
+    modelSelectionOptionsEqual(left.options, right.options)
+  );
+}
+
+function useStableModelSelection<T extends ModelSelection | null | undefined>(selection: T): T {
+  const stableSelectionRef = useRef<T>(selection);
+  if (!modelSelectionsEqual(stableSelectionRef.current, selection)) {
+    stableSelectionRef.current = selection;
+  }
+  return stableSelectionRef.current;
+}
+
+function useEventCallback<TArgs extends unknown[], TResult>(
+  callback: (...args: TArgs) => TResult,
+): (...args: TArgs) => TResult {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+  return useCallback((...args: TArgs) => callbackRef.current(...args), []);
+}
+
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
 function useThreadPlanCatalog(threadIds: readonly ThreadId[]): ThreadPlanCatalogEntry[] {
@@ -962,6 +1000,8 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const activeThreadModelSelection = useStableModelSelection(activeThread?.modelSelection);
+  const activeThreadProviderInstanceId = activeThread?.session?.providerInstanceId;
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -1327,7 +1367,7 @@ export default function ChatView(props: ChatViewProps) {
 
   const selectedProviderByThreadId = composerActiveProvider ?? null;
   const threadProvider =
-    activeThread?.modelSelection.instanceId ??
+    activeThreadModelSelection?.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
   const lockedProvider = deriveLockedProvider({
@@ -1843,8 +1883,8 @@ export default function ChatView(props: ChatViewProps) {
   // than the default Codex's. Falls back to first-match-by-kind when no
   // saved instance id is available or the instance no longer exists.
   const activeProviderInstanceId =
-    activeThread?.session?.providerInstanceId ??
-    activeThread?.modelSelection.instanceId ??
+    activeThreadProviderInstanceId ??
+    activeThreadModelSelection?.instanceId ??
     activeProject?.defaultModelSelection?.instanceId ??
     null;
   const activeProviderStatus = useMemo(() => {
@@ -2832,7 +2872,7 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const onSend = useEventCallback(async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     const api = readEnvironmentApi(environmentId);
     if (
@@ -3133,9 +3173,9 @@ export default function ChatView(props: ChatViewProps) {
     if (!turnStartSucceeded) {
       resetLocalDispatch();
     }
-  };
+  });
 
-  const onInterrupt = async () => {
+  const onInterrupt = useEventCallback(async () => {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     await api.orchestration.dispatchCommand({
@@ -3144,7 +3184,7 @@ export default function ChatView(props: ChatViewProps) {
       threadId: activeThread.id,
       createdAt: new Date().toISOString(),
     });
-  };
+  });
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -3839,7 +3879,6 @@ export default function ChatView(props: ChatViewProps) {
                   draftId={draftId}
                   activeThreadId={activeThreadId}
                   activeThreadEnvironmentId={activeThread?.environmentId}
-                  activeThread={activeThread}
                   isServerThread={isServerThread}
                   isLocalDraftThread={isLocalDraftThread}
                   phase={phase}
@@ -3867,8 +3906,9 @@ export default function ChatView(props: ChatViewProps) {
                   lockedProvider={lockedProvider}
                   providerStatuses={providerStatuses as ServerProvider[]}
                   activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
-                  activeThreadModelSelection={activeThread?.modelSelection}
-                  activeThreadActivities={activeThread?.activities}
+                  activeThreadModelSelection={activeThreadModelSelection}
+                  activeThreadProviderInstanceId={activeThreadProviderInstanceId}
+                  activeThreadActivities={threadActivities}
                   resolvedTheme={resolvedTheme}
                   settings={settings}
                   keybindings={keybindings}
