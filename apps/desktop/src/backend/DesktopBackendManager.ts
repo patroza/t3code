@@ -408,7 +408,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           return;
         }
 
-        if (current.ready || Option.isSome(current.config)) {
+        if (current.ready) {
           yield* spec.onShutdown?.() ?? Effect.void;
         }
         const config = yield* spec.configResolve.pipe(

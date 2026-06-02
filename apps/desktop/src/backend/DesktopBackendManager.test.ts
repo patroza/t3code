@@ -416,6 +416,36 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  it.effect("does not notify shutdown when a scheduled restart starts from non-ready state", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let shutdownCount = 0;
+
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.die("unexpected backend spawn")),
+        );
+
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          config: {
+            ...baseConfig,
+            preflightFailure: Option.some("preflight failed"),
+          },
+          onShutdown: Effect.sync(() => {
+            shutdownCount += 1;
+          }),
+        });
+
+        yield* instance.start;
+        assert.equal(shutdownCount, 0);
+
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(shutdownCount, 0);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
   it.effect("cancels a scheduled restart when start is requested manually", () =>
     Effect.scoped(
       Effect.gen(function* () {
