@@ -26,10 +26,6 @@ permissions:
   contents: read
   id-token: none
 
-env:
-  T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
-  T3_RELAY_URL: ${{ vars.T3_RELAY_URL }}
-
 jobs:
   check_changes:
     name: Check for changes since last nightly
@@ -170,12 +166,54 @@ jobs:
             --current-tag "${{ steps.release_meta.outputs.tag }}" \
             --github-output
 
-  build:
-    name: Build ${{ matrix.label }}
+  relay_public_config:
+    name: Resolve T3 Cloud public config
     needs: preflight
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    environment:
+      name: production
+    outputs:
+      clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
+      relay_url: ${{ steps.public_config.outputs.relay_url }}
+    env:
+      T3_RELAY_DOMAIN: ${{ vars.T3_RELAY_DOMAIN }}
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ vars.T3CODE_CLERK_PUBLISHABLE_KEY }}
+    steps:
+      - id: public_config
+        name: Resolve production relay public config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required=(
+            T3_RELAY_DOMAIN
+            T3CODE_CLERK_PUBLISHABLE_KEY
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required relay deployment configuration: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          echo "clerk_publishable_key=$T3CODE_CLERK_PUBLISHABLE_KEY" >> "$GITHUB_OUTPUT"
+          echo "relay_url=https://$T3_RELAY_DOMAIN" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: [preflight, relay_public_config]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      T3_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
     strategy:
       fail-fast: false
       matrix:
@@ -426,13 +464,16 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
-    needs: [preflight, build]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
+    needs: [preflight, relay_public_config, build]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04 # blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
+    env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      T3_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -581,11 +622,13 @@ jobs:
 
   deploy_web:
     name: Deploy hosted web app
-    needs: [preflight, release]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' }}
+    needs: [preflight, relay_public_config, release]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     env:
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
+      T3_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -749,10 +792,11 @@ jobs:
     if: |
       always() && !cancelled() &&
       needs.preflight.result == 'success' &&
+      needs.relay_public_config.result == 'success' &&
       needs.release.result == 'success' &&
       needs.deploy_web.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
-    needs: [preflight, release, deploy_web, finalize]
+    needs: [preflight, relay_public_config, release, deploy_web, finalize]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:

@@ -88,6 +88,63 @@ connectivity, and relay tracing resources. Copy [`infra/relay/.env.example`](./.
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
 file from the relay directory. Runtime secrets include Clerk and APNs credentials.
 
+The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
+stable and nightly clients. Every other stage references that database and provisions an isolated
+PlanetScale branch and runtime role for local development, so deploy `prod` before creating
+developer stages:
+
+```sh
+bun --cwd infra/relay run deploy -- --stage prod
+bun --cwd infra/relay run deploy -- --stage "$USER" --env-file .env.local
+```
+
+After a successful deploy, the wrapper updates the repository-root `.env` file with the relay URL
+derived from `T3_RELAY_DOMAIN`. That makes subsequent source builds point at the relay that was just
+deployed without copying the URL manually.
+
+### Deployment CI
+
+The relay is versioned separately from client releases. `.github/workflows/deploy-relay.yml` deploys
+the shared Alchemy `prod` stage on every push to `main`, with a manual dispatch available for
+retries. Stable and nightly release builds both resolve their static public config from the same
+`production` GitHub environment. Pull requests do not deploy relay stages. Developers can
+deploy personal non-production stages locally with any stage name other than `prod`.
+
+The repository must define these Actions variables shared by relay deployments:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `PLANETSCALE_ORGANIZATION`
+- `AXIOM_ORG_ID`
+
+The repository must define these Actions secrets shared by relay deployments:
+
+- `CLOUDFLARE_API_TOKEN`
+- `PLANETSCALE_API_TOKEN_ID`
+- `PLANETSCALE_API_TOKEN`
+- `AXIOM_TOKEN`
+
+The `production` GitHub environment must define these Actions variables:
+
+- `T3_RELAY_DOMAIN`
+- `T3_RELAY_ZONE_NAME`
+- `T3CODE_CLERK_PUBLISHABLE_KEY`
+- `CLERK_CLI_OAUTH_CLIENT_ID`
+- `APNS_ENVIRONMENT`
+- `APNS_TEAM_ID`
+- `APNS_KEY_ID`
+- `APNS_BUNDLE_ID`
+
+The `production` GitHub environment must define these Actions secrets:
+
+- `CLERK_SECRET_KEY`
+- `APNS_PRIVATE_KEY`
+
+The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
+are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
+so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
+derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
+and hosted web builds.
+
 See:
 
 - [T3 Cloud Clerk Setup](../../docs/t3-cloud-clerk.md) for Clerk keys, JWT templates, and waitlist
