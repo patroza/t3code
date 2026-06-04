@@ -41,6 +41,14 @@ catalog:
   vite-plus: latest
   yaml: ^2.9.0
 overrides:
+  # Clerk publishes wallet auth integrations as required dependencies. T3 Code does
+  # not support wallet auth, so keep that unused dependency tree out of installs.
+  "@clerk/clerk-js>@base-org/account": "-"
+  "@clerk/clerk-js>@coinbase/wallet-sdk": "-"
+  "@clerk/clerk-js>@solana/wallet-adapter-base": "-"
+  "@clerk/clerk-js>@solana/wallet-adapter-react": "-"
+  "@clerk/clerk-js>@solana/wallet-standard": "-"
+  "@clerk/clerk-js>@wallet-standard/core": "-"
   "@effect/atom-react": "catalog:"
   "@effect/platform-bun": "catalog:"
   "@effect/platform-node": "catalog:"
