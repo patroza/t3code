@@ -218,7 +218,7 @@ function expectedManagedHostname(environmentId: string, userId = "user_ABC"): st
     .update(`dev_julius:${userId}:${environmentId}`)
     .digest("hex")
     .slice(0, 16);
-  return `tunnels-dev-julius-${hash}.t3code.test`;
+  return `dev-julius-${hash}.t3code.test`;
 }
 
 function expectedManagedTunnelName(environmentId: string, userId = "user_ABC"): string {
@@ -334,7 +334,7 @@ describe("ManagedEndpointProvider", () => {
       expect(configBody).toMatchObject({
         ingress: [
           {
-            hostname: expect.stringMatching(/^tunnels-dev-julius-[a-f0-9]{16}\.t3code\.test$/),
+            hostname: expect.stringMatching(/^dev-julius-[a-f0-9]{16}\.t3code\.test$/),
           },
           { service: "http_status:404" },
         ],

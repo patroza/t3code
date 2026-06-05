@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Planetscale from "alchemy/Planetscale";
 
 import { PlanetscaleDatabase, RelayHyperdrive } from "./src/db.ts";
-import { ManagedEndpointZone } from "./src/zone.ts";
+import { ManagedEndpointZone, RelayApiZone } from "./src/zone.ts";
 import Api from "./src/worker.ts";
 
 export default Alchemy.Stack(
@@ -25,7 +25,8 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const db = yield* PlanetscaleDatabase;
     const hyperdrive = yield* RelayHyperdrive;
-    const zone = yield* ManagedEndpointZone.pipe(Effect.orDie);
+    const managedEndpointZone = yield* ManagedEndpointZone.pipe(Effect.orDie);
+    const relayApiZone = yield* RelayApiZone.pipe(Effect.orDie);
     const api = yield* Api;
 
     return {
@@ -34,7 +35,8 @@ export default Alchemy.Stack(
       hyperdriveName: hyperdrive.name,
       workerName: api.workerName,
       url: api.url,
-      managedEndpointZoneId: zone.zoneId,
+      relayApiZoneId: relayApiZone.zoneId,
+      managedEndpointZoneId: managedEndpointZone.zoneId,
     };
   }),
 );

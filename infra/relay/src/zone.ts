@@ -21,18 +21,20 @@ function withLogicalId<Resource extends object>(resource: Resource, logicalId: s
 
 export const RelayDeploymentConfig = Effect.gen(function* () {
   const { stage } = yield* Alchemy.Stack;
-  const managedEndpointZoneName = yield* Config.nonEmptyString("RELAY_ZONE_NAME");
+  const relayApiZoneName = yield* Config.nonEmptyString("RELAY_API_ZONE_NAME");
+  const managedEndpointZoneName = yield* Config.nonEmptyString("RELAY_TUNNEL_ZONE_NAME");
   const relayPublicDomainOverride = yield* Config.nonEmptyString("RELAY_DOMAIN").pipe(
     Config.option,
   );
   const relayPublicDomain = Option.getOrElse(relayPublicDomainOverride, () =>
-    relayPublicDomainForStage(stage, managedEndpointZoneName),
+    relayPublicDomainForStage(stage, relayApiZoneName),
   );
 
   return {
     stage,
     relayPublicDomain,
     relayPublicOrigin: `https://${relayPublicDomain}`,
+    relayApiZoneName,
     managedEndpointZoneName,
   };
 });
@@ -48,5 +50,17 @@ export const ManagedEndpointZone = RelayDeploymentConfig.pipe(
           // stable SID, but Resource.ref returns a lazy output proxy.
           Effect.map((zone) => withLogicalId(zone, "ManagedEndpointZone")),
         ),
+  ),
+);
+
+export const RelayApiZone = RelayDeploymentConfig.pipe(
+  Effect.flatMap(({ stage, relayApiZoneName, managedEndpointZoneName }) =>
+    relayApiZoneName === managedEndpointZoneName
+      ? ManagedEndpointZone
+      : relayOwnsManagedEndpointZone(stage)
+        ? Cloudflare.Zone("RelayApiZone", { name: relayApiZoneName }).pipe(adopt(true))
+        : Cloudflare.Zone.ref("RelayApiZone", {
+            stage: MANAGED_ENDPOINT_ZONE_OWNER_STAGE,
+          }),
   ),
 );

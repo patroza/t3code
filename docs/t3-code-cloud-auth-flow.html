@@ -829,8 +829,8 @@ sequenceDiagram
           </tbody>
         </table>
         <div class="callout warning">
-          Managed tunnel hostnames currently live under the configured relay DNS zone. Serving them
-          from a dedicated registrable domain with a Public Suffix List entry remains an operational
+          Managed tunnel hostnames live under the configured tunnel DNS zone. Serving them from a
+          dedicated registrable domain with a Public Suffix List entry remains an operational
           isolation requirement before broad untrusted use.
         </div>
       </section>
@@ -1038,9 +1038,10 @@ sequenceDiagram
             <tr>
               <td>Relay infrastructure</td>
               <td>
-                <code>RELAY_ZONE_NAME</code>, optional <code>RELAY_DOMAIN</code>,
-                <code>CLERK_PUBLISHABLE_KEY</code>, <code>CLERK_SECRET_KEY</code>,
-                <code>CLERK_JWT_AUDIENCE</code>, and APNs credentials.
+                <code>RELAY_API_ZONE_NAME</code>, <code>RELAY_TUNNEL_ZONE_NAME</code>, optional
+                <code>RELAY_DOMAIN</code>, <code>CLERK_PUBLISHABLE_KEY</code>,
+                <code>CLERK_SECRET_KEY</code>, <code>CLERK_JWT_AUDIENCE</code>, and APNs
+                credentials.
               </td>
             </tr>
             <tr>

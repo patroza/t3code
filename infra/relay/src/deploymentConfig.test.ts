@@ -56,7 +56,10 @@ describe("managed endpoint names", () => {
       "dev_julius:user_123:env_123",
     );
     expect(managedEndpointHostname("dev_julius", ".example.com.", hash)).toBe(
-      "tunnels-dev-julius-abcdef0123456789.example.com",
+      "dev-julius-abcdef0123456789.example.com",
+    );
+    expect(managedEndpointHostname("prod", "t3coderelay.com", hash)).toBe(
+      "prod-abcdef0123456789.t3coderelay.com",
     );
     expect(managedEndpointTunnelName("dev_julius", hash)).toBe(
       "t3coderelay-managedendpoint-dev-julius-abcdef0123456789",
@@ -76,11 +79,11 @@ describe("managed endpoint names", () => {
 
   it("accepts allocated hostnames within the relay zone", () => {
     expect(
-      isManagedEndpointHostname("tunnels-dev-julius-abcdef0123456789.example.com", "example.com"),
+      isManagedEndpointHostname("dev-julius-abcdef0123456789.example.com", "example.com"),
     ).toBe(true);
-    expect(managedEndpointForHostname("tunnels-dev-julius-abcdef0123456789.example.com")).toEqual({
-      httpBaseUrl: "https://tunnels-dev-julius-abcdef0123456789.example.com/",
-      wsBaseUrl: "wss://tunnels-dev-julius-abcdef0123456789.example.com/ws",
+    expect(managedEndpointForHostname("dev-julius-abcdef0123456789.example.com")).toEqual({
+      httpBaseUrl: "https://dev-julius-abcdef0123456789.example.com/",
+      wsBaseUrl: "wss://dev-julius-abcdef0123456789.example.com/ws",
       providerKind: "cloudflare_tunnel",
     });
   });
@@ -88,6 +91,6 @@ describe("managed endpoint names", () => {
   it("rejects hostnames outside the relay zone", () => {
     expect(isManagedEndpointHostname("internal.example.net", "example.com")).toBe(false);
     expect(isManagedEndpointHostname("example.com.attacker.test", "example.com")).toBe(false);
-    expect(isManagedEndpointHostname("tunnels-dev-julius.example.com.", "example.com")).toBe(false);
+    expect(isManagedEndpointHostname("dev-julius.example.com.", "example.com")).toBe(false);
   });
 });

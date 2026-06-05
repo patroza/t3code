@@ -85,7 +85,9 @@ vp run --filter t3code-relay deploy
 The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
 connectivity, and relay tracing resources. Copy [`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
-file from the relay directory. Runtime secrets include Clerk and APNs credentials.
+file from the relay directory. Runtime secrets include Clerk and APNs credentials. Production adopts
+the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
+the production-owned zones.
 
 The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
 stable and nightly clients. Every other stage references that database and provisions an isolated
@@ -99,8 +101,12 @@ vp run --filter t3code-relay deploy -- --env-file .env.local
 
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
 DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
-`relay.<RELAY_ZONE_NAME>` and `dev_julius` uses `relay-dev-julius.<RELAY_ZONE_NAME>`.
-`RELAY_DOMAIN` remains available as an explicit override.
+`relay.<RELAY_API_ZONE_NAME>` and `dev_julius` uses
+`relay-dev-julius.<RELAY_API_ZONE_NAME>`. Managed environment endpoints are provisioned below
+`RELAY_TUNNEL_ZONE_NAME`, which may be a different Cloudflare zone. Production tunnel hostnames use
+`prod-<digest>.<RELAY_TUNNEL_ZONE_NAME>`; personal stages use
+`<stage>-<digest>.<RELAY_TUNNEL_ZONE_NAME>`. `RELAY_DOMAIN` remains available as an explicit API
+domain override.
 
 After a successful deploy, the wrapper updates the repository-root `.env` file with the derived relay
 URL. That makes subsequent source builds point at the relay that was just deployed without copying
@@ -129,7 +135,8 @@ The repository must define these Actions secrets shared by relay deployments:
 
 The `production` GitHub environment must define these Actions variables:
 
-- `RELAY_ZONE_NAME`
+- `RELAY_API_ZONE_NAME`
+- `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`

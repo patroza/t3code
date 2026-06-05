@@ -2,7 +2,6 @@ import type { RelayManagedEndpoint } from "@t3tools/contracts/relay";
 
 const DNS_LABEL_MAX_LENGTH = 63;
 const MANAGED_ENDPOINT_HASH_LENGTH = 16;
-const MANAGED_ENDPOINT_HOST_PREFIX = "tunnels";
 const MANAGED_ENDPOINT_TUNNEL_PREFIX = "t3coderelay-managedendpoint";
 export const MANAGED_ENDPOINT_ZONE_OWNER_STAGE = "prod";
 
@@ -77,10 +76,7 @@ export function managedEndpointDigestInput(
 }
 
 export function managedEndpointHostname(stage: string, baseDomain: string, hash: string): string {
-  const label = appendDnsSafeSuffix(
-    `${MANAGED_ENDPOINT_HOST_PREFIX}-${relayStageSlug(stage)}`,
-    stableSuffix(hash),
-  );
+  const label = appendDnsSafeSuffix(relayStageSlug(stage), stableSuffix(hash));
   return `${label}.${normalizeZoneName(baseDomain)}`;
 }
 

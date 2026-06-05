@@ -31,7 +31,7 @@ import {
   tokenApi,
   withoutCapturedParentSpan,
 } from "./http/Api.ts";
-import { ManagedEndpointZone, RelayDeploymentConfig } from "./zone.ts";
+import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./zone.ts";
 import { makeRelayTraceLayer, RelayObservability } from "./observability.ts";
 import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
@@ -109,6 +109,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
     const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
+    const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
     const observability = yield* RelayObservability;
@@ -141,6 +142,8 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const db = yield* Drizzle.postgres(hyperdrive.connectionString);
 
     const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
+    // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
+    yield* yield* relayApiZone.zoneId;
     const managedEndpointDnsBinding = yield* Cloudflare.DnsReadWrite.bind(managedEndpointZone);
     const managedEndpointZoneName = yield* managedEndpointZone.name;
 

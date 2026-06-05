@@ -55,8 +55,8 @@ Required repository secrets shared by relay deployments:
 
 Required `production` environment variables:
 
-- `RELAY_DOMAIN`
-- `RELAY_ZONE_NAME`
+- `RELAY_API_ZONE_NAME`
+- `RELAY_TUNNEL_ZONE_NAME`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -65,6 +65,10 @@ Required `production` environment variables:
 - `APNS_TEAM_ID`
 - `APNS_KEY_ID`
 - `APNS_BUNDLE_ID`
+
+Optional `production` environment variables:
+
+- `RELAY_DOMAIN` when overriding the derived `relay.<RELAY_API_ZONE_NAME>` domain
 
 Required `production` environment secrets:
 
@@ -75,6 +79,8 @@ The account-scoped repository credentials are consumed by Alchemy while provisio
 are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
 so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The `prod` stage owns the retained PlanetScale
 database. Local personal stages provision isolated branches from it and are never deployed by CI.
+Production adopts the configured relay API and tunnel DNS zones as retained Cloudflare resources.
+Personal stages reference the production-owned zones.
 
 Developers deploy personal stages locally rather than through pull-request automation:
 

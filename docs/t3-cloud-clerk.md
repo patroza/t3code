@@ -41,11 +41,12 @@ overrides for self-hosted or operator-managed
 deployments.
 
 For a hosted relay deployment, copy `infra/relay/.env.example` to `infra/relay/.env`. The relay
-deployment reads `RELAY_DOMAIN`, `RELAY_ZONE_NAME`, `CLERK_PUBLISHABLE_KEY`, and
-`CLERK_JWT_AUDIENCE` through Effect `Config`. There are no checked-in deployment defaults.
+deployment reads `RELAY_DOMAIN`, `RELAY_API_ZONE_NAME`, `RELAY_TUNNEL_ZONE_NAME`,
+`CLERK_PUBLISHABLE_KEY`, and `CLERK_JWT_AUDIENCE` through Effect `Config`. There are no checked-in
+deployment defaults.
 `vp run --filter t3code-relay deploy` invokes Alchemy from the relay directory, so Alchemy loads
 `infra/relay/.env`. After a successful deployment, the wrapper updates the repository-root `.env`
-with the HTTPS relay URL derived from `RELAY_DOMAIN`. The relay still requires
+with the deployed HTTPS relay URL. The relay still requires
 `CLERK_SECRET_KEY` as an Alchemy secret. Never put `CLERK_SECRET_KEY` in a client application
 environment or commit it to the repository.
 
