@@ -353,7 +353,7 @@ describe("RelayClient", () => {
         configProvider: emptyConfigProvider,
       });
 
-      const install = yield* manager.install.pipe(Effect.flip, Effect.fork);
+      const install = yield* manager.install.pipe(Effect.flip, Effect.forkScoped);
       yield* TestClock.adjust(Duration.seconds(10));
       const error = yield* Fiber.join(install);
 
