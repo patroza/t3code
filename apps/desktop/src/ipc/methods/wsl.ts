@@ -55,9 +55,16 @@ export const setWslBackendEnabled = makeIpcMethod({
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
     const wslBackend = yield* DesktopWslBackend.DesktopWslBackend;
     const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
-    const change = yield* appSettings.setWslBackendEnabled(enabled);
+    const previousSettings = yield* appSettings.get;
+    const updateSettings = enabled
+      ? appSettings.setWslBackendEnabled(true)
+      : appSettings.applyWslWindowsFallback;
+    const change = yield* updateSettings;
     const settings = yield* appSettings.get;
-    if (settings.wslOnly && change.changed) {
+    const changedWslOnlyPrimary = enabled
+      ? settings.wslOnly
+      : previousSettings.wslBackendEnabled && previousSettings.wslOnly;
+    if (changedWslOnlyPrimary && change.changed) {
       const state = yield* readWslState;
       yield* lifecycle.relaunch(`wslBackendEnabled=${enabled}`);
       return state;

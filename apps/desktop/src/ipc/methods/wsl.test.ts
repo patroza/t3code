@@ -129,4 +129,72 @@ describe("WSL IPC", () => {
       assert.deepEqual(relaunchReasons, []);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("clears wsl-only before relaunching when disabling a WSL-only backend", () => {
+    const relaunchReasons: Array<string> = [];
+    let reconcileCount = 0;
+    const layer = Layer.mergeAll(
+      DesktopAppSettings.layerTest({
+        ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+        wslBackendEnabled: true,
+        wslOnly: true,
+      }),
+      DesktopWslEnvironment.layerTest({ isAvailable: true }),
+      makeWslBackendLayer({
+        onReconcile: Effect.sync(() => {
+          reconcileCount += 1;
+        }),
+      }),
+      makeLifecycleLayer(relaunchReasons),
+      unusedLifecycleRuntimeLayer,
+    );
+
+    return Effect.gen(function* () {
+      const state = yield* invokeSetWslBackendEnabled(false);
+      const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+      const settings = yield* appSettings.get;
+
+      assert.deepEqual(state, {
+        enabled: false,
+        distro: null,
+        available: true,
+        wslOnly: false,
+        distros: [],
+        preflightError: null,
+      });
+      assert.equal(settings.wslBackendEnabled, false);
+      assert.equal(settings.wslOnly, false);
+      assert.equal(reconcileCount, 0);
+      assert.deepEqual(relaunchReasons, ["wslBackendEnabled=false"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("clears dual-backend WSL without relaunching", () => {
+    const relaunchReasons: Array<string> = [];
+    let reconcileCount = 0;
+    const layer = Layer.mergeAll(
+      DesktopAppSettings.layerTest({
+        ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+        wslBackendEnabled: true,
+        wslOnly: false,
+      }),
+      DesktopWslEnvironment.layerTest({ isAvailable: true }),
+      makeWslBackendLayer({
+        onReconcile: Effect.sync(() => {
+          reconcileCount += 1;
+        }),
+      }),
+      makeLifecycleLayer(relaunchReasons),
+      unusedLifecycleRuntimeLayer,
+    );
+
+    return Effect.gen(function* () {
+      const state = yield* invokeSetWslBackendEnabled(false);
+
+      assert.equal(state.enabled, false);
+      assert.equal(state.wslOnly, false);
+      assert.equal(reconcileCount, 1);
+      assert.deepEqual(relaunchReasons, []);
+    }).pipe(Effect.provide(layer));
+  });
 });
