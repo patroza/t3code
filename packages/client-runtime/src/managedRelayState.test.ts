@@ -132,6 +132,47 @@ describe("createManagedRelayQueryManager", () => {
     });
   });
 
+  it("uses schema encoded status keys for equivalent environment inputs", async () => {
+    const getEnvironmentStatus = vi.fn(() =>
+      Effect.succeed({
+        environmentId: environment.environmentId,
+        endpoint: environment.endpoint,
+        status: "online" as const,
+        checkedAt: "2026-06-01T00:00:00.000Z",
+      }),
+    );
+    const manager = createManager({ getEnvironmentStatus });
+    const reorderedEnvironment = {
+      linkedAt: environment.linkedAt,
+      endpoint: {
+        providerKind: environment.endpoint.providerKind,
+        wsBaseUrl: environment.endpoint.wsBaseUrl,
+        httpBaseUrl: environment.endpoint.httpBaseUrl,
+      },
+      label: environment.label,
+      environmentId: environment.environmentId,
+    } satisfies RelayClientEnvironmentRecord;
+    setSession();
+
+    const atom = manager.environmentStatusAtom({ accountId: "account-1", environment });
+    registry.get(atom);
+    await vi.waitFor(() => expect(getEnvironmentStatus).toHaveBeenCalledTimes(1));
+
+    registry.get(
+      manager.environmentStatusAtom({
+        accountId: "account-1",
+        environment: reorderedEnvironment,
+      }),
+    );
+    expect(getEnvironmentStatus).toHaveBeenCalledTimes(1);
+
+    manager.refreshEnvironmentStatus(registry, {
+      accountId: "account-1",
+      environment: reorderedEnvironment,
+    });
+    await vi.waitFor(() => expect(getEnvironmentStatus).toHaveBeenCalledTimes(2));
+  });
+
   it("rejects status responses for a different environment", async () => {
     const mismatchedStatus = {
       environmentId: EnvironmentId.make("environment-2"),

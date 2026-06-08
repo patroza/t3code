@@ -1,15 +1,17 @@
 import type {
-  RelayClientEnvironmentRecord,
   RelayEnvironmentStatusResponse,
 } from "@t3tools/contracts/relay";
 import {
+  RelayClientEnvironmentRecord,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
+  type RelayClientEnvironmentRecord as RelayClientEnvironmentRecordType,
 } from "@t3tools/contracts/relay";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 import { ManagedRelayClient } from "./managedRelay.ts";
@@ -36,6 +38,16 @@ export class ManagedRelaySessionError extends Data.TaggedError("ManagedRelaySess
 export class ManagedRelaySnapshotError extends Data.TaggedError("ManagedRelaySnapshotError")<{
   readonly message: string;
 }> {}
+
+const EnvironmentStatusKey = Schema.Struct({
+  accountId: Schema.String,
+  environment: RelayClientEnvironmentRecord,
+});
+type EnvironmentStatusKey = typeof EnvironmentStatusKey.Type;
+
+const EnvironmentStatusKeyJson = Schema.fromJsonString(EnvironmentStatusKey);
+const encodeEnvironmentStatusKey = Schema.encodeSync(EnvironmentStatusKeyJson);
+const decodeEnvironmentStatusKey = Schema.decodeSync(EnvironmentStatusKeyJson);
 
 export const managedRelaySessionAtom = Atom.make<ManagedRelaySession | null>(null).pipe(
   Atom.keepAlive,
@@ -130,19 +142,13 @@ function requireClerkToken(
 
 function statusKey(input: {
   readonly accountId: string;
-  readonly environment: RelayClientEnvironmentRecord;
+  readonly environment: RelayClientEnvironmentRecordType;
 }): string {
-  return JSON.stringify(input);
+  return encodeEnvironmentStatusKey(input);
 }
 
-function parseStatusKey(key: string): {
-  readonly accountId: string;
-  readonly environment: RelayClientEnvironmentRecord;
-} {
-  return JSON.parse(key) as {
-    readonly accountId: string;
-    readonly environment: RelayClientEnvironmentRecord;
-  };
+function parseStatusKey(key: string): EnvironmentStatusKey {
+  return decodeEnvironmentStatusKey(key);
 }
 
 function endpointMatches(
@@ -157,7 +163,7 @@ function endpointMatches(
 }
 
 function validateEnvironmentStatus(
-  environment: RelayClientEnvironmentRecord,
+  environment: RelayClientEnvironmentRecordType,
   status: RelayEnvironmentStatusResponse,
 ): Effect.Effect<RelayEnvironmentStatusResponse, ManagedRelaySnapshotError> {
   if (status.environmentId !== environment.environmentId) {
@@ -268,7 +274,7 @@ export function createManagedRelayQueryManager(
     devicesAtom,
     environmentStatusAtom: (input: {
       readonly accountId: string;
-      readonly environment: RelayClientEnvironmentRecord;
+      readonly environment: RelayClientEnvironmentRecordType;
     }) => environmentStatusAtom(statusKey(input)),
     refreshEnvironments(registry: AtomRegistry.AtomRegistry, accountId: string): void {
       registry.refresh(environmentsAtom(accountId));
@@ -280,7 +286,7 @@ export function createManagedRelayQueryManager(
       registry: AtomRegistry.AtomRegistry,
       input: {
         readonly accountId: string;
-        readonly environment: RelayClientEnvironmentRecord;
+        readonly environment: RelayClientEnvironmentRecordType;
       },
     ): void {
       registry.refresh(environmentStatusAtom(statusKey(input)));
