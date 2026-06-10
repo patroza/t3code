@@ -31,7 +31,9 @@ const DpopJwtPayload = Schema.Struct({
 });
 type DpopJwtPayload = typeof DpopJwtPayload.Type;
 
-const decodeDpopJwtHeaderJson = Schema.decodeUnknownOption(Schema.fromJsonString(DpopJwtHeader));
+const decodeDpopJwtHeaderJson = Schema.decodeUnknownOption(Schema.fromJsonString(DpopJwtHeader), {
+  onExcessProperty: "preserve",
+});
 const decodeDpopJwtPayloadJson = Schema.decodeUnknownOption(Schema.fromJsonString(DpopJwtPayload));
 
 export class MissingDpopProofError extends Schema.TaggedErrorClass<MissingDpopProofError>()(
