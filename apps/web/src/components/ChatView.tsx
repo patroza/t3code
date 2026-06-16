@@ -153,6 +153,7 @@ import {
   formatElementContextLabel,
 } from "../lib/elementContext";
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
+import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -1072,6 +1073,7 @@ function ChatViewContent(props: ChatViewProps) {
   const setComposerDraftPreviewAnnotations = useComposerDraftStore(
     (store) => store.setPreviewAnnotations,
   );
+  const setComposerDraftReviewComments = useComposerDraftStore((store) => store.setReviewComments);
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
@@ -2939,29 +2941,32 @@ function ChatViewContent(props: ChatViewProps) {
       threadKey === routeThreadKey ? null : routeThreadKey,
     );
   }, [canMaximizeRightPanel, routeThreadKey]);
-  const closeRightPanelSurface = useCallback(
-    (surface: RightPanelSurface) => {
+  const cleanupRightPanelSurfaces = useCallback(
+    (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
-      if (surface.kind === "preview" && surface.resourceId) {
-        usePreviewStateStore.getState().removeSession(activeThreadRef, surface.resourceId);
-        void closePreview({
-          environmentId: activeThreadRef.environmentId,
-          input: { threadId: activeThreadRef.threadId, tabId: surface.resourceId },
-        }).catch(() => undefined);
-      }
-      if (surface.kind === "terminal") {
-        for (const terminalId of surface.terminalIds) {
-          void closeTerminalMutation({
+
+      for (const surface of surfaces) {
+        if (surface.kind === "preview" && surface.resourceId) {
+          usePreviewStateStore.getState().removeSession(activeThreadRef, surface.resourceId);
+          void closePreview({
             environmentId: activeThreadRef.environmentId,
-            input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
+            input: { threadId: activeThreadRef.threadId, tabId: surface.resourceId },
           }).catch(() => undefined);
         }
+        if (surface.kind === "terminal") {
+          for (const terminalId of surface.terminalIds) {
+            void closeTerminalMutation({
+              environmentId: activeThreadRef.environmentId,
+              input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
+            }).catch(() => undefined);
+          }
+        }
       }
-      if (surface.kind === "plan") {
+      if (surfaces.some((surface) => surface.kind === "plan")) {
         closePlanSidebar();
       }
-      useRightPanelStore.getState().closeSurface(activeThreadRef, surface.id);
-      if (surface.kind === "diff" && diffOpen) {
+
+      if (diffOpen && surfaces.some((surface) => surface.kind === "diff")) {
         void navigate({
           to: "/$environmentId/$threadId",
           params: { environmentId, threadId },
@@ -2981,7 +2986,93 @@ function ChatViewContent(props: ChatViewProps) {
       threadId,
     ],
   );
+  const syncActivePreviewSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    const nextActiveSurface = selectActiveRightPanelSurface(
+      useRightPanelStore.getState().byThreadKey,
+      activeThreadRef,
+    );
+    if (nextActiveSurface?.kind === "preview" && nextActiveSurface.resourceId) {
+      usePreviewStateStore.getState().setActiveTab(activeThreadRef, nextActiveSurface.resourceId);
+    }
+  }, [activeThreadRef]);
+  const closeRightPanelSurface = useCallback(
+    (surface: RightPanelSurface) => {
+      if (!activeThreadRef) return;
+      cleanupRightPanelSurfaces([surface]);
+      useRightPanelStore.getState().closeSurface(activeThreadRef, surface.id);
+      syncActivePreviewSurface();
+    },
+    [activeThreadRef, cleanupRightPanelSurfaces, syncActivePreviewSurface],
+  );
+  const closeOtherRightPanelSurfaces = useCallback(
+    (surface: RightPanelSurface) => {
+      if (!activeThreadRef) return;
+      const surfaces = rightPanelState.surfaces.filter((entry) => entry.id !== surface.id);
+      cleanupRightPanelSurfaces(surfaces);
+      useRightPanelStore.getState().closeOtherSurfaces(activeThreadRef, surface.id);
+      syncActivePreviewSurface();
+    },
+    [
+      activeThreadRef,
+      cleanupRightPanelSurfaces,
+      rightPanelState.surfaces,
+      syncActivePreviewSurface,
+    ],
+  );
+  const closeRightPanelSurfacesToRight = useCallback(
+    (surface: RightPanelSurface) => {
+      if (!activeThreadRef) return;
+      const surfaceIndex = rightPanelState.surfaces.findIndex((entry) => entry.id === surface.id);
+      if (surfaceIndex < 0) return;
+      const surfaces = rightPanelState.surfaces.slice(surfaceIndex + 1);
+      cleanupRightPanelSurfaces(surfaces);
+      useRightPanelStore.getState().closeSurfacesToRight(activeThreadRef, surface.id);
+      syncActivePreviewSurface();
+    },
+    [
+      activeThreadRef,
+      cleanupRightPanelSurfaces,
+      rightPanelState.surfaces,
+      syncActivePreviewSurface,
+    ],
+  );
+  const closeAllRightPanelSurfaces = useCallback(() => {
+    if (!activeThreadRef) return;
+    cleanupRightPanelSurfaces(rightPanelState.surfaces);
+    useRightPanelStore.getState().closeAllSurfaces(activeThreadRef);
+  }, [activeThreadRef, cleanupRightPanelSurfaces, rightPanelState.surfaces]);
+  const copyRightPanelFilePath = useCallback((relativePath: string) => {
+    if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy path",
+          description: "Clipboard API unavailable.",
+        }),
+      );
+      return;
+    }
 
+    void navigator.clipboard.writeText(relativePath).then(
+      () => {
+        toastManager.add({
+          type: "success",
+          title: "Path copied",
+          description: relativePath,
+        });
+      },
+      (error) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to copy path",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      },
+    );
+  }, []);
   useEffect(
     () =>
       subscribePreviewAction((action) => {
@@ -2989,7 +3080,6 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [togglePreviewPanel],
   );
-
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
       threadId: ThreadId;
@@ -3482,6 +3572,7 @@ function ChatViewContent(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContexts: composerElementContexts,
       previewAnnotations: composerPreviewAnnotations,
+      reviewComments: composerReviewComments,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
@@ -3498,7 +3589,10 @@ function ChatViewContent(props: ChatViewProps) {
       prompt: promptForSend,
       imageCount: composerImages.length,
       terminalContexts: composerTerminalContexts,
-      elementContextCount: composerElementContexts.length + composerPreviewAnnotations.length,
+      elementContextCount:
+        composerElementContexts.length +
+        composerPreviewAnnotations.length +
+        composerReviewComments.length,
     });
     if (showPlanFollowUpPrompt && activeProposedPlan) {
       const followUp = resolvePlanFollowUpSubmission({
@@ -3518,7 +3612,8 @@ function ChatViewContent(props: ChatViewProps) {
       composerImages.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
-      composerPreviewAnnotations.length === 0
+      composerPreviewAnnotations.length === 0 &&
+      composerReviewComments.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
@@ -3568,13 +3663,18 @@ function ChatViewContent(props: ChatViewProps) {
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerElementContextsSnapshot = [...composerElementContexts];
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
+    const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
     const messageTextWithContexts = appendElementContextsToPrompt(
       appendTerminalContextsToPrompt(promptForSend, composerTerminalContextsSnapshot),
       composerElementContextsSnapshot,
     );
-    const messageTextForSend = composerPreviewAnnotationsSnapshot.reduce(
+    const messageTextWithPreviewAnnotations = composerPreviewAnnotationsSnapshot.reduce(
       (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
       messageTextWithContexts,
+    );
+    const messageTextForSend = appendReviewCommentsToPrompt(
+      messageTextWithPreviewAnnotations,
+      composerReviewCommentsSnapshot,
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
@@ -3749,6 +3849,8 @@ function ChatViewContent(props: ChatViewProps) {
         composerTerminalContextsRef.current.length === 0 &&
         composerElementContextsRef.current.length === 0 &&
         (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.previewAnnotations
+          .length ?? 0) === 0 &&
+        (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
           .length ?? 0) === 0
       ) {
         setOptimisticUserMessages((existing) => {
@@ -3769,6 +3871,7 @@ function ChatViewContent(props: ChatViewProps) {
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
         setComposerDraftElementContexts(composerDraftTarget, composerElementContextsSnapshot);
         setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
+        setComposerDraftReviewComments(composerDraftTarget, composerReviewCommentsSnapshot);
         composerRef.current?.resetCursorState({
           cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
           prompt: promptForSend,
@@ -4713,6 +4816,10 @@ function ChatViewContent(props: ChatViewProps) {
           terminalLabelsById={activeTerminalLabelsById}
           onActivate={activateRightPanelSurface}
           onCloseSurface={closeRightPanelSurface}
+          onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
+          onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
+          onCloseAllSurfaces={closeAllRightPanelSurfaces}
+          onCopyFilePath={copyRightPanelFilePath}
           onAddBrowser={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
@@ -4752,7 +4859,7 @@ function ChatViewContent(props: ChatViewProps) {
           ) : activeRightPanelSurface?.kind === "diff" ? (
             <DiffWorkerPoolProvider>
               <Suspense fallback={null}>
-                <DiffPanel mode="embedded" />
+                <DiffPanel mode="embedded" composerDraftTarget={composerDraftTarget} />
               </Suspense>
             </DiffWorkerPoolProvider>
           ) : activeRightPanelSurface?.kind === "plan" ? (
@@ -4776,6 +4883,10 @@ function ChatViewContent(props: ChatViewProps) {
                 environmentId={activeProject.environmentId}
                 cwd={activeProject.workspaceRoot}
                 projectName={activeProject.title}
+                threadRef={activeThreadRef}
+                composerDraftTarget={composerDraftTarget}
+                keybindings={keybindings}
+                availableEditors={availableEditors}
                 relativePath={
                   activeRightPanelSurface.kind === "file"
                     ? activeRightPanelSurface.relativePath
@@ -4799,6 +4910,10 @@ function ChatViewContent(props: ChatViewProps) {
             terminalLabelsById={activeTerminalLabelsById}
             onActivate={activateRightPanelSurface}
             onCloseSurface={closeRightPanelSurface}
+            onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
+            onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
+            onCloseAllSurfaces={closeAllRightPanelSurfaces}
+            onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
@@ -4838,7 +4953,7 @@ function ChatViewContent(props: ChatViewProps) {
             ) : activeRightPanelSurface?.kind === "diff" ? (
               <DiffWorkerPoolProvider>
                 <Suspense fallback={null}>
-                  <DiffPanel mode="embedded" />
+                  <DiffPanel mode="embedded" composerDraftTarget={composerDraftTarget} />
                 </Suspense>
               </DiffWorkerPoolProvider>
             ) : activeRightPanelSurface?.kind === "plan" ? (
@@ -4862,6 +4977,10 @@ function ChatViewContent(props: ChatViewProps) {
                   environmentId={activeProject.environmentId}
                   cwd={activeProject.workspaceRoot}
                   projectName={activeProject.title}
+                  threadRef={activeThreadRef}
+                  composerDraftTarget={composerDraftTarget}
+                  keybindings={keybindings}
+                  availableEditors={availableEditors}
                   relativePath={
                     activeRightPanelSurface.kind === "file"
                       ? activeRightPanelSurface.relativePath

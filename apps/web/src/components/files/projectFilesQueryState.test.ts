@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   __resetProjectFileQueryDataForTests,
   confirmProjectFileQueryData,
+  getOptimisticProjectFileQueryData,
   resolveProjectFileQueryData,
   setProjectFileQueryData,
 } from "./projectFilesQueryState";
@@ -27,6 +28,10 @@ describe("project files queries", () => {
     } satisfies ProjectReadFileResult;
     setProjectFileQueryData(environmentId, "/repo", "convex.json", '{"nodeVersion":"220"}');
     setProjectFileQueryData(environmentId, "/repo", "convex.json", '{"nodeVersion":"22"}');
+
+    expect(getOptimisticProjectFileQueryData(environmentId, "/repo", "convex.json")?.contents).toBe(
+      '{"nodeVersion":"22"}',
+    );
 
     expect(
       confirmProjectFileQueryData(environmentId, "/repo", "convex.json", '{"nodeVersion":"220"}'),

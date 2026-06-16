@@ -64,6 +64,14 @@ export function setProjectFileQueryData(
   });
 }
 
+export function getOptimisticProjectFileQueryData(
+  environmentId: EnvironmentId,
+  cwd: string,
+  relativePath: string,
+): ProjectReadFileResult | null {
+  return optimisticProjectFiles.get(fileKey(environmentId, cwd, relativePath))?.data ?? null;
+}
+
 export function confirmProjectFileQueryData(
   environmentId: EnvironmentId,
   cwd: string,

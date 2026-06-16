@@ -1,7 +1,7 @@
-import { FileDiff, Virtualizer } from "@pierre/diffs/react";
+import { Virtualizer } from "@pierre/diffs/react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { TurnId } from "@t3tools/contracts";
+import type { ScopedThreadRef, TurnId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -20,6 +20,7 @@ import {
   useState,
 } from "react";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import { type DraftId } from "../composerDraftStore";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { resolvePathLinkTarget } from "../terminal-links";
@@ -38,6 +39,7 @@ import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { useSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import { AnnotatableFileDiff } from "./diffs/AnnotatableFileDiff";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
@@ -112,11 +114,12 @@ const DIFF_PANEL_UNSAFE_CSS = `
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
+  composerDraftTarget: ScopedThreadRef | DraftId;
 }
 
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
-export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
+export default function DiffPanel({ mode = "inline", composerDraftTarget }: DiffPanelProps) {
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const settings = useSettings();
@@ -197,6 +200,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
+  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : "conversation";
+  const reviewSectionTitle = selectedTurn
+    ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
+    : "All turns";
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -618,8 +625,12 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                         openDiffFile(filePath);
                       }}
                     >
-                      <FileDiff
+                      <AnnotatableFileDiff
                         fileDiff={fileDiff}
+                        filePath={filePath}
+                        sectionId={reviewSectionId}
+                        sectionTitle={reviewSectionTitle}
+                        composerDraftTarget={composerDraftTarget}
                         renderHeaderPrefix={() => (
                           <button
                             type="button"

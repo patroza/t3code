@@ -98,6 +98,7 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
+  onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   className?: string;
@@ -115,6 +116,17 @@ const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
+
+function findTaskListMarkerOffset(markdown: string, listItemStart: number): number | null {
+  const firstLineEnd = markdown.indexOf("\n", listItemStart);
+  const firstLine = markdown.slice(
+    listItemStart,
+    firstLineEnd === -1 ? markdown.length : firstLineEnd,
+  );
+  const match = firstLine.match(/^(?:\s*(?:[-+*]|\d+[.)])\s+)(\[[ xX]\])/);
+  if (!match?.[1]) return null;
+  return listItemStart + firstLine.indexOf(match[1]);
+}
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
   attributes: {
@@ -1114,6 +1126,7 @@ function ChatMarkdown({
   text,
   cwd,
   threadRef,
+  onTaskListChange,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
   className,
@@ -1192,8 +1205,44 @@ function ChatMarkdown({
       p({ node: _node, children, ...props }) {
         return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
       },
-      li({ node: _node, children, ...props }) {
-        return <li {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</li>;
+      li({ node, children, ...props }) {
+        const listItemStart = node?.position?.start.offset;
+        const markerOffset =
+          typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
+        return (
+          <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
+            {renderSkillInlineMarkdownChildren(children, skills)}
+          </li>
+        );
+      },
+      input({ node: _node, type, checked, disabled: _disabled, ...props }) {
+        if (type !== "checkbox" || !onTaskListChange) {
+          return (
+            <input
+              {...props}
+              type={type}
+              checked={checked}
+              disabled={_disabled}
+              readOnly={type === "checkbox"}
+            />
+          );
+        }
+        return (
+          <input
+            {...props}
+            type="checkbox"
+            name="markdown-task"
+            aria-label="Toggle task"
+            checked={checked}
+            onChange={(event) => {
+              const markerOffset = Number(
+                event.currentTarget.closest("li")?.dataset.taskMarkerOffset,
+              );
+              if (!Number.isSafeInteger(markerOffset)) return;
+              onTaskListChange({ markerOffset, checked: event.currentTarget.checked });
+            }}
+          />
+        );
       },
       a({ node, href, children, ...props }) {
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
@@ -1337,11 +1386,13 @@ function ChatMarkdown({
       fileLinkParentSuffixByPath,
       isStreaming,
       markdownFileLinkMetaByHref,
+      onTaskListChange,
       openInPreferredEditor,
       openExternalLinkInPreview,
       openMarkdownFileInPreview,
       resolvedTheme,
       skills,
+      text,
       threadRef,
     ],
   );
