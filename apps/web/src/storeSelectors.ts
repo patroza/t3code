@@ -1,4 +1,9 @@
 import { type ScopedProjectRef, type ScopedThreadRef, type ThreadId } from "@t3tools/contracts";
+import {
+  contextWindowSnapshotsEqual,
+  deriveLatestContextWindowSnapshot,
+  type ContextWindowSnapshot,
+} from "./lib/contextWindow";
 import { selectEnvironmentState, type AppState, type EnvironmentState } from "./store";
 import { type Project, type Thread } from "./types";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
@@ -43,6 +48,52 @@ export function createThreadSelectorByRef(
   ref: ScopedThreadRef | null | undefined,
 ): (state: AppState) => Thread | undefined {
   return createScopedThreadSelector(() => ref);
+}
+
+export function createContextWindowSnapshotSelectorByRef(
+  ref: ScopedThreadRef | null | undefined,
+): (state: AppState) => ContextWindowSnapshot | null {
+  let previousEnvironmentState: EnvironmentState | undefined;
+  let previousThreadId: ThreadId | undefined;
+  let previousActivityIds: readonly string[] | undefined;
+  let previousSnapshot: ContextWindowSnapshot | null = null;
+
+  return (state) => {
+    if (!ref) {
+      previousEnvironmentState = undefined;
+      previousThreadId = undefined;
+      previousActivityIds = undefined;
+      previousSnapshot = null;
+      return null;
+    }
+
+    const environmentState = selectEnvironmentState(state, ref.environmentId);
+    const activityIds = environmentState.activityIdsByThreadId[ref.threadId];
+    if (
+      previousEnvironmentState === environmentState &&
+      previousThreadId === ref.threadId &&
+      previousActivityIds === activityIds
+    ) {
+      return previousSnapshot;
+    }
+
+    const activities =
+      activityIds?.flatMap((activityId) => {
+        const activity = environmentState.activityByThreadId[ref.threadId]?.[activityId];
+        return activity ? [activity] : [];
+      }) ?? [];
+    const nextSnapshot = deriveLatestContextWindowSnapshot(activities);
+    previousEnvironmentState = environmentState;
+    previousThreadId = ref.threadId;
+    previousActivityIds = activityIds;
+
+    if (contextWindowSnapshotsEqual(previousSnapshot, nextSnapshot)) {
+      return previousSnapshot;
+    }
+
+    previousSnapshot = nextSnapshot;
+    return nextSnapshot;
+  };
 }
 
 export function createThreadSelectorAcrossEnvironments(

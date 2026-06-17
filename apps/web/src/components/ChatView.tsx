@@ -4903,7 +4903,9 @@ function ChatViewContent(props: ChatViewProps) {
                     draftId={draftId}
                     activeThreadId={activeThreadId}
                     activeThreadEnvironmentId={activeThread?.environmentId}
-                    activeThread={activeThread}
+                    activeThreadSessionProviderInstanceId={
+                      activeThread?.session?.providerInstanceId
+                    }
                     isServerThread={isServerThread}
                     isLocalDraftThread={isLocalDraftThread}
                     phase={phase}
@@ -4932,7 +4934,6 @@ function ChatViewContent(props: ChatViewProps) {
                     providerStatuses={providerStatuses as ServerProvider[]}
                     activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                     activeThreadModelSelection={activeThread?.modelSelection}
-                    activeThreadActivities={activeThread?.activities}
                     resolvedTheme={resolvedTheme}
                     settings={settings}
                     keybindings={keybindings}

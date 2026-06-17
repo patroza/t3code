@@ -95,6 +95,35 @@ export function deriveLatestContextWindowSnapshot(
   return null;
 }
 
+export function contextWindowSnapshotsEqual(
+  left: ContextWindowSnapshot | null,
+  right: ContextWindowSnapshot | null,
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  return (
+    left.usedTokens === right.usedTokens &&
+    left.totalProcessedTokens === right.totalProcessedTokens &&
+    left.maxTokens === right.maxTokens &&
+    left.remainingTokens === right.remainingTokens &&
+    left.usedPercentage === right.usedPercentage &&
+    left.remainingPercentage === right.remainingPercentage &&
+    left.inputTokens === right.inputTokens &&
+    left.cachedInputTokens === right.cachedInputTokens &&
+    left.outputTokens === right.outputTokens &&
+    left.reasoningOutputTokens === right.reasoningOutputTokens &&
+    left.lastUsedTokens === right.lastUsedTokens &&
+    left.lastInputTokens === right.lastInputTokens &&
+    left.lastCachedInputTokens === right.lastCachedInputTokens &&
+    left.lastOutputTokens === right.lastOutputTokens &&
+    left.lastReasoningOutputTokens === right.lastReasoningOutputTokens &&
+    left.toolUses === right.toolUses &&
+    left.durationMs === right.durationMs &&
+    left.compactsAutomatically === right.compactsAutomatically &&
+    left.updatedAt === right.updatedAt
+  );
+}
+
 export function formatContextWindowTokens(value: number | null): string {
   if (value === null || !Number.isFinite(value)) {
     return "0";
