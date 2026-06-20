@@ -46,17 +46,20 @@ const resolveResourcePath = Effect.fn("desktop.assets.resolveResourcePath")(func
   const fileSystem = yield* FileSystem.FileSystem;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const candidates = environment.resolveResourcePathCandidates(fileName);
+  let probeError: DesktopAssetProbeError | undefined;
   for (const candidate of candidates) {
-    const exists = yield* fileSystem
-      .exists(candidate)
-      .pipe(
-        Effect.mapError(
-          (cause) => new DesktopAssetProbeError({ fileName, candidatePath: candidate, cause }),
-        ),
-      );
+    const exists = yield* fileSystem.exists(candidate).pipe(
+      Effect.catch((cause) => {
+        probeError ??= new DesktopAssetProbeError({ fileName, candidatePath: candidate, cause });
+        return Effect.succeed(false);
+      }),
+    );
     if (exists) {
       return Option.some(candidate);
     }
+  }
+  if (probeError) {
+    return yield* probeError;
   }
   return Option.none<string>();
 });
@@ -72,16 +75,9 @@ const resolveIconPath = Effect.fn("desktop.assets.resolveIconPath")(function* (
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   if (environment.isDevelopment && environment.platform === "darwin" && ext === "png") {
     const developmentDockIconPath = environment.developmentDockIconPath;
-    const developmentDockIconExists = yield* fileSystem.exists(developmentDockIconPath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new DesktopAssetProbeError({
-            fileName: "icon.png",
-            candidatePath: developmentDockIconPath,
-            cause,
-          }),
-      ),
-    );
+    const developmentDockIconExists = yield* fileSystem
+      .exists(developmentDockIconPath)
+      .pipe(Effect.orElseSucceed(() => false));
     if (developmentDockIconExists) {
       return Option.some(developmentDockIconPath);
     }
