@@ -1,15 +1,19 @@
 import * as NodeNet from "node:net";
 
-import * as Data from "effect/Data";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Context from "effect/Context";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
-export class NetError extends Data.TaggedError("NetError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-}> {}
+export class NetError extends Schema.TaggedErrorClass<NetError>()("NetError", {
+  host: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {
+  override get message(): string {
+    return `Failed to reserve loopback port on ${this.host}.`;
+  }
+}
 
 const isErrnoExceptionWithCode = (
   cause: unknown,
@@ -28,34 +32,33 @@ const closeServer = (server: NodeNet.Server) => {
   }
 };
 
-export interface NetServiceShape {
-  /**
-   * Returns true when a TCP server can bind to {host, port}.
-   */
-  readonly canListenOnHost: (port: number, host: string) => Effect.Effect<boolean>;
-
-  /**
-   * Checks loopback availability on both IPv4 and IPv6 localhost addresses.
-   */
-  readonly isPortAvailableOnLoopback: (port: number) => Effect.Effect<boolean>;
-
-  /**
-   * Reserve an ephemeral loopback port and release it immediately.
-   */
-  readonly reserveLoopbackPort: (host?: string) => Effect.Effect<number, NetError>;
-
-  /**
-   * Resolve an available listening port, preferring the provided port first.
-   */
-  readonly findAvailablePort: (preferred: number) => Effect.Effect<number, NetError>;
-}
-
 /**
  * NetService - Service tag for startup networking helpers.
  */
-export class NetService extends Context.Service<NetService, NetServiceShape>()(
-  "@t3tools/shared/Net/NetService",
-) {}
+export class NetService extends Context.Service<
+  NetService,
+  {
+    /**
+     * Returns true when a TCP server can bind to {host, port}.
+     */
+    readonly canListenOnHost: (port: number, host: string) => Effect.Effect<boolean>;
+
+    /**
+     * Checks loopback availability on both IPv4 and IPv6 localhost addresses.
+     */
+    readonly isPortAvailableOnLoopback: (port: number) => Effect.Effect<boolean>;
+
+    /**
+     * Reserve an ephemeral loopback port and release it immediately.
+     */
+    readonly reserveLoopbackPort: (host?: string) => Effect.Effect<number, NetError>;
+
+    /**
+     * Resolve an available listening port, preferring the provided port first.
+     */
+    readonly findAvailablePort: (preferred: number) => Effect.Effect<number, NetError>;
+  }
+>()("@t3tools/shared/Net/NetService") {}
 
 export const make = () => {
   /**
@@ -160,7 +163,7 @@ export const make = () => {
       };
 
       probe.once("error", (cause) => {
-        settle(Effect.fail(new NetError({ message: "Failed to reserve loopback port", cause })));
+        settle(Effect.fail(new NetError({ host, cause })));
       });
 
       probe.listen(0, host, () => {
@@ -171,7 +174,7 @@ export const make = () => {
             settle(Effect.succeed(port));
             return;
           }
-          settle(Effect.fail(new NetError({ message: "Failed to reserve loopback port" })));
+          settle(Effect.fail(new NetError({ host })));
         });
       });
 
@@ -180,7 +183,7 @@ export const make = () => {
       });
     });
 
-  return {
+  return NetService.of({
     canListenOnHost,
     isPortAvailableOnLoopback,
     reserveLoopbackPort,
@@ -191,7 +194,7 @@ export const make = () => {
         }
         return yield* reserveLoopbackPort();
       }),
-  } satisfies NetServiceShape;
+  });
 };
 
 export const layer = Layer.sync(NetService, make);

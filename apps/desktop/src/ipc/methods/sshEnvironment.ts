@@ -50,14 +50,13 @@ const isEnvironmentInternalError = Schema.is(EnvironmentInternalError);
 const isEnvironmentOperationForbiddenError = Schema.is(EnvironmentOperationForbiddenError);
 const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
 const isEnvironmentScopeRequiredError = Schema.is(EnvironmentScopeRequiredError);
+const isSshHttpBridgeError = Schema.is(SshHttpBridgeError);
 
 function readSshHttpStatus(cause: DesktopSshEnvironmentRequestCause): number | null {
-  if (
-    cause instanceof RemoteEnvironmentAuthUndeclaredStatusError ||
-    cause instanceof SshHttpBridgeError
-  ) {
+  if (cause instanceof RemoteEnvironmentAuthUndeclaredStatusError) {
     return cause.status ?? null;
   }
+  if (isSshHttpBridgeError(cause)) return null;
   if (isEnvironmentRequestInvalidError(cause)) {
     return 400;
   }
@@ -131,7 +130,7 @@ export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
         DesktopSshEnvironment.isDesktopSshPasswordPromptCancellation(error)
           ? Effect.succeed({
               type: DesktopSshPasswordPromptCancelledType,
-              message: error.message,
+              message: error.cause.message,
             })
           : Effect.fail(error),
       ),
