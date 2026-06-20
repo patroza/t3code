@@ -25,7 +25,7 @@ import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { ServerConfig } from "../../config.ts";
+import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
@@ -36,20 +36,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
-import {
-  buildOpenCodePermissionRules,
-  isOpenCodeRuntimeError,
-  OpenCodeRuntime,
-  OpenCodeRuntimeError,
-  openCodeQuestionId,
-  openCodeRuntimeErrorDetail,
-  parseOpenCodeModelSlug,
-  runOpenCodeSdk,
-  toOpenCodeFileParts,
-  toOpenCodePermissionReply,
-  toOpenCodeQuestionAnswers,
-  type OpenCodeServerConnection,
-} from "../opencodeRuntime.ts";
+import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
@@ -69,7 +56,7 @@ type OpenCodeSubscribedEvent =
 interface OpenCodeSessionContext {
   session: ProviderSession;
   readonly client: OpencodeClient;
-  readonly server: OpenCodeServerConnection;
+  readonly server: OpenCodeRuntime.OpenCodeServerConnection;
   readonly directory: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
@@ -109,12 +96,12 @@ export interface OpenCodeAdapterLiveOptions {
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 /**
- * Map a tagged OpenCodeRuntimeError produced by {@link runOpenCodeSdk} into
+ * Map a tagged OpenCodeRuntimeError produced by {@link OpenCodeRuntime.runOpenCodeSdk} into
  * the adapter-boundary `ProviderAdapterRequestError`. SDK-method-level call
  * sites pipe through this in `Effect.mapError` so they never build the error
  * shape by hand.
  */
-const toRequestError = (cause: OpenCodeRuntimeError): ProviderAdapterRequestError =>
+const toRequestError = (cause: OpenCodeRuntime.OpenCodeRuntimeError): ProviderAdapterRequestError =>
   new ProviderAdapterRequestError({
     provider: PROVIDER,
     method: cause.operation,
@@ -124,15 +111,17 @@ const toRequestError = (cause: OpenCodeRuntimeError): ProviderAdapterRequestErro
 
 /**
  * Map a `Cause.squash`-ed failure into a `ProviderAdapterProcessError`. The
- * typed cause is usually an `OpenCodeRuntimeError` (from {@link runOpenCodeSdk}),
+ * typed cause is usually an `OpenCodeRuntimeError` (from {@link OpenCodeRuntime.runOpenCodeSdk}),
  * in which case we preserve its `detail`; otherwise we fall back to
- * {@link openCodeRuntimeErrorDetail} for unknown causes (defects, etc.).
+ * {@link OpenCodeRuntime.openCodeRuntimeErrorDetail} for unknown causes (defects, etc.).
  */
 const toProcessError = (threadId: ThreadId, cause: unknown): ProviderAdapterProcessError =>
   new ProviderAdapterProcessError({
     provider: PROVIDER,
     threadId,
-    detail: isOpenCodeRuntimeError(cause) ? cause.detail : openCodeRuntimeErrorDetail(cause),
+    detail: OpenCodeRuntime.isOpenCodeRuntimeError(cause)
+      ? cause.detail
+      : OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
     cause,
   });
 
@@ -254,7 +243,7 @@ function ensureSessionContext(
 
 function normalizeQuestionRequest(request: QuestionRequest): ReadonlyArray<UserInputQuestion> {
   return request.questions.map((question, index) => ({
-    id: openCodeQuestionId(index, question),
+    id: OpenCodeRuntime.openCodeQuestionId(index, question),
     header: question.header,
     question: question.question,
     options: question.options.map((option) => ({
@@ -414,7 +403,7 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   // Best-effort remote abort. The scope close below tears down the local
   // handles (event-pump fiber, server-exit fiber, event-subscribe fetch),
   // but we still want to tell OpenCode that this session is done.
-  yield* runOpenCodeSdk("session.abort", () =>
+  yield* OpenCodeRuntime.runOpenCodeSdk("session.abort", () =>
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
   ).pipe(Effect.ignore({ log: true }));
 
@@ -431,8 +420,8 @@ export function makeOpenCodeAdapter(
 ) {
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("opencode");
-    const serverConfig = yield* ServerConfig;
-    const openCodeRuntime = yield* OpenCodeRuntime;
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const openCodeRuntime = yield* OpenCodeRuntime.OpenCodeRuntime;
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -570,7 +559,7 @@ export function makeOpenCodeAdapter(
       // Inline the teardown that `stopOpenCodeContext` would do; we can't
       // delegate to it because our `getAndSet` above already flipped the
       // one-shot guard, so the call would no-op.
-      yield* runOpenCodeSdk("session.abort", () =>
+      yield* OpenCodeRuntime.runOpenCodeSdk("session.abort", () =>
         context.client.session.abort({ sessionID: context.openCodeSessionId }),
       ).pipe(Effect.ignore({ log: true }));
       yield* Scope.close(context.sessionScope, Exit.void);
@@ -842,7 +831,7 @@ export function makeOpenCodeAdapter(
           context.pendingQuestions.delete(event.properties.requestID);
           const answers = Object.fromEntries(
             (request?.questions ?? []).map((question, index) => [
-              openCodeQuestionId(index, question),
+              OpenCodeRuntime.openCodeQuestionId(index, question),
               event.properties.answers[index]?.join(", ") ?? "",
             ]),
           );
@@ -976,7 +965,7 @@ export function makeOpenCodeAdapter(
       // Fibers forked into `context.sessionScope` are interrupted
       // automatically when the scope closes — no bookkeeping required.
       yield* Effect.flatMap(
-        runOpenCodeSdk("event.subscribe", () =>
+        OpenCodeRuntime.runOpenCodeSdk("event.subscribe", () =>
           context.client.event.subscribe(undefined, {
             signal: eventsAbortController.signal,
           }),
@@ -985,9 +974,9 @@ export function makeOpenCodeAdapter(
           Stream.fromAsyncIterable(
             subscription.stream,
             (cause) =>
-              new OpenCodeRuntimeError({
+              new OpenCodeRuntime.OpenCodeRuntimeError({
                 operation: "event.subscribe",
-                detail: openCodeRuntimeErrorDetail(cause),
+                detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
                 cause,
               }),
           ).pipe(Stream.runForEach((event) => handleSubscribedEvent(context, event))),
@@ -1003,7 +992,7 @@ export function makeOpenCodeAdapter(
             if (Exit.isFailure(exit)) {
               yield* emitUnexpectedExit(
                 context,
-                openCodeRuntimeErrorDetail(Cause.squash(exit.cause)),
+                OpenCodeRuntime.openCodeRuntimeErrorDetail(Cause.squash(exit.cause)),
               );
             }
           }),
@@ -1057,7 +1046,7 @@ export function makeOpenCodeAdapter(
               });
               const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
               if (mcpSession && !server.external) {
-                yield* runOpenCodeSdk("mcp.add", () =>
+                yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
                   client.mcp.add({
                     name: "t3-code",
                     config: {
@@ -1071,14 +1060,14 @@ export function makeOpenCodeAdapter(
                   }),
                 );
               }
-              const openCodeSession = yield* runOpenCodeSdk("session.create", () =>
+              const openCodeSession = yield* OpenCodeRuntime.runOpenCodeSdk("session.create", () =>
                 client.session.create({
                   title: `T3 Code ${input.threadId}`,
-                  permission: buildOpenCodePermissionRules(input.runtimeMode),
+                  permission: OpenCodeRuntime.buildOpenCodePermissionRules(input.runtimeMode),
                 }),
               );
               if (!openCodeSession.data) {
-                return yield* new OpenCodeRuntimeError({
+                return yield* new OpenCodeRuntime.OpenCodeRuntimeError({
                   operation: "session.create",
                   detail: "OpenCode session.create returned no session payload.",
                 });
@@ -1104,7 +1093,7 @@ export function makeOpenCodeAdapter(
         if (raceWinner) {
           // Another call won the race – clean up the session we just created
           // (including the remote SDK session) and return the existing one.
-          yield* runOpenCodeSdk("session.abort", () =>
+          yield* OpenCodeRuntime.runOpenCodeSdk("session.abort", () =>
             started.client.session.abort({
               sessionID: started.openCodeSession.id,
             }),
@@ -1186,7 +1175,7 @@ export function makeOpenCodeAdapter(
           issue: `OpenCode model selection is bound to instance '${modelSelection?.instanceId}', expected '${boundInstanceId}'.`,
         });
       }
-      const parsedModel = parseOpenCodeModelSlug(modelSelection?.model);
+      const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(modelSelection?.model);
       if (!parsedModel) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -1196,7 +1185,7 @@ export function makeOpenCodeAdapter(
       }
 
       const text = input.input?.trim();
-      const fileParts = toOpenCodeFileParts({
+      const fileParts = OpenCodeRuntime.toOpenCodeFileParts({
         attachments: input.attachments,
         resolveAttachmentPath: (attachment) =>
           resolveAttachmentPath({
@@ -1239,7 +1228,7 @@ export function makeOpenCodeAdapter(
         });
       }
 
-      yield* runOpenCodeSdk("session.promptAsync", () =>
+      yield* OpenCodeRuntime.runOpenCodeSdk("session.promptAsync", () =>
         context.client.session.promptAsync({
           sessionID: context.openCodeSessionId,
           model: parsedModel,
@@ -1293,7 +1282,7 @@ export function makeOpenCodeAdapter(
     const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
       function* (threadId, turnId) {
         const context = ensureSessionContext(sessions, threadId);
-        yield* runOpenCodeSdk("session.abort", () =>
+        yield* OpenCodeRuntime.runOpenCodeSdk("session.abort", () =>
           context.client.session.abort({ sessionID: context.openCodeSessionId }),
         ).pipe(Effect.mapError(toRequestError));
         if (turnId ?? context.activeTurnId) {
@@ -1323,10 +1312,10 @@ export function makeOpenCodeAdapter(
         });
       }
 
-      yield* runOpenCodeSdk("permission.reply", () =>
+      yield* OpenCodeRuntime.runOpenCodeSdk("permission.reply", () =>
         context.client.permission.reply({
           requestID: requestId,
-          reply: toOpenCodePermissionReply(decision),
+          reply: OpenCodeRuntime.toOpenCodePermissionReply(decision),
         }),
       ).pipe(Effect.mapError(toRequestError));
     });
@@ -1344,10 +1333,10 @@ export function makeOpenCodeAdapter(
         });
       }
 
-      yield* runOpenCodeSdk("question.reply", () =>
+      yield* OpenCodeRuntime.runOpenCodeSdk("question.reply", () =>
         context.client.question.reply({
           requestID: requestId,
-          answers: toOpenCodeQuestionAnswers(request, answers),
+          answers: OpenCodeRuntime.toOpenCodeQuestionAnswers(request, answers),
         }),
       ).pipe(Effect.mapError(toRequestError));
     });
@@ -1387,7 +1376,7 @@ export function makeOpenCodeAdapter(
     const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
       function* (threadId) {
         const context = ensureSessionContext(sessions, threadId);
-        const messages = yield* runOpenCodeSdk("session.messages", () =>
+        const messages = yield* OpenCodeRuntime.runOpenCodeSdk("session.messages", () =>
           context.client.session.messages({
             sessionID: context.openCodeSessionId,
           }),
@@ -1413,7 +1402,7 @@ export function makeOpenCodeAdapter(
     const rollbackThread: OpenCodeAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
       function* (threadId, numTurns) {
         const context = ensureSessionContext(sessions, threadId);
-        const messages = yield* runOpenCodeSdk("session.messages", () =>
+        const messages = yield* OpenCodeRuntime.runOpenCodeSdk("session.messages", () =>
           context.client.session.messages({
             sessionID: context.openCodeSessionId,
           }),
@@ -1424,7 +1413,7 @@ export function makeOpenCodeAdapter(
         );
         const targetIndex = assistantMessages.length - numTurns - 1;
         const target = targetIndex >= 0 ? assistantMessages[targetIndex] : null;
-        yield* runOpenCodeSdk("session.revert", () =>
+        yield* OpenCodeRuntime.runOpenCodeSdk("session.revert", () =>
           context.client.session.revert({
             sessionID: context.openCodeSessionId,
             ...(target ? { messageID: target.info.id } : {}),

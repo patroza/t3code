@@ -18,11 +18,7 @@ import {
   providerModelsFromSettings,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  OpenCodeRuntime,
-  openCodeRuntimeErrorDetail,
-  type OpenCodeInventory,
-} from "../opencodeRuntime.ts";
+import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
@@ -219,7 +215,9 @@ function openCodeCapabilitiesForModel(input: {
   });
 }
 
-function flattenOpenCodeModels(input: OpenCodeInventory): ReadonlyArray<ServerProviderModel> {
+function flattenOpenCodeModels(
+  input: OpenCodeRuntime.OpenCodeInventory,
+): ReadonlyArray<ServerProviderModel> {
   const connected = new Set(input.providerList.connected);
   const models: Array<ServerProviderModel> = [];
 
@@ -302,8 +300,8 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   openCodeSettings: OpenCodeSettings,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
-): Effect.fn.Return<ServerProviderDraft, never, OpenCodeRuntime> {
-  const openCodeRuntime = yield* OpenCodeRuntime;
+): Effect.fn.Return<ServerProviderDraft, never, OpenCodeRuntime.OpenCodeRuntime> {
+  const openCodeRuntime = yield* OpenCodeRuntime.OpenCodeRuntime;
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const customModels = openCodeSettings.customModels;
@@ -369,7 +367,11 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
         })
         .pipe(
           Effect.mapError(
-            (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
+            (cause) =>
+              new OpenCodeProbeError({
+                cause,
+                detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
+              }),
           ),
         ),
     );
@@ -427,7 +429,11 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
         );
       }).pipe(
         Effect.mapError(
-          (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
+          (cause) =>
+            new OpenCodeProbeError({
+              cause,
+              detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
+            }),
         ),
       ),
     ),
