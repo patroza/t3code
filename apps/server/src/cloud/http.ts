@@ -770,13 +770,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
     CloudRelayConfigurationError: (error) =>
       failEnvironmentCloudInternalError(error.message)(error),
     CloudRelayRequestError: (error) => failEnvironmentCloudInternalError(error.message)(error),
-    CloudCliCredentialRemovalError: (error) =>
-      failEnvironmentCloudInternalError(error.message)(error),
     CloudCliCredentialRefreshError: (error) =>
-      failEnvironmentCloudInternalError(error.message)(error),
-    CloudCliCredentialReadError: (error) => failEnvironmentCloudInternalError(error.message)(error),
-    CloudCliAuthorizationError: (error) => failEnvironmentCloudInternalError(error.message)(error),
-    CloudCliAuthorizationTimeoutError: (error) =>
       failEnvironmentCloudInternalError(error.message)(error),
   }),
 );
