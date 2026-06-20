@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { EnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
 import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 
@@ -262,6 +263,15 @@ describe("thread outbox", () => {
   });
 
   it("retries transport failures but drops deterministic command failures", () => {
+    expect(
+      shouldRetryThreadOutboxDelivery(
+        new EnvironmentRpcUnavailableError({
+          environmentId: EnvironmentId.make("environment-1"),
+          environmentLabel: "Test environment",
+          method: "thread.turn.start",
+        }),
+      ),
+    ).toBe(true);
     expect(shouldRetryThreadOutboxDelivery(new Error("Socket is not connected"))).toBe(true);
     expect(
       shouldRetryThreadOutboxDelivery({

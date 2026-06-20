@@ -1,4 +1,5 @@
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
+import { isEnvironmentRpcUnavailableError } from "@t3tools/client-runtime/rpc";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import { CommandId, EnvironmentId, IsoDateTime, MessageId, ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -109,6 +110,9 @@ function errorMessage(error: unknown): string | null {
 }
 
 export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
+  if (isEnvironmentRpcUnavailableError(error)) {
+    return true;
+  }
   if (
     typeof error === "object" &&
     error !== null &&

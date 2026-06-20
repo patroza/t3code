@@ -1,4 +1,4 @@
-import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import { EnvironmentId, ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -15,10 +15,18 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 export class EnvironmentRpcUnavailableError extends Schema.TaggedErrorClass<EnvironmentRpcUnavailableError>()(
   "EnvironmentRpcUnavailableError",
   {
-    environmentId: Schema.String,
-    message: Schema.String,
+    environmentId: EnvironmentId,
+    environmentLabel: Schema.String,
+    method: Schema.optionalKey(Schema.String),
   },
-) {}
+) {
+  override get message(): string {
+    const method = this.method === undefined ? "" : ` for RPC method ${this.method}`;
+    return `${this.environmentLabel} is not connected${method}.`;
+  }
+}
+
+export const isEnvironmentRpcUnavailableError = Schema.is(EnvironmentRpcUnavailableError);
 
 export interface EnvironmentRpcRequestObservation {
   readonly environmentId: string;
@@ -85,7 +93,7 @@ export type EnvironmentRpcStreamFailure<TTag extends EnvironmentStreamRpcTag> =
     ? E
     : never;
 
-const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* () {
+const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* (method?: string) {
   const supervisor = yield* EnvironmentSupervisor;
   return yield* SubscriptionRef.get(supervisor.session).pipe(
     Effect.flatMap(
@@ -94,7 +102,8 @@ const currentSession = Effect.fn("EnvironmentRpc.currentSession")(function* () {
           Effect.fail(
             new EnvironmentRpcUnavailableError({
               environmentId: supervisor.target.environmentId,
-              message: `${supervisor.target.label} is not connected.`,
+              environmentLabel: supervisor.target.label,
+              ...(method === undefined ? {} : { method }),
             }),
           ),
         onSome: Effect.succeed,
@@ -111,7 +120,7 @@ export const request = Effect.fn("EnvironmentRpc.request")(function* <
     "environment.id": supervisor.target.environmentId,
     "rpc.method": tag,
   });
-  const session = yield* currentSession();
+  const session = yield* currentSession(tag);
   const observer = yield* EnvironmentRpcRequestObserver;
   const method = session.client[tag] as (
     input: EnvironmentRpcInput<TTag>,
@@ -132,7 +141,7 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
   EnvironmentSupervisor
 > {
   return Stream.unwrap(
-    currentSession().pipe(
+    currentSession(tag).pipe(
       Effect.map((session) => {
         const method = session.client[tag] as (
           input: EnvironmentRpcInput<TTag>,
@@ -195,7 +204,8 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
                             Effect.logWarning(
                               "Durable RPC subscription lost its transport; waiting for the next session.",
                               {
-                                cause: Cause.pretty(cause),
+                                errorTag: "RpcClientError",
+                                reasonCount: cause.reasons.length,
                                 method: tag,
                                 environmentId: supervisor.target.environmentId,
                               },
