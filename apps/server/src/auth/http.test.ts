@@ -23,47 +23,43 @@ const loggerLayer = (messages: Array<unknown>) =>
   );
 
 describe("auth http diagnostics", () => {
-  it.effect(
-    "retains the exact internal cause while logging and encoding bounded diagnostics",
-    () => {
-      const messages: Array<unknown> = [];
-      const cause = new Error("credential=secret-value");
+  it.effect("logs and encodes bounded internal diagnostics without exposing secrets", () => {
+    const messages: Array<unknown> = [];
+    const cause = new Error("credential=secret-value");
 
-      return Effect.gen(function* () {
-        const error = yield* Effect.flip(
-          AuthHttp.failEnvironmentInternal("browser_session_cookie_failed", cause),
-        );
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        AuthHttp.failEnvironmentInternal("browser_session_cookie_failed", cause),
+      );
 
-        expect(error).toBeInstanceOf(AuthHttp.EnvironmentHttpInternalError);
-        expect(error.cause).toBe(cause);
-        expect(error.failureTag).toBe("Error");
-        expect(error.message).toBe(
-          "Environment API operation failed (browser_session_cookie_failed).",
-        );
-        expect(encodeEnvironmentInternalError(error)).toEqual({
-          _tag: "EnvironmentInternalError",
-          code: "internal_error",
-          reason: "browser_session_cookie_failed",
-          traceId: error.traceId,
-        });
+      expect(error).toBeInstanceOf(AuthHttp.EnvironmentHttpInternalError);
+      expect(error.failureTag).toBe("Error");
+      expect(error.message).toBe(
+        "Environment API operation failed (browser_session_cookie_failed).",
+      );
+      expect(encodeEnvironmentInternalError(error)).toEqual({
+        _tag: "EnvironmentInternalError",
+        code: "internal_error",
+        reason: "browser_session_cookie_failed",
+        traceId: error.traceId,
+      });
 
-        expect(messages).toEqual([
-          [
-            "environment api operation failed",
-            {
-              reason: "browser_session_cookie_failed",
-              traceId: error.traceId,
-              failureTag: "Error",
-              reasonCount: 1,
-              failureCount: 1,
-              defectCount: 0,
-              interruptionCount: 0,
-            },
-          ],
-        ]);
-      }).pipe(Effect.provide(loggerLayer(messages)));
-    },
-  );
+      expect(messages).toEqual([
+        [
+          "environment api operation failed",
+          {
+            reason: "browser_session_cookie_failed",
+            traceId: error.traceId,
+            failureTag: "Error",
+            reasonCount: 1,
+            failureCount: 1,
+            defectCount: 0,
+            interruptionCount: 0,
+          },
+        ],
+      ]);
+    }).pipe(Effect.provide(loggerLayer(messages)));
+  });
 
   it.effect("logs request failures without serializing their Error or Cause values", () => {
     const messages: Array<unknown> = [];
