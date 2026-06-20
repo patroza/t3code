@@ -3,6 +3,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { make as makeJsonSchemaGenerator } from "@effect/openapi-generator/JsonSchemaGenerator";
+import { getUrlDiagnostics } from "@t3tools/shared/urlDiagnostics";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -59,14 +60,141 @@ interface JsonSchemaFile {
   readonly fileName: string;
   readonly downloadUrl: string;
   readonly qualifiedName: string;
+  readonly repositoryPath: string;
 }
 
-class GeneratorError extends Schema.TaggedErrorClass<GeneratorError>()("GeneratorError", {
-  detail: Schema.String,
-  cause: Schema.optional(Schema.Defect()),
-}) {
-  override get message() {
-    return this.detail;
+const urlDiagnosticsSchema = {
+  urlInputLength: Schema.Number,
+  urlProtocol: Schema.optionalKey(Schema.String),
+  urlHostname: Schema.optionalKey(Schema.String),
+};
+
+function urlDiagnosticFields(url: string) {
+  const diagnostics = getUrlDiagnostics(url);
+  return {
+    urlInputLength: diagnostics.inputLength,
+    ...(diagnostics.protocol === undefined ? {} : { urlProtocol: diagnostics.protocol }),
+    ...(diagnostics.hostname === undefined ? {} : { urlHostname: diagnostics.hostname }),
+  };
+}
+
+export class GeneratorFetchError extends Schema.TaggedErrorClass<GeneratorFetchError>()(
+  "GeneratorFetchError",
+  {
+    ...urlDiagnosticsSchema,
+    stage: Schema.Literals(["request", "read-response"]),
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    const source = this.urlHostname === undefined ? "the configured source" : this.urlHostname;
+    return `Failed to fetch a Codex generator input from ${source} during ${this.stage}.`;
+  }
+}
+
+export class GeneratorDirectoryDecodeError extends Schema.TaggedErrorClass<GeneratorDirectoryDecodeError>()(
+  "GeneratorDirectoryDecodeError",
+  {
+    directoryPath: Schema.String,
+    ...urlDiagnosticsSchema,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to decode the GitHub directory listing for ${this.directoryPath}.`;
+  }
+}
+
+export class GeneratorSchemaDocumentDecodeError extends Schema.TaggedErrorClass<GeneratorSchemaDocumentDecodeError>()(
+  "GeneratorSchemaDocumentDecodeError",
+  {
+    repositoryPath: Schema.String,
+    ...urlDiagnosticsSchema,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to decode the Codex schema document ${this.repositoryPath}.`;
+  }
+}
+
+export class GeneratorFormatProcessError extends Schema.TaggedErrorClass<GeneratorFormatProcessError>()(
+  "GeneratorFormatProcessError",
+  {
+    operation: Schema.Literals(["spawn", "wait-for-exit"]),
+    command: Schema.String,
+    argumentCount: Schema.Number,
+    generatedDir: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Generator formatting command ${this.command} failed during ${this.operation} for ${this.generatedDir}.`;
+  }
+}
+
+export class GeneratorFormatExitError extends Schema.TaggedErrorClass<GeneratorFormatExitError>()(
+  "GeneratorFormatExitError",
+  {
+    command: Schema.String,
+    argumentCount: Schema.Number,
+    generatedDir: Schema.String,
+    exitCode: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Generator formatting command ${this.command} exited with code ${this.exitCode} for ${this.generatedDir}.`;
+  }
+}
+
+export class GeneratorSchemaValueDeclarationMissingError extends Schema.TaggedErrorClass<GeneratorSchemaValueDeclarationMissingError>()(
+  "GeneratorSchemaValueDeclarationMissingError",
+  {
+    lineIndex: Schema.Number,
+    typeDeclarationLength: Schema.Number,
+    nextLinePresent: Schema.Boolean,
+    nextLineLength: Schema.optional(Schema.Number),
+  },
+) {
+  override get message(): string {
+    return `Generated schema type declaration at line ${this.lineIndex + 1} has no following value declaration.`;
+  }
+}
+
+export class GeneratorSchemaNameParseError extends Schema.TaggedErrorClass<GeneratorSchemaNameParseError>()(
+  "GeneratorSchemaNameParseError",
+  {
+    lineIndex: Schema.Number,
+    typeDeclarationLength: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Could not extract a schema name from generated declaration at line ${this.lineIndex + 1}.`;
+  }
+}
+
+export class GeneratorSchemaTypeResolutionError extends Schema.TaggedErrorClass<GeneratorSchemaTypeResolutionError>()(
+  "GeneratorSchemaTypeResolutionError",
+  {
+    rawTypeName: Schema.String,
+    candidates: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Unable to resolve schema type ${this.rawTypeName}; tried ${this.candidates.join(", ")}.`;
+  }
+}
+
+export class GeneratorExternalReferenceResolutionError extends Schema.TaggedErrorClass<GeneratorExternalReferenceResolutionError>()(
+  "GeneratorExternalReferenceResolutionError",
+  {
+    reference: Schema.String,
+    currentNamespace: Schema.NullOr(Schema.String),
+    candidates: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Unable to rewrite external reference ${this.reference} in namespace ${this.currentNamespace ?? "<root>"}; tried ${this.candidates.join(", ")}.`;
   }
 }
 
@@ -162,30 +290,108 @@ const ensureGeneratedDir = Effect.fn("ensureGeneratedDir")(function* () {
   yield* fs.makeDirectory(generatedDir, { recursive: true });
 });
 
-const fetchText = Effect.fn("fetchText")(function* (url: string) {
-  return yield* HttpClientRequest.get(url).pipe(
+export const fetchText = Effect.fn("fetchText")(function* (url: string) {
+  const response = yield* HttpClientRequest.get(url).pipe(
     HttpClientRequest.setHeader("user-agent", USER_AGENT),
     HttpClient.execute,
     Effect.flatMap(HttpClientResponse.filterStatusOk),
-    Effect.flatMap((okResponse) => okResponse.text),
     Effect.mapError(
       (cause) =>
-        new GeneratorError({
-          detail: `Failed to fetch ${url}`,
+        new GeneratorFetchError({
+          ...urlDiagnosticFields(url),
+          stage: "request",
+          cause,
+        }),
+    ),
+  );
+  return yield* response.text.pipe(
+    Effect.mapError(
+      (cause) =>
+        new GeneratorFetchError({
+          ...urlDiagnosticFields(url),
+          stage: "read-response",
           cause,
         }),
     ),
   );
 });
 
-const fetchDirectoryEntries = Effect.fn("fetchDirectoryEntries")(function* (path: string) {
-  const raw = yield* fetchText(`${GITHUB_API_BASE}/${path}?ref=${UPSTREAM_REF}`);
-  return yield* decodeGithubContentEntries(raw);
+export const fetchDirectoryEntries = Effect.fn("fetchDirectoryEntries")(function* (
+  directoryPath: string,
+) {
+  const url = `${GITHUB_API_BASE}/${directoryPath}?ref=${UPSTREAM_REF}`;
+  const raw = yield* fetchText(url);
+  return yield* decodeGithubContentEntries(raw).pipe(
+    Effect.mapError(
+      (cause) =>
+        new GeneratorDirectoryDecodeError({
+          directoryPath,
+          ...urlDiagnosticFields(url),
+          cause,
+        }),
+    ),
+  );
 });
 
-function collectSchemaEntries(
-  chunk: string,
-): ReadonlyArray<{ readonly name: string; readonly code: string }> {
+export const decodeSchemaDocument = Effect.fn("decodeSchemaDocument")(function* (input: {
+  readonly repositoryPath: string;
+  readonly url: string;
+  readonly raw: string;
+}) {
+  return yield* decodeJsonSchemaDocument(input.raw).pipe(
+    Effect.mapError(
+      (cause) =>
+        new GeneratorSchemaDocumentDecodeError({
+          repositoryPath: input.repositoryPath,
+          ...urlDiagnosticFields(input.url),
+          cause,
+        }),
+    ),
+  );
+});
+
+export const formatGeneratedFiles = Effect.fn("formatGeneratedFiles")(function* (
+  generatedDir: string,
+) {
+  const command = "vp";
+  const args = ["fmt", generatedDir, "--write"];
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const child = yield* spawner.spawn(ChildProcess.make(command, args)).pipe(
+    Effect.mapError(
+      (cause) =>
+        new GeneratorFormatProcessError({
+          operation: "spawn",
+          command,
+          argumentCount: args.length,
+          generatedDir,
+          cause,
+        }),
+    ),
+  );
+  const exitCode = yield* child.exitCode.pipe(
+    Effect.mapError(
+      (cause) =>
+        new GeneratorFormatProcessError({
+          operation: "wait-for-exit",
+          command,
+          argumentCount: args.length,
+          generatedDir,
+          cause,
+        }),
+    ),
+  );
+
+  if (exitCode !== 0) {
+    return yield* new GeneratorFormatExitError({
+      command,
+      argumentCount: args.length,
+      generatedDir,
+      exitCode,
+    });
+  }
+});
+
+export const collectSchemaEntries = Effect.fn("collectSchemaEntries")(function* (chunk: string) {
   const lines = chunk
     .split("\n")
     .map((line) => line.trim())
@@ -200,12 +406,20 @@ function collectSchemaEntries(
 
     const constLine = lines[index + 1];
     if (!constLine?.startsWith("export const ")) {
-      throw new Error(`Malformed generator output near: ${typeLine}`);
+      return yield* new GeneratorSchemaValueDeclarationMissingError({
+        lineIndex: index,
+        typeDeclarationLength: typeLine.length,
+        nextLinePresent: constLine !== undefined,
+        ...(constLine === undefined ? {} : { nextLineLength: constLine.length }),
+      });
     }
 
     const match = /^export type ([A-Za-z0-9_]+)/.exec(typeLine);
     if (!match?.[1]) {
-      throw new Error(`Could not extract schema name from: ${typeLine}`);
+      return yield* new GeneratorSchemaNameParseError({
+        lineIndex: index,
+        typeDeclarationLength: typeLine.length,
+      });
     }
 
     entries.push({
@@ -216,7 +430,7 @@ function collectSchemaEntries(
   }
 
   return entries;
-}
+});
 
 function normalizeNullableTypes(value: Schema.Json): Schema.Json {
   if (Array.isArray(value)) {
@@ -337,7 +551,7 @@ function resolveSchemaTypeName(
     }
   }
 
-  throw new Error(`Unable to resolve schema type name: ${rawTypeName}`);
+  throw new GeneratorSchemaTypeResolutionError({ rawTypeName, candidates });
 }
 
 function resolveResponseTypeName(
@@ -454,6 +668,7 @@ function buildJsonSchemaFiles(
           fileName: entry.name,
           downloadUrl: entry.download_url!,
           qualifiedName: relative.replace(/\.json$/, ""),
+          repositoryPath: entry.path,
         } satisfies JsonSchemaFile;
       }
       return {
@@ -461,6 +676,7 @@ function buildJsonSchemaFiles(
         fileName: entry.name,
         downloadUrl: entry.download_url!,
         qualifiedName: relative.replace(/\.json$/, ""),
+        repositoryPath: entry.path,
       } satisfies JsonSchemaFile;
     });
 }
@@ -504,7 +720,11 @@ function rewriteExternalRefs(
           .find((candidate) => candidate !== undefined);
 
         if (!rewritten) {
-          throw new Error(`Missing rewritten definition for ref: ${child}`);
+          throw new GeneratorExternalReferenceResolutionError({
+            reference: child,
+            currentNamespace: currentNamespace ?? null,
+            candidates,
+          });
         }
 
         return [key, `#/definitions/${rewritten}`];
@@ -545,7 +765,11 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
 
   for (const file of jsonSchemaFiles) {
     const raw = yield* fetchText(file.downloadUrl);
-    const parsed = yield* decodeJsonSchemaDocument(raw);
+    const parsed = yield* decodeSchemaDocument({
+      repositoryPath: file.repositoryPath,
+      url: file.downloadUrl,
+      raw,
+    });
     const localDefinitionNames = new Map(
       Object.keys(parsed.definitions ?? {}).map((definitionName) => [
         definitionName,
@@ -601,7 +825,8 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
   const generatedEntries = new Map<string, string>();
   const output = generator.generate("openapi-3.1", aggregateSchemas as never, false).trim();
   if (output.length > 0) {
-    for (const entry of collectSchemaEntries(output)) {
+    const schemaEntries = yield* collectSchemaEntries(output);
+    for (const entry of schemaEntries) {
       if (!generatedEntries.has(entry.name)) {
         generatedEntries.set(entry.name, entry.code);
       }
@@ -745,31 +970,19 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
 
   yield* Effect.log(`Generated Codex App Server schemas from ${UPSTREAM_REF}`);
 
-  yield* Effect.service(ChildProcessSpawner.ChildProcessSpawner).pipe(
-    Effect.flatMap((spawner) =>
-      spawner.spawn(ChildProcess.make("vp", ["fmt", generatedDir, "--write"])),
-    ),
-    Effect.flatMap((child) => child.exitCode),
-    Effect.tap((code) =>
-      code === 0
-        ? Effect.void
-        : Effect.fail(
-            new GeneratorError({
-              detail: `vp fmt failed with exit code ${code}`,
-            }),
-          ),
-    ),
-  );
+  yield* formatGeneratedFiles(generatedDir);
 });
 
-generateFiles().pipe(
-  Effect.scoped,
-  Effect.provide(
-    Layer.mergeAll(
-      Logger.layer([Logger.consolePretty()]),
-      NodeServices.layer,
-      FetchHttpClient.layer,
+if (import.meta.main) {
+  generateFiles().pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(
+        Logger.layer([Logger.consolePretty()]),
+        NodeServices.layer,
+        FetchHttpClient.layer,
+      ),
     ),
-  ),
-  NodeRuntime.runMain,
-);
+    NodeRuntime.runMain,
+  );
+}
