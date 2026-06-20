@@ -23,10 +23,12 @@ import {
 import type { AuthEnvironmentScope } from "@t3tools/contracts";
 import { parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -42,6 +44,72 @@ const CREDENTIAL_RESPONSE_HEADERS = {
   "cache-control": "no-store",
   pragma: "no-cache",
 } as const;
+
+const MAX_FAILURE_TAG_LENGTH = 128;
+const MAX_CAUSE_CHAIN_DEPTH = 32;
+
+const EnvironmentFailureTag = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_FAILURE_TAG_LENGTH),
+);
+
+function failureLogAttributes(input: unknown) {
+  const cause = Cause.isCause(input) ? input : Cause.fail(input);
+  let failureCount = 0;
+  let defectCount = 0;
+  let interruptionCount = 0;
+  for (const reason of cause.reasons) {
+    switch (reason._tag) {
+      case "Fail":
+        failureCount += 1;
+        break;
+      case "Die":
+        defectCount += 1;
+        break;
+      case "Interrupt":
+        interruptionCount += 1;
+        break;
+    }
+  }
+  const unboundedFailureTag = causeErrorTag(cause).trim() || "Unknown";
+  return {
+    failureTag: unboundedFailureTag.slice(0, MAX_FAILURE_TAG_LENGTH),
+    reasonCount: cause.reasons.length,
+    failureCount,
+    defectCount,
+    interruptionCount,
+  };
+}
+
+function findInterruptCause(input: unknown): Cause.Cause<never> | undefined {
+  const seen = new Set<object>();
+  let current = input;
+  for (let depth = 0; depth < MAX_CAUSE_CHAIN_DEPTH; depth += 1) {
+    if (Cause.isCause(current)) {
+      return Cause.hasInterruptsOnly(current) ? (current as Cause.Cause<never>) : undefined;
+    }
+    if (typeof current !== "object" || current === null || seen.has(current)) {
+      return undefined;
+    }
+    seen.add(current);
+    if (!("cause" in current)) {
+      return undefined;
+    }
+    current = current.cause;
+  }
+  return undefined;
+}
+
+export class EnvironmentHttpInternalError extends EnvironmentInternalError.extend<EnvironmentHttpInternalError>(
+  "EnvironmentHttpInternalError",
+)({
+  failureTag: EnvironmentFailureTag,
+  cause: Schema.Defect(),
+}) {
+  override get message(): string {
+    return `Environment API operation failed (${this.reason}).`;
+  }
+}
 
 const appendCredentialResponseHeaders = HttpEffect.appendPreResponseHandler((_request, response) =>
   Effect.succeed(HttpServerResponse.setHeaders(response, CREDENTIAL_RESPONSE_HEADERS)),
@@ -75,12 +143,11 @@ export function annotateEnvironmentRequest(endpoint: string) {
     const traceId = yield* currentEnvironmentTraceId;
 
     yield* Effect.addFinalizer((exit) =>
-      exit._tag === "Failure"
+      exit._tag === "Failure" && !Cause.hasInterruptsOnly(exit.cause)
         ? Effect.logWarning("environment api request failed", {
             endpoint,
             traceId,
-            errorTag: causeErrorTag(exit.cause),
-            cause: exit.cause,
+            ...failureLogAttributes(exit.cause),
           })
         : Effect.void,
     );
@@ -137,19 +204,28 @@ function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_a
   );
 }
 
-export function failEnvironmentInternal(reason: EnvironmentInternalErrorReason, error?: unknown) {
-  return Effect.gen(function* () {
-    const traceId = yield* currentEnvironmentTraceId;
-    if (error !== undefined) {
-      yield* Effect.logError("environment api operation failed", {
-        reason,
-        traceId,
-        cause: error,
-      });
+export const failEnvironmentInternal = Effect.fn("environment.auth.failEnvironmentInternal")(
+  function* (reason: EnvironmentInternalErrorReason, cause: unknown) {
+    const interruptCause = findInterruptCause(cause);
+    if (interruptCause !== undefined) {
+      return yield* Effect.failCause(interruptCause);
     }
-    return yield* new EnvironmentInternalError({ code: "internal_error", reason, traceId });
-  });
-}
+    const traceId = yield* currentEnvironmentTraceId;
+    const diagnostics = failureLogAttributes(cause);
+    yield* Effect.logError("environment api operation failed", {
+      reason,
+      traceId,
+      ...diagnostics,
+    });
+    return yield* new EnvironmentHttpInternalError({
+      code: "internal_error",
+      reason,
+      traceId,
+      failureTag: diagnostics.failureTag,
+      cause,
+    });
+  },
+);
 
 const failAuthenticationInternal = (error: EnvironmentAuth.ServerAuthAuthenticationInternalError) =>
   failEnvironmentInternal("internal_error", error);
@@ -242,7 +318,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                 path: "/",
                 sameSite: "lax",
               }),
-            ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
+            ).pipe(
+              Effect.catchTags({
+                CookieError: (cause) =>
+                  failEnvironmentInternal("browser_session_cookie_failed", cause),
+              }),
+            );
 
             yield* HttpEffect.appendPreResponseHandler((_request, response) =>
               Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
