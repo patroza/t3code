@@ -1237,21 +1237,22 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
                 relayClient
                   .installWithProgress((event) => Queue.offer(queue, event).pipe(Effect.asVoid))
                   .pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new RelayClientInstallFailedError({
+                          reason: relayClientInstallFailureReason(error),
+                          message: error.message,
+                        }),
+                    ),
                     Effect.flatMap((status) =>
                       Queue.offer(queue, {
                         type: "complete",
                         status,
                       }),
                     ),
-                    Effect.catch((error) =>
-                      Queue.fail(
-                        queue,
-                        new RelayClientInstallFailedError({
-                          reason: relayClientInstallFailureReason(error),
-                          message: error.message,
-                        }),
-                      ),
-                    ),
+                    Effect.catchTags({
+                      RelayClientInstallFailedError: (error) => Queue.fail(queue, error),
+                    }),
                     Effect.andThen(Queue.end(queue)),
                     Effect.forkScoped,
                   ),
