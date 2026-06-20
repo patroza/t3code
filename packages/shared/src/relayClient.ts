@@ -363,15 +363,6 @@ function isAlreadyExists(error: PlatformError.PlatformError): boolean {
   return error.reason._tag === "AlreadyExists";
 }
 
-const wrapInstallFailure =
-  (
-    makeError: (cause: unknown) => RelayClientInstallError,
-  ): (<E, R>(
-    effect: Effect.Effect<void, E, R>,
-  ) => Effect.Effect<void, RelayClientInstallError, R>) =>
-  (effect) =>
-    effect.pipe(Effect.mapError(makeError));
-
 export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function* (
   options: CloudflaredRelayClientOptions,
 ): Effect.fn.Return<
@@ -575,7 +566,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     const managedDirectory = path.dirname(managedPath);
     const lockPath = `${managedPath}.lock`;
     yield* fileSystem.makeDirectory(managedDirectory, { recursive: true }).pipe(
-      wrapInstallFailure(
+      Effect.mapError(
         (cause) =>
           new RelayClientDirectoryCreateError({
             directoryPath: managedDirectory,
@@ -610,7 +601,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       const download = yield* downloadAsset(releaseAsset, report);
       yield* report("installing");
       yield* fileSystem.writeFile(archivePath, download).pipe(
-        wrapInstallFailure(
+        Effect.mapError(
           (cause) =>
             new RelayClientDownloadWriteError({
               archivePath,
@@ -622,7 +613,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       const executablePath = path.join(tempDirectory, executableFileName(platform));
       if (releaseAsset.archive === "tgz") {
         yield* runCommand("tar", ["-xzf", archivePath, "-C", tempDirectory]).pipe(
-          wrapInstallFailure(
+          Effect.mapError(
             (cause) =>
               new RelayClientArchiveExtractError({
                 archivePath,
@@ -634,7 +625,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       }
       if (platform !== "win32") {
         yield* fileSystem.chmod(executablePath, 0o755).pipe(
-          wrapInstallFailure(
+          Effect.mapError(
             (cause) =>
               new RelayClientExecutablePermissionError({
                 executablePath,
@@ -645,7 +636,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       }
       yield* report("validating");
       yield* runCommand(executablePath, ["--version"]).pipe(
-        wrapInstallFailure(
+        Effect.mapError(
           (cause) =>
             new RelayClientExecutableValidationError({
               executablePath,
@@ -657,7 +648,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       const stagedPath = `${managedPath}.${yield* crypto.randomUUIDv4}.tmp`;
       yield* report("activating");
       yield* fileSystem.rename(executablePath, stagedPath).pipe(
-        wrapInstallFailure(
+        Effect.mapError(
           (cause) =>
             new RelayClientStageError({
               sourcePath: executablePath,
@@ -667,7 +658,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
         ),
       );
       yield* fileSystem.rename(stagedPath, managedPath).pipe(
-        wrapInstallFailure(
+        Effect.mapError(
           (cause) =>
             new RelayClientActivationError({
               sourcePath: stagedPath,
@@ -686,15 +677,16 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     }).pipe(
       Effect.scoped,
       Effect.ensuring(fileSystem.remove(lockPath, { force: true }).pipe(Effect.ignore)),
-      Effect.catch((cause) =>
-        isRelayClientInstallError(cause)
-          ? Effect.fail(cause)
-          : Effect.fail(
-              new RelayClientInstallWriteError({
-                managedPath,
-                cause,
-              }),
-            ),
+      Effect.catch(
+        (cause): Effect.Effect<never, RelayClientInstallError> =>
+          isRelayClientInstallError(cause)
+            ? Effect.fail(cause)
+            : Effect.fail(
+                new RelayClientInstallWriteError({
+                  managedPath,
+                  cause,
+                }),
+              ),
       ),
     );
   });
