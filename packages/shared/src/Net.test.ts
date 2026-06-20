@@ -31,9 +31,7 @@ const openServer = (host?: string): Effect.Effect<NodeNet.Server, NetService.Net
     };
 
     server.once("error", (cause) => {
-      settle(
-        Effect.fail(new NetService.NetError({ message: "Failed to open test server", cause })),
-      );
+      settle(Effect.fail(new NetService.NetError({ host: host ?? "localhost", cause })));
     });
 
     if (host) {

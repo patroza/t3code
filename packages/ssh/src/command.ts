@@ -9,10 +9,21 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
-import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
-import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
+import * as SshAuth from "./auth.ts";
+import {
+  SshAuthenticationHelperError,
+  type SshCommandError,
+  SshCommandExecutionError,
+  SshCommandExitError,
+  SshCommandSpawnError,
+  SshCommandTimeoutError,
+  SshHostAliasRequiredError,
+  type SshInvalidTargetError,
+  SshTargetDestinationMissingError,
+} from "./errors.ts";
 
 const PUBLISHABLE_T3_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
@@ -35,7 +46,7 @@ export interface SshCommandResult {
   readonly stderr: string;
 }
 
-export interface RunSshCommandOptions extends SshAuthOptions {
+export interface RunSshCommandOptions extends SshAuth.SshAuthOptions {
   readonly preHostArgs?: ReadonlyArray<string>;
   readonly remoteCommandArgs?: ReadonlyArray<string>;
   readonly stdin?: string;
@@ -93,9 +104,10 @@ export const buildSshHostSpecEffect = (
 ): Effect.Effect<string, SshInvalidTargetError> =>
   Effect.try({
     try: () => buildSshHostSpec(target),
-    catch: (cause) =>
-      new SshInvalidTargetError({
-        message: cause instanceof Error ? cause.message : "SSH target is invalid.",
+    catch: () =>
+      new SshTargetDestinationMissingError({
+        alias: target.alias,
+        hostname: target.hostname,
       }),
   });
 
@@ -143,20 +155,6 @@ function redactSshErrorOutput(output: string): string {
     : redacted;
 }
 
-function normalizeSshErrorMessage(input: {
-  readonly stdout?: string;
-  readonly stderr: string;
-  readonly fallbackMessage: string;
-}): string {
-  const cleanedStderr = input.stderr.trim();
-  if (cleanedStderr.length > 0) {
-    return cleanedStderr;
-  }
-
-  const cleanedStdout = input.stdout?.trim() ?? "";
-  return cleanedStdout.length > 0 ? cleanedStdout : input.fallbackMessage;
-}
-
 function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
   return {
     alias: target.alias,
@@ -180,17 +178,16 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
   const hostSpec = yield* buildSshHostSpecEffect(target);
-  const environment = yield* buildSshChildEnvironment({
+  const environment = yield* SshAuth.buildSshChildEnvironment({
     ...(input.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
     ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
   }).pipe(
     Effect.mapError(
       (cause) =>
-        new SshCommandError({
+        new SshAuthenticationHelperError({
           command: ["ssh"],
           exitCode: null,
           stderr: "",
-          message: "Failed to prepare SSH authentication helpers.",
           cause,
         }),
     ),
@@ -226,14 +223,11 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       Effect.provideService(Scope.Scope, commandScope),
       Effect.mapError(
         (cause) =>
-          new SshCommandError({
+          new SshCommandSpawnError({
             command: [sshCommand, ...args],
             exitCode: null,
             stderr: "",
-            message:
-              cause instanceof Error
-                ? cause.message
-                : `Failed to spawn SSH command for ${hostSpec}.`,
+            target: hostSpec,
             cause,
           }),
       ),
@@ -249,12 +243,11 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   ).pipe(
     Effect.mapError(
       (cause) =>
-        new SshCommandError({
+        new SshCommandExecutionError({
           command: ["ssh", ...args],
           exitCode: null,
           stderr: "",
-          message:
-            cause instanceof Error ? cause.message : `Failed to run SSH command for ${hostSpec}.`,
+          target: hostSpec,
           cause,
         }),
     ),
@@ -269,16 +262,12 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       stdout: diagnosticStdout,
       stderr,
     });
-    return yield* new SshCommandError({
+    return yield* new SshCommandExitError({
       command: ["ssh", ...args],
       exitCode,
       stdout: diagnosticStdout,
       stderr,
-      message: normalizeSshErrorMessage({
-        stdout: diagnosticStdout,
-        stderr,
-        fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
-      }),
+      target: hostSpec,
     });
   }
 
@@ -313,11 +302,11 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
               preHostArgs: input.preHostArgs ?? [],
               hasStdin: input.stdin !== undefined,
             });
-            return yield* new SshCommandError({
+            return yield* new SshCommandTimeoutError({
               command: ["ssh"],
               exitCode: null,
               stderr: "",
-              message: `SSH command timed out after ${input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS}ms.`,
+              timeoutMs: input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS,
             });
           }),
       }),
@@ -334,7 +323,7 @@ export const resolveSshTarget = Effect.fn("ssh/command.resolveSshTarget")(functi
 > {
   const trimmedAlias = alias.trim();
   if (trimmedAlias.length === 0) {
-    return yield* new SshInvalidTargetError({ message: "SSH host alias is required." });
+    return yield* new SshHostAliasRequiredError({ alias });
   }
 
   yield* Effect.logDebug("ssh.target.resolve.start", { alias: trimmedAlias });

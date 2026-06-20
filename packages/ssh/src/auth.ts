@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
-import { SshPasswordPromptError } from "./errors.ts";
+import type { SshPasswordPromptError } from "./errors.ts";
 
 export interface SshPasswordRequest {
   readonly destination: string;
@@ -34,24 +34,25 @@ export interface SshAuthOptions {
   readonly interactiveAuth?: boolean;
 }
 
-export interface SshPasswordPromptShape {
-  readonly isAvailable: boolean;
-  readonly request: (
-    request: SshPasswordRequest,
-  ) => Effect.Effect<string | null, SshPasswordPromptError>;
-}
+export class SshPasswordPrompt extends Context.Service<
+  SshPasswordPrompt,
+  {
+    readonly isAvailable: boolean;
+    readonly request: (
+      request: SshPasswordRequest,
+    ) => Effect.Effect<string | null, SshPasswordPromptError>;
+  }
+>()("@t3tools/ssh/auth/SshPasswordPrompt") {}
 
-export class SshPasswordPrompt extends Context.Service<SshPasswordPrompt, SshPasswordPromptShape>()(
-  "@t3tools/ssh/auth/SshPasswordPrompt",
-) {
-  static readonly disabledLayer = Layer.succeed(
-    SshPasswordPrompt,
-    SshPasswordPrompt.of({
-      isAvailable: false,
-      request: () => Effect.succeed(null),
-    }),
-  );
-}
+export const make = (service: SshPasswordPrompt["Service"]) => SshPasswordPrompt.of(service);
+
+export const layer = (service: SshPasswordPrompt["Service"]) =>
+  Layer.succeed(SshPasswordPrompt, make(service));
+
+export const disabledLayer = layer({
+  isAvailable: false,
+  request: () => Effect.succeed(null),
+});
 
 export interface SshChildEnvironmentOptions {
   readonly interactiveAuth?: boolean;
