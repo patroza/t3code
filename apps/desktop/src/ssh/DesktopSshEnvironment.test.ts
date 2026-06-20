@@ -2,7 +2,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@t3tools/shared/Net";
-import { SshPasswordPromptError } from "@t3tools/ssh/errors";
+import { SshPasswordPromptRequestError } from "@t3tools/ssh/errors";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -20,18 +20,18 @@ function makeTempHomeDir() {
 
 describe("sshEnvironment", () => {
   it("treats password prompt timeouts as cancellable authentication prompts", () => {
-    assert.equal(
-      DesktopSshEnvironment.isDesktopSshPasswordPromptCancellation(
-        new SshPasswordPromptError({
-          message: "SSH authentication timed out for devbox.",
-          cause: new DesktopSshPasswordPrompts.DesktopSshPromptTimedOutError({
-            requestId: "prompt-1",
-            destination: "devbox",
-          }),
-        }),
-      ),
-      true,
-    );
+    const cause = new DesktopSshPasswordPrompts.DesktopSshPromptTimedOutError({
+      requestId: "prompt-1",
+      destination: "devbox",
+    });
+    const error = new SshPasswordPromptRequestError({
+      destination: "devbox",
+      cause,
+    });
+    assert.strictEqual(error.cause, cause);
+    assert.equal(error.message, "SSH authentication failed for devbox.");
+    assert.notInclude(error.message, cause.message);
+    assert.equal(DesktopSshEnvironment.isDesktopSshPasswordPromptCancellation(error), true);
   });
 
   it.effect("wires desktop host discovery through the ssh package runtime", () =>

@@ -8,7 +8,7 @@ import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import {
   baseSshArgs,
@@ -17,7 +17,7 @@ import {
   resolveRemoteT3CliPackageSpec,
   runSshCommand,
 } from "./command.ts";
-import { SshCommandError } from "./errors.ts";
+import { SshCommandExitError, SshCommandSpawnError, SshTunnelExitError } from "./errors.ts";
 
 const encoder = new TextEncoder();
 
@@ -167,11 +167,43 @@ describe("ssh command", () => {
 
       assert.isTrue(Result.isFailure(result));
       if (Result.isFailure(result)) {
-        assert.instanceOf(result.failure, SshCommandError);
+        assert.instanceOf(result.failure, SshCommandExitError);
         assert.equal(result.failure.message, "Pairing token creation failed");
         assert.equal(result.failure.stdout, "Pairing token creation failed\n");
         assert.equal(result.failure.stderr, "");
       }
+
+      assert.equal(
+        new SshCommandExitError({
+          command: ["ssh"],
+          exitCode: 1,
+          stderr: "",
+          stdout: "",
+          target: "devbox",
+        }).message,
+        "SSH command failed for devbox (exit 1).",
+      );
+      assert.equal(
+        new SshTunnelExitError({
+          command: ["ssh"],
+          exitCode: 1,
+          stderr: "",
+          target: "devbox",
+        }).message,
+        "SSH tunnel exited unexpectedly for devbox (exit 1).",
+      );
+
+      const spawnCause = new Error("ssh executable path included sensitive diagnostics");
+      const spawnError = new SshCommandSpawnError({
+        command: ["ssh"],
+        exitCode: null,
+        stderr: "",
+        target: "devbox",
+        cause: spawnCause,
+      });
+      assert.strictEqual(spawnError.cause, spawnCause);
+      assert.equal(spawnError.message, "Failed to spawn SSH command for devbox.");
+      assert.notInclude(spawnError.message, spawnCause.message);
     }).pipe(Effect.provide(processLayer));
   });
 
@@ -197,7 +229,7 @@ describe("ssh command", () => {
 
       assert.isTrue(Result.isFailure(result));
       if (Result.isFailure(result)) {
-        assert.instanceOf(result.failure, SshCommandError);
+        assert.instanceOf(result.failure, SshCommandExitError);
         assert.equal(result.failure.message, '{"credential":"[redacted]"}');
         assert.equal(result.failure.stdout, '{"credential":"[redacted]"}\n');
       }
