@@ -39,9 +39,7 @@ import {
 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
@@ -84,7 +82,6 @@ export type CodexDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
 
@@ -123,7 +120,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
-      const eventLoggers = yield* ProviderEventLoggers;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const homeLayout = yield* resolveCodexHomeLayout(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
@@ -154,17 +150,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         env: processEnv,
       });
 
-      // `makeCodexAdapter` and `makeCodexTextGeneration` have `never` error
-      // channels at construction time — their failure modes are all on the
-      // per-operation closures they return. No `mapError` wrapper is needed
-      // here; the registry only has to worry about snapshot-build and
-      // spawner-availability failures surfaced from `checkCodexProviderStatus`
-      // below.
-      const adapter = yield* makeCodexAdapter(effectiveConfig, {
-        instanceId,
-        environment: processEnv,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-      });
       const orchestrationAdapter = yield* CodexAdapterV2Driver.create({
         instanceId,
         displayName,
@@ -230,7 +215,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        adapter,
         orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;
