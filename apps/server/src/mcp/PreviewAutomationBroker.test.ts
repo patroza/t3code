@@ -22,7 +22,6 @@ const scope = {
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
-  expiresAt: 2,
 };
 
 const makeOwner = (overrides: Partial<PreviewAutomationOwner> = {}): PreviewAutomationOwner => ({
