@@ -465,6 +465,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             ? new ServerProviderUpdateError({
                 provider,
                 reason: error.reason,
+                cause: error,
               })
             : error,
         ),

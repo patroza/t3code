@@ -461,6 +461,10 @@ describe("providerMaintenanceRunner", () => {
         assert.strictEqual(isServerProviderUpdateError(error), true);
         if (isServerProviderUpdateError(error)) {
           assert.include(error.reason, "already running");
+          assert.strictEqual(isServerProviderUpdateError(error.cause), true);
+          if (isServerProviderUpdateError(error.cause)) {
+            assert.strictEqual(error.cause.provider, "unknown");
+          }
         }
       }
 
