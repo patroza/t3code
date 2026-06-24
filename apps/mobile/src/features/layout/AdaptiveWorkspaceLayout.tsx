@@ -238,6 +238,7 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
               onOpenSettings={() => router.push("/settings")}
               onSelectThread={handleSelectThread}
               onStartNewTask={() => router.push("/new")}
+              onThreadRemoved={() => router.back()}
             />
           </Animated.View>
         ) : null}

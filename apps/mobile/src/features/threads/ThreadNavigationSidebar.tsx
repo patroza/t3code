@@ -23,13 +23,24 @@ export function ThreadNavigationSidebar(props: {
   readonly onOpenSettings: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onStartNewTask: () => void;
+  readonly onThreadRemoved?: (thread: EnvironmentThreadShell) => void;
 }) {
   const insets = useSafeAreaInsets();
   const projects = useProjects();
   const threads = useThreadShells();
   const [searchQuery, setSearchQuery] = useState("");
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
-  const { archiveThread, confirmDeleteThread } = useThreadListActions();
+  const { onThreadRemoved, selectedThreadKey } = props;
+  const handleThreadActionCompleted = useCallback(
+    (_action: unknown, thread: EnvironmentThreadShell) => {
+      const threadKey = scopedThreadKey(thread.environmentId, thread.id);
+      if (threadKey === selectedThreadKey) {
+        onThreadRemoved?.(thread);
+      }
+    },
+    [onThreadRemoved, selectedThreadKey],
+  );
+  const { archiveThread, confirmDeleteThread } = useThreadListActions(handleThreadActionCompleted);
   const groups = useMemo(
     () => buildThreadNavigationGroups({ projects, threads, searchQuery }),
     [projects, searchQuery, threads],

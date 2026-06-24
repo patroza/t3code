@@ -197,7 +197,11 @@ export function FileTreeBrowser(props: {
       });
       pendingSelectionTimeoutRef.current = setTimeout(() => {
         pendingSelectionTimeoutRef.current = null;
-        setPendingSelection((current) => (current?.path === path ? null : current));
+        setPendingSelection((current) => {
+          if (current?.path !== path) return current;
+          if (controlledSelectedPathRef.current === path) return null;
+          return current;
+        });
       }, OPTIMISTIC_SELECTION_TIMEOUT_MS);
       onSelectFile(path);
     },

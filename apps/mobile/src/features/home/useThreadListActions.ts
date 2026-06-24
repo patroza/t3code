@@ -99,11 +99,19 @@ function useConfirmDeleteThread(
   );
 }
 
-export function useThreadListActions(): {
+export function useThreadListActions(
+  onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
+): {
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
 } {
-  const executeAction = useThreadActionExecutor();
+  const handleCompleted = useCallback(
+    (action: ThreadListAction, thread: EnvironmentThreadShell) => {
+      onCompleted?.(action, thread);
+    },
+    [onCompleted],
+  );
+  const executeAction = useThreadActionExecutor(onCompleted ? handleCompleted : undefined);
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
