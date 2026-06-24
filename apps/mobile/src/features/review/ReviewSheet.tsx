@@ -465,8 +465,10 @@ export function ReviewSheet() {
     canHighlight: parsedDiff.kind === "files",
   });
 
+  const isAllFilesSelectedRef = useRef(false);
   const handleSelectFile = useCallback(
     (fileId: string | null) => {
+      isAllFilesSelectedRef.current = fileId === null;
       commentSelection.clearSelection();
       if (fileId !== null && collapsedFileIds.includes(fileId)) {
         toggleExpandedFile(fileId);
@@ -484,7 +486,7 @@ export function ReviewSheet() {
   const handleVisibleFileChange = useCallback(
     (event: NativeSyntheticEvent<{ readonly fileId?: string }>) => {
       const { fileId } = event.nativeEvent;
-      if (!fileId) {
+      if (!fileId || isAllFilesSelectedRef.current) {
         return;
       }
       reviewFileNavigatorRef.current?.setVisibleFile(fileId);

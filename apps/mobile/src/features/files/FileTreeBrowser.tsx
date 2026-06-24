@@ -148,6 +148,7 @@ export function FileTreeBrowser(props: {
   }, [defaultExpanded]);
 
   useEffect(() => {
+    setPendingSelection(null);
     if (!controlledSelectedPath) {
       return;
     }
@@ -175,12 +176,25 @@ export function FileTreeBrowser(props: {
       return next;
     });
   }, []);
+  const pendingSelectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleSelectFile = useCallback(
     (path: string) => {
+      if (pendingSelectionTimerRef.current !== null) {
+        clearTimeout(pendingSelectionTimerRef.current);
+      }
       setPendingSelection({
         path,
         selectedPathAtPress: controlledSelectedPathRef.current,
       });
+      pendingSelectionTimerRef.current = setTimeout(() => {
+        pendingSelectionTimerRef.current = null;
+        setPendingSelection((current) =>
+          current?.path === path &&
+          current.selectedPathAtPress === controlledSelectedPathRef.current
+            ? null
+            : current,
+        );
+      }, 1000);
       onSelectFile(path);
     },
     [onSelectFile],

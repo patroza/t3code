@@ -1322,6 +1322,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       cancelAnimationFrame(revealSettleFrameRef.current);
       revealSettleFrameRef.current = null;
     }
+    setRevealedThreadId(null);
     initialScrollReadyRef.current = false;
     isNearEndRef.current = true;
     lastContentHeightRef.current = 0;

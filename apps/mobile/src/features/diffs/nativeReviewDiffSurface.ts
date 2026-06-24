@@ -168,7 +168,8 @@ type NativeReviewDiffPayloadMethod = "setRowsJson" | "setTokensJson" | "setToken
 
 function isPendingNativeViewRegistration(error: unknown): boolean {
   return (
-    error instanceof Error && error.message.includes("Unable to find the 'T3ReviewDiffView' view")
+    error instanceof Error &&
+    error.message.includes(`Unable to find the '${NATIVE_REVIEW_DIFF_MODULE_NAME}' view`)
   );
 }
 
