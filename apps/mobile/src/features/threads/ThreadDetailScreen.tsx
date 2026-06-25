@@ -43,6 +43,8 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { ThreadRelationshipsBanner } from "./ThreadRelationshipsBanner";
+import { ThreadQueueControl } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 
 export interface ThreadDetailScreenProps {
@@ -373,6 +375,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               key={props.selectedThread.id}
               environmentId={props.environmentId}
               threadId={props.selectedThread.id}
+              threadTitle={props.selectedThread.title}
               workspaceRoot={props.threadCwd}
               feed={props.selectedThreadFeed}
               contentPresentation={props.contentPresentation}
@@ -384,6 +387,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               contentInsetEndAdjustment={contentInsetEndAdjustment}
               contentTopInset={headerHeight}
               contentBottomInset={estimatedOverlayHeight}
+              topAccessory={
+                <ThreadRelationshipsBanner
+                  environmentId={props.environmentId}
+                  threadId={props.selectedThread.id}
+                />
+              }
               layoutVariant={layoutVariant}
               skills={selectedProviderSkills}
             />
@@ -402,6 +411,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               {props.activeWorkStartedAt ? (
                 <WorkingDurationPill startedAt={props.activeWorkStartedAt} />
               ) : null}
+
+              <ThreadQueueControl
+                environmentId={props.environmentId}
+                threadId={props.selectedThread.id}
+              />
 
               {props.activePendingApproval || props.activePendingUserInput ? (
                 <View className="gap-3 px-4 pb-3" style={{ flexShrink: 0 }}>

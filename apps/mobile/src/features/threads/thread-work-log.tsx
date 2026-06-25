@@ -1,11 +1,14 @@
 import * as Haptics from "expo-haptics";
 import { SymbolView, type SFSymbol } from "expo-symbols";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useRouter } from "expo-router";
 import { LayoutAnimation, Pressable, useColorScheme, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
+import { buildThreadRoutePath } from "../../lib/routes";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
+import { useV2ItemSupport } from "../../state/v2-item-support";
 import { ThreadActivityInspector } from "./ThreadActivityInspector";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -71,6 +74,59 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): SFSymbol {
   }
 }
 
+function ThreadActivityThreadLink(props: {
+  readonly activity: ThreadFeedActivity;
+  readonly environmentId: EnvironmentId;
+  readonly iconColor: import("react-native").ColorValue;
+}) {
+  const row = props.activity.projectedItem;
+  const support = useV2ItemSupport({
+    environmentId: props.environmentId,
+    sourceThreadId: row.sourceThreadId,
+    sourceItemId: row.sourceItemId,
+  });
+  const router = useRouter();
+  const item = row.item;
+  let targetThreadId: ThreadId | null = null;
+  let label = "Open related thread";
+
+  if (item.type === "thread_created") {
+    targetThreadId = item.targetThreadId;
+    label = "Open created thread";
+  } else if (item.type === "subagent") {
+    targetThreadId = support.subagent?.childThreadId ?? item.childThreadId;
+    label = "Open subagent thread";
+  } else if (item.type === "fork") {
+    targetThreadId =
+      item.targetThreadId === row.sourceThreadId && item.source.type === "run"
+        ? item.source.threadId
+        : item.targetThreadId;
+    label = targetThreadId === item.targetThreadId ? "Open forked thread" : "Open parent thread";
+  }
+
+  if (targetThreadId === null) return null;
+
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={label}
+      onPress={() => {
+        void Haptics.selectionAsync();
+        router.push(
+          buildThreadRoutePath({
+            environmentId: props.environmentId,
+            threadId: targetThreadId,
+          }),
+        );
+      }}
+      className="mx-2 mb-2 min-h-9 flex-row items-center justify-center gap-1.5 rounded-lg border border-neutral-300/50 px-2 dark:border-white/[0.08]"
+    >
+      <Text className="font-t3-medium text-2xs text-foreground">{label}</Text>
+      <SymbolView name="arrow.right" size={11} tintColor={props.iconColor} type="monochrome" />
+    </Pressable>
+  );
+}
+
 export function ThreadWorkLog(props: {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
   readonly copiedRowId: string | null;
@@ -114,7 +170,13 @@ export function ThreadWorkLog(props: {
           const iconIsDestructive = row.icon === "alert" || row.icon === "warning";
 
           return (
-            <View key={row.id}>
+            <View
+              key={row.id}
+              className={cn(
+                row.prominent &&
+                  "mb-2 overflow-hidden rounded-xl border border-neutral-300/60 bg-card dark:border-white/[0.1]",
+              )}
+            >
               <Pressable
                 accessibilityRole={canExpand ? "button" : undefined}
                 accessibilityLabel={displayText}
@@ -210,6 +272,13 @@ export function ThreadWorkLog(props: {
                     workspaceRoot={props.workspaceRoot}
                   />
                 </View>
+              ) : null}
+              {row.prominent ? (
+                <ThreadActivityThreadLink
+                  activity={row}
+                  environmentId={props.environmentId}
+                  iconColor={props.iconSubtleColor}
+                />
               ) : null}
             </View>
           );
