@@ -20,6 +20,7 @@ import {
   buildThreadTerminalNavigation,
 } from "../../lib/routes";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import { resolveFileSelectionNavigationAction } from "../../lib/adaptive-navigation";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { connectionTone } from "../connection/connectionTone";
 import { nativeTopScrollEdgeEffect } from "../../lib/native-scroll-edge-effect";
@@ -382,9 +383,17 @@ function ThreadRouteContent(
       if (selectedThread === null) {
         return;
       }
-      router.push(buildThreadFilesNavigation(selectedThread, path));
+      const destination = buildThreadFilesNavigation(selectedThread, path);
+      const navigationAction = resolveFileSelectionNavigationAction({
+        hasPersistentFileInspector: fileInspector.supported,
+      });
+      if (navigationAction === "replace") {
+        router.replace(destination);
+        return;
+      }
+      router.push(destination);
     },
-    [router, selectedThread],
+    [fileInspector.supported, router, selectedThread],
   );
   const GitInspector = useCallback(
     () => <GitOverviewSheet headerInset={headerHeight} presentation="inspector" />,

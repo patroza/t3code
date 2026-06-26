@@ -223,6 +223,9 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
             <ThreadNavigationSidebar
               width={layout.listPaneWidth}
               selectedThreadKey={selectedThreadKey}
+              selectedEnvironmentId={
+                environmentId !== null ? EnvironmentId.make(environmentId) : null
+              }
               onOpenSettings={handleOpenSettings}
               onSelectThread={handleSelectThread}
               onStartNewTask={handleStartNewTask}

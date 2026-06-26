@@ -185,7 +185,9 @@ function useNativeReviewDiffPayload(
 
     let cancelled = false;
     let frame: number | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
+    const MAX_ATTEMPTS = 12;
 
     const dispatch = () => {
       if (cancelled) {
@@ -195,15 +197,22 @@ function useNativeReviewDiffPayload(
       const view = nativeRef.current;
       const command = view?.[method];
       if (!view || !command) {
-        if (attempts < 4) {
+        if (attempts < MAX_ATTEMPTS) {
           attempts += 1;
-          frame = requestAnimationFrame(dispatch);
+          if (attempts <= 4) {
+            frame = requestAnimationFrame(dispatch);
+          } else {
+            const delay = Math.min(50 * 2 ** (attempts - 5), 1000);
+            timer = setTimeout(dispatch, delay);
+          }
+        } else {
+          console.error(`[native-review-diff] ${method} gave up after ${MAX_ATTEMPTS} attempts`);
         }
         return;
       }
 
       void command.call(view, payload).catch((error: unknown) => {
-        if (!cancelled && attempts < 4 && isPendingNativeViewRegistration(error)) {
+        if (!cancelled && attempts < MAX_ATTEMPTS && isPendingNativeViewRegistration(error)) {
           attempts += 1;
           frame = requestAnimationFrame(dispatch);
           return;
@@ -220,6 +229,9 @@ function useNativeReviewDiffPayload(
       cancelled = true;
       if (frame !== null) {
         cancelAnimationFrame(frame);
+      }
+      if (timer !== null) {
+        clearTimeout(timer);
       }
     };
   }, [method, nativeRef, payload]);

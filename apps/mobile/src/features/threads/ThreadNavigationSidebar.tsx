@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { SymbolView } from "expo-symbols";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import type { ColorValue } from "react-native";
@@ -107,6 +108,7 @@ const ThreadNavigationRow = memo(function ThreadNavigationRow(props: {
 export function ThreadNavigationSidebar(props: {
   readonly width: number;
   readonly selectedThreadKey: string | null;
+  readonly selectedEnvironmentId?: EnvironmentId | null;
   readonly onOpenSettings: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onStartNewTask: () => void;
@@ -118,8 +120,14 @@ export function ThreadNavigationSidebar(props: {
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const { archiveThread, confirmDeleteThread } = useThreadListActions();
   const groups = useMemo(
-    () => buildThreadNavigationGroups({ projects, threads, searchQuery }),
-    [projects, searchQuery, threads],
+    () =>
+      buildThreadNavigationGroups({
+        projects,
+        threads,
+        searchQuery,
+        environmentId: props.selectedEnvironmentId,
+      }),
+    [projects, props.selectedEnvironmentId, searchQuery, threads],
   );
 
   const backgroundColor = useThemeColor("--color-drawer");

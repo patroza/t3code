@@ -420,6 +420,18 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
 
     payloadDecodeQueue.async { [weak self] in
       guard let data = rowsJson.data(using: .utf8) else {
+        DispatchQueue.main.async { [weak self] in
+          guard let self, generation == self.rowsDecodeGeneration else {
+            return
+          }
+          self.rows = []
+          self.contentView.rows = []
+          self.hasAppliedInitialRowIndex = false
+          self.lastVisibleFileId = nil
+          self.pendingScrollFileId = nil
+          self.updateContentMetrics()
+          self.emitDebug("rows-decode-failed", ["error": "invalid utf8"])
+        }
         return
       }
 
@@ -464,6 +476,13 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
 
     payloadDecodeQueue.async { [weak self] in
       guard let data = tokensJson.data(using: .utf8) else {
+        DispatchQueue.main.async { [weak self] in
+          guard let self, generation == self.tokensDecodeGeneration else {
+            return
+          }
+          self.contentView.tokensByRowId = [:]
+          self.emitDebug("tokens-decode-failed", ["error": "invalid utf8"])
+        }
         return
       }
 
@@ -550,14 +569,17 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     }
 
     self.contentResetKey = contentResetKey
+    rowsDecodeGeneration += 1
     tokensDecodeGeneration += 1
+    rows = []
+    contentView.rows = []
     contentView.tokensByRowId = [:]
     hasAppliedInitialRowIndex = false
     lastVisibleFileId = nil
     pendingScrollFileId = nil
     isProgrammaticScrollActive = false
     scrollView.setContentOffset(.zero, animated: false)
-    updateViewportFrame()
+    updateContentMetrics()
     applyInitialRowIndexIfNeeded()
   }
 
