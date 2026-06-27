@@ -565,7 +565,7 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     pendingScrollFileId = nil
     isProgrammaticScrollActive = false
     scrollView.setContentOffset(.zero, animated: false)
-    updateViewportFrame()
+    updateContentMetrics()
     applyInitialRowIndexIfNeeded()
   }
 

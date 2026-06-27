@@ -30,7 +30,7 @@ import {
   type WorkspacePaneLayout,
 } from "../../lib/layout";
 import { resolveThreadSelectionNavigationAction } from "../../lib/adaptive-navigation";
-import { buildThreadFilesNavigation, buildThreadRoutePath } from "../../lib/routes";
+import { buildThreadRoutePath } from "../../lib/routes";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import {
   parseActiveThreadPath,
@@ -204,13 +204,12 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
     setSupplementaryPanePreferredVisible(true);
   }, []);
   const handleOpenFilesCommand = useCallback(() => {
-    const activeThread = parseActiveThreadPath(pathname);
-    if (!layout.usesSplitView || !fileInspector.supported || activeThread === null) {
+    if (!layout.usesSplitView || !fileInspector.supported || !parseActiveThreadPath(pathname)) {
       return false;
     }
-    router.replace(buildThreadFilesNavigation(activeThread));
+    showAuxiliaryPane("inspector");
     return true;
-  }, [fileInspector.supported, layout.usesSplitView, pathname, router]);
+  }, [fileInspector.supported, layout.usesSplitView, pathname, showAuxiliaryPane]);
   useHardwareKeyboardCommand("files", handleOpenFilesCommand);
   const toggleAuxiliaryPane = useCallback(() => {
     if (auxiliaryPaneRole === "inspector") {
