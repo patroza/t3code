@@ -537,10 +537,10 @@ export function ThreadFilesTreeScreen() {
     [projectName],
   );
   useEffect(() => {
-    if (fileInspector.supported) {
+    if (fileInspector.supported && cwd !== null) {
       showAuxiliaryPane("inspector");
     }
-  }, [fileInspector.supported, showAuxiliaryPane]);
+  }, [cwd, fileInspector.supported, showAuxiliaryPane]);
 
   if (selectedThread === null || environmentId === null || threadId === null) {
     if (fileInspector.supported) {

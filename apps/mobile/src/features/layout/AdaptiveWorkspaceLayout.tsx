@@ -45,6 +45,7 @@ interface AdaptiveWorkspaceContextValue {
   readonly fileInspector: FileInspectorPaneLayout;
   readonly activateAuxiliaryPaneRole: (role: WorkspaceAuxiliaryPaneRole) => () => void;
   readonly showAuxiliaryPane: (role: WorkspaceAuxiliaryPaneRole) => void;
+  readonly hideAuxiliaryPane: (role: WorkspaceAuxiliaryPaneRole) => void;
   readonly toggleAuxiliaryPane: () => void;
   readonly togglePrimarySidebar: () => void;
   readonly setAuxiliaryPaneWidth: (width: number) => void;
@@ -67,6 +68,7 @@ const AdaptiveWorkspaceContext = createContext<AdaptiveWorkspaceContextValue>({
   fileInspector: compactFileInspector,
   activateAuxiliaryPaneRole: () => () => undefined,
   showAuxiliaryPane: () => undefined,
+  hideAuxiliaryPane: () => undefined,
   toggleAuxiliaryPane: () => undefined,
   togglePrimarySidebar: () => undefined,
   setAuxiliaryPaneWidth: () => undefined,
@@ -203,6 +205,13 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
     setFocusedAuxiliaryPaneRole("supplementary");
     setSupplementaryPanePreferredVisible(true);
   }, []);
+  const hideAuxiliaryPane = useCallback((role: WorkspaceAuxiliaryPaneRole) => {
+    if (role === "inspector") {
+      setFileInspectorPreferredVisible(false);
+      return;
+    }
+    setSupplementaryPanePreferredVisible(false);
+  }, []);
   const handleOpenFilesCommand = useCallback(() => {
     const activeThread = parseActiveThreadPath(pathname);
     if (!layout.usesSplitView || !fileInspector.supported || activeThread === null) {
@@ -240,6 +249,7 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
       fileInspector,
       activateAuxiliaryPaneRole,
       showAuxiliaryPane,
+      hideAuxiliaryPane,
       toggleAuxiliaryPane,
       togglePrimarySidebar,
       setAuxiliaryPaneWidth,
@@ -247,6 +257,7 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
     [
       activateAuxiliaryPaneRole,
       fileInspector,
+      hideAuxiliaryPane,
       layout,
       panes,
       showAuxiliaryPane,

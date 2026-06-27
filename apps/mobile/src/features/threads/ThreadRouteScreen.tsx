@@ -220,7 +220,7 @@ function ThreadRouteContent(
     readonly selectedThreadDetailState: ReturnType<typeof useSelectedThreadDetailState>;
   },
 ) {
-  const { fileInspector, layout, showAuxiliaryPane, toggleAuxiliaryPane } =
+  const { fileInspector, hideAuxiliaryPane, layout, showAuxiliaryPane, toggleAuxiliaryPane } =
     useAdaptiveWorkspaceLayout();
   const { connectionState } = useRemoteConnectionStatus();
   const { onReconnectEnvironment } = useRemoteConnections();
@@ -261,6 +261,12 @@ function ThreadRouteContent(
     }
     return null;
   })();
+
+  useEffect(() => {
+    if (inspectorMode === null && selectedThreadCwd === null) {
+      hideAuxiliaryPane("inspector");
+    }
+  }, [hideAuxiliaryPane, inspectorMode, selectedThreadCwd]);
 
   useEffect(() => {
     setInspectorSelection((current) => {
