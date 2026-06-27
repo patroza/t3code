@@ -131,6 +131,7 @@ export function AdaptiveWorkspaceLayout(props: { readonly children: ReactNode })
         layout,
         viewportWidth: width,
         preferredWidth: fileInspectorPreferredWidth ?? undefined,
+        sidebarWidth: layout.listPaneWidth ?? 0,
       }),
     [fileInspectorPreferredWidth, layout, width],
   );

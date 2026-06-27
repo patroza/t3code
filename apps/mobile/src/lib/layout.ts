@@ -100,6 +100,7 @@ export function deriveWorkspacePaneLayout(input: {
       layout: input.layout,
       viewportWidth,
       preferredWidth: input.auxiliaryPanePreferredWidth,
+      sidebarWidth: preferredPrimarySidebarWidth,
     });
     const auxiliaryPaneVisible = fileInspector.supported && input.auxiliaryPanePreferredVisible;
     const primarySidebarSuppressedByAuxiliary =
@@ -151,10 +152,13 @@ export function deriveFileInspectorPaneLayout(input: {
   readonly layout: Layout;
   readonly viewportWidth: number;
   readonly preferredWidth?: number;
+  readonly sidebarWidth?: number;
 }): FileInspectorPaneLayout {
   const viewportWidth = Math.max(0, input.viewportWidth);
+  const sidebarWidth = input.sidebarWidth ?? 0;
   const supported =
     input.layout.usesSplitView && viewportWidth >= FILE_INSPECTOR_MIN_VIEWPORT_WIDTH;
+  const availableWidth = Math.max(0, viewportWidth - sidebarWidth);
 
   return {
     supported,
@@ -163,11 +167,11 @@ export function deriveFileInspectorPaneLayout(input: {
           preferredWidth:
             input.preferredWidth ??
             clamp(
-              Math.round(viewportWidth * 0.28),
+              Math.round(availableWidth * 0.28),
               AUXILIARY_PANE_MIN_WIDTH,
               AUXILIARY_PANE_DEFAULT_MAX_WIDTH,
             ),
-          availableWidth: viewportWidth,
+          availableWidth,
         })
       : null,
   };

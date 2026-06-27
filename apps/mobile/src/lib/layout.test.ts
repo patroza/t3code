@@ -164,7 +164,7 @@ describe("deriveWorkspacePaneLayout", () => {
       contentPaneWidth: 1_024,
       supportsAuxiliaryPane: true,
       auxiliaryPaneVisible: true,
-      auxiliaryPaneWidth: 287,
+      auxiliaryPaneWidth: 260,
     });
   });
 
@@ -185,7 +185,7 @@ describe("deriveWorkspacePaneLayout", () => {
       contentPaneWidth: 986,
       supportsAuxiliaryPane: true,
       auxiliaryPaneVisible: true,
-      auxiliaryPaneWidth: 320,
+      auxiliaryPaneWidth: 276,
     });
   });
 

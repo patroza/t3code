@@ -60,6 +60,7 @@ import {
   useAdaptiveWorkspaceLayout,
   useAdaptiveWorkspacePaneRole,
 } from "../layout/AdaptiveWorkspaceLayout";
+import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { ThreadFileNavigatorPane } from "../files/thread-file-navigator-pane";
 import {
@@ -377,6 +378,14 @@ function ThreadRouteContent(
     }
     action.toggleAuxiliaryPane();
   }, []);
+  const handleFilesKeyboardCommand = useCallback(() => {
+    if (fileInspector.supported && selectedThreadCwd !== null) {
+      handleOpenFilesInspector();
+      return true;
+    }
+    return false;
+  }, [fileInspector.supported, handleOpenFilesInspector, selectedThreadCwd]);
+  useHardwareKeyboardCommand("files", handleFilesKeyboardCommand);
   const handleSelectInspectorFile = useCallback(
     (path: string) => {
       if (selectedThread === null) {

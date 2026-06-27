@@ -21,10 +21,13 @@ public final class T3KeyboardCommandsView: ExpoView {
   public override var canBecomeFirstResponder: Bool { true }
 
   public override var keyCommands: [UIKeyCommand]? {
-    [
+    let responder = window?.t3FirstResponder
+    let textInputActive = responder is UITextField || responder is UITextView
+
+    return [
       enabledCommand("newTask", input: "n", modifiers: .command, action: #selector(newTask), title: "New Task"),
-      enabledCommand("focusSearch", input: "f", modifiers: .command, action: #selector(focusSearch), title: "Find"),
-      enabledCommand("focusSearch", input: "k", modifiers: .command, action: #selector(focusSearch), title: "Focus Search"),
+      textInputActive ? nil : enabledCommand("focusSearch", input: "f", modifiers: .command, action: #selector(focusSearch), title: "Find"),
+      textInputActive ? nil : enabledCommand("focusSearch", input: "k", modifiers: .command, action: #selector(focusSearch), title: "Focus Search"),
       enabledCommand("back", input: "[", modifiers: .command, action: #selector(goBack), title: "Back"),
       enabledCommand("files", input: "f", modifiers: [.command, .shift], action: #selector(openFiles), title: "Open Files"),
       enabledCommand("terminal", input: "t", modifiers: [.command, .shift], action: #selector(openTerminal), title: "Open Terminal"),
