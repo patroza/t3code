@@ -331,7 +331,9 @@ function ThreadRouteContent(
   const screenBackgroundColor = String(useThemeColor("--color-screen"));
   const usesNativeHeaderGlass = Platform.OS === "ios";
   const usesThreadSearchToolbar =
-    Platform.OS === "ios" && layout.usesSplitView && inspectorMode === null;
+    Platform.OS === "ios" &&
+    layout.usesSplitView &&
+    (inspectorMode === null || !panes.auxiliaryPaneVisible);
   const focusThreadSearch = useCallback(() => {
     if (!usesThreadSearchToolbar) {
       return false;
