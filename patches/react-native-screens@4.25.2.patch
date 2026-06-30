@@ -15,7 +15,7 @@ diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
 index 0eb1f09..73298f1 100644
 --- a/ios/RNSBarButtonItem.mm
 +++ b/ios/RNSBarButtonItem.mm
-@@ -110,6 +110,58 @@ static UIMenuOptions RNSMakeUIMenuOptionsFromConfig(NSDictionary *config);
+@@ -110,6 +110,63 @@ static UIMenuOptions RNSMakeUIMenuOptionsFromConfig(NSDictionary *config);
    if (dict[@"accessibilityHint"]) {
      self.accessibilityHint = dict[@"accessibilityHint"];
    }
@@ -32,6 +32,11 @@ index 0eb1f09..73298f1 100644
 +      configuration.contentInsets = NSDirectionalEdgeInsetsZero;
 +      if (title != nil) {
 +        configuration.title = title;
++      }
++
++      id tintColorObj = dict[@"tintColor"];
++      if (tintColorObj) {
++        configuration.baseForegroundColor = [RCTConvert UIColor:tintColorObj];
 +      }
 +
 +      UIButton *button = [UIButton buttonWithConfiguration:configuration primaryAction:nil];
