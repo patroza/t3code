@@ -43,7 +43,7 @@ import {
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import { ThreadDetailScreen } from "./ThreadDetailScreen";
-import { ThreadGitControls, useThreadGitRightHeaderItems } from "./ThreadGitControls";
+import { ThreadGitControls, useThreadGitCenterHeaderItems } from "./ThreadGitControls";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { ThreadNavigationDrawer } from "./ThreadNavigationDrawer";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -619,7 +619,7 @@ function ThreadRouteContent(
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
-  const threadRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
+  const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
 
   if (!environmentId || !threadId) {
     return <OpeningThreadLoadingScreen />;
@@ -653,6 +653,14 @@ function ThreadRouteContent(
                 headerShadowVisible: false,
               }),
           headerTintColor: iconColor,
+          headerTitle: selectedThread.title,
+          headerTitleStyle: usesNativeHeaderGlass
+            ? {
+                fontSize: 17,
+                fontWeight: "800",
+              }
+            : undefined,
+          title: selectedThread.title,
           headerBackVisible: !layout.usesSplitView,
           headerBackTitle: "",
           scrollEdgeEffects: {
@@ -670,22 +678,24 @@ function ThreadRouteContent(
                 placement: "integratedButton",
               }
             : undefined,
-          unstable_headerRightItems:
+          unstable_headerCenterItems:
             layout.usesSplitView && Platform.OS === "ios" && !activeInspectorRenderer
-              ? () => threadRightHeaderItems
+              ? () => threadCenterHeaderItems
               : undefined,
           unstable_navigationItemStyle: usesNativeHeaderGlass ? "editor" : undefined,
         }}
       />
 
-      <Stack.Screen.Title asChild>
-        <ThreadHeaderTitle
-          foregroundColor={foregroundColor}
-          secondaryForegroundColor={secondaryFg}
-          subtitle={headerSubtitle}
-          title={selectedThread.title}
-        />
-      </Stack.Screen.Title>
+      {layout.usesSplitView ? null : (
+        <Stack.Screen.Title asChild>
+          <ThreadHeaderTitle
+            foregroundColor={foregroundColor}
+            secondaryForegroundColor={secondaryFg}
+            subtitle={headerSubtitle}
+            title={selectedThread.title}
+          />
+        </Stack.Screen.Title>
+      )}
 
       <WorkspaceSidebarToolbar
         afterSidebarButton={
