@@ -20,6 +20,7 @@ import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useWorkspaceState } from "../../state/workspace";
+import type { WorkspaceState } from "../../state/workspaceModel";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import {
@@ -47,6 +48,16 @@ const SIDEBAR_HEADER_WASH_OPACITY = {
   dark: [0.22, 0.14, 0.04],
   light: [0.46, 0.3, 0.08],
 } as const;
+
+function sidebarConnectionStatusLabel(state: WorkspaceState): string {
+  if (state.networkStatus === "offline") return "Offline";
+  if (state.connectionState === "connected") return "Ready";
+  if (state.connectionState === "connecting") return "Connecting";
+  if (state.connectionState === "reconnecting") return "Reconnecting";
+  if (state.connectionState === "error") return "Error";
+  if (!state.hasConnections) return "No environments";
+  return "Not connected";
+}
 
 const ThreadNavigationRow = memo(function ThreadNavigationRow(props: {
   readonly backgroundColor: ColorValue;
@@ -278,6 +289,35 @@ export function ThreadNavigationSidebar(props: {
     [groups],
   );
   const showsConnectionStatus = shouldShowWorkspaceConnectionStatus(catalogState);
+  const selectedThread = useMemo(() => {
+    if (props.selectedThreadKey === null) return null;
+    return (
+      threads.find(
+        (thread) => scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey,
+      ) ?? null
+    );
+  }, [props.selectedThreadKey, threads]);
+  const selectedProject = useMemo(() => {
+    if (selectedThread === null) return null;
+    return (
+      projects.find(
+        (project) =>
+          project.environmentId === selectedThread.environmentId &&
+          project.id === selectedThread.projectId,
+      ) ?? null
+    );
+  }, [projects, selectedThread]);
+  const selectedEnvironmentLabel =
+    options.selectedEnvironmentId === null
+      ? null
+      : (environments.find(
+          (environment) => environment.environmentId === options.selectedEnvironmentId,
+        )?.label ?? null);
+  const sidebarScopeLabel =
+    selectedProject?.title ??
+    selectedEnvironmentLabel ??
+    (projects.length === 1 ? projects[0]!.title : "All projects");
+  const nativeSidebarSubtitle = `${sidebarScopeLabel} · ${sidebarConnectionStatusLabel(catalogState)}`;
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
       {
@@ -657,6 +697,7 @@ export function ThreadNavigationSidebar(props: {
               hideShadow={false}
               headerRightBarButtonItems={nativeHeaderRightBarButtonItems}
               navigationItemStyle="editor"
+              subtitle={nativeSidebarSubtitle}
               title="Threads"
               titleColor={foregroundColor}
               titleFontSize={17}
