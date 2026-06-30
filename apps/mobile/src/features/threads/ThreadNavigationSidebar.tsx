@@ -51,7 +51,11 @@ const SIDEBAR_HEADER_WASH_OPACITY = {
 
 function sidebarConnectionStatusLabel(state: WorkspaceState): string {
   if (state.networkStatus === "offline") return "Offline";
-  if (state.connectionState === "connected") return "Ready";
+  if (state.connectionState === "connected") {
+    if (state.hasConnectingEnvironment) return "Reconnecting";
+    if (state.connectionError !== null) return "Error";
+    return "Ready";
+  }
   if (state.connectionState === "connecting") return "Connecting";
   if (state.connectionState === "reconnecting") return "Reconnecting";
   if (state.connectionState === "error") return "Error";
