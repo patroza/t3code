@@ -32,7 +32,6 @@ import { AppText as Text } from "../../components/AppText";
 import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { nativeTopScrollEdgeEffect } from "../../lib/native-scroll-edge-effect";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThreadDraftForThread } from "../../state/use-thread-composer-state";
@@ -60,8 +59,6 @@ import { useReviewCommentSelectionController } from "./useReviewCommentSelection
 import { resolveReviewAvailability } from "./reviewAvailability";
 import { resolveSelectedReviewFileId } from "./reviewPaneSelection";
 import { buildReviewSectionMenu } from "./review-section-menu";
-
-const TOP_SCROLL_EDGE_EFFECT = nativeTopScrollEdgeEffect(Platform.OS, Platform.Version);
 
 const REVIEW_HEADER_SPACING = 0;
 
@@ -593,12 +590,6 @@ export function ReviewSheet() {
             backgroundColor: "transparent",
           },
           headerTitle: renderHeaderTitle,
-          scrollEdgeEffects: {
-            top: TOP_SCROLL_EDGE_EFFECT,
-            bottom: "hidden",
-            left: "hidden",
-            right: "hidden",
-          },
           unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
         }}
       />
