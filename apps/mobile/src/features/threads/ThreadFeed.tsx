@@ -1510,7 +1510,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             automaticallyAdjustsScrollIndicatorInsets={usesNativeAutomaticInsets}
             {...(usesNativeAutomaticInsets
               ? {
-                  contentInset: { top: topContentInset, left: 0, right: 0, bottom: 0 },
+                  contentInset: { top: topContentInset - insets.top, left: 0, right: 0, bottom: 0 },
                   scrollIndicatorInsets: { top: 0, left: 0, right: 0, bottom: 0 },
                 }
               : { scrollIndicatorInsets: { top: topContentInset, bottom: 0 } })}

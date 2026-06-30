@@ -848,6 +848,7 @@ function ThreadRouteContent(
               {usesThreadSearchToolbar ? (
                 <ScreenStackHeaderSearchBarView>
                   <SearchBar
+                    ref={threadSearchBarRef}
                     allowToolbarIntegration
                     autoCapitalize="none"
                     hideNavigationBar={false}
