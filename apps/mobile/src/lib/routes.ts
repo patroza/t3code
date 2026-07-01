@@ -31,8 +31,9 @@ export function homeNavigation(): AppNavigationTarget {
   return { name: "Home" };
 }
 
+const _settingsNavigation: AppNavigationTarget = { name: "Settings" };
 export function settingsNavigation(): AppNavigationTarget {
-  return { name: "Settings" };
+  return _settingsNavigation;
 }
 
 export function settingsEnvironmentsNavigation(): AppNavigationTarget {
