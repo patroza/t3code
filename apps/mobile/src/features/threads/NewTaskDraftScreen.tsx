@@ -1,4 +1,5 @@
-import { NativeStackScreenOptions, useAppNavigation } from "../../navigation/native-stack-header";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Alert, InteractionManager, View, useColorScheme } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
@@ -29,7 +30,6 @@ import {
   providerOptionsConfigurationLabel,
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
-import { newTaskNavigation, threadNavigation } from "../../lib/routes";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { getComposerDraftSnapshot } from "../../state/use-composer-drafts";
@@ -58,7 +58,7 @@ export function NewTaskDraftScreen(props: {
   const projects = useProjects();
   const createProjectThread = useCreateProjectThread();
   const flow = useNewTaskFlow();
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
@@ -101,7 +101,7 @@ export function NewTaskDraftScreen(props: {
       return;
     }
 
-    navigation.replace(newTaskNavigation());
+    navigation.dispatch(StackActions.replace("NewTask"));
   }, [
     logicalProjects,
     projects,
@@ -429,7 +429,12 @@ export function NewTaskDraftScreen(props: {
 
     flow.setPrompt("");
     flow.clearAttachments();
-    navigation.replace(threadNavigation(result.value));
+    navigation.dispatch(
+      StackActions.replace("Thread", {
+        environmentId: String(result.value.environmentId),
+        threadId: String(result.value.threadId),
+      }),
+    );
   }
 
   if (!selectedProject) {

@@ -4,24 +4,18 @@ import {
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
 } from "@t3tools/client-runtime/state/vcs";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useRouteParams, useAppNavigation } from "../../../navigation/native-stack-header";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SymbolView } from "expo-symbols";
-import { useCallback, useEffect, useMemo, type ComponentProps } from "react";
-import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Platform, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { Screen, ScreenStack, ScreenStackHeaderConfig } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../../lib/useThemeColor";
 
 import { AppText as Text } from "../../../components/AppText";
-import { nativeHeaderScrollEdgeEffects } from "../../../lib/native-scroll-edge-effect";
+import { nativeHeaderScrollEdgeEffects } from "../../../native/StackHeader";
 import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
-import {
-  buildGitBranchesNavigation,
-  buildGitCommitNavigation,
-  buildGitConfirmNavigation,
-  buildThreadReviewNavigation,
-} from "../../../lib/routes";
 import { useEnvironmentQuery } from "../../../state/query";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
@@ -32,20 +26,21 @@ import { MetaCard, SheetListRow, menuItemIconName, statusSummary } from "./gitSh
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
-export function GitOverviewSheet(
-  props: {
-    readonly headerInset?: number;
-    readonly presentation?: "sheet" | "inspector";
-  } = {},
-) {
-  const navigation = useAppNavigation();
+type GitOverviewSheetProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+}> & {
+  readonly headerInset?: number;
+  readonly presentation?: "sheet" | "inspector";
+};
+
+export function GitOverviewSheet(props: GitOverviewSheetProps) {
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const presentation = props.presentation ?? "sheet";
   const isInspector = presentation === "inspector";
-  const { environmentId, threadId } = useRouteParams<{
-    environmentId: EnvironmentId;
-    threadId: ThreadId;
-  }>();
+  const environmentId = EnvironmentId.make(props.route.params.environmentId);
+  const threadId = ThreadId.make(props.route.params.threadId);
   const { selectedThread } = useThreadSelection();
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
@@ -124,23 +119,20 @@ export function GitOverviewSheet(
         !input.featureBranch &&
         requiresDefaultBranchConfirmation(input.action, isDefaultRef)
       ) {
-        navigation.push(
-          buildGitConfirmNavigation(
-            { environmentId, threadId },
-            {
-              confirmAction: confirmableAction,
-              branchName,
-              includesCommit: String(
-                input.action === "commit_push" || input.action === "commit_push_pr",
-              ),
-            },
+        navigation.navigate("GitConfirm", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+          confirmAction: confirmableAction,
+          branchName,
+          includesCommit: String(
+            input.action === "commit_push" || input.action === "commit_push_pr",
           ),
-        );
+        });
         return;
       }
 
       if (!isInspector) {
-        navigation.dismiss();
+        navigation.goBack();
       }
       await gitActions.onRunSelectedThreadGitAction(input);
     },
@@ -155,7 +147,10 @@ export function GitOverviewSheet(
         return;
       }
       if (item.dialogAction === "commit") {
-        navigation.push(buildGitCommitNavigation({ environmentId, threadId }));
+        navigation.navigate("GitCommit", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+        });
         return;
       }
       if (item.dialogAction === "push") {
@@ -169,37 +164,59 @@ export function GitOverviewSheet(
     [environmentId, openExistingPr, navigation, runActionWithPrompt, threadId],
   );
 
-  const inspectorHeaderRightBarButtonItems = useMemo(
-    () =>
-      [
-        {
-          accessibilityLabel: "Refresh repository status",
-          disabled: busy,
-          icon: { name: "arrow.clockwise", type: "sfSymbol" as const },
-          identifier: "git-overview-refresh",
-          onPress: () => {
-            void gitActions.refreshSelectedThreadGitStatus();
-          },
-          sharesBackground: false,
-          tintColor: foregroundColor,
-          type: "button" as const,
-          width: 44,
-        },
-      ] as ComponentProps<typeof ScreenStackHeaderConfig>["headerRightBarButtonItems"],
-    [busy, foregroundColor, gitActions],
+  // Status facts live on the relevant rows instead of crowding the header
+  // subtitle: files changed → Commit, ahead → Push, PR → View PR, behind → Pull.
+  const rowStatusDetail = useCallback(
+    (item: (typeof menuItems)[number]): string | undefined => {
+      const status = gitStatus.data;
+      if (status == null) {
+        return undefined;
+      }
+      if (item.dialogAction === "commit" && status.hasWorkingTreeChanges) {
+        const fileCount = status.workingTree?.files.length ?? 0;
+        return `${fileCount} file${fileCount === 1 ? "" : "s"} changed`;
+      }
+      if (item.dialogAction === "push" && (status.aheadCount ?? 0) > 0) {
+        const ahead = status.aheadCount ?? 0;
+        return `${ahead} commit${ahead === 1 ? "" : "s"} ahead`;
+      }
+      if (item.kind === "open_pr" && status.pr?.number != null) {
+        return `PR #${status.pr.number} ${status.pr.state ?? "open"}`;
+      }
+      return undefined;
+    },
+    [gitStatus.data, menuItems],
   );
+
+  const behindCount = gitStatus.data?.behindCount ?? 0;
+
+  // Deterministic pull-to-refresh state. Tying RefreshControl to the query's
+  // isPending flag left the spinner stuck (the status query reports pending
+  // during quiet background refreshes too).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const handlePullRefresh = useCallback(async () => {
+    setIsPullRefreshing(true);
+    try {
+      await gitActions.refreshSelectedThreadGitStatus();
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }, [gitActions]);
 
   const content = (
     <ScrollView
-      contentInsetAdjustmentBehavior={isInspector && Platform.OS === "ios" ? "automatic" : "never"}
+      contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
       showsVerticalScrollIndicator={false}
-      style={{ flex: 1 }}
+      style={{ flex: 1, backgroundColor: sheetColor }}
       contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
       contentContainerStyle={{
         paddingHorizontal: isInspector ? 12 : 20,
         paddingTop: 8,
         gap: 14,
       }}
+      refreshControl={
+        <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullRefresh()} />
+      }
     >
       <View
         className={
@@ -216,19 +233,19 @@ export function GitOverviewSheet(
             <SheetListRow
               icon={menuItemIconName(item.icon)}
               title={item.label}
-              subtitle={disabledReason}
+              subtitle={disabledReason ?? rowStatusDetail(item)}
               disabled={item.disabled}
               onPress={() => void onPressMenuItem(item)}
             />
           </View>
         ))}
-        {(gitStatus.data?.behindCount ?? 0) > 0 ? (
+        {behindCount > 0 ? (
           <>
             <View className="ml-12 h-px" style={{ backgroundColor: borderColor }} />
             <SheetListRow
               icon="arrow.down.circle"
               title="Pull latest"
-              subtitle="Sync this branch with upstream"
+              subtitle={`${behindCount} commit${behindCount === 1 ? "" : "s"} behind upstream`}
               disabled={busy || !isRepo}
               onPress={() => void gitActions.onPullSelectedThreadBranch()}
             />
@@ -240,7 +257,7 @@ export function GitOverviewSheet(
           title="Review changes"
           subtitle="Inspect turn diffs, worktree changes, and base branch diff"
           disabled={busy || !isRepo}
-          onPress={() => navigation.push(buildThreadReviewNavigation({ environmentId, threadId }))}
+          onPress={() => navigation.navigate("ThreadReview", { environmentId, threadId })}
         />
         <View className="ml-12 h-px" style={{ backgroundColor: borderColor }} />
         <SheetListRow
@@ -248,7 +265,12 @@ export function GitOverviewSheet(
           title="Branches & worktrees"
           subtitle="Switch branch, create branch, or move to a worktree"
           disabled={busy || !isRepo}
-          onPress={() => navigation.push(buildGitBranchesNavigation({ environmentId, threadId }))}
+          onPress={() =>
+            navigation.navigate("GitBranches", {
+              environmentId: String(environmentId),
+              threadId: String(threadId),
+            })
+          }
         />
       </View>
 
@@ -272,15 +294,49 @@ export function GitOverviewSheet(
             <ScreenStackHeaderConfig
               backgroundColor="rgba(0,0,0,0)"
               color={foregroundColor}
-              headerRightBarButtonItems={inspectorHeaderRightBarButtonItems}
               hideBackButton
               hideShadow={false}
               navigationItemStyle="editor"
-              subtitle={currentStatusSummary}
               title={currentBranchLabel}
               titleColor={foregroundColor}
               titleFontSize={17}
               titleFontWeight="700"
+              translucent
+            />
+          </Screen>
+        </ScreenStack>
+      </View>
+    );
+  }
+
+  if (Platform.OS === "ios") {
+    // Compact form sheet: a plain screen presented as formSheet never renders a
+    // stack header, so — like the Settings sheet — the header must come from a
+    // nested native stack INSIDE the sheet. This reuses the exact structure of the
+    // inspector branch below: branch as the title, status summary as the native
+    // subtitle, refresh as a header button.
+    return (
+      <View collapsable={false} className="flex-1 bg-sheet">
+        <ScreenStack style={{ flex: 1 }}>
+          <Screen
+            activityState={2}
+            enabled
+            isNativeStack
+            screenId="thread-git-sheet-native"
+            scrollEdgeEffects={HEADER_SCROLL_EDGE_EFFECTS}
+            style={{ backgroundColor: sheetColor, flex: 1 }}
+          >
+            {content}
+            <ScreenStackHeaderConfig
+              backgroundColor="rgba(0,0,0,0)"
+              color={foregroundColor}
+              hideBackButton
+              hideShadow={false}
+              navigationItemStyle="editor"
+              title={currentBranchLabel}
+              titleColor={foregroundColor}
+              titleFontSize={18}
+              titleFontWeight="800"
               translucent
             />
           </Screen>

@@ -1,10 +1,6 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useRouteParams,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, ScrollView, View } from "react-native";
@@ -13,21 +9,26 @@ import { useThemeColor } from "../../lib/useThemeColor";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { ErrorBanner } from "../../components/ErrorBanner";
-import { dismissRoute } from "../../lib/routes";
-import { ConnectionSheetButton } from "../../features/connection/ConnectionSheetButton";
-import { extractPairingUrlFromQrPayload } from "../../features/connection/pairing";
+import { ConnectionSheetButton } from "./ConnectionSheetButton";
+import { extractPairingUrlFromQrPayload } from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
-import { buildPairingUrl, parsePairingUrl } from "../../features/connection/pairing";
+import { buildPairingUrl, parsePairingUrl } from "./pairing";
 
-export default function ConnectionsNewRouteScreen() {
+type ConnectionsNewRouteParams = {
+  readonly mode?: string;
+};
+
+export function ConnectionsNewRouteScreen({
+  route,
+}: StaticScreenProps<ConnectionsNewRouteParams | undefined>) {
   const {
     connectionPairingUrl,
     onChangeConnectionPairingUrl,
     onConnectPress,
     pairingConnectionError,
   } = useRemoteConnections();
-  const navigation = useAppNavigation();
-  const params = useRouteParams<{ mode?: string }>();
+  const navigation = useNavigation();
+  const params = route.params ?? {};
   const insets = useSafeAreaInsets();
   const [hostInput, setHostInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
@@ -36,6 +37,7 @@ export default function ConnectionsNewRouteScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [scannerLocked, setScannerLocked] = useState(false);
 
+  const headerIconColor = useThemeColor("--color-icon");
   const placeholderColor = useThemeColor("--color-placeholder");
 
   const connectDisabled = isSubmitting || hostInput.trim().length === 0;
@@ -121,7 +123,11 @@ export default function ConnectionsNewRouteScreen() {
     onChangeConnectionPairingUrl(pairingUrl);
     const result = await onConnectPress(pairingUrl);
     if (AsyncResult.isSuccess(result)) {
-      dismissRoute(navigation);
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation.dispatch(StackActions.replace("Home"));
+      }
     } else {
       setIsSubmitting(false);
     }
@@ -145,6 +151,7 @@ export default function ConnectionsNewRouteScreen() {
             }
           }}
           separateBackground
+          tintColor={headerIconColor}
         />
       </NativeHeaderToolbar>
 

@@ -1,13 +1,16 @@
-import { NativeStackScreenOptions, useRouteParams } from "../../navigation/native-stack-header";
+import type { StaticScreenProps } from "@react-navigation/native";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 
-import { NewTaskDraftScreen } from "../../features/threads/NewTaskDraftScreen";
+import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
 
-export default function NewTaskDraftRoute() {
-  const params = useRouteParams<{
-    environmentId?: string | string[];
-    projectId?: string | string[];
-    title?: string | string[];
-  }>();
+type NewTaskDraftRouteParams = {
+  readonly environmentId?: string | string[];
+  readonly projectId?: string | string[];
+  readonly title?: string | string[];
+};
+
+export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
+  const params = route.params ?? {};
 
   return (
     <>

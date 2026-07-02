@@ -1,11 +1,11 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Markdown,
   type CustomRenderers,
   type NodeStyleOverrides,
   type PartialMarkdownTheme,
 } from "react-native-nitro-markdown";
-import { ScrollView, Text as NativeText, View } from "react-native";
+import { RefreshControl, ScrollView, Text as NativeText, View } from "react-native";
 
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
@@ -142,14 +142,40 @@ function useMarkdownPreviewStyles(): MarkdownPreviewStyles {
   ]);
 }
 
-export function FileMarkdownPreview(props: { readonly markdown: string }) {
+export function FileMarkdownPreview(props: {
+  readonly markdown: string;
+  readonly onRefresh?: () => Promise<void> | void;
+}) {
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const handlePullToRefresh = useCallback(async () => {
+    if (!props.onRefresh) {
+      return;
+    }
+    setIsPullRefreshing(true);
+    try {
+      await props.onRefresh();
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }, [props.onRefresh]);
   const styles = useMarkdownPreviewStyles();
   const onLinkPress = useCallback((href: string) => {
     void tryOpenExternalUrl(href, "markdown-link");
   }, []);
 
   return (
-    <ScrollView className="flex-1 bg-card" contentContainerStyle={{ padding: 18 }}>
+    <ScrollView
+      className="flex-1 bg-sheet"
+      contentContainerStyle={{ padding: 18 }}
+      refreshControl={
+        props.onRefresh ? (
+          <RefreshControl
+            refreshing={isPullRefreshing}
+            onRefresh={() => void handlePullToRefresh()}
+          />
+        ) : undefined
+      }
+    >
       <View className="mx-auto w-full max-w-[760px]">
         {hasNativeSelectableMarkdownText() ? (
           <SelectableMarkdownText

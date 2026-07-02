@@ -4,7 +4,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { SymbolView } from "expo-symbols";
-import { useAppNavigation } from "../../navigation/native-stack-header";
+import { useNavigation } from "@react-navigation/native";
 import {
   memo,
   useCallback,
@@ -39,7 +39,6 @@ import {
   View,
 } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
-import { ScrollViewMarker } from "react-native-screens";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { type SharedValue } from "react-native-reanimated";
@@ -69,8 +68,6 @@ import {
 import { buildReviewParsedDiff } from "../review/reviewModel";
 import { cn } from "../../lib/cn";
 import { deriveCenteredContentHorizontalPadding, type LayoutVariant } from "../../lib/layout";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
-import { buildThreadFilesNavigation } from "../../lib/routes";
 import { MOBILE_CODE_SURFACE, MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
 import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
@@ -88,8 +85,6 @@ const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
   minute: "2-digit",
 });
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
-
 function formatMessageTime(input: string): string {
   const timestamp = Date.parse(input);
   if (Number.isNaN(timestamp)) {
@@ -1097,7 +1092,6 @@ function ThreadFeedPlaceholder(props: {
   readonly bottomInset: number;
   readonly detail: string;
   readonly horizontalPadding: number;
-  readonly loading?: boolean;
   readonly title: string;
   readonly topInset: number;
 }) {
@@ -1114,7 +1108,6 @@ function ThreadFeedPlaceholder(props: {
       }}
     >
       <View className="max-w-[320px] items-center gap-2">
-        {props.loading ? <ActivityIndicator style={{ marginBottom: 6 }} /> : null}
         <Text className="text-center font-t3-bold text-lg text-foreground">{props.title}</Text>
         <Text className="text-center text-sm leading-5 text-foreground-secondary">
           {props.detail}
@@ -1125,7 +1118,7 @@ function ThreadFeedPlaceholder(props: {
 }
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foldSettleFrameRef = useRef<number | null>(null);
   const foldSettleSecondFrameRef = useRef<number | null>(null);
@@ -1180,13 +1173,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         );
         if (relativePath) {
           void Haptics.selectionAsync();
-          navigation.push(
-            buildThreadFilesNavigation(
-              { environmentId: props.environmentId, threadId: props.threadId },
-              relativePath,
-              presentation.line,
-            ),
-          );
+          navigation.navigate("ThreadFile", {
+            environmentId: String(props.environmentId),
+            threadId: String(props.threadId),
+            path: relativePath.split("/").filter((segment) => segment.length > 0),
+            ...(presentation.line ? { line: String(presentation.line) } : {}),
+          });
         }
         return;
       }
@@ -1473,19 +1465,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ],
   );
 
-  if (props.contentPresentation.kind === "loading") {
-    return (
-      <ThreadFeedPlaceholder
-        title="Loading conversation"
-        detail="Fetching the latest messages from this environment."
-        loading
-        topInset={topContentInset}
-        bottomInset={bottomContentInset}
-        horizontalPadding={horizontalPadding}
-      />
-    );
-  }
-
   if (props.contentPresentation.kind === "unavailable") {
     return (
       <ThreadFeedPlaceholder
@@ -1501,16 +1480,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   return (
     <>
       <View style={{ flex: 1 }} onLayout={handleViewportLayout}>
-        <ScrollViewMarker style={{ flex: 1 }} scrollEdgeEffects={HEADER_SCROLL_EDGE_EFFECTS}>
+        <View style={{ flex: 1 }}>
           <KeyboardAwareLegendList
             ref={props.listRef}
-            key={props.threadId}
+            // The empty↔filled key remounts the list when messages first
+            // arrive. LegendList's maintainScrollAtEnd calls scrollToEnd(),
+            // which is blind to UIKit's adjustedContentInset — inserting into
+            // an already-attached list under a transparent header can pin
+            // short content at offset 0 (one header-height too high). A fresh
+            // mount positions during attach, where UIKit applies the inset.
+            key={`${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`}
             style={{ flex: 1 }}
             contentInsetAdjustmentBehavior={usesNativeAutomaticInsets ? "automatic" : "never"}
             automaticallyAdjustsScrollIndicatorInsets={usesNativeAutomaticInsets}
             {...(usesNativeAutomaticInsets
               ? {
-                  contentInset: { top: topContentInset, left: 0, right: 0, bottom: 0 },
+                  // Do NOT pass a manual `contentInset` here. Like the Home
+                  // ScrollView, we rely purely on `contentInsetAdjustmentBehavior:
+                  // "automatic"` so UIKit derives the top inset from the transparent
+                  // header. A manual contentInset (which LegendList consumes into its
+                  // own layout math) collapses the scroll view's adjustedContentInset
+                  // top to 0, leaving the iOS 26/27 scroll-edge effect no region to
+                  // render into — which is why the header blur was missing on threads.
                   scrollIndicatorInsets: { top: 0, left: 0, right: 0, bottom: 0 },
                 }
               : { scrollIndicatorInsets: { top: topContentInset, bottom: 0 } })}
@@ -1552,8 +1543,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               paddingHorizontal: contentHorizontalPadding,
             }}
           />
-        </ScrollViewMarker>
-        {props.feed.length === 0 ? (
+        </View>
+        {props.feed.length === 0 && props.contentPresentation.kind === "ready" ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
             <ThreadFeedPlaceholder
               title="No conversation yet"

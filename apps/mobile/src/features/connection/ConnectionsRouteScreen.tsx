@@ -1,8 +1,5 @@
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
+import { useNavigation } from "@react-navigation/native";
 import { SymbolView } from "expo-symbols";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useState } from "react";
@@ -12,18 +9,17 @@ import { useThemeColor } from "../../lib/useThemeColor";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
-import { connectionsNewNavigation } from "../../lib/routes";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
-import { ConnectionEnvironmentRow } from "../../features/connection/ConnectionEnvironmentRow";
+import { ConnectionEnvironmentRow } from "./ConnectionEnvironmentRow";
 
-export default function ConnectionsRouteScreen() {
+export function ConnectionsRouteScreen() {
   const {
     connectedEnvironments,
     onReconnectEnvironment,
     onRemoveEnvironmentPress,
     onUpdateEnvironment,
   } = useRemoteConnections();
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const hasEnvironments = connectedEnvironments.length > 0;
   const [expandedId, setExpandedId] = useState<EnvironmentId | null>(null);
@@ -36,15 +32,10 @@ export default function ConnectionsRouteScreen() {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions
-        options={{
-          title: "Environments",
-        }}
-      />
       <NativeHeaderToolbar placement="right">
         <NativeHeaderToolbar.Button
           icon="plus"
-          onPress={() => navigation.push(connectionsNewNavigation())}
+          onPress={() => navigation.navigate("ConnectionsNew")}
           separateBackground
         />
       </NativeHeaderToolbar>

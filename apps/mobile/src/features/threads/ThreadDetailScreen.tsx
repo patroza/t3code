@@ -1,4 +1,5 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import type {
@@ -15,7 +16,6 @@ import type {
 } from "@t3tools/contracts";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import * as Haptics from "expo-haptics";
-import { useHeaderHeight } from "@react-navigation/elements";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { View, type GestureResponderEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -62,6 +62,8 @@ export interface ThreadDetailScreenProps {
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
+  /** Message sync status for the selected thread (drives the composer status pill). */
+  readonly threadSyncStatus?: EnvironmentThreadStatus;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
@@ -69,7 +71,6 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadQueueCount: number;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
-  readonly nativeHeaderContentTopInset?: number;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onOpenDrawer: () => void;
@@ -210,7 +211,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const { onOpenDrawer } = props;
 
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -223,6 +223,22 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
   const composerBottomInset = composerExpanded ? 0 : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
+  // The raw sync status enters "synchronizing" on every full fetch, cached or
+  // not. Whether messages are already on screen decides the pill label: no
+  // data yet → "Loading messages", cached data reconciling → "Syncing".
+  const threadSyncPhase = (() => {
+    switch (props.threadSyncStatus) {
+      case "empty":
+      case "cached":
+      case "synchronizing":
+        if (contentPresentationKind === "ready") {
+          return "syncing" as const;
+        }
+        return contentPresentationKind === "loading" ? ("loading" as const) : null;
+      default:
+        return null;
+    }
+  })();
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
@@ -238,9 +254,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
   const contentMaxWidth = isSplitLayout ? CHAT_CONTENT_MAX_WIDTH : undefined;
-  const nativeHeaderContentTopInset =
-    props.nativeHeaderContentTopInset ??
-    Math.max(headerHeight, insets.top + (isSplitLayout ? 88 : 92));
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
   const selectedProviderSkills = useMemo(
@@ -389,7 +402,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               freeze={freeze}
               anchorMessageId={anchorMessageId}
               contentInsetEndAdjustment={contentInsetEndAdjustment}
-              contentTopInset={props.usesAutomaticContentInsets ? nativeHeaderContentTopInset : 0}
+              contentTopInset={0}
               contentBottomInset={estimatedOverlayHeight}
               contentMaxWidth={contentMaxWidth}
               layoutVariant={layoutVariant}
@@ -451,6 +464,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 connectionState={props.connectionStateLabel}
                 connectionError={props.connectionError}
                 environmentLabel={props.environmentLabel}
+                threadSyncPhase={threadSyncPhase}
                 selectedThread={props.selectedThread}
                 serverConfig={props.serverConfig}
                 queueCount={props.selectedThreadQueueCount}

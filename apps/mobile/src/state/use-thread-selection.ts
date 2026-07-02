@@ -1,5 +1,5 @@
-import { useCurrentRouteParams } from "../navigation/native-stack-header";
-import { createContext, createElement, use, useMemo, useRef, type ReactNode } from "react";
+import { useRoute, type RouteProp } from "@react-navigation/native";
+import { useMemo, useRef } from "react";
 import {
   EnvironmentId,
   type OrchestrationThread,
@@ -16,6 +16,10 @@ import {
   useRemoteEnvironmentRuntime,
   useSavedRemoteConnection,
 } from "./use-remote-environment-registry";
+type ThreadSelectionRouteParams = {
+  readonly environmentId?: string | string[];
+  readonly threadId?: string | string[];
+};
 
 function firstRouteParam(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) {
@@ -62,14 +66,11 @@ function threadDetailToShell(
   };
 }
 
-function useResolvedThreadSelection() {
-  const params = useCurrentRouteParams<{
-    environmentId?: string | string[];
-    threadId?: string | string[];
-  }>();
+function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefined) {
+  const routeParams = params ?? {};
   const routeThreadRef = useMemo<ScopedThreadRef | null>(() => {
-    const environmentId = firstRouteParam(params.environmentId);
-    const threadId = firstRouteParam(params.threadId);
+    const environmentId = firstRouteParam(routeParams.environmentId);
+    const threadId = firstRouteParam(routeParams.threadId);
     if (!environmentId || !threadId) {
       return null;
     }
@@ -78,7 +79,7 @@ function useResolvedThreadSelection() {
       environmentId: EnvironmentId.make(environmentId),
       threadId: ThreadId.make(threadId),
     };
-  }, [params.environmentId, params.threadId]);
+  }, [routeParams.environmentId, routeParams.threadId]);
   const lastRouteThreadRef = useRef<ScopedThreadRef | null>(null);
   if (routeThreadRef !== null) {
     lastRouteThreadRef.current = routeThreadRef;
@@ -133,17 +134,7 @@ function useResolvedThreadSelection() {
 
 type ThreadSelectionState = ReturnType<typeof useResolvedThreadSelection>;
 
-const ThreadSelectionContext = createContext<ThreadSelectionState | null>(null);
-
-export function ThreadSelectionProvider(props: { readonly children: ReactNode }) {
-  const selection = useResolvedThreadSelection();
-  return createElement(ThreadSelectionContext.Provider, { value: selection }, props.children);
-}
-
 export function useThreadSelection(): ThreadSelectionState {
-  const selection = use(ThreadSelectionContext);
-  if (selection === null) {
-    throw new Error("useThreadSelection must be used within ThreadSelectionProvider");
-  }
-  return selection;
+  const route = useRoute<RouteProp<Record<string, ThreadSelectionRouteParams | undefined>>>();
+  return useResolvedThreadSelection(route.params);
 }

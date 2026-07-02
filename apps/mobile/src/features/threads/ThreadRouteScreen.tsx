@@ -1,37 +1,16 @@
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import {
-  NativeStackScreenOptions,
+  StackActions,
   useFocusEffect,
-  useRouteParams,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-  type ReactNode,
-} from "react";
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import {
-  Platform,
-  Pressable,
-  ScrollView,
-  Text as RNText,
-  View,
-  type NativeSyntheticEvent,
-} from "react-native";
-import {
-  Screen,
-  ScreenStack,
-  ScreenStackHeaderConfig,
-  ScreenStackHeaderSearchBarView,
-  SearchBar,
-  type SearchBarCommands,
-} from "react-native-screens";
+import { Platform, Pressable, ScrollView, Text as RNText, View } from "react-native";
+import { type SearchBarCommands } from "react-native-screens";
 import { useWorkspaceState } from "../../state/workspace";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useEnvironmentQuery } from "../../state/query";
@@ -40,18 +19,9 @@ import { vcsEnvironment } from "../../state/vcs";
 
 import { EmptyState } from "../../components/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
-import {
-  buildThreadFilesNavigation,
-  buildThreadTerminalNavigation,
-  connectionsNavigation,
-  homeNavigation,
-  newTaskNavigation,
-  threadNavigation,
-} from "../../lib/routes";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { connectionTone } from "../connection/connectionTone";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
 
 import {
   useRemoteConnections,
@@ -107,13 +77,6 @@ interface ThreadInspectorSelection {
 }
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
-type RnsHeaderItems = ComponentProps<typeof ScreenStackHeaderConfig>["headerRightBarButtonItems"];
-
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
-
-function asRnsHeaderItems(items: NativeHeaderItems | undefined): RnsHeaderItems {
-  return items as unknown as RnsHeaderItems;
-}
 
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
@@ -132,7 +95,12 @@ function OpeningThreadLoadingScreen() {
   return <LoadingScreen message="Opening thread…" messagePlacement="above-spinner" />;
 }
 
-interface ThreadRouteScreenProps {
+type ThreadRouteScreenRouteProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+}>;
+
+interface ThreadRouteScreenProps extends ThreadRouteScreenRouteProps {
   readonly onReturnToThread?: () => void;
   readonly renderInspector?: (headerInset: number) => ReactNode;
 }
@@ -157,14 +125,11 @@ function ThreadUnavailableScreen() {
   );
 }
 
-export function ThreadRouteScreen(props: ThreadRouteScreenProps = {}) {
+export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
   const { selectedThread } = useThreadSelection();
-  const params = useRouteParams<{
-    environmentId?: string | string[];
-    threadId?: string | string[];
-  }>();
+  const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const threadIdRaw = firstRouteParam(params.threadId);
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
@@ -180,19 +145,16 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps = {}) {
       ? null
       : scopedThreadKey(selectedThread.environmentId, selectedThread.id);
   const selectedThreadDetailState = useSelectedThreadDetailState();
-  const hasThreadDetail = Option.isSome(selectedThreadDetailState.data);
-  const hasTerminalDetailState =
-    selectedThreadDetailState.status === "deleted" ||
-    Option.isSome(selectedThreadDetailState.error);
 
   if (environmentId === null || threadIdRaw === null) {
     return <OpeningThreadLoadingScreen />;
   }
 
+  // Render the full thread chrome (header, feed, composer) as soon as the
+  // thread SHELL is known — no blocking on message detail. The feed shows a
+  // loading placeholder while messages fetch, and the composer's connection
+  // pill reports connecting/reconnecting/syncing status.
   if (selectedThread !== null && selectedThreadKey === routeThreadKey) {
-    if (!hasThreadDetail && !hasTerminalDetailState) {
-      return <OpeningThreadLoadingScreen />;
-    }
     return <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />;
   }
 
@@ -206,47 +168,6 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps = {}) {
   }
 
   return <ThreadUnavailableScreen />;
-}
-
-function ThreadHeaderTitle(props: {
-  readonly foregroundColor: string;
-  readonly secondaryForegroundColor: string;
-  readonly subtitle: string;
-  readonly title: string;
-}) {
-  return (
-    <Pressable
-      style={{ alignItems: "center", maxWidth: 200 }}
-      onLongPress={() => {
-        // TODO: trigger rename modal
-      }}
-    >
-      <RNText
-        numberOfLines={1}
-        style={{
-          fontFamily: "DMSans_700Bold",
-          fontSize: MOBILE_TYPOGRAPHY.headline.fontSize,
-          fontWeight: "900",
-          color: props.foregroundColor,
-          letterSpacing: -0.4,
-        }}
-      >
-        {props.title}
-      </RNText>
-      <RNText
-        numberOfLines={1}
-        style={{
-          fontFamily: "DMSans_700Bold",
-          fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-          fontWeight: "700",
-          color: props.secondaryForegroundColor,
-          letterSpacing: 0.3,
-        }}
-      >
-        {props.subtitle}
-      </RNText>
-    </Pressable>
-  );
 }
 
 function ThreadRouteContent(
@@ -276,11 +197,8 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
-  const navigation = useAppNavigation();
-  const params = useRouteParams<{
-    environmentId?: string | string[];
-    threadId?: string | string[];
-  }>();
+  const navigation = useNavigation();
+  const params = props.route.params;
   const [drawerVisible, setDrawerVisible] = useState(false);
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
@@ -363,10 +281,7 @@ function ThreadRouteContent(
   );
 
   /* ─── Native header theming ──────────────────────────────────────── */
-  const iconColor = String(useThemeColor("--color-icon"));
   const foregroundColor = String(useThemeColor("--color-foreground"));
-  const secondaryFg = String(useThemeColor("--color-foreground-secondary"));
-  const screenBackgroundColor = String(useThemeColor("--color-screen"));
   const usesNativeHeaderGlass = Platform.OS === "ios";
   const usesThreadSearchToolbar =
     Platform.OS === "ios" && layout.usesSplitView && inspectorMode === null;
@@ -479,18 +394,28 @@ function ThreadRouteContent(
       if (selectedThread === null) {
         return;
       }
-      const destination = buildThreadFilesNavigation(selectedThread, path);
+      const params = {
+        environmentId: String(selectedThread.environmentId),
+        threadId: String(selectedThread.id),
+        path: path.split("/").filter((segment) => segment.length > 0),
+      };
       if (fileInspector.supported) {
-        navigation.replace(destination);
+        navigation.navigate("ThreadFile", params);
         return;
       }
-      navigation.push(destination);
+      navigation.navigate("ThreadFile", params);
     },
     [fileInspector.supported, navigation, selectedThread],
   );
   const GitInspector = useCallback(
-    () => <GitOverviewSheet headerInset={0} presentation="inspector" />,
-    [],
+    () => (
+      <GitOverviewSheet
+        headerInset={0}
+        presentation="inspector"
+        route={{ params: props.route.params }}
+      />
+    ),
+    [props.route.params],
   );
   const FilesInspector = useCallback(
     () =>
@@ -522,7 +447,7 @@ function ThreadRouteContent(
   const activeInspectorRenderer = inspectorMode === null ? undefined : renderInspectorStack;
 
   const handleOpenConnectionEditor = useCallback(() => {
-    void navigation.push(connectionsNavigation());
+    void navigation.navigate("Connections");
   }, [navigation]);
   const handleStopThread = useCallback(() => {
     if (
@@ -555,7 +480,11 @@ function ThreadRouteContent(
         return;
       }
 
-      void navigation.push(buildThreadTerminalNavigation(selectedThread, nextTerminalId));
+      void navigation.navigate("ThreadTerminal", {
+        environmentId: String(selectedThread.environmentId),
+        threadId: String(selectedThread.id),
+        ...(nextTerminalId ? { terminalId: nextTerminalId } : {}),
+      });
     },
     [navigation, selectedThread, selectedThreadProject?.workspaceRoot],
   );
@@ -574,7 +503,11 @@ function ThreadRouteContent(
     const nextId = nextOpenTerminalId({
       listedTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
     });
-    void navigation.push(buildThreadTerminalNavigation(selectedThread, nextId));
+    void navigation.navigate("ThreadTerminal", {
+      environmentId: String(selectedThread.environmentId),
+      threadId: String(selectedThread.id),
+      terminalId: nextId,
+    });
   }, [navigation, selectedThread, selectedThreadProject?.workspaceRoot, terminalMenuSessions]);
 
   const handleRunProjectScript = useCallback(
@@ -632,7 +565,11 @@ function ThreadRouteContent(
         worktreePath: preferredWorktreePath,
       });
 
-      void navigation.push(buildThreadTerminalNavigation(selectedThread, targetTerminalId));
+      void navigation.navigate("ThreadTerminal", {
+        environmentId: String(selectedThread.environmentId),
+        threadId: String(selectedThread.id),
+        terminalId: targetTerminalId,
+      });
     },
     [
       navigation,
@@ -643,6 +580,8 @@ function ThreadRouteContent(
     ],
   );
   const threadGitControlProps = {
+    environmentId: environmentIdRaw ?? "",
+    threadId: threadId ?? "",
     auxiliaryPaneControl:
       !layout.usesSplitView && fileInspector.supported && selectedThreadCwd !== null
         ? {
@@ -669,24 +608,6 @@ function ThreadRouteContent(
   };
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(threadGitControlProps);
   const compactRightHeaderItems = useThreadGitRightHeaderItems(threadGitControlProps);
-  const compactLeftHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      withNativeGlassHeaderItem({
-        accessibilityLabel: "Back to threads",
-        icon: { name: "chevron.left", type: "sfSymbol" as const },
-        identifier: "thread-compact-back",
-        onPress: () => {
-          if (navigation.canGoBack()) {
-            navigation.back();
-            return;
-          }
-          navigation.replace(homeNavigation());
-        },
-        type: "button" as const,
-      }),
-    ],
-    [navigation],
-  );
   const splitLeftHeaderItems = useMemo<NativeHeaderItems>(
     () => [
       {
@@ -722,7 +643,7 @@ function ThreadRouteContent(
         accessibilityLabel: "New task",
         icon: { name: "square.and.pencil", type: "sfSymbol" as const },
         identifier: "thread-left-new-task",
-        onPress: () => navigation.push(newTaskNavigation()),
+        onPress: () => navigation.navigate("NewTaskSheet", { screen: "NewTask" }),
         type: "button" as const,
       }),
     ],
@@ -770,6 +691,7 @@ function ThreadRouteContent(
             draftMessage={composer.draftMessage}
             draftAttachments={composer.draftAttachments}
             connectionStateLabel={routeConnectionState}
+            threadSyncStatus={selectedThreadDetailState.status}
             activeThreadBusy={composer.activeThreadBusy}
             environmentId={selectedThread.environmentId}
             projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
@@ -802,9 +724,14 @@ function ThreadRouteContent(
               selectedThreadKey={selectedThreadKey}
               onClose={() => setDrawerVisible(false)}
               onSelectThread={(thread) => {
-                navigation.replace(threadNavigation(thread));
+                navigation.dispatch(
+                  StackActions.replace("Thread", {
+                    environmentId: String(thread.environmentId),
+                    threadId: String(thread.id),
+                  }),
+                );
               }}
-              onStartNewTask={() => navigation.push(newTaskNavigation())}
+              onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
             />
           )}
         </View>
@@ -812,86 +739,11 @@ function ThreadRouteContent(
     </>
   );
 
-  if (usesNativeHeaderGlass) {
-    return (
-      <>
-        {activeInspectorRenderer ? <InspectorPaneRoleActivation /> : null}
-        <NativeStackScreenOptions options={{ headerShown: false }} />
-        <ScreenStack style={{ flex: 1 }}>
-          <Screen
-            activityState={2}
-            enabled
-            hasLargeHeader={false}
-            isNativeStack
-            screenId={`thread-detail-${selectedThreadKey}`}
-            scrollEdgeEffects={HEADER_SCROLL_EDGE_EFFECTS}
-            style={{ flex: 1, backgroundColor: screenBackgroundColor }}
-          >
-            {renderThreadRouteBody(false)}
-            <ScreenStackHeaderConfig
-              backgroundColor="rgba(0,0,0,0)"
-              color={iconColor}
-              headerCenterBarButtonItems={asRnsHeaderItems(
-                layout.usesSplitView ? threadCenterHeaderItems : undefined,
-              )}
-              headerLeftBarButtonItems={asRnsHeaderItems(
-                layout.usesSplitView ? splitLeftHeaderItems : compactLeftHeaderItems,
-              )}
-              headerRightBarButtonItems={asRnsHeaderItems(
-                layout.usesSplitView ? undefined : compactRightHeaderItems,
-              )}
-              hideBackButton
-              hideShadow={false}
-              navigationItemStyle="editor"
-              subtitle={headerSubtitle}
-              title={selectedThread.title}
-              titleColor={foregroundColor}
-              titleFontSize={17}
-              titleFontWeight="800"
-              translucent
-            >
-              {usesThreadSearchToolbar ? (
-                <ScreenStackHeaderSearchBarView>
-                  <SearchBar
-                    allowToolbarIntegration
-                    autoCapitalize="none"
-                    hideNavigationBar={false}
-                    obscureBackground={false}
-                    onCancelButtonPress={() => {
-                      setPrimarySidebarSearchQuery("");
-                    }}
-                    onChangeText={(event: NativeSyntheticEvent<{ readonly text?: string }>) => {
-                      setPrimarySidebarSearchQuery(event.nativeEvent.text ?? "");
-                    }}
-                    placement="integratedButton"
-                    placeholder="Search"
-                    textColor={foregroundColor}
-                    tintColor={iconColor}
-                  />
-                </ScreenStackHeaderSearchBarView>
-              ) : null}
-            </ScreenStackHeaderConfig>
-          </Screen>
-        </ScreenStack>
-      </>
-    );
-  }
-
   return (
     <>
       {activeInspectorRenderer ? <InspectorPaneRoleActivation /> : null}
       <NativeStackScreenOptions
         options={{
-          headerShown: true,
-          headerTransparent: usesNativeHeaderGlass,
-          headerShadowVisible: false,
-          ...(usesNativeHeaderGlass
-            ? { headerStyle: { backgroundColor: "transparent" } }
-            : {
-                headerStyle: { backgroundColor: screenBackgroundColor },
-                headerShadowVisible: false,
-              }),
-          headerTintColor: iconColor,
           headerTitle: layout.usesSplitView ? () => null : selectedThread.title,
           headerTitleStyle: usesNativeHeaderGlass
             ? {
@@ -901,8 +753,6 @@ function ThreadRouteContent(
             : undefined,
           title: layout.usesSplitView ? "" : selectedThread.title,
           headerBackVisible: !layout.usesSplitView,
-          headerBackTitle: "",
-          scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
           headerSearchBarOptions: usesThreadSearchToolbar
             ? {
                 ref: threadSearchBarRef,
@@ -920,29 +770,24 @@ function ThreadRouteContent(
                 placement: "integratedButton",
               }
             : undefined,
+          // Compact uses the NATIVE back button (Thread lives flat in the root
+          // stack now, so a real previous route exists); only split view needs
+          // custom left items.
           unstable_headerLeftItems:
-            layout.usesSplitView && Platform.OS === "ios" ? () => splitLeftHeaderItems : undefined,
+            Platform.OS === "ios" && layout.usesSplitView ? () => splitLeftHeaderItems : undefined,
           unstable_headerCenterItems:
             layout.usesSplitView && Platform.OS === "ios"
               ? () => threadCenterHeaderItems
               : undefined,
-          unstable_headerSubtitle: undefined,
-          unstable_navigationItemStyle: usesNativeHeaderGlass ? "editor" : undefined,
+          unstable_headerRightItems:
+            !layout.usesSplitView && Platform.OS === "ios"
+              ? () => compactRightHeaderItems
+              : undefined,
+          unstable_headerSubtitle: usesNativeHeaderGlass ? headerSubtitle : undefined,
         }}
       />
 
-      {layout.usesSplitView || usesNativeHeaderGlass ? null : (
-        <NativeStackScreenOptions.Title asChild>
-          <ThreadHeaderTitle
-            foregroundColor={foregroundColor}
-            secondaryForegroundColor={secondaryFg}
-            subtitle={headerSubtitle}
-            title={selectedThread.title}
-          />
-        </NativeStackScreenOptions.Title>
-      )}
-
-      {renderThreadRouteBody(!layout.usesSplitView)}
+      {renderThreadRouteBody(!layout.usesSplitView && !usesNativeHeaderGlass)}
     </>
   );
 }

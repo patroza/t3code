@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  nativeHeaderScrollEdgeEffects,
-  nativeTopScrollEdgeEffect,
-} from "./native-scroll-edge-effect";
+import { nativeHeaderScrollEdgeEffects, nativeTopScrollEdgeEffect } from "./scrollEdgeEffects";
 
 describe("nativeTopScrollEdgeEffect", () => {
   it("keeps the automatic native treatment on iOS 26", () => {

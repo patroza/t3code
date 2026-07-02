@@ -1,9 +1,5 @@
-import {
-  NavigationLink,
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
+import { useNavigation } from "@react-navigation/native";
 import { SymbolView } from "expo-symbols";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useMemo } from "react";
@@ -17,12 +13,7 @@ import { useProjects, useThreadShells } from "../../state/entities";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useWorkspaceState } from "../../state/workspace";
 import { groupProjectsByRepository } from "../../lib/repositoryGroups";
-import {
-  addProjectNavigation,
-  connectionsNewNavigation,
-  newTaskDraftNavigation,
-} from "../../lib/routes";
-import { useAdaptiveWorkspaceLayout } from "../../features/layout/AdaptiveWorkspaceLayout";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
 function deriveProjectEmptyState(catalogState: WorkspaceState): {
   readonly title: string;
@@ -79,11 +70,11 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
   };
 }
 
-export default function NewTaskRoute() {
+export function NewTaskRouteScreen() {
   const projects = useProjects();
   const threads = useThreadShells();
   const { state: catalogState } = useWorkspaceState();
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const { layout } = useAdaptiveWorkspaceLayout();
   const insets = useSafeAreaInsets();
   const chevronColor = useThemeColor("--color-chevron");
@@ -120,24 +111,24 @@ export default function NewTaskRoute() {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions options={{ title: "Choose project" }} />
       <NativeHeaderToolbar placement="right">
         {layout.usesSplitView ? (
           <NativeHeaderToolbar.Button
             accessibilityLabel="Close new task"
             icon="xmark"
-            onPress={() => navigation.dismiss()}
+            onPress={() => navigation.goBack()}
             separateBackground
           />
         ) : null}
         <NativeHeaderToolbar.Button
           icon="plus"
-          onPress={() => navigation.push(addProjectNavigation())}
+          onPress={() => navigation.navigate("NewTaskSheet", { screen: "AddProject" })}
           separateBackground
         />
       </NativeHeaderToolbar>
 
       <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
         style={{ flex: 1 }}
         contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
@@ -158,7 +149,7 @@ export default function NewTaskRoute() {
             {!catalogState.hasReadyEnvironment ? (
               <Pressable
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
-                onPress={() => navigation.push(connectionsNewNavigation())}
+                onPress={() => navigation.navigate("ConnectionsNew")}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
                   Add environment
@@ -167,7 +158,7 @@ export default function NewTaskRoute() {
             ) : (
               <Pressable
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
-                onPress={() => navigation.push(addProjectNavigation())}
+                onPress={() => navigation.navigate("NewTaskSheet", { screen: "AddProject" })}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
                   Add new project
@@ -182,49 +173,50 @@ export default function NewTaskRoute() {
               const isLast = index === items.length - 1;
 
               return (
-                <NavigationLink
+                <Pressable
                   key={item.key}
-                  href={newTaskDraftNavigation({
-                    environmentId: item.environmentId,
-                    projectId: item.id,
-                    title: item.title,
-                  })}
-                  asChild
+                  className="bg-card"
+                  onPress={() =>
+                    navigation.navigate("NewTaskSheet", {
+                      screen: "NewTaskDraft",
+                      params: {
+                        environmentId: item.environmentId,
+                        projectId: item.id,
+                        title: item.title,
+                      },
+                    })
+                  }
+                  style={{
+                    paddingHorizontal: 16,
+                    paddingVertical: 14,
+                    borderTopWidth: isFirst ? 0 : 1,
+                    borderTopColor: borderSubtleColor,
+                    borderTopLeftRadius: isFirst ? 24 : 0,
+                    borderTopRightRadius: isFirst ? 24 : 0,
+                    borderBottomLeftRadius: isLast ? 24 : 0,
+                    borderBottomRightRadius: isLast ? 24 : 0,
+                  }}
                 >
-                  <Pressable
-                    className="bg-card"
-                    style={{
-                      paddingHorizontal: 16,
-                      paddingVertical: 14,
-                      borderTopWidth: isFirst ? 0 : 1,
-                      borderTopColor: borderSubtleColor,
-                      borderTopLeftRadius: isFirst ? 24 : 0,
-                      borderTopRightRadius: isFirst ? 24 : 0,
-                      borderBottomLeftRadius: isLast ? 24 : 0,
-                      borderBottomRightRadius: isLast ? 24 : 0,
-                    }}
-                  >
-                    <View className="flex-row items-center justify-between gap-3">
-                      <View className="h-7 w-7 items-center justify-center">
-                        <ProjectFavicon
-                          environmentId={item.environmentId}
-                          size={20}
-                          projectTitle={item.title}
-                          workspaceRoot={item.workspaceRoot}
-                        />
-                      </View>
-                      <View className="flex-1">
-                        <Text className="text-base leading-[21px] font-t3-bold">{item.title}</Text>
-                      </View>
-                      <SymbolView
-                        name="chevron.right"
-                        size={14}
-                        tintColor={chevronColor}
-                        type="monochrome"
+                  <View className="flex-row items-center justify-between gap-3">
+                    <View className="h-7 w-7 items-center justify-center">
+                      <ProjectFavicon
+                        environmentId={item.environmentId}
+                        size={20}
+                        projectTitle={item.title}
+                        workspaceRoot={item.workspaceRoot}
                       />
                     </View>
-                  </Pressable>
-                </NavigationLink>
+                    <View className="flex-1">
+                      <Text className="text-base leading-[21px] font-t3-bold">{item.title}</Text>
+                    </View>
+                    <SymbolView
+                      name="chevron.right"
+                      size={14}
+                      tintColor={chevronColor}
+                      type="monochrome"
+                    />
+                  </View>
+                </Pressable>
               );
             })}
           </View>

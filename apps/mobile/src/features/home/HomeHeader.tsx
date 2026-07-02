@@ -3,15 +3,12 @@ import type {
   SidebarProjectGroupingMode,
   SidebarThreadSortOrder,
 } from "@t3tools/contracts";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useCallback, useRef } from "react";
 import { Platform } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
 
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
+import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -59,21 +56,9 @@ export function HomeHeader(props: {
     <>
       <NativeStackScreenOptions
         options={{
-          headerShown: true,
-          headerTransparent: true,
-          headerShadowVisible: false,
-          headerLargeTitle: false,
-          headerStyle: { backgroundColor: "transparent" },
+          // Static header config (glass, title, fonts) lives in Stack.tsx
+          // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
-          scrollEdgeEffects: Platform.OS === "ios" ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
-          headerBackVisible: false,
-          headerBackTitle: "",
-          headerTitle: "Threads",
-          headerTitleStyle: {
-            fontSize: 18,
-            fontWeight: "800",
-          },
-          unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [

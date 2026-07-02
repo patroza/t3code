@@ -86,7 +86,6 @@ function statusColors(thread: EnvironmentThreadShell): { bg: string; fg: string 
 }
 
 const COLLAPSED_THREAD_LIMIT = 6;
-const HOME_COMPACT_HEADER_THRESHOLD = 48;
 const THREAD_LAYOUT_TRANSITION = LinearTransition.duration(220).easing(Easing.out(Easing.cubic));
 
 function threadRowExit(values: ExitAnimationsValues) {
@@ -185,12 +184,13 @@ function ProjectGroupLabel(props: {
   readonly title: string;
   readonly totalThreadCount: number;
   readonly isExpanded: boolean;
+  readonly isFirst: boolean;
   readonly onToggleExpand: () => void;
 }) {
   const hiddenCount = props.totalThreadCount - COLLAPSED_THREAD_LIMIT;
 
   return (
-    <View className="flex-row items-center gap-2.5 px-5 pb-2 pt-5">
+    <View className={`flex-row items-center gap-2.5 px-5 pb-2 ${props.isFirst ? "" : "pt-5"}`}>
       <ProjectFavicon
         environmentId={props.project.environmentId}
         size={18}
@@ -371,7 +371,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
   const accentColor = useThemeColor("--color-icon-muted");
   const toggleExpanded = useCallback((key: string) => {
     setExpandedProjects((prev) => {
@@ -430,6 +429,43 @@ export function HomeScreen(props: HomeScreenProps) {
     catalogState: props.catalogState,
     projectCount: props.projects.length,
   });
+  const connectionStatus =
+    shouldShowConnectionStatus && Platform.OS !== "ios" ? (
+      <View
+        className="absolute left-0 right-0 items-center"
+        style={{ bottom: Math.max(insets.bottom, 18) + 76 }}
+      >
+        <WorkspaceConnectionStatus state={props.catalogState} onPress={props.onOpenEnvironments} />
+      </View>
+    ) : null;
+
+  if (!hasAnyThreads) {
+    return (
+      <View
+        className="flex-1 items-center justify-center bg-screen px-8"
+        style={{
+          paddingBottom: Math.max(insets.bottom, 24),
+          paddingTop: Platform.OS === "ios" ? insets.top + 72 : insets.top,
+        }}
+      >
+        <View className="w-full max-w-[430px]">
+          <EmptyState
+            title={emptyState.title}
+            detail={emptyState.detail}
+            actionLabel={!props.catalogState.hasReadyEnvironment ? "Add environment" : undefined}
+            onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
+            variant="plain"
+          />
+          {emptyState.loading ? (
+            <View className="mt-4 items-center">
+              <ActivityIndicator color={accentColor} />
+            </View>
+          ) : null}
+        </View>
+        {connectionStatus}
+      </View>
+    );
+  }
 
   const listContent = (
     <>
@@ -445,21 +481,7 @@ export function HomeScreen(props: HomeScreenProps) {
         </View>
       ) : null}
 
-      {!hasAnyThreads ? (
-        <View>
-          <EmptyState
-            title={emptyState.title}
-            detail={emptyState.detail}
-            actionLabel={!props.catalogState.hasReadyEnvironment ? "Add environment" : undefined}
-            onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
-          />
-          {emptyState.loading ? (
-            <View className="absolute right-5 top-5">
-              <ActivityIndicator color={accentColor} />
-            </View>
-          ) : null}
-        </View>
-      ) : !hasResults && hasSearchQuery ? (
+      {!hasResults && hasSearchQuery ? (
         <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
       ) : !hasResults && selectedEnvironmentLabel ? (
         <EmptyState
@@ -469,7 +491,7 @@ export function HomeScreen(props: HomeScreenProps) {
       ) : !hasResults ? (
         <EmptyState title="No threads yet" detail="Create a task to start a new coding session." />
       ) : (
-        projectGroups.map((group) => {
+        projectGroups.map((group, groupIndex) => {
           const isExpanded = expandedProjects.has(group.key);
           const visibleThreads = isExpanded
             ? group.threads
@@ -485,6 +507,7 @@ export function HomeScreen(props: HomeScreenProps) {
             >
               <ProjectGroupLabel
                 isExpanded={isExpanded}
+                isFirst={groupIndex === 0}
                 onToggleExpand={() => toggleExpanded(group.key)}
                 project={group.representative}
                 title={group.title}
@@ -526,6 +549,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const scrollView = (
     <ScrollView
+      automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
       contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
       showsVerticalScrollIndicator={false}
       keyboardDismissMode="on-drag"
@@ -534,17 +558,16 @@ export function HomeScreen(props: HomeScreenProps) {
       scrollEventThrottle={16}
       className="flex-1 bg-screen"
       contentContainerStyle={{
-        minHeight: windowHeight + HOME_COMPACT_HEADER_THRESHOLD + insets.top,
+        flexGrow: 1,
         paddingHorizontal: 0,
-        paddingTop: Platform.OS === "ios" ? 18 : 0,
-        paddingBottom: Platform.OS === "ios" ? Math.max(insets.bottom, 24) + 132 : 24,
+        paddingBottom: Platform.OS === "ios" ? Math.max(insets.bottom, 24) + 24 : 24,
         gap: 0,
       }}
       scrollIndicatorInsets={
         Platform.OS === "ios"
           ? {
-              bottom: Math.max(insets.bottom, 16) + 92,
-              top: insets.top + 72,
+              bottom: Math.max(insets.bottom, 16) + 24,
+              top: 0,
             }
           : undefined
       }
@@ -552,16 +575,6 @@ export function HomeScreen(props: HomeScreenProps) {
       {listContent}
     </ScrollView>
   );
-
-  const connectionStatus =
-    shouldShowConnectionStatus && Platform.OS !== "ios" ? (
-      <View
-        className="absolute left-0 right-0 items-center"
-        style={{ bottom: Math.max(insets.bottom, 18) + 76 }}
-      >
-        <WorkspaceConnectionStatus state={props.catalogState} onPress={props.onOpenEnvironments} />
-      </View>
-    ) : null;
 
   return (
     <>

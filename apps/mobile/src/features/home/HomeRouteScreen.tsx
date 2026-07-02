@@ -1,39 +1,24 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useAppNavigation,
-} from "../navigation/native-stack-header";
+import { useNavigation } from "@react-navigation/native";
 import { useMemo, useState } from "react";
 
-import { useProjects, useThreadShells } from "../state/entities";
-import { useWorkspaceState } from "../state/workspace";
-import {
-  connectionsNewNavigation,
-  newTaskNavigation,
-  settingsEnvironmentsNavigation,
-  settingsNavigation,
-  threadNavigation,
-} from "../lib/routes";
-import { useSavedRemoteConnections } from "../state/use-remote-environment-registry";
-import { HomeScreen } from "../features/home/HomeScreen";
-import { HomeHeader } from "../features/home/HomeHeader";
-import { useHomeListOptions } from "../features/home/home-list-options";
-import { useThreadListActions } from "../features/home/useThreadListActions";
-import { useAdaptiveWorkspaceLayout } from "../features/layout/AdaptiveWorkspaceLayout";
-import { WorkspaceEmptyDetail } from "../features/layout/WorkspaceEmptyDetail";
-import { WorkspaceSidebarToolbar } from "../features/layout/workspace-sidebar-toolbar";
+import { useProjects, useThreadShells } from "../../state/entities";
+import { useWorkspaceState } from "../../state/workspace";
+import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
+import { HomeScreen } from "./HomeScreen";
+import { HomeHeader } from "./HomeHeader";
+import { useHomeListOptions } from "./home-list-options";
+import { useThreadListActions } from "./useThreadListActions";
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
-export default function HomeRouteScreen() {
-  const { layout } = useAdaptiveWorkspaceLayout();
+export function HomeRouteScreen() {
   const projects = useProjects();
   const threads = useThreadShells();
   const { state: catalogState } = useWorkspaceState();
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
   const { archiveThread, confirmDeleteThread } = useThreadListActions();
   const environments = useMemo(
@@ -63,31 +48,6 @@ export default function HomeRouteScreen() {
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
 
-  if (layout.usesSplitView) {
-    return (
-      <>
-        <NativeStackScreenOptions
-          options={{
-            headerShown: true,
-            headerTransparent: true,
-            headerShadowVisible: false,
-            headerTitle: "",
-          }}
-        />
-        <WorkspaceSidebarToolbar
-          afterSidebarButton={
-            <NativeHeaderToolbar.Button
-              accessibilityLabel="Start new task"
-              icon="square.and.pencil"
-              onPress={() => navigation.push(newTaskNavigation())}
-            />
-          }
-        />
-        <WorkspaceEmptyDetail />
-      </>
-    );
-  }
-
   return (
     <>
       <HomeHeader
@@ -97,30 +57,37 @@ export default function HomeRouteScreen() {
         threadSortOrder={listOptions.threadSortOrder}
         projectGroupingMode={listOptions.projectGroupingMode}
         onEnvironmentChange={setSelectedEnvironmentId}
-        onOpenSettings={() => navigation.push(settingsNavigation())}
+        onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
         onProjectGroupingModeChange={setProjectGroupingMode}
         onProjectSortOrderChange={setProjectSortOrder}
         onSearchQueryChange={setSearchQuery}
-        onStartNewTask={() => navigation.push(newTaskNavigation())}
+        onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
         onThreadSortOrderChange={setThreadSortOrder}
       />
 
       <HomeScreen
         catalogState={catalogState}
         environments={environments}
-        onAddConnection={() => navigation.push(connectionsNewNavigation())}
+        onAddConnection={() =>
+          navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
+        }
         onArchiveThread={archiveThread}
         onDeleteThread={confirmDeleteThread}
         onEnvironmentChange={setSelectedEnvironmentId}
-        onOpenEnvironments={() => navigation.push(settingsEnvironmentsNavigation())}
-        onOpenSettings={() => navigation.push(settingsNavigation())}
+        onOpenEnvironments={() =>
+          navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+        }
+        onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
         onProjectGroupingModeChange={setProjectGroupingMode}
         onProjectSortOrderChange={setProjectSortOrder}
         onSearchQueryChange={setSearchQuery}
         onSelectThread={(thread) => {
-          navigation.push(threadNavigation(thread));
+          navigation.navigate("Thread", {
+            environmentId: thread.environmentId,
+            threadId: thread.id,
+          });
         }}
-        onStartNewTask={() => navigation.push(newTaskNavigation())}
+        onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
         onThreadSortOrderChange={setThreadSortOrder}
         projectGroupingMode={listOptions.projectGroupingMode}
         projects={projects}

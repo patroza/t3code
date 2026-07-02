@@ -1,3 +1,7 @@
+// Pure helpers for native header scroll-edge effects. Kept free of
+// react-native / react-navigation imports so they stay unit-testable in node
+// (those packages ship untranspiled Flow syntax).
+
 export type NativeTopScrollEdgeEffect = "automatic" | "soft";
 export type NativeHeaderScrollEdgeEffects = {
   readonly top: NativeTopScrollEdgeEffect;

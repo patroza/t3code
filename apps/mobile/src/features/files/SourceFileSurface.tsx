@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import type { ComponentType } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, ScrollView, Text as NativeText, useColorScheme, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -37,6 +37,8 @@ interface SourceFileSurfaceProps {
   readonly contents: string;
   readonly path: string;
   readonly initialLine?: number | null;
+  /** Enables native pull-to-refresh on the source surface. */
+  readonly onRefresh?: () => Promise<void> | void;
 }
 
 type SourceHighlightStatus = "highlighting" | "ready" | "error";
@@ -155,8 +157,20 @@ function NativeSourceFileSurface(
     readonly NativeView: ComponentType<NativeReviewDiffViewProps>;
   },
 ) {
-  const { NativeView } = props;
+  const { NativeView, onRefresh } = props;
   const { rowsJson, status, targetIndex, theme, tokens } = useSourceFileModel(props);
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const handlePullToRefresh = useCallback(async () => {
+    if (!onRefresh) {
+      return;
+    }
+    setIsPullRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }, [onRefresh]);
   const tokensJson = useMemo(() => JSON.stringify(buildNativeSourceTokens(tokens)), [tokens]);
   const selectedRowIdsJson = useMemo(
     () => JSON.stringify(targetIndex === null ? [] : [nativeSourceRowId(targetIndex)]),
@@ -165,7 +179,7 @@ function NativeSourceFileSurface(
   const themeJson = useMemo(() => JSON.stringify(createNativeReviewDiffTheme(theme)), [theme]);
 
   return (
-    <View className="relative flex-1 bg-card">
+    <View className="relative flex-1 bg-sheet">
       <SourceHighlightStatusView status={status} />
       <NativeView
         collapsable={false}
@@ -181,6 +195,12 @@ function NativeSourceFileSurface(
         styleJson={NATIVE_SOURCE_STYLE_JSON}
         themeJson={themeJson}
         tokensJson={tokensJson}
+        {...(onRefresh
+          ? {
+              refreshing: isPullRefreshing,
+              onPullToRefresh: () => void handlePullToRefresh(),
+            }
+          : {})}
       />
     </View>
   );
@@ -213,7 +233,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   );
 
   return (
-    <View className="relative flex-1 bg-card">
+    <View className="relative flex-1 bg-sheet">
       <SourceHighlightStatusView status={status} />
       <ScrollView horizontal bounces={false} className="flex-1">
         <FlatList

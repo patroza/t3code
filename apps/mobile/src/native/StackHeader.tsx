@@ -1,9 +1,4 @@
-import {
-  useFocusEffect,
-  useNavigation,
-  useRoute,
-  type ParamListBase,
-} from "@react-navigation/native";
+import { useNavigation, type ParamListBase } from "@react-navigation/native";
 import type {
   NativeStackHeaderItem,
   NativeStackHeaderItemMenu,
@@ -12,23 +7,21 @@ import type {
 } from "@react-navigation/native-stack";
 import {
   Children,
-  cloneElement,
-  createElement,
-  Fragment,
   isValidElement,
   useEffect,
+  useLayoutEffect,
   useMemo,
   type ReactElement,
   type ReactNode,
 } from "react";
 import type { ColorValue } from "react-native";
 
-import { useAppNavigation } from "./app-navigation";
-import type { AppNavigationInput, RouteParams } from "./route-model";
-
-export { useFocusEffect };
-export { useAppNavigation, useCurrentPathname, useCurrentRouteParams } from "./app-navigation";
-export type { AppNavigationInput };
+export {
+  nativeHeaderScrollEdgeEffects,
+  nativeTopScrollEdgeEffect,
+  type NativeHeaderScrollEdgeEffects,
+  type NativeTopScrollEdgeEffect,
+} from "./scrollEdgeEffects";
 
 export type AppNativeStackNavigationOptions = Omit<
   NativeStackNavigationOptions,
@@ -43,17 +36,8 @@ export type AppNativeStackNavigationOptions = Omit<
   readonly unstable_navigationItemStyle?: unknown;
 };
 
-export function useRouteParams<T extends RouteParams = RouteParams>(): T {
-  const route = useRoute();
-  return (route.params ?? {}) as RouteParams as T;
-}
-
 function useNativeStackNavigation(): NativeStackNavigationProp<ParamListBase> | null {
-  try {
-    return useNavigation<NativeStackNavigationProp<ParamListBase>>();
-  } catch {
-    return null;
-  }
+  return useNavigation<NativeStackNavigationProp<ParamListBase>>();
 }
 
 function normalizeScreenOptions(
@@ -70,11 +54,6 @@ function normalizeScreenOptions(
     unstable_headerToolbarItems?: unknown;
   };
 
-  delete normalized.unstable_navigationItemStyle;
-  delete normalized.unstable_headerCenterItems;
-  delete normalized.unstable_headerSubtitle;
-  delete normalized.unstable_headerToolbarItems;
-
   if (normalized.headerTintColor !== undefined) {
     normalized.headerTintColor = String(normalized.headerTintColor);
   }
@@ -90,7 +69,7 @@ export function NativeStackScreenOptions(props: {
   const navigation = useNativeStackNavigation();
   const normalizedOptions = useMemo(() => normalizeScreenOptions(props.options), [props.options]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!navigation || !normalizedOptions) {
       return;
     }
@@ -129,6 +108,9 @@ function labelFromChildren(children: ReactNode): string {
 type NativeStackHeaderIcon = NonNullable<
   Extract<NativeStackHeaderItem, { type: "button" }>["icon"]
 >;
+type NativeStackOptionsWithToolbar = NativeStackNavigationOptions & {
+  unstable_headerToolbarItems?: () => NativeStackHeaderItem[];
+};
 
 function iconFromProp(icon: unknown): NativeStackHeaderIcon | undefined {
   if (typeof icon !== "string") {
@@ -225,7 +207,8 @@ function convertToolbarChild(child: ReactNode): NativeStackHeaderItem | null {
           ? (child.props.onPress as () => void)
           : () => undefined,
       sharesBackground: !child.props.separateBackground,
-      variant: "prominent",
+      tintColor: child.props.tintColor as ColorValue | undefined,
+      variant: "plain",
     };
   }
 
@@ -244,7 +227,8 @@ function convertToolbarChild(child: ReactNode): NativeStackHeaderItem | null {
         items: collectMenuItems(child.props.children),
       },
       sharesBackground: !child.props.separateBackground,
-      variant: "prominent",
+      tintColor: child.props.tintColor as ColorValue | undefined,
+      variant: "plain",
     };
   }
 
@@ -277,14 +261,29 @@ function NativeHeaderToolbarRoot(props: {
   const items = useMemo(() => collectToolbarItems(props.children), [props.children]);
 
   useEffect(() => {
-    if (!navigation || props.placement === "bottom" || items.length === 0) {
+    if (!navigation) {
       return;
+    }
+    if (props.placement === "bottom") {
+      navigation.setOptions({
+        unstable_headerToolbarItems: () => items,
+      } as NativeStackOptionsWithToolbar);
+      return () => {
+        navigation.setOptions({
+          unstable_headerToolbarItems: () => [],
+        } as NativeStackOptionsWithToolbar);
+      };
     }
     if (props.placement === "left") {
       navigation.setOptions({ unstable_headerLeftItems: () => items });
-      return;
+      return () => {
+        navigation.setOptions({ unstable_headerLeftItems: () => [] });
+      };
     }
     navigation.setOptions({ unstable_headerRightItems: () => items });
+    return () => {
+      navigation.setOptions({ unstable_headerRightItems: () => [] });
+    };
   }, [items, navigation, props.placement]);
 
   return null;
@@ -296,6 +295,7 @@ function NativeHeaderToolbarButton(_props: {
   readonly icon?: string;
   readonly onPress?: () => void;
   readonly separateBackground?: boolean;
+  readonly tintColor?: ColorValue;
 }) {
   return null;
 }
@@ -308,6 +308,7 @@ function NativeHeaderToolbarMenu(_props: {
   readonly icon?: string;
   readonly inline?: boolean;
   readonly separateBackground?: boolean;
+  readonly tintColor?: ColorValue;
   readonly title?: string;
 }) {
   return null;
@@ -356,40 +357,3 @@ export const NativeHeaderToolbar = Object.assign(NativeHeaderToolbarRoot, {
   SearchBarSlot: NativeHeaderToolbarSearchBarSlot,
   Spacer: NativeHeaderToolbarSpacer,
 });
-
-function NativeStackScreenTitle(_props: {
-  readonly asChild?: boolean;
-  readonly children?: ReactNode;
-}) {
-  return null;
-}
-
-NativeStackScreenOptions.Title = NativeStackScreenTitle;
-
-export function NavigateTo(props: { readonly href: AppNavigationInput }) {
-  const navigation = useAppNavigation();
-  useEffect(() => {
-    navigation.replace(props.href);
-  }, [navigation, props.href]);
-  return null;
-}
-
-export function NavigationLink(props: {
-  readonly href: AppNavigationInput;
-  readonly asChild?: boolean;
-  readonly children?: ReactNode;
-}) {
-  const navigation = useAppNavigation();
-  if (props.asChild && isValidElement<{ onPress?: () => void }>(props.children)) {
-    return cloneElement(props.children, {
-      onPress: () => navigation.push(props.href),
-    });
-  }
-  return null;
-}
-
-export const NativeStackFragment = function NativeStackFragment(props: {
-  readonly children?: ReactNode;
-}) {
-  return createElement(Fragment, null, props.children);
-};

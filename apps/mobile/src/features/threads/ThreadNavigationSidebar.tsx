@@ -2,7 +2,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { LegendList } from "@legendapp/list/react-native";
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "expo-symbols";
-import { useAppNavigation } from "../../navigation/native-stack-header";
+import { useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import type { ColorValue, NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Platform, Pressable, StyleSheet, TextInput, View, useColorScheme } from "react-native";
@@ -14,8 +14,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { StatusPill } from "../../components/StatusPill";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
-import { settingsEnvironmentsNavigation } from "../../lib/routes";
+import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -258,7 +257,7 @@ export function ThreadNavigationSidebar(props: {
 }) {
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme() === "dark" ? "dark" : "light";
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const projects = useProjects();
   const threads = useThreadShells();
   const { state: catalogState } = useWorkspaceState();
@@ -694,7 +693,11 @@ export function ThreadNavigationSidebar(props: {
                     showsConnectionStatus ? (
                       <View style={styles.nativeConnectionStatus}>
                         <WorkspaceConnectionStatus
-                          onPress={() => navigation.push(settingsEnvironmentsNavigation())}
+                          onPress={() =>
+                            navigation.navigate("SettingsSheet", {
+                              screen: "SettingsEnvironments",
+                            })
+                          }
                           state={catalogState}
                           variant="sidebar"
                         />
@@ -871,7 +874,11 @@ export function ThreadNavigationSidebar(props: {
         {showsConnectionStatus ? (
           <View style={styles.connectionStatus}>
             <WorkspaceConnectionStatus
-              onPress={() => navigation.push(settingsEnvironmentsNavigation())}
+              onPress={() =>
+                navigation.navigate("SettingsSheet", {
+                  screen: "SettingsEnvironments",
+                })
+              }
               state={catalogState}
               variant="sidebar"
             />

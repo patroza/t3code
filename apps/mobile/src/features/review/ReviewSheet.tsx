@@ -1,10 +1,6 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useRouteParams } from "../../navigation/native-stack-header";
-import { useHeaderHeight } from "@react-navigation/elements";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-} from "../../navigation/native-stack-header";
+import type { StaticScreenProps } from "@react-navigation/native";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { SymbolView } from "expo-symbols";
 import {
   memo,
@@ -24,7 +20,6 @@ import {
   Pressable,
   ScrollView,
   type NativeSyntheticEvent,
-  Text as NativeText,
   StyleSheet,
   useColorScheme,
   View,
@@ -35,9 +30,7 @@ import { AppText as Text } from "../../components/AppText";
 import { environmentCatalog } from "../../connection/catalog";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThreadDraftForThread } from "../../state/use-thread-composer-state";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
 import { AdaptiveInspectorLayout } from "../layout/adaptive-inspector-layout";
@@ -63,8 +56,6 @@ import { useReviewCommentSelectionController } from "./useReviewCommentSelection
 import { resolveReviewAvailability } from "./reviewAvailability";
 import { resolveSelectedReviewFileId } from "./reviewPaneSelection";
 import { buildReviewSectionMenu } from "./review-section-menu";
-
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
 const REVIEW_HEADER_SPACING = 0;
 
@@ -290,143 +281,39 @@ function ReviewFileNavigator({
   );
 }
 
-function ReviewHeaderTitle(props: {
-  readonly additions: string | null;
-  readonly deletions: string | null;
-  readonly foregroundColor: string;
-  readonly mutedColor: string;
-  readonly pendingCommentCount: number;
-  readonly sectionTitle: string;
-}) {
-  return (
-    <View style={{ alignItems: "center" }}>
-      <NativeText
-        numberOfLines={1}
-        style={{
-          fontFamily: "DMSans_700Bold",
-          fontSize: MOBILE_TYPOGRAPHY.headline.fontSize,
-          fontWeight: "900",
-          color: props.foregroundColor,
-          letterSpacing: -0.4,
-        }}
-      >
-        Files Changed
-      </NativeText>
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 6,
-          flexWrap: "wrap",
-        }}
-      >
-        {props.additions && props.deletions ? (
-          <>
-            <NativeText
-              style={{
-                fontFamily: "DMSans_700Bold",
-                fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-                fontWeight: "700",
-                color: "#16a34a",
-              }}
-            >
-              {props.additions}
-            </NativeText>
-            <NativeText
-              style={{
-                fontFamily: "DMSans_700Bold",
-                fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-                fontWeight: "700",
-                color: "#e11d48",
-              }}
-            >
-              {props.deletions}
-            </NativeText>
-            {props.pendingCommentCount > 0 ? (
-              <NativeText
-                style={{
-                  fontFamily: "DMSans_700Bold",
-                  fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-                  fontWeight: "700",
-                  color: "#b45309",
-                }}
-              >
-                {props.pendingCommentCount} pending
-              </NativeText>
-            ) : null}
-          </>
-        ) : (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-            <NativeText
-              numberOfLines={1}
-              style={{
-                fontFamily: "DMSans_700Bold",
-                fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-                fontWeight: "700",
-                color: props.mutedColor,
-              }}
-            >
-              {props.sectionTitle}
-            </NativeText>
-            {props.pendingCommentCount > 0 ? (
-              <NativeText
-                style={{
-                  fontFamily: "DMSans_700Bold",
-                  fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-                  fontWeight: "700",
-                  color: "#b45309",
-                }}
-              >
-                {props.pendingCommentCount} pending
-              </NativeText>
-            ) : null}
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
+type ReviewSheetProps = StaticScreenProps<{
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}>;
 
-export function ReviewSheet() {
+export function ReviewSheet(props: ReviewSheetProps) {
   useAdaptiveWorkspacePaneRole("inspector");
   const { layout, panes, showAuxiliaryPane, toggleAuxiliaryPane, togglePrimarySidebar } =
     useAdaptiveWorkspaceLayout();
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
   const colorScheme = useColorScheme();
-  const headerForeground = String(useThemeColor("--color-foreground"));
-  const headerMuted = String(useThemeColor("--color-foreground-muted"));
   const headerIcon = String(useThemeColor("--color-icon"));
-  const { environmentId, threadId } = useRouteParams<{
-    environmentId: EnvironmentId;
-    threadId: ThreadId;
-  }>();
+  const { environmentId, threadId } = props.route.params;
   const environment = useEnvironmentPresentation(environmentId);
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, "environment retry");
   const isEnvironmentReady = environment.presentation?.connection.phase === "connected";
   const { draftMessage } = useThreadDraftForThread({ environmentId, threadId });
   const reviewCache = useReviewCacheForThread({ environmentId, threadId });
   const selectedTheme = colorScheme === "dark" ? "dark" : "light";
-  const topContentInset = headerHeight;
+  // With a solid (non-overlay) header the content lays out below the header
+  // natively, so no manual top inset is needed.
+  const topContentInset = 0;
 
   useEffect(() => {
     showAuxiliaryPane("inspector");
   }, [environmentId, showAuxiliaryPane, threadId]);
-  const {
-    error,
-    loadingGitDiffs,
-    loadingTurnIds,
-    reviewSections,
-    selectedSection,
-    refreshSelectedSection,
-    selectSection,
-  } = useReviewSections({
-    enabled: isEnvironmentReady,
-    environmentId,
-    threadId,
-    reviewCache,
-  });
+  const { error, reviewSections, selectedSection, refreshSelectedSection, selectSection } =
+    useReviewSections({
+      enabled: isEnvironmentReady,
+      environmentId,
+      threadId,
+      reviewCache,
+    });
   useReviewDiffPrewarming({
     threadKey: reviewCache.threadKey,
     sections: reviewSections,
@@ -440,6 +327,16 @@ export function ReviewSheet() {
     });
   const NativeReviewDiffView = resolveNativeReviewDiffView()!;
   const nativeReviewDiffViewRef = useRef<NativeReviewDiffViewHandle>(null);
+  // Native pull-to-refresh on the diff surface (replaces the old Refresh menu item).
+  const [isPullRefreshing, setIsPullRefreshing] = useState(false);
+  const handlePullToRefresh = useCallback(async () => {
+    setIsPullRefreshing(true);
+    try {
+      await refreshSelectedSection();
+    } finally {
+      setIsPullRefreshing(false);
+    }
+  }, [refreshSelectedSection]);
   const reviewFileNavigatorRef = useRef<ReviewFileNavigatorHandle>(null);
   const reviewFiles = parsedDiff.kind === "files" ? parsedDiff.files : [];
   const fileVisibility = useReviewFileVisibility({
@@ -499,12 +396,13 @@ export function ReviewSheet() {
       <ReviewFileNavigator
         ref={reviewFileNavigatorRef}
         files={nativeReviewDiffData.files}
-        headerInset={headerHeight}
+        // Solid header: pane content starts below the header natively.
+        headerInset={0}
         sectionId={selectedSection?.id ?? null}
         onSelectFile={handleSelectFile}
       />
     ),
-    [handleSelectFile, headerHeight, nativeReviewDiffData.files, selectedSection?.id],
+    [handleSelectFile, nativeReviewDiffData.files, selectedSection?.id],
   );
 
   const handleNativeToggleFile = useCallback(
@@ -564,40 +462,29 @@ export function ReviewSheet() {
 
     return <>{children}</>;
   }, [error, parsedDiffNotice]);
-  const renderHeaderTitle = useCallback(
-    () => (
-      <ReviewHeaderTitle
-        additions={headerDiffSummary.additions}
-        deletions={headerDiffSummary.deletions}
-        foregroundColor={headerForeground}
-        mutedColor={headerMuted}
-        pendingCommentCount={pendingReviewCommentCount}
-        sectionTitle={selectedSection?.title ?? "Review changes"}
-      />
-    ),
-    [
-      headerDiffSummary.additions,
-      headerDiffSummary.deletions,
-      headerForeground,
-      headerMuted,
-      pendingReviewCommentCount,
-      selectedSection?.title,
-    ],
-  );
+  const headerSubtitle = [
+    headerDiffSummary.additions,
+    headerDiffSummary.deletions,
+    pendingReviewCommentCount > 0
+      ? `${pendingReviewCommentCount} comment${pendingReviewCommentCount === 1 ? "" : "s"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const headerTitleText = selectedSection?.title ?? "Review changes";
 
   return (
     <>
       <NativeStackScreenOptions
         options={{
-          headerTransparent: true,
-          headerShadowVisible: false,
+          // Static header config lives in Stack.tsx (SOLID_HEADER_OPTIONS — the native
+          // diff scrolls internally, nothing for glass to sample). Only dynamic values
+          // here.
           headerTintColor: headerIcon,
-          headerStyle: {
-            backgroundColor: "transparent",
-          },
-          headerTitle: renderHeaderTitle,
-          scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
-          unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
+          headerTitle: headerTitleText,
+          title: headerTitleText,
+          unstable_headerSubtitle:
+            Platform.OS === "ios" && headerSubtitle.length > 0 ? headerSubtitle : undefined,
         }}
       />
 
@@ -627,7 +514,7 @@ export function ReviewSheet() {
             />
           ) : null}
           {showSectionToolbar ? (
-            <NativeHeaderToolbar.Menu icon="ellipsis.circle" title="Select diff" separateBackground>
+            <NativeHeaderToolbar.Menu icon="ellipsis" title="Select diff" separateBackground>
               <NativeHeaderToolbar.Menu inline>
                 <NativeHeaderToolbar.MenuAction
                   disabled={sectionMenu.workingTree === null}
@@ -677,17 +564,6 @@ export function ReviewSheet() {
                   </NativeHeaderToolbar.Menu>
                 ) : null}
               </NativeHeaderToolbar.Menu>
-              <NativeHeaderToolbar.MenuAction
-                icon="arrow.clockwise"
-                disabled={
-                  loadingGitDiffs ||
-                  (selectedSection?.kind === "turn" && loadingTurnIds[selectedSection.id] === true)
-                }
-                onPress={() => void refreshSelectedSection()}
-                subtitle="Reload current diff"
-              >
-                <NativeHeaderToolbar.Label>Refresh</NativeHeaderToolbar.Label>
-              </NativeHeaderToolbar.MenuAction>
             </NativeHeaderToolbar.Menu>
           ) : null}
         </NativeHeaderToolbar>
@@ -726,6 +602,8 @@ export function ReviewSheet() {
                   <NativeReviewDiffView
                     collapsable={false}
                     testID="review-native-diff-view"
+                    refreshing={isPullRefreshing}
+                    onPullToRefresh={() => void handlePullToRefresh()}
                     style={StyleSheet.absoluteFill}
                     appearanceScheme={selectedTheme}
                     collapsedFileIdsJson={nativeBridge.collapsedFileIdsJson}

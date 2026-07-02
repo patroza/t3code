@@ -15,7 +15,7 @@ diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
 index 0eb1f09..73298f1 100644
 --- a/ios/RNSBarButtonItem.mm
 +++ b/ios/RNSBarButtonItem.mm
-@@ -110,6 +110,58 @@ static UIMenuOptions RNSMakeUIMenuOptionsFromConfig(NSDictionary *config);
+@@ -110,6 +110,58 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
    if (dict[@"accessibilityHint"]) {
      self.accessibilityHint = dict[@"accessibilityHint"];
    }
@@ -74,55 +74,6 @@ index 0eb1f09..73298f1 100644
  
  #if !TARGET_OS_TV || __TV_OS_VERSION_MAX_ALLOWED >= 170000
    if (@available(tvOS 17.0, *)) {
-diff --git a/ios/RNSScreen.mm b/ios/RNSScreen.mm
-index 69d4d9a..6192c4a 100644
---- a/ios/RNSScreen.mm
-+++ b/ios/RNSScreen.mm
-@@ -26,8 +26,10 @@
- #import "RNSScreenFooter.h"
- #import "RNSScreenStack.h"
- #import "RNSScreenStackHeaderConfig.h"
-+#import "RNSScrollViewMarkerComponentView.h"
- #import "RNSScrollViewFinder.h"
- #import "RNSScrollViewHelper.h"
-+#import "RNSScrollViewSeeking.h"
- #import "RNSTabBarController.h"
- 
- #import "RNSDefines.h"
-@@ -61,6 +63,8 @@ struct ContentWrapperBox {
-   ContentWrapperBox _contentWrapperBox;
-   bool _sheetHasInitialDetentSet;
-   BOOL _shouldUpdateScrollEdgeEffects;
-+  __weak UIScrollView *_markedContentScrollView;
-+  __weak RNSScrollViewMarkerComponentView *_markedContentScrollViewMarker;
-   UITapGestureRecognizer *_backdropTapGestureRecognizer;
-   RCTSurfaceTouchHandler *_touchHandler;
-   react::RNSScreenShadowNode::ConcreteState::Shared _state;
-@@ -1146,10 +1150,24 @@ RNS_IGNORE_SUPER_CALL_END
- 
- - (void)updateContentScrollViewEdgeEffectsIfExists
- {
-+  if (_markedContentScrollView != nil && _markedContentScrollViewMarker != nil) {
-+    [RNSScrollEdgeEffectApplicator applyToScrollView:_markedContentScrollView
-+                                        withProvider:_markedContentScrollViewMarker];
-+    return;
-+  }
-+
-   [RNSScrollEdgeEffectApplicator applyToScrollView:[RNSScrollViewFinder findScrollViewInFirstDescendantChainFrom:self]
-                                       withProvider:self];
- }
- 
-+- (void)registerDescendantScrollView:(nonnull UIScrollView *)scrollView
-+                           fromMarker:(nonnull RNSScrollViewMarkerComponentView *)marker
-+{
-+  _markedContentScrollView = scrollView;
-+  _markedContentScrollViewMarker = marker;
-+  [RNSScrollEdgeEffectApplicator applyToScrollView:scrollView withProvider:marker];
-+}
-+
- #pragma mark - RNSSafeAreaProviding
- 
- - (UIEdgeInsets)providerSafeAreaInsets
 diff --git a/ios/RNSScreenStackHeaderConfig.h b/ios/RNSScreenStackHeaderConfig.h
 index 919b984..5bb0cd6 100644
 --- a/ios/RNSScreenStackHeaderConfig.h
@@ -150,10 +101,10 @@ index 919b984..5bb0cd6 100644
  
  NS_ASSUME_NONNULL_END
 diff --git a/ios/RNSScreenStackHeaderConfig.mm b/ios/RNSScreenStackHeaderConfig.mm
-index 5970e3e..0849992 100644
+index 5970e3e..cb050f9 100644
 --- a/ios/RNSScreenStackHeaderConfig.mm
 +++ b/ios/RNSScreenStackHeaderConfig.mm
-@@ -30,6 +30,20 @@ namespace react = facebook::react;
+@@ -30,6 +30,20 @@
  static const NSNumber *const DEFAULT_TITLE_FONT_SIZE = @17;
  static const NSNumber *const DEFAULT_TITLE_LARGE_FONT_SIZE = @34;
  
@@ -174,7 +125,7 @@ index 5970e3e..0849992 100644
  @interface RCTImageLoader (Private)
  - (id<RCTImageCache>)imageCache;
  @end
-@@ -47,6 +61,9 @@ static const NSNumber *const DEFAULT_TITLE_LARGE_FONT_SIZE = @34;
+@@ -47,6 +61,9 @@ + (BOOL)rnscreens_isBlankOrNull:(NSString *)string
  @end
  
  @interface RNSScreenStackHeaderConfig () <RCTMountingTransactionObserving>
@@ -184,7 +135,7 @@ index 5970e3e..0849992 100644
  @end
  
  @implementation RNSScreenStackHeaderConfig {
-@@ -81,6 +98,7 @@ static const NSNumber *const DEFAULT_TITLE_LARGE_FONT_SIZE = @34;
+@@ -81,6 +98,7 @@ - (void)initProps
    self.hidden = YES;
    _reactSubviews = [NSMutableArray new];
    _backTitleVisible = YES;
@@ -192,7 +143,7 @@ index 5970e3e..0849992 100644
    _blurEffect = RNSBlurEffectStyleNone;
  }
  
-@@ -496,6 +514,10 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -496,6 +514,10 @@ + (void)updateViewController:(UIViewController *)vc
  
    if (shouldHide) {
      navitem.title = config.title;
@@ -203,7 +154,7 @@ index 5970e3e..0849992 100644
  
      // Setting navigation bar visibility is split to mitigate iOS 26 bug with bar button items.
      [navctr setNavigationBarHidden:YES animated:animated];
-@@ -512,11 +534,19 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -512,11 +534,19 @@ + (void)updateViewController:(UIViewController *)vc
    }
    navitem.largeTitleDisplayMode =
        config.largeTitle ? UINavigationItemLargeTitleDisplayModeAlways : UINavigationItemLargeTitleDisplayModeNever;
@@ -223,7 +174,7 @@ index 5970e3e..0849992 100644
  
  // appearance does not apply to the tvOS so we need to use lagacy customization
  #if TARGET_OS_TV
-@@ -637,10 +667,245 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -637,10 +667,270 @@ + (void)updateViewController:(UIViewController *)vc
    // This assignment should be done after `navitem.titleView = ...` assignment (iOS 16.0 bug).
    // See: https://github.com/software-mansion/react-native-screens/issues/1570 (comments)
    navitem.title = config.title;
@@ -299,15 +250,28 @@ index 5970e3e..0849992 100644
 +        resolvedWidth = MIN(resolvedWidth, MAX(260.0, hostWidth - 12.0));
 +      }
 +
++      CGFloat toolbarHeight = 48.0;
++      CGFloat toolbarRadius = toolbarHeight / 2.0;
++      CGFloat buttonSize = toolbarHeight;
++      CGFloat sideButtonReserve = buttonSize + 8.0;
++      CGFloat searchFieldHeight = 42.0;
++      CGFloat toolbarBottomSpacing = 4.0;
++      UIFont *searchFont = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle3];
++      NSDictionary<NSAttributedStringKey, id> *placeholderAttributes = @{
++        NSForegroundColorAttributeName : UIColor.secondaryLabelColor,
++        NSFontAttributeName : searchFont,
++      };
++      UIKeyboardLayoutGuide *keyboardLayoutGuide = chromeHostView.keyboardLayoutGuide;
++
 +      UIView *toolbarHost = [[UIView alloc] init];
 +      toolbarHost.tag = RNSMailSearchToolbarViewTag;
 +      toolbarHost.translatesAutoresizingMaskIntoConstraints = NO;
 +      [chromeHostView addSubview:toolbarHost];
 +      [NSLayoutConstraint activateConstraints:@[
 +        [toolbarHost.centerXAnchor constraintEqualToAnchor:chromeHostView.centerXAnchor],
-+        [toolbarHost.bottomAnchor constraintEqualToAnchor:chromeHostView.safeAreaLayoutGuide.bottomAnchor constant:-16.0],
++        [toolbarHost.bottomAnchor constraintEqualToAnchor:keyboardLayoutGuide.topAnchor constant:-toolbarBottomSpacing],
 +        [toolbarHost.widthAnchor constraintEqualToConstant:resolvedWidth],
-+        [toolbarHost.heightAnchor constraintEqualToConstant:56.0],
++        [toolbarHost.heightAnchor constraintEqualToConstant:toolbarHeight],
 +      ]];
 +      [chromeHostView bringSubviewToFront:toolbarHost];
 +
@@ -315,20 +279,20 @@ index 5970e3e..0849992 100644
 +      glassEffect.interactive = YES;
 +      UIVisualEffectView *glassView = [[UIVisualEffectView alloc] initWithEffect:glassEffect];
 +      glassView.clipsToBounds = YES;
-+      glassView.layer.cornerRadius = 28.0;
++      glassView.layer.cornerRadius = toolbarRadius;
 +      glassView.translatesAutoresizingMaskIntoConstraints = NO;
 +      [toolbarHost addSubview:glassView];
 +      BOOL hasFilterButton =
 +          mailSearchToolbarConfig[@"filterButtonId"] != nil || mailSearchToolbarConfig[@"filterMenu"] != nil;
 +      BOOL hasComposeButton =
 +          mailSearchToolbarConfig[@"composeButtonId"] != nil || mailSearchToolbarConfig[@"composeMenu"] != nil;
-+      CGFloat glassLeadingInset = hasFilterButton ? 64.0 : 0.0;
-+      CGFloat glassTrailingInset = hasComposeButton ? -64.0 : 0.0;
++      CGFloat glassLeadingInset = hasFilterButton ? sideButtonReserve : 0.0;
++      CGFloat glassTrailingInset = hasComposeButton ? -sideButtonReserve : 0.0;
 +      [NSLayoutConstraint activateConstraints:@[
 +        [glassView.leadingAnchor constraintEqualToAnchor:toolbarHost.leadingAnchor constant:glassLeadingInset],
 +        [glassView.trailingAnchor constraintEqualToAnchor:toolbarHost.trailingAnchor constant:glassTrailingInset],
 +        [glassView.centerYAnchor constraintEqualToAnchor:toolbarHost.centerYAnchor],
-+        [glassView.heightAnchor constraintEqualToConstant:56.0],
++        [glassView.heightAnchor constraintEqualToConstant:toolbarHeight],
 +      ]];
 +
 +      void (^emitButtonPress)(NSString *) = ^(NSString *buttonId) {
@@ -388,20 +352,28 @@ index 5970e3e..0849992 100644
 +        searchBar.searchTextField.hidden = NO;
 +        searchBar.searchTextField.alpha = 1.0;
 +        searchBar.searchTextField.backgroundColor = UIColor.clearColor;
++        searchBar.searchTextField.font = searchFont;
++        searchBar.searchTextField.adjustsFontForContentSizeCategory = YES;
 +        searchBar.searchTextField.textColor = UIColor.labelColor;
 +        searchBar.searchTextField.tintColor = UIColor.labelColor;
++        if (placeholder != nil) {
++          searchBar.searchTextField.attributedPlaceholder =
++              [[NSAttributedString alloc] initWithString:placeholder attributes:placeholderAttributes];
++        }
 +        searchBar.translatesAutoresizingMaskIntoConstraints = NO;
 +        [glassView.contentView addSubview:searchBar];
 +        [NSLayoutConstraint activateConstraints:@[
 +          [searchBar.leadingAnchor constraintEqualToAnchor:glassView.contentView.leadingAnchor constant:8.0],
 +          [searchBar.trailingAnchor constraintEqualToAnchor:glassView.contentView.trailingAnchor constant:-8.0],
 +          [searchBar.centerYAnchor constraintEqualToAnchor:glassView.contentView.centerYAnchor],
-+          [searchBar.heightAnchor constraintEqualToConstant:50.0],
++          [searchBar.heightAnchor constraintEqualToConstant:searchFieldHeight],
 +        ]];
 +      } else {
 +        UISearchTextField *searchField = [UISearchTextField new];
 +        if (placeholder != nil) {
 +          searchField.placeholder = placeholder;
++          searchField.attributedPlaceholder =
++              [[NSAttributedString alloc] initWithString:placeholder attributes:placeholderAttributes];
 +        }
 +        NSString *searchTextChangeId = mailSearchToolbarConfig[@"searchTextChangeId"];
 +        if (searchTextChangeId != nil) {
@@ -412,13 +384,17 @@ index 5970e3e..0849992 100644
 +              forControlEvents:UIControlEventEditingChanged];
 +        }
 +        searchField.borderStyle = UITextBorderStyleNone;
++        searchField.font = searchFont;
++        searchField.adjustsFontForContentSizeCategory = YES;
++        searchField.textColor = UIColor.labelColor;
++        searchField.tintColor = UIColor.labelColor;
 +        searchField.translatesAutoresizingMaskIntoConstraints = NO;
 +        [glassView.contentView addSubview:searchField];
 +        [NSLayoutConstraint activateConstraints:@[
-+          [searchField.leadingAnchor constraintEqualToAnchor:glassView.contentView.leadingAnchor constant:16.0],
-+          [searchField.trailingAnchor constraintEqualToAnchor:glassView.contentView.trailingAnchor constant:-16.0],
++          [searchField.leadingAnchor constraintEqualToAnchor:glassView.contentView.leadingAnchor constant:14.0],
++          [searchField.trailingAnchor constraintEqualToAnchor:glassView.contentView.trailingAnchor constant:-14.0],
 +          [searchField.centerYAnchor constraintEqualToAnchor:glassView.contentView.centerYAnchor],
-+          [searchField.heightAnchor constraintEqualToConstant:48.0],
++          [searchField.heightAnchor constraintEqualToConstant:searchFieldHeight],
 +        ]];
 +      }
 +
@@ -432,8 +408,8 @@ index 5970e3e..0849992 100644
 +        [NSLayoutConstraint activateConstraints:@[
 +          [filterButton.leadingAnchor constraintEqualToAnchor:toolbarHost.leadingAnchor],
 +          [filterButton.centerYAnchor constraintEqualToAnchor:toolbarHost.centerYAnchor],
-+          [filterButton.widthAnchor constraintEqualToConstant:56.0],
-+          [filterButton.heightAnchor constraintEqualToConstant:56.0],
++          [filterButton.widthAnchor constraintEqualToConstant:buttonSize],
++          [filterButton.heightAnchor constraintEqualToConstant:buttonSize],
 +        ]];
 +      }
 +
@@ -447,8 +423,8 @@ index 5970e3e..0849992 100644
 +        [NSLayoutConstraint activateConstraints:@[
 +          [composeButton.trailingAnchor constraintEqualToAnchor:toolbarHost.trailingAnchor],
 +          [composeButton.centerYAnchor constraintEqualToAnchor:toolbarHost.centerYAnchor],
-+          [composeButton.widthAnchor constraintEqualToConstant:56.0],
-+          [composeButton.heightAnchor constraintEqualToConstant:56.0],
++          [composeButton.widthAnchor constraintEqualToConstant:buttonSize],
++          [composeButton.heightAnchor constraintEqualToConstant:buttonSize],
 +        ]];
 +      }
 +    }
@@ -473,7 +449,7 @@ index 5970e3e..0849992 100644
  
    // Setting navigation bar visibility is split to mitigate iOS 26 bug with bar button items
    // (setting nav bar visibility should be done after `navitem.*BarButtonItems`).
-@@ -773,6 +1038,7 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -773,6 +1063,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
  
  - (NSArray<UIBarButtonItem *> *)barButtonItemsFromConfigs:(NSArray<NSDictionary<NSString *, id> *> *)dicts
                                           withCurrentItems:(NSArray<UIBarButtonItem *> *)currentItems
@@ -481,7 +457,7 @@ index 5970e3e..0849992 100644
  {
    if (dicts.count == 0) {
      return currentItems;
-@@ -781,7 +1047,197 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -781,7 +1072,197 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
    [items addObjectsFromArray:currentItems];
    for (NSUInteger i = 0; i < dicts.count; i++) {
      NSDictionary *dict = dicts[i];
@@ -680,7 +656,7 @@ index 5970e3e..0849992 100644
        RNSBarButtonItem *item = [[RNSBarButtonItem alloc] initWithConfig:dict
            action:^(NSString *buttonId) {
              auto eventEmitter = std::static_pointer_cast<const facebook::react::RNSScreenStackHeaderConfigEventEmitter>(
-@@ -809,11 +1265,15 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -809,11 +1290,15 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
          [items addObject:item];
        }
      } else if (dict[@"spacing"]) {
@@ -700,7 +676,7 @@ index 5970e3e..0849992 100644
        NSNumber *index = dict[@"index"];
        if (index.integerValue < items.count) {
          [items insertObject:item atIndex:index.integerValue];
-@@ -825,6 +1285,47 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -825,6 +1310,47 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
    return items;
  }
  
@@ -748,7 +724,7 @@ index 5970e3e..0849992 100644
  RNS_IGNORE_SUPER_CALL_BEGIN
  - (void)insertReactSubview:(RNSScreenStackHeaderSubview *)subview atIndex:(NSInteger)atIndex
  {
-@@ -1013,6 +1514,8 @@ static RCTResizeMode resizeModeFromCppEquiv(react::ImageResizeMode resizeMode)
+@@ -1013,6 +1539,8 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
    }
  
    _title = RCTNSStringFromStringNilIfEmpty(newScreenProps.title);
@@ -757,7 +733,7 @@ index 5970e3e..0849992 100644
    if (newScreenProps.titleFontFamily != oldScreenProps.titleFontFamily) {
      _titleFontFamily = RCTNSStringFromStringNilIfEmpty(newScreenProps.titleFontFamily);
    }
-@@ -1038,6 +1541,7 @@ static RCTResizeMode resizeModeFromCppEquiv(react::ImageResizeMode resizeMode)
+@@ -1038,6 +1566,7 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
    _disableBackButtonMenu = newScreenProps.disableBackButtonMenu;
    _backButtonDisplayMode =
        [RNSConvert UINavigationItemBackButtonDisplayModeFromCppEquivalent:newScreenProps.backButtonDisplayMode];
@@ -765,7 +741,7 @@ index 5970e3e..0849992 100644
  
    if (newScreenProps.userInterfaceStyle != oldScreenProps.userInterfaceStyle) {
      _userInterfaceStyle = [RNSConvert UIUserInterfaceStyleFromCppEquivalent:newScreenProps.userInterfaceStyle];
-@@ -1084,6 +1588,30 @@ static RCTResizeMode resizeModeFromCppEquiv(react::ImageResizeMode resizeMode)
+@@ -1084,6 +1613,30 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
      _headerRightBarButtonItems = array;
    }
  
@@ -796,78 +772,6 @@ index 5970e3e..0849992 100644
    [self updateViewControllerIfNeeded];
  
    if (needsNavigationControllerLayout) {
-diff --git a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.h b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.h
-index 4badf56..7703df9 100644
---- a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.h
-+++ b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.h
-@@ -1,10 +1,11 @@
- #pragma once
- 
- #import "RNSReactBaseView.h"
-+#import "RNSScrollEdgeEffectApplicator.h"
- 
- NS_ASSUME_NONNULL_BEGIN
- 
--@interface RNSScrollViewMarkerComponentView : RNSReactBaseView
-+@interface RNSScrollViewMarkerComponentView : RNSReactBaseView <RNSScrollEdgeEffectProviding>
- 
- @end
- 
-diff --git a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
-index 52c61c8..cb4d6be 100644
---- a/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
-+++ b/ios/gamma/scroll-view-marker/RNSScrollViewMarkerComponentView.mm
-@@ -2,6 +2,7 @@
- #import "RNSConversions-ScrollViewMarker.h"
- #import "RNSEnums.h"
- #import "RNSScrollEdgeEffectApplicator.h"
-+#import "RNSScrollViewFinder.h"
- #import "RNSScrollViewSeeking.h"
- 
- #import <React/RCTMountingTransactionObserving.h>
-@@ -60,16 +61,14 @@ namespace react = facebook::react;
-  */
- - (nullable UIScrollView *)findScrollView
- {
--  // It allows 0 for cases where the child is unmounted
--  RCTAssert(
--      self.subviews.count <= 1,
--      @"[RNScreens] ScrollViewMarker expects at most a single child. Subviews: %@",
--      self.subviews);
--
--  UIScrollView *_Nullable foundScrollView = [self resolveScrollViewFromChildView:self.subviews.firstObject];
-+  for (UIView *subview in self.subviews) {
-+    UIScrollView *_Nullable foundScrollView = [self resolveScrollViewFromChildView:subview];
-+    if (foundScrollView != nil) {
-+      return foundScrollView;
-+    }
-+  }
- 
--  RCTAssert(foundScrollView != nil, @"[RNScreens] Failed to find ScrollView"); // debug assertion only
--  return foundScrollView;
-+  return nil;
- }
- 
- - (nullable id<RNSScrollViewSeeking>)findFirstSeekingAncestor
-@@ -122,7 +121,8 @@ namespace react = facebook::react;
- /**
-  * Tries to resolve UIScrollView from the passed childView.
-  *
-- * Currently it supports only direct `UIScrollView` or react-native's `<ScrollView />` component.
-+ * Handles direct scroll views and scroll views hidden under wrapper views such
-+ * as keyboard-aware list components.
-  */
- - (nullable UIScrollView *)resolveScrollViewFromChildView:(nullable UIView *)childView
- {
-@@ -138,7 +138,7 @@ namespace react = facebook::react;
-     return static_cast<RCTScrollViewComponentView *>(childView).scrollView;
-   }
- 
--  return nil;
-+  return [RNSScrollViewFinder findScrollViewInFirstDescendantChainFrom:childView];
- }
- 
- #pragma mark - Override
 diff --git a/lib/commonjs/components/ScreenStackHeaderConfig.js b/lib/commonjs/components/ScreenStackHeaderConfig.js
 index 16b979b..01415d4 100644
 --- a/lib/commonjs/components/ScreenStackHeaderConfig.js
@@ -989,36 +893,6 @@ index ab93f62..b5ea122 100644
      let imageSource, templateSource;
      if (item.icon?.type === 'imageSource') {
        imageSource = _reactNative.Image.resolveAssetSource(item.icon.imageSource);
-diff --git a/lib/commonjs/index.js b/lib/commonjs/index.js
-index de25040..bf73f41 100644
---- a/lib/commonjs/index.js
-+++ b/lib/commonjs/index.js
-@@ -202,6 +202,7 @@ var _utils = require("./utils");
- var _flags = require("./flags");
- var _useTransitionProgress = _interopRequireDefault(require("./useTransitionProgress"));
- var _tabs = require("./components/tabs");
-+var _scrollViewMarker = require("./components/gamma/scroll-view-marker");
- Object.keys(_tabs).forEach(function (key) {
-   if (key === "default" || key === "__esModule") return;
-   if (Object.prototype.hasOwnProperty.call(_exportNames, key)) return;
-@@ -213,6 +214,17 @@ Object.keys(_tabs).forEach(function (key) {
-     }
-   });
- });
-+Object.keys(_scrollViewMarker).forEach(function (key) {
-+  if (key === "default" || key === "__esModule") return;
-+  if (Object.prototype.hasOwnProperty.call(_exportNames, key)) return;
-+  if (key in exports && exports[key] === _scrollViewMarker[key]) return;
-+  Object.defineProperty(exports, key, {
-+    enumerable: true,
-+    get: function () {
-+      return _scrollViewMarker[key];
-+    }
-+  });
-+});
- function _interopRequireDefault(e) { return e && e.__esModule ? e : { default: e }; }
- function _getRequireWildcardCache(e) { if ("function" != typeof WeakMap) return null; var r = new WeakMap(), t = new WeakMap(); return (_getRequireWildcardCache = function (e) { return e ? t : r; })(e); }
- function _interopRequireWildcard(e, r) { if (!r && e && e.__esModule) return e; if (null === e || "object" != typeof e && "function" != typeof e) return { default: e }; var t = _getRequireWildcardCache(r); if (t && t.has(e)) return t.get(e); var n = { __proto__: null }, a = Object.defineProperty && Object.getOwnPropertyDescriptor; for (var u in e) if ("default" !== u && {}.hasOwnProperty.call(e, u)) { var i = a ? Object.getOwnPropertyDescriptor(e, u) : null; i && (i.get || i.set) ? Object.defineProperty(n, u, i) : n[u] = e[u]; } return n.default = e, t && t.set(e, n), n; }
 diff --git a/lib/module/components/ScreenStackHeaderConfig.js b/lib/module/components/ScreenStackHeaderConfig.js
 index cf15f36..dd66167 100644
 --- a/lib/module/components/ScreenStackHeaderConfig.js
@@ -1140,17 +1014,6 @@ index 8a70ffd..8dbd0ba 100644
      let imageSource, templateSource;
      if (item.icon?.type === 'imageSource') {
        imageSource = Image.resolveAssetSource(item.icon.imageSource);
-diff --git a/lib/module/index.js b/lib/module/index.js
-index 07caaf7..07fd7a5 100644
---- a/lib/module/index.js
-+++ b/lib/module/index.js
-@@ -43,4 +43,5 @@ export { default as useTransitionProgress } from './useTransitionProgress';
-  * EXPERIMENTAL API BELOW. MIGHT CHANGE W/O ANY NOTICE
-  */
- export * from './components/tabs';
-+export * from './components/gamma/scroll-view-marker';
- //# sourceMappingURL=index.js.map
-\ No newline at end of file
 diff --git a/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts b/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts
 index b7568ec..41ca1f2 100644
 --- a/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts
@@ -1187,18 +1050,6 @@ index b7568ec..41ca1f2 100644
      onPressHeaderBarButtonItem?: CT.DirectEventHandler<OnPressHeaderBarButtonItemEvent> | undefined;
      onPressHeaderBarButtonMenuItem?: CT.DirectEventHandler<OnPressHeaderBarButtonMenuItemEvent> | undefined;
      synchronousShadowStateUpdatesEnabled?: CT.WithDefault<boolean, false>;
-diff --git a/lib/typescript/index.d.ts b/lib/typescript/index.d.ts
-index 8e4480f..883c5f2 100644
---- a/lib/typescript/index.d.ts
-+++ b/lib/typescript/index.d.ts
-@@ -32,5 +32,6 @@ export { default as useTransitionProgress } from './useTransitionProgress';
-  * EXPERIMENTAL API BELOW. MIGHT CHANGE W/O ANY NOTICE
-  */
- export * from './components/tabs';
-+export * from './components/gamma/scroll-view-marker';
- export type * from './components/shared/types';
- //# sourceMappingURL=index.d.ts.map
-\ No newline at end of file
 diff --git a/lib/typescript/types.d.ts b/lib/typescript/types.d.ts
 index 3b384e0..1e3a966 100644
 --- a/lib/typescript/types.d.ts
@@ -1546,16 +1397,6 @@ index ba2479d..8677583 100644
    onPressHeaderBarButtonItem?:
      | CT.DirectEventHandler<OnPressHeaderBarButtonItemEvent>
      | undefined;
-diff --git a/src/index.tsx b/src/index.tsx
-index a405aec..cd649bd 100644
---- a/src/index.tsx
-+++ b/src/index.tsx
-@@ -66,4 +66,5 @@ export { default as useTransitionProgress } from './useTransitionProgress';
-  * EXPERIMENTAL API BELOW. MIGHT CHANGE W/O ANY NOTICE
-  */
- export * from './components/tabs';
-+export * from './components/gamma/scroll-view-marker';
- export type * from './components/shared/types';
 diff --git a/src/types.tsx b/src/types.tsx
 index 76a83f3..9e4499f 100644
 --- a/src/types.tsx

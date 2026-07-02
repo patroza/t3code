@@ -122,7 +122,9 @@ export interface NativeReviewDiffViewProps extends ViewProps {
   readonly rowHeight: number;
   readonly contentWidth: number;
   readonly initialRowIndex?: number;
+  readonly refreshing?: boolean;
   readonly nativeViewRef?: Ref<NativeReviewDiffViewHandle>;
+  readonly onPullToRefresh?: (event: NativeSyntheticEvent<Record<string, never>>) => void;
   readonly onDebug?: (event: NativeSyntheticEvent<Record<string, unknown>>) => void;
   readonly onVisibleFileChange?: (
     event: NativeSyntheticEvent<{ readonly fileId?: string | null }>,

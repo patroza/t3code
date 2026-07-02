@@ -1,16 +1,12 @@
 import { useAuth, useUser } from "@clerk/expo";
 import * as Notifications from "expo-notifications";
-import {
-  NavigationLink,
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { SymbolView } from "expo-symbols";
 import * as Effect from "effect/Effect";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
-import { Alert, Linking, Pressable, ScrollView, Switch, View } from "react-native";
+import { Alert, Linking, Platform, Pressable, ScrollView, Switch, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
@@ -21,48 +17,45 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { AppText as Text } from "../../components/AppText";
-import { setLiveActivityUpdatesEnabled } from "../../features/agent-awareness/liveActivityPreferences";
-import { requestAgentNotificationPermission } from "../../features/agent-awareness/notificationPermissions";
-import { refreshAgentAwarenessRegistration } from "../../features/agent-awareness/remoteRegistration";
-import { refreshManagedRelayEnvironments } from "../../features/cloud/managedRelayState";
-import { useClerkSettingsSheetDetent } from "../../features/cloud/ClerkSettingsSheetDetent";
-import {
-  hasCloudPublicConfig,
-  resolveRelayClerkTokenOptions,
-} from "../../features/cloud/publicConfig";
-import { useAdaptiveWorkspaceLayout } from "../../features/layout/AdaptiveWorkspaceLayout";
-import { WorkspaceSidebarToolbar } from "../../features/layout/workspace-sidebar-toolbar";
+import { setLiveActivityUpdatesEnabled } from "../agent-awareness/liveActivityPreferences";
+import { requestAgentNotificationPermission } from "../agent-awareness/notificationPermissions";
+import { refreshAgentAwarenessRegistration } from "../agent-awareness/remoteRegistration";
+import { refreshManagedRelayEnvironments } from "../cloud/managedRelayState";
+import { useClerkSettingsSheetDetent } from "../cloud/ClerkSettingsSheetDetent";
+import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/publicConfig";
+import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
+import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { loadPreferences } from "../../lib/storage";
 import { useThemeColor } from "../../lib/useThemeColor";
-import {
-  settingsArchiveNavigation,
-  settingsAuthNavigation,
-  settingsEnvironmentsNavigation,
-  settingsWaitlistNavigation,
-} from "../../lib/routes";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
 
-export default function SettingsRouteScreen() {
-  const navigation = useAppNavigation();
-  const { layout } = useAdaptiveWorkspaceLayout();
+export function SettingsRouteScreen() {
+  const navigation = useNavigation();
 
   return (
     <>
       <WorkspaceSidebarToolbar />
-      {layout.usesSplitView ? (
-        <NativeHeaderToolbar placement="right">
-          <NativeHeaderToolbar.Button
-            accessibilityLabel="Close settings"
-            icon="xmark"
-            onPress={() => navigation.back()}
-            separateBackground
-          />
-        </NativeHeaderToolbar>
-      ) : null}
+      <NativeStackScreenOptions
+        options={{
+          unstable_headerRightItems:
+            Platform.OS === "ios"
+              ? () => [
+                  withNativeGlassHeaderItem({
+                    accessibilityLabel: "Close settings",
+                    icon: { name: "xmark", type: "sfSymbol" } as const,
+                    identifier: "settings-close",
+                    label: "",
+                    onPress: () => navigation.goBack(),
+                    type: "button",
+                  }),
+                ]
+              : undefined,
+        }}
+      />
       {hasCloudPublicConfig() ? <ConfiguredSettingsRouteScreen /> : <LocalSettingsRouteScreen />}
     </>
   );
@@ -75,7 +68,6 @@ function LocalSettingsRouteScreen() {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions options={{ title: "Settings" }} />
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -92,7 +84,7 @@ function LocalSettingsRouteScreen() {
             icon="desktopcomputer"
             label="Environments"
             value={`${environmentCount}`}
-            href={settingsEnvironmentsNavigation()}
+            target="SettingsEnvironments"
           />
         </SettingsSection>
 
@@ -106,7 +98,7 @@ function LocalSettingsRouteScreen() {
 
 function ConfiguredSettingsRouteScreen() {
   const insets = useSafeAreaInsets();
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const { expand: expandClerkSheet } = useClerkSettingsSheetDetent();
   const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
@@ -217,7 +209,10 @@ function ConfiguredSettingsRouteScreen() {
       "Live Activity updates require approved T3 Cloud access so relay can deliver updates to this device.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Continue", onPress: () => navigation.push(settingsWaitlistNavigation()) },
+        {
+          text: "Continue",
+          onPress: () => navigation.navigate("SettingsSheet", { screen: "SettingsWaitlist" }),
+        },
       ],
     );
   }, [navigation]);
@@ -347,16 +342,15 @@ function ConfiguredSettingsRouteScreen() {
   const openAccount = useCallback(() => {
     if (!isLoaded) return;
     if (!isSignedIn) {
-      navigation.push(settingsWaitlistNavigation());
+      navigation.navigate("SettingsSheet", { screen: "SettingsWaitlist" });
       return;
     }
     expandClerkSheet();
-    navigation.push(settingsAuthNavigation());
+    navigation.navigate("SettingsSheet", { screen: "SettingsAuth" });
   }, [expandClerkSheet, isLoaded, isSignedIn, navigation]);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions options={{ title: "Settings" }} />
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
@@ -387,7 +381,7 @@ function ConfiguredSettingsRouteScreen() {
             icon="desktopcomputer"
             label="Environments"
             value={`${environmentCount}`}
-            href={settingsEnvironmentsNavigation()}
+            target="SettingsEnvironments"
           />
           <SettingsSwitchRow
             icon="bell.badge"
@@ -454,7 +448,7 @@ function AppSettingsSection() {
 function ArchivedThreadsSettingsSection() {
   return (
     <SettingsSection title="Threads">
-      <SettingsRow icon="archivebox" label="Archived Threads" href={settingsArchiveNavigation()} />
+      <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
     </SettingsSection>
   );
 }
@@ -464,9 +458,10 @@ function SettingsRow(props: {
   readonly icon: SymbolName;
   readonly label: string;
   readonly value?: string;
-  readonly href?: ComponentProps<typeof NavigationLink>["href"];
+  readonly target?: "SettingsEnvironments" | "SettingsArchive";
   readonly onPress?: () => void;
 }) {
+  const navigation = useNavigation();
   const icon = useThemeColor("--color-icon");
   const chevron = useThemeColor("--color-chevron");
   const content = (
@@ -499,13 +494,21 @@ function SettingsRow(props: {
     </View>
   );
 
-  if (props.href) {
+  const target = props.target;
+  if (target) {
     return (
-      <NavigationLink href={props.href} asChild>
-        <Pressable accessibilityLabel={props.label} accessibilityRole="button">
-          {content}
-        </Pressable>
-      </NavigationLink>
+      <Pressable
+        accessibilityLabel={props.label}
+        accessibilityRole="button"
+        disabled={props.disabled}
+        onPress={() =>
+          navigation.navigate("SettingsSheet", {
+            screen: target,
+          })
+        }
+      >
+        {content}
+      </Pressable>
     );
   }
 

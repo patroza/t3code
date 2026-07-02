@@ -4,10 +4,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { SymbolView } from "expo-symbols";
 import { useCallback, useMemo, useRef, type ComponentProps } from "react";
 import {
@@ -26,14 +23,11 @@ import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { EmptyState } from "../../components/EmptyState";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import type { ArchivedThreadGroup, ArchivedThreadSortOrder } from "./archivedThreadList";
-
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
 export interface ArchivedThreadsHeaderEnvironment {
   readonly environmentId: EnvironmentId;
@@ -114,14 +108,10 @@ function ArchivedThreadsHeader(props: {
 
   return (
     <>
+      {/* Static header config (glass preset + title) lives in Stack.tsx; only
+          dynamic toolbar/search wiring is set here. */}
       <NativeStackScreenOptions
         options={{
-          title: "Archived Threads",
-          headerTransparent: usesNativeChrome,
-          headerStyle: usesNativeChrome ? { backgroundColor: "transparent" } : undefined,
-          headerShadowVisible: usesNativeChrome ? false : undefined,
-          scrollEdgeEffects: usesNativeChrome ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
-          unstable_navigationItemStyle: usesNativeChrome ? "editor" : undefined,
           unstable_headerToolbarItems: usesCompactMailToolbar
             ? () => [
                 createNativeMailSearchToolbarItem({

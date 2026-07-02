@@ -11,7 +11,7 @@ import {
 } from "react-native-screens";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
+import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";

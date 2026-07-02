@@ -1,4 +1,4 @@
-import { NativeHeaderToolbar } from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
 import type { ReactNode } from "react";
 
 import { useAdaptiveWorkspaceLayout } from "./AdaptiveWorkspaceLayout";

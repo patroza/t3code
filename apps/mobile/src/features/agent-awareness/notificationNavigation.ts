@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
-import { useAppNavigation } from "../../navigation/native-stack-header";
+import { useLinkTo } from "@react-navigation/native";
 
 import { routeAgentNotificationResponseOnce } from "./notificationPayload";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 export function useAgentNotificationNavigation(): void {
-  const navigation = useAppNavigation();
+  const linkTo = useLinkTo();
   const handledResponseIds = useRef(new Set<string>());
 
   useEffect(() => {
@@ -14,7 +14,7 @@ export function useAgentNotificationNavigation(): void {
       routeAgentNotificationResponseOnce({
         handledResponseIds: handledResponseIds.current,
         response,
-        navigate: (deepLink) => navigation.push(deepLink as never),
+        navigate: linkTo,
       });
     };
 
@@ -28,5 +28,5 @@ export function useAgentNotificationNavigation(): void {
     return () => {
       subscription.remove();
     };
-  }, [navigation]);
+  }, [linkTo]);
 }

@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NativeSyntheticEvent } from "react-native";
-import { useAppNavigation } from "../../navigation/native-stack-header";
+import { useNavigation } from "@react-navigation/native";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Result from "effect/Result";
 
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { buildThreadReviewCommentNavigation } from "../../lib/routes";
-
 import {
   buildReviewCommentTarget,
   clearReviewCommentTarget,
@@ -35,7 +33,7 @@ export function useReviewCommentSelectionController(input: {
   readonly nativeReviewDiffData: NativeReviewDiffData;
 }) {
   const { environmentId, nativeReviewDiffData, selectedSection, threadId } = input;
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const activeCommentTarget = useReviewCommentTarget();
   const [pendingNativeCommentSelection, setPendingNativeCommentSelection] =
     useState<PendingNativeCommentSelection | null>(null);
@@ -45,7 +43,10 @@ export function useReviewCommentSelectionController(input: {
       return;
     }
 
-    navigation.push(buildThreadReviewCommentNavigation({ environmentId, threadId }));
+    navigation.navigate("ThreadReviewComment", {
+      environmentId,
+      threadId,
+    });
   }, [environmentId, navigation, threadId]);
 
   const selectedRowIds = useMemo(() => {

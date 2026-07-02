@@ -1,25 +1,19 @@
-import type {
+import {
   EnvironmentId,
-  GitRunStackedActionResult,
-  ProjectScript,
+  type GitRunStackedActionResult,
+  type ProjectScript,
   ThreadId,
-  VcsStatusResult,
+  type VcsStatusResult,
 } from "@t3tools/contracts";
 import {
   type GitActionRequestInput,
   requiresDefaultBranchConfirmation,
   resolveQuickAction,
 } from "@t3tools/client-runtime/state/vcs";
-import { useRouteParams, useAppNavigation } from "../../navigation/native-stack-header";
-import { NativeHeaderToolbar } from "../../navigation/native-stack-header";
+import { useNavigation } from "@react-navigation/native";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
 import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
-import {
-  buildGitConfirmNavigation,
-  buildGitOverviewNavigation,
-  buildThreadFilesNavigation,
-  buildThreadReviewNavigation,
-} from "../../lib/routes";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import {
   basename,
@@ -84,6 +78,8 @@ type QuickActionIcon =
   | "arrow.up.circle";
 
 type ThreadGitControlsProps = {
+  readonly environmentId: EnvironmentId | string;
+  readonly threadId: ThreadId | string;
   readonly auxiliaryPaneControl?: {
     readonly accessibilityLabel: string;
     readonly onPress: () => void;
@@ -107,11 +103,9 @@ type ThreadGitControlsProps = {
 };
 
 function useThreadGitControlModel(props: ThreadGitControlsProps) {
-  const navigation = useAppNavigation();
-  const { environmentId, threadId } = useRouteParams<{
-    environmentId: EnvironmentId;
-    threadId: ThreadId;
-  }>();
+  const navigation = useNavigation();
+  const environmentId = props.environmentId;
+  const threadId = props.threadId;
   const { gitStatus, gitOperationLabel, onPull, onRunAction } = props;
 
   const currentBranchLabel = gitStatus?.refName ?? props.currentBranch ?? "Detached HEAD";
@@ -175,18 +169,15 @@ function useThreadGitControlModel(props: ThreadGitControlsProps) {
         !input.featureBranch &&
         requiresDefaultBranchConfirmation(input.action, isDefaultRef)
       ) {
-        navigation.push(
-          buildGitConfirmNavigation(
-            { environmentId, threadId },
-            {
-              confirmAction: confirmableAction,
-              branchName,
-              includesCommit: String(
-                input.action === "commit_push" || input.action === "commit_push_pr",
-              ),
-            },
+        navigation.navigate("GitConfirm", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+          confirmAction: confirmableAction,
+          branchName,
+          includesCommit: String(
+            input.action === "commit_push" || input.action === "commit_push_pr",
           ),
-        );
+        });
         return;
       }
 
@@ -214,11 +205,17 @@ function useThreadGitControlModel(props: ThreadGitControlsProps) {
       props.onOpenFilesInspector();
       return;
     }
-    navigation.push(buildThreadFilesNavigation({ environmentId, threadId }));
+    navigation.navigate("ThreadFiles", {
+      environmentId: String(environmentId),
+      threadId: String(threadId),
+    });
   }, [environmentId, props.onOpenFilesInspector, navigation, threadId]);
 
   const openReview = useCallback(() => {
-    navigation.push(buildThreadReviewNavigation({ environmentId, threadId }));
+    navigation.navigate("ThreadReview", {
+      environmentId: EnvironmentId.make(String(environmentId)),
+      threadId: ThreadId.make(String(threadId)),
+    });
   }, [environmentId, navigation, threadId]);
 
   const openGitInspector = useCallback(() => {
@@ -226,7 +223,10 @@ function useThreadGitControlModel(props: ThreadGitControlsProps) {
       props.onOpenGitInspector();
       return;
     }
-    navigation.push(buildGitOverviewNavigation({ environmentId, threadId }));
+    navigation.navigate("GitOverview", {
+      environmentId: String(environmentId),
+      threadId: String(threadId),
+    });
   }, [environmentId, props.onOpenGitInspector, navigation, threadId]);
 
   return {
@@ -301,7 +301,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         },
         sharesBackground: true,
         type: "menu",
-        variant: "prominent",
+        variant: "plain",
       },
       files: {
         accessibilityLabel: "Open files",
@@ -312,7 +312,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         onPress: model.openFiles,
         sharesBackground: true,
         type: "button",
-        variant: "prominent",
+        variant: "plain",
       },
       git: {
         accessibilityLabel: "Git actions",
@@ -349,16 +349,8 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
               type: "action",
             },
             {
-              description: "Browse this workspace",
-              disabled: !props.canOpenFiles,
-              icon: { name: "folder", type: "sfSymbol" },
-              label: "Files",
-              onPress: model.openFiles,
-              type: "action",
-            },
-            {
               description: "Commit, files, branches",
-              icon: { name: "ellipsis.circle", type: "sfSymbol" },
+              icon: { name: "ellipsis", type: "sfSymbol" },
               label: "More",
               onPress: model.openGitInspector,
               type: "action",
@@ -368,7 +360,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         },
         sharesBackground: true,
         type: "menu",
-        variant: "prominent",
+        variant: "plain",
       },
     }),
     [
@@ -522,15 +514,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
             <NativeHeaderToolbar.Label>Review changes</NativeHeaderToolbar.Label>
           </NativeHeaderToolbar.MenuAction>
           <NativeHeaderToolbar.MenuAction
-            icon="folder"
-            disabled={!props.canOpenFiles}
-            onPress={model.openFiles}
-            subtitle="Browse this workspace"
-          >
-            <NativeHeaderToolbar.Label>Files</NativeHeaderToolbar.Label>
-          </NativeHeaderToolbar.MenuAction>
-          <NativeHeaderToolbar.MenuAction
-            icon="ellipsis.circle"
+            icon="ellipsis"
             onPress={model.openGitInspector}
             subtitle="Commit, files, branches"
           >

@@ -53,13 +53,18 @@ public class T3ReviewDiffModule: Module {
         view.setInitialRowIndex(initialRowIndex)
       }
 
+      Prop("refreshing") { (view: T3ReviewDiffView, refreshing: Bool) in
+        view.setRefreshing(refreshing)
+      }
+
       Events(
         "onDebug",
         "onVisibleFileChange",
         "onToggleFile",
         "onToggleViewedFile",
         "onPressLine",
-        "onToggleComment"
+        "onToggleComment",
+        "onPullToRefresh"
       )
 
       AsyncFunction("scrollToFile") { (view: T3ReviewDiffView, fileId: String, animated: Bool) in

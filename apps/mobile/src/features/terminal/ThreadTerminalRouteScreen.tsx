@@ -1,12 +1,8 @@
 import { DEFAULT_TERMINAL_ID, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { type KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 import { SymbolView } from "expo-symbols";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useRouteParams,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, Text as RNText, View, useColorScheme } from "react-native";
 import {
@@ -29,8 +25,6 @@ import { useEnvironmentPresentation } from "../../state/presentation";
 import { terminalEnvironment } from "../../state/terminal";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceState } from "../../state/workspace";
-import { buildThreadTerminalNavigation } from "../../lib/routes";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import {
   useAttachedTerminalSession,
@@ -79,7 +73,6 @@ import {
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 const TERMINAL_ACCESSORY_HEIGHT = 52;
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
 type PendingModifier = "ctrl" | "meta";
 type HostPlatform = "mac" | "linux" | "windows" | "unknown";
@@ -202,8 +195,14 @@ function pickRunningTerminalSessionForBootstrap(
   );
 }
 
-export function ThreadTerminalRouteScreen() {
-  const navigation = useAppNavigation();
+type ThreadTerminalRouteScreenProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly terminalId?: string;
+}>;
+
+export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps) {
+  const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const resizeTerminal = useAtomCommand(terminalEnvironment.resize, "terminal resize");
   const clearTerminal = useAtomCommand(terminalEnvironment.clear, "terminal clear");
@@ -211,11 +210,7 @@ export function ThreadTerminalRouteScreen() {
   const appearanceScheme = useColorScheme() === "light" ? "light" : "dark";
   const { state: workspaceState } = useWorkspaceState();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
-  const params = useRouteParams<{
-    environmentId?: string | string[];
-    threadId?: string | string[];
-    terminalId?: string | string[];
-  }>();
+  const params = props.route.params;
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =
     useThreadSelection();
   const selectedThreadDetail = useSelectedThreadDetail();
@@ -613,8 +608,12 @@ export function ThreadTerminalRouteScreen() {
     if (!shouldRedirectToRunningTerminal || !selectedThread || !runningSession) {
       return;
     }
-    navigation.replace(
-      buildThreadTerminalNavigation(selectedThread, runningSession.target.terminalId),
+    navigation.dispatch(
+      StackActions.replace("ThreadTerminal", {
+        environmentId: String(selectedThread.environmentId),
+        threadId: String(selectedThread.id),
+        terminalId: runningSession.target.terminalId,
+      }),
     );
   }, [navigation, runningSession, selectedThread, shouldRedirectToRunningTerminal]);
 
@@ -841,7 +840,13 @@ export function ThreadTerminalRouteScreen() {
         return;
       }
 
-      navigation.replace(buildThreadTerminalNavigation(selectedThread, nextTerminalId));
+      navigation.dispatch(
+        StackActions.replace("ThreadTerminal", {
+          environmentId: String(selectedThread.environmentId),
+          threadId: String(selectedThread.id),
+          terminalId: nextTerminalId,
+        }),
+      );
     },
     [navigation, selectedThread, terminalId],
   );
@@ -851,14 +856,15 @@ export function ThreadTerminalRouteScreen() {
       return;
     }
 
-    navigation.replace(
-      buildThreadTerminalNavigation(
-        selectedThread,
-        nextOpenTerminalId({
+    navigation.dispatch(
+      StackActions.replace("ThreadTerminal", {
+        environmentId: String(selectedThread.environmentId),
+        threadId: String(selectedThread.id),
+        terminalId: nextOpenTerminalId({
           listedTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
           activeRouteTerminalId: terminalId,
         }),
-      ),
+      }),
     );
   }, [navigation, selectedThread, terminalId, terminalMenuSessions]);
 
@@ -969,26 +975,17 @@ export function ThreadTerminalRouteScreen() {
     <>
       <NativeStackScreenOptions
         options={{
-          headerShown: true,
-          headerBackButtonDisplayMode: "minimal",
-          headerBackTitle: "",
-          headerTransparent: usesNativeHeaderGlass,
-          headerShadowVisible: false,
-          headerStyle: {
-            backgroundColor: usesNativeHeaderGlass ? "transparent" : terminalTheme.background,
-          },
+          // Static header config lives in Stack.tsx (SOLID_HEADER_OPTIONS — the pty
+          // scrolls internally, nothing for glass to sample). The terminal theme's
+          // background matches the sheet color in both schemes. Only dynamic values
+          // here.
           headerTintColor: terminalTheme.foreground,
-          headerTitleAlign: "center",
           headerTitle: usesNativeHeaderGlass ? headerTitle.topLine : renderTerminalHeaderTitle,
-          headerTitleStyle: usesNativeHeaderGlass
-            ? {
-                fontSize: 17,
-                fontWeight: "800",
-              }
-            : undefined,
-          scrollEdgeEffects: usesNativeHeaderGlass ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
           title: headerTitle.topLine,
-          unstable_navigationItemStyle: usesNativeHeaderGlass ? "editor" : undefined,
+          unstable_headerSubtitle:
+            usesNativeHeaderGlass && headerTitle.bottomLine.length > 0
+              ? headerTitle.bottomLine
+              : undefined,
         }}
       />
 

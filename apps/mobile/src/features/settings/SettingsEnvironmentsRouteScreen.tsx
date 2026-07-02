@@ -1,9 +1,6 @@
 import { useAuth } from "@clerk/expo";
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-  useAppNavigation,
-} from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
+import { useNavigation } from "@react-navigation/native";
 import { SymbolView } from "expo-symbols";
 import {
   connectionStatusText,
@@ -26,27 +23,26 @@ import { AppText as Text } from "../../components/AppText";
 import {
   type RelayEnvironmentView,
   useConnectionController,
-} from "../../features/connection/useConnectionController";
-import { hasCloudPublicConfig } from "../../features/cloud/publicConfig";
-import { availableCloudEnvironmentPresentation } from "../../features/cloud/cloudEnvironmentPresentation";
-import { ConnectionEnvironmentRow } from "../../features/connection/ConnectionEnvironmentRow";
-import { ConnectionStatusDot } from "../../features/connection/ConnectionStatusDot";
-import { splitEnvironmentSections } from "../../features/connection/environmentSections";
+} from "../connection/useConnectionController";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
+import { availableCloudEnvironmentPresentation } from "../cloud/cloudEnvironmentPresentation";
+import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
+import { ConnectionStatusDot } from "../connection/ConnectionStatusDot";
+import { splitEnvironmentSections } from "../connection/environmentSections";
 import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
-import { settingsEnvironmentNewNavigation } from "../../lib/routes";
 import { useThemeColor } from "../../lib/useThemeColor";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 
-export default function SettingsEnvironmentsRouteScreen() {
+export function SettingsEnvironmentsRouteScreen() {
   const {
     connectedEnvironments,
     onReconnectEnvironment,
     onRemoveEnvironmentPress,
     onUpdateEnvironment,
   } = useRemoteConnections();
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { localEnvironments, connectedCloudEnvironments } = splitEnvironmentSections({
     connectedEnvironments,
@@ -55,6 +51,7 @@ export default function SettingsEnvironmentsRouteScreen() {
   const hasLocalEnvironments = localEnvironments.length > 0;
   const [expandedId, setExpandedId] = useState<EnvironmentId | null>(null);
   const accentColor = useThemeColor("--color-icon-muted");
+  const headerIconColor = useThemeColor("--color-icon");
 
   const handleToggle = useCallback((environmentId: EnvironmentId) => {
     setExpandedId((prev) => (prev === environmentId ? null : environmentId));
@@ -62,16 +59,12 @@ export default function SettingsEnvironmentsRouteScreen() {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions
-        options={{
-          title: "Environments",
-        }}
-      />
       <NativeHeaderToolbar placement="right">
         <NativeHeaderToolbar.Button
           icon="plus"
-          onPress={() => navigation.push(settingsEnvironmentNewNavigation())}
+          onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })}
           separateBackground
+          tintColor={headerIconColor}
         />
       </NativeHeaderToolbar>
       <ScrollView

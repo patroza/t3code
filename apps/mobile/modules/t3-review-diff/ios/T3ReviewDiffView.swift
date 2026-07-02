@@ -343,6 +343,9 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
   let onToggleViewedFile = EventDispatcher()
   let onPressLine = EventDispatcher()
   let onToggleComment = EventDispatcher()
+  let onPullToRefresh = EventDispatcher()
+
+  private let pullRefreshControl = UIRefreshControl()
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -357,6 +360,8 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     scrollView.showsVerticalScrollIndicator = true
     scrollView.showsHorizontalScrollIndicator = false
     scrollView.backgroundColor = contentView.theme.background
+    pullRefreshControl.addTarget(self, action: #selector(handlePullToRefresh), for: .valueChanged)
+    scrollView.refreshControl = pullRefreshControl
     addSubview(scrollView)
 
     contentView.backgroundColor = contentView.theme.background
@@ -800,6 +805,21 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
     pendingScrollFileId = nil
     pendingScrollAnimated = false
     setVerticalContentOffset(0, animated: animated)
+  }
+
+  @objc private func handlePullToRefresh() {
+    onPullToRefresh([:])
+  }
+
+  /// Driven from JS: set to false once the reload completes to dismiss the spinner.
+  func setRefreshing(_ refreshing: Bool) {
+    if refreshing {
+      if !pullRefreshControl.isRefreshing {
+        pullRefreshControl.beginRefreshing()
+      }
+    } else if pullRefreshControl.isRefreshing {
+      pullRefreshControl.endRefreshing()
+    }
   }
 
   private func applyStyle() {

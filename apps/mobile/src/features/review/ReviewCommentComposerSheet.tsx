@@ -1,4 +1,4 @@
-import { useRouteParams, useAppNavigation } from "../../navigation/native-stack-header";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SymbolView } from "expo-symbols";
 import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -40,17 +40,19 @@ import {
 
 const REVIEW_COMMENT_PREVIEW_MAX_LINES = 5;
 
-export function ReviewCommentComposerSheet() {
-  const navigation = useAppNavigation();
+type ReviewCommentComposerSheetProps = StaticScreenProps<{
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}>;
+
+export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProps) {
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const colorScheme = useColorScheme();
   const iconTint = String(useThemeColor("--color-icon"));
   const target = useReviewCommentTarget();
-  const { environmentId, threadId } = useRouteParams<{
-    environmentId: EnvironmentId;
-    threadId: ThreadId;
-  }>();
+  const { environmentId, threadId } = props.route.params;
   const [commentText, setCommentText] = useState("");
   const [highlightedLinesById, setHighlightedLinesById] = useState<
     Record<string, ReadonlyArray<ReviewHighlightedToken>>
@@ -84,7 +86,7 @@ export function ReviewCommentComposerSheet() {
   const previewViewportWidth = Math.max(width - 40, 280);
   const dismissComposer = useCallback(() => {
     clearReviewCommentTarget();
-    navigation.dismiss();
+    navigation.goBack();
   }, [navigation]);
   const handleNativePaste = useNativePaste((uris) => {
     void (async () => {

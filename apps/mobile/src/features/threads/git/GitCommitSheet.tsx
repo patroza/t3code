@@ -1,4 +1,4 @@
-import { useAppNavigation } from "../../../navigation/native-stack-header";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useCallback, useState } from "react";
 import { Pressable, ScrollView, View, useColorScheme } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,8 +13,13 @@ import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-wo
 import { vcsEnvironment } from "../../../state/vcs";
 import { SheetActionButton } from "./gitSheetComponents";
 
-export function GitCommitSheet() {
-  const navigation = useAppNavigation();
+type GitCommitSheetProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+}>;
+
+export function GitCommitSheet(_props: GitCommitSheetProps) {
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const isDarkMode = useColorScheme() === "dark";
   const { selectedThread } = useThreadSelection();
@@ -55,7 +60,7 @@ export function GitCommitSheet() {
   const runCommitAction = useCallback(
     async (featureBranch: boolean) => {
       const commitMessage = dialogCommitMessage.trim();
-      navigation.dismiss();
+      navigation.goBack();
       await gitActions.onRunSelectedThreadGitAction({
         action: "commit",
         featureBranch,

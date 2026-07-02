@@ -1,17 +1,22 @@
 import { useAuth } from "@clerk/expo";
 import { AuthView, UserProfileView } from "@clerk/expo/native";
-import { NavigateTo, NativeStackScreenOptions } from "../../navigation/native-stack-header";
+import { StackActions, useNavigation } from "@react-navigation/native";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { useEffect } from "react";
 import { View } from "react-native";
 
-import { hasCloudPublicConfig } from "../../features/cloud/publicConfig";
-import { settingsNavigation } from "../../lib/routes";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
 
-export default function SettingsAuthRouteScreen() {
-  return hasCloudPublicConfig() ? (
-    <ConfiguredSettingsAuthRouteScreen />
-  ) : (
-    <NavigateTo href={settingsNavigation()} />
-  );
+export function SettingsAuthRouteScreen() {
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    if (!hasCloudPublicConfig()) {
+      navigation.dispatch(StackActions.replace("Settings"));
+    }
+  }, [navigation]);
+
+  return hasCloudPublicConfig() ? <ConfiguredSettingsAuthRouteScreen /> : null;
 }
 
 function ConfiguredSettingsAuthRouteScreen() {

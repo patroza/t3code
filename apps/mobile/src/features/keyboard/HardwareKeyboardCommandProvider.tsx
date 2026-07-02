@@ -1,13 +1,6 @@
-import { useCurrentPathname, useAppNavigation } from "../../navigation/native-stack-header";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { useCallback, useMemo, useSyncExternalStore, type PropsWithChildren } from "react";
 
-import {
-  buildThreadFilesNavigation,
-  buildThreadReviewNavigation,
-  buildThreadTerminalNavigation,
-  dismissRoute,
-  newTaskNavigation,
-} from "../../lib/routes";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import {
   dispatchHardwareKeyboardCommand,
@@ -18,9 +11,11 @@ import {
   type HardwareKeyboardCommand,
 } from "./hardwareKeyboardCommands";
 
-export function HardwareKeyboardCommandProvider({ children }: PropsWithChildren) {
-  const pathname = useCurrentPathname();
-  const navigation = useAppNavigation();
+export function HardwareKeyboardCommandProvider({
+  children,
+  pathname,
+}: PropsWithChildren<{ readonly pathname: string }>) {
+  const navigation = useNavigation();
   const registrationVersion = useSyncExternalStore(
     subscribeToHardwareKeyboardCommandRegistrations,
     getHardwareKeyboardCommandRegistrationVersion,
@@ -43,24 +38,28 @@ export function HardwareKeyboardCommandProvider({ children }: PropsWithChildren)
       if (dispatchHardwareKeyboardCommand(command)) return;
 
       if (command === "newTask") {
-        navigation.push(newTaskNavigation());
+        navigation.navigate("NewTaskSheet", { screen: "NewTask" });
         return;
       }
       if (command === "back") {
-        dismissRoute(navigation);
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.dispatch(StackActions.replace("Home"));
+        }
         return;
       }
 
       const thread = parseActiveThreadPath(pathname);
       if (!thread) return;
       if (command === "files" && !/\/files(?:\/|$)/.test(pathname)) {
-        navigation.push(buildThreadFilesNavigation(thread));
+        navigation.navigate("ThreadFiles", thread);
       }
       if (command === "terminal" && !/\/terminal(?:\/|$)/.test(pathname)) {
-        navigation.push(buildThreadTerminalNavigation(thread));
+        navigation.navigate("ThreadTerminal", thread);
       }
       if (command === "review" && !/\/review(?:\/|$)/.test(pathname)) {
-        navigation.push(buildThreadReviewNavigation(thread));
+        navigation.navigate("ThreadReview", thread);
       }
     },
     [pathname, navigation],

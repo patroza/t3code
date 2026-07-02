@@ -1,16 +1,11 @@
-import {
-  NativeHeaderToolbar,
-  NativeStackScreenOptions,
-} from "../../navigation/native-stack-header";
-import { SymbolView } from "expo-symbols";
-import { useRouteParams, useAppNavigation } from "../../navigation/native-stack-header";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
-  Text as RNText,
   useColorScheme,
   View,
 } from "react-native";
@@ -23,15 +18,12 @@ import {
 } from "@t3tools/contracts";
 
 import { AppText as Text } from "../../components/AppText";
-import { CopyTextButton } from "../../components/CopyTextButton";
 import { EmptyState } from "../../components/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { cn } from "../../lib/cn";
 import { resolveFileSelectionNavigationAction } from "../../lib/adaptive-navigation";
-import { nativeHeaderScrollEdgeEffects } from "../../lib/native-scroll-edge-effect";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
-import { buildThreadFilesNavigation, threadNavigation } from "../../lib/routes";
-import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
@@ -64,7 +56,6 @@ import {
 import { useWorkspaceFileAssetUrl } from "./workspaceFileAssetUrl";
 
 type FileViewMode = "preview" | "source";
-const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
 function firstRouteParam(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) {
@@ -96,196 +87,6 @@ function defaultViewMode(path: string | null): FileViewMode {
     : "source";
 }
 
-function ModeButton(props: {
-  readonly active: boolean;
-  readonly icon: "doc.text" | "eye";
-  readonly label: string;
-  readonly onPress: () => void;
-}) {
-  const iconColor = String(
-    useThemeColor(props.active ? "--color-primary-foreground" : "--color-icon-muted"),
-  );
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected: props.active }}
-      className={cn(
-        "h-8 flex-row items-center justify-center gap-1.5 rounded-full px-3 active:opacity-70",
-        props.active ? "bg-primary" : "bg-subtle",
-      )}
-      onPress={props.onPress}
-    >
-      <SymbolView name={props.icon} size={13} tintColor={iconColor} type="monochrome" />
-      <Text
-        className={cn(
-          "text-xs font-t3-bold",
-          props.active ? "text-primary-foreground" : "text-foreground-muted",
-        )}
-      >
-        {props.label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function BreadcrumbFade(props: { readonly color: string; readonly side: "left" | "right" }) {
-  const gradientId = `file-breadcrumb-${props.side}-fade`;
-  const isLeft = props.side === "left";
-
-  return (
-    <View
-      pointerEvents="none"
-      className={cn("absolute inset-y-0 w-7", isLeft ? "left-0" : "right-0")}
-    >
-      <Svg width="100%" height="100%">
-        <Defs>
-          <LinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="0%">
-            <Stop offset="0%" stopColor={props.color} stopOpacity={isLeft ? 1 : 0} />
-            <Stop offset="100%" stopColor={props.color} stopOpacity={isLeft ? 0 : 1} />
-          </LinearGradient>
-        </Defs>
-        <Rect width="100%" height="100%" fill={`url(#${gradientId})`} />
-      </Svg>
-    </View>
-  );
-}
-
-function FileBreadcrumbs(props: { readonly projectName: string; readonly relativePath: string }) {
-  const iconColor = String(useThemeColor("--color-icon-muted"));
-  const cardColor = String(useThemeColor("--color-card"));
-  const scrollMetrics = useRef({ contentWidth: 0, offsetX: 0, viewportWidth: 0 });
-  const [fadeVisibility, setFadeVisibility] = useState({ left: false, right: false });
-  const breadcrumbs = useMemo(
-    () => fileBreadcrumbs(props.projectName, props.relativePath),
-    [props.projectName, props.relativePath],
-  );
-  const updateFadeVisibility = useCallback(
-    (metrics: Partial<(typeof scrollMetrics)["current"]>) => {
-      Object.assign(scrollMetrics.current, metrics);
-      const { contentWidth, offsetX, viewportWidth } = scrollMetrics.current;
-      const maxOffset = Math.max(0, contentWidth - viewportWidth);
-      const next = {
-        left: maxOffset > 1 && offsetX > 1,
-        right: maxOffset > 1 && offsetX < maxOffset - 1,
-      };
-
-      setFadeVisibility((current) =>
-        current.left === next.left && current.right === next.right ? current : next,
-      );
-    },
-    [],
-  );
-
-  return (
-    <View className="min-w-0 flex-1">
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        onContentSizeChange={(contentWidth) => {
-          updateFadeVisibility({ contentWidth });
-        }}
-        onLayout={(event) => {
-          updateFadeVisibility({ viewportWidth: event.nativeEvent.layout.width });
-        }}
-        onScroll={(event) => {
-          updateFadeVisibility({ offsetX: event.nativeEvent.contentOffset.x });
-        }}
-        scrollEventThrottle={16}
-      >
-        <View className="h-8 flex-row items-center">
-          {breadcrumbs.map((crumb, index) => (
-            <View key={crumb.path || "project"} className="flex-row items-center">
-              {index > 0 ? (
-                <SymbolView
-                  name="chevron.right"
-                  size={10}
-                  tintColor={iconColor}
-                  type="monochrome"
-                />
-              ) : null}
-              <Text
-                className={cn(
-                  "max-w-[180px] px-1 text-xs",
-                  crumb.kind === "file"
-                    ? "font-t3-bold text-foreground"
-                    : "font-t3-medium text-foreground-muted",
-                )}
-                numberOfLines={1}
-              >
-                {crumb.label}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-      {fadeVisibility.left ? <BreadcrumbFade color={cardColor} side="left" /> : null}
-      {fadeVisibility.right ? <BreadcrumbFade color={cardColor} side="right" /> : null}
-    </View>
-  );
-}
-
-function FilePreviewHeader(props: {
-  readonly activeMode: FileViewMode;
-  readonly showModeSelector: boolean;
-  readonly externalPreviewUri?: string | null;
-  readonly projectName: string;
-  readonly relativePath: string;
-  readonly onSetMode: (mode: FileViewMode) => void;
-}) {
-  const iconColor = String(useThemeColor("--color-icon-muted"));
-
-  return (
-    <View className="border-b border-border bg-card px-3 py-2">
-      <View className="flex-row items-center gap-2">
-        <FileBreadcrumbs projectName={props.projectName} relativePath={props.relativePath} />
-        <CopyTextButton
-          accessibilityLabel="Copy file path"
-          text={props.relativePath}
-          tintColor={iconColor}
-          buttonSize={32}
-          iconSize={13}
-        />
-      </View>
-      {props.showModeSelector ? (
-        <View className="mt-2 flex-row items-center gap-2">
-          <ModeButton
-            active={props.activeMode === "preview"}
-            icon="eye"
-            label="Preview"
-            onPress={() => props.onSetMode("preview")}
-          />
-          <ModeButton
-            active={props.activeMode === "source"}
-            icon="doc.text"
-            label="Source"
-            onPress={() => props.onSetMode("source")}
-          />
-          {props.externalPreviewUri !== undefined ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open preview in Safari"
-              disabled={props.externalPreviewUri === null}
-              hitSlop={8}
-              className={cn(
-                "ml-auto h-8 w-8 items-center justify-center rounded-full bg-subtle active:opacity-70",
-                props.externalPreviewUri === null && "opacity-40",
-              )}
-              onPress={() => {
-                if (typeof props.externalPreviewUri === "string") {
-                  void tryOpenExternalUrl(props.externalPreviewUri, "file-preview");
-                }
-              }}
-            >
-              <SymbolView name="safari" size={15} tintColor={iconColor} type="monochrome" />
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
 function FileContent(props: {
   readonly activeMode: FileViewMode;
   readonly previewUri: string | null;
@@ -294,6 +95,7 @@ function FileContent(props: {
   readonly relativePath: string;
   readonly initialLine: number | null;
   readonly truncated: boolean;
+  readonly onRefresh?: () => Promise<void> | void;
 }) {
   const isMarkdown = isMarkdownPreviewFile(props.relativePath);
   const isBrowserFile = isBrowserPreviewFile(props.relativePath);
@@ -317,7 +119,7 @@ function FileContent(props: {
 
   if (props.fileError && props.fileContents === null) {
     return (
-      <View className="flex-1 items-center justify-center bg-card px-6">
+      <View className="flex-1 items-center justify-center bg-sheet px-6">
         <EmptyState title="File unavailable" detail={props.fileError} />
       </View>
     );
@@ -325,7 +127,7 @@ function FileContent(props: {
 
   if (props.fileContents === null) {
     return (
-      <View className="flex-1 items-center justify-center gap-3 bg-card px-6">
+      <View className="flex-1 items-center justify-center gap-3 bg-sheet px-6">
         <ActivityIndicator />
         <Text className="text-center text-sm text-foreground-muted">Loading file...</Text>
       </View>
@@ -333,7 +135,7 @@ function FileContent(props: {
   }
 
   return (
-    <View className="flex-1 bg-card">
+    <View className="flex-1 bg-sheet">
       {props.truncated ? (
         <View className="border-b border-amber-200 bg-amber-50 px-4 py-2 dark:border-amber-900/60 dark:bg-amber-950/40">
           <Text className="text-2xs font-t3-bold uppercase text-amber-700 dark:text-amber-300">
@@ -345,23 +147,35 @@ function FileContent(props: {
         </View>
       ) : null}
       {props.activeMode === "preview" && isMarkdown ? (
-        <FileMarkdownPreview markdown={props.fileContents} />
+        <FileMarkdownPreview markdown={props.fileContents} onRefresh={props.onRefresh} />
       ) : (
         <SourceFileSurface
           contents={props.fileContents}
           path={props.relativePath}
           initialLine={props.initialLine}
+          onRefresh={props.onRefresh}
         />
       )}
     </View>
   );
 }
 
-function useThreadFilesWorkspace() {
-  const params = useRouteParams<{
-    environmentId?: string | string[];
-    threadId?: string | string[];
-  }>();
+type ThreadFilesRouteScreenProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+}>;
+
+type ThreadFileRouteScreenProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly path: string[];
+  readonly line?: string;
+}>;
+
+function useThreadFilesWorkspace(params: {
+  readonly environmentId?: string | string[];
+  readonly threadId?: string | string[];
+}) {
   const routeEnvironmentId = firstRouteParam(params.environmentId);
   const routeThreadId = firstRouteParam(params.threadId);
   const { selectedThread, selectedThreadProject } = useThreadSelection();
@@ -393,40 +207,6 @@ function FilesUnavailable() {
         title="Files unavailable"
         detail="This thread does not have an active workspace path."
       />
-    </View>
-  );
-}
-
-function FilesHeaderTitle(props: { readonly projectName: string }) {
-  const foregroundColor = String(useThemeColor("--color-foreground"));
-  const secondaryForegroundColor = String(useThemeColor("--color-foreground-secondary"));
-
-  return (
-    <View style={{ alignItems: "center", maxWidth: 220 }}>
-      <RNText
-        numberOfLines={1}
-        style={{
-          color: foregroundColor,
-          fontFamily: "DMSans_700Bold",
-          fontSize: MOBILE_TYPOGRAPHY.headline.fontSize,
-          fontWeight: "900",
-          letterSpacing: -0.4,
-        }}
-      >
-        Files
-      </RNText>
-      <RNText
-        numberOfLines={1}
-        style={{
-          color: secondaryForegroundColor,
-          fontFamily: "DMSans_500Medium",
-          fontSize: MOBILE_TYPOGRAPHY.label.fontSize,
-          fontWeight: "500",
-          letterSpacing: 0.2,
-        }}
-      >
-        {props.projectName}
-      </RNText>
     </View>
   );
 }
@@ -466,15 +246,17 @@ function FilesToolbarBottomFade() {
   );
 }
 
-export function ThreadFilesTreeScreen() {
+export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
   useAdaptiveWorkspacePaneRole("inspector");
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const { fileInspector, layout, panes, showAuxiliaryPane, togglePrimarySidebar } =
     useAdaptiveWorkspaceLayout();
   const [searchQuery, setSearchQuery] = useState("");
   const colorScheme = useColorScheme();
   const highlightTheme = colorScheme === "dark" ? "dark" : "light";
-  const { cwd, environmentId, projectName, selectedThread, threadId } = useThreadFilesWorkspace();
+  const { cwd, environmentId, projectName, selectedThread, threadId } = useThreadFilesWorkspace(
+    props.route.params,
+  );
   const revealedInspectorRef = useRef(false);
   const entriesQuery = useEnvironmentQuery(
     environmentId !== null && cwd !== null && !fileInspector.supported
@@ -487,11 +269,16 @@ export function ThreadFilesTreeScreen() {
   const entriesData = entriesQuery.data as ProjectListEntriesResult | null;
   const handleReturnToThread = useCallback(() => {
     if (navigation.canGoBack()) {
-      navigation.back();
+      navigation.goBack();
       return;
     }
     if (environmentId !== null && threadId !== null) {
-      navigation.replace(threadNavigation({ environmentId, threadId }));
+      navigation.dispatch(
+        StackActions.replace("Thread", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+        }),
+      );
     }
   }, [environmentId, navigation, threadId]);
 
@@ -500,15 +287,19 @@ export function ThreadFilesTreeScreen() {
       if (environmentId === null || threadId === null) {
         return;
       }
-      const destination = buildThreadFilesNavigation({ environmentId, threadId }, path);
+      const params = {
+        environmentId: String(environmentId),
+        threadId: String(threadId),
+        path: path.split("/").filter((segment) => segment.length > 0),
+      };
       const navigationAction = resolveFileSelectionNavigationAction({
         hasPersistentFileInspector: fileInspector.supported,
       });
       if (navigationAction === "replace") {
-        navigation.replace(destination);
+        navigation.dispatch(StackActions.replace("ThreadFile", params));
         return;
       }
-      navigation.push(destination);
+      navigation.navigate("ThreadFile", params);
     },
     [environmentId, fileInspector.supported, navigation, threadId],
   );
@@ -540,10 +331,6 @@ export function ThreadFilesTreeScreen() {
     },
     [cwd, environmentId, highlightTheme],
   );
-  const renderHeaderTitle = useCallback(
-    () => <FilesHeaderTitle projectName={projectName} />,
-    [projectName],
-  );
   useEffect(() => {
     if (fileInspector.supported && cwd !== null && !revealedInspectorRef.current) {
       revealedInspectorRef.current = true;
@@ -557,6 +344,7 @@ export function ThreadFilesTreeScreen() {
         <ThreadRouteScreen
           onReturnToThread={handleReturnToThread}
           renderInspector={renderInspector}
+          route={props.route}
         />
       );
     }
@@ -572,6 +360,7 @@ export function ThreadFilesTreeScreen() {
       <ThreadRouteScreen
         onReturnToThread={handleReturnToThread}
         renderInspector={renderInspector}
+        route={props.route}
       />
     );
   }
@@ -579,23 +368,17 @@ export function ThreadFilesTreeScreen() {
   const usesCompactMailToolbar = Platform.OS === "ios" && !layout.usesSplitView;
 
   return (
-    <View className="flex-1 bg-sheet">
+    <>
+      {/* Static header config (glass preset, title, contentStyle) lives in Stack.tsx.
+          Only genuinely dynamic options are set here. */}
       <NativeStackScreenOptions
         options={{
-          title: "Files",
-          headerShown: true,
-          headerTransparent: true,
-          headerStyle: { backgroundColor: "transparent" },
-          headerShadowVisible: false,
-          headerTitle: renderHeaderTitle,
-          scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
-          unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
+          unstable_headerSubtitle:
+            Platform.OS === "ios" && projectName.length > 0 ? projectName : undefined,
+          // No refresh button: the list already supports pull-to-refresh.
           unstable_headerToolbarItems: usesCompactMailToolbar
             ? () => [
                 createNativeMailSearchToolbarItem({
-                  composeButtonId: "files-refresh",
-                  composeSystemImageName: "arrow.clockwise",
-                  onComposePress: entriesQuery.refresh,
                   onSearchTextChange: setSearchQuery,
                   placeholder: "Search files",
                   searchTextChangeId: "files-search-text",
@@ -630,15 +413,6 @@ export function ThreadFilesTreeScreen() {
           />
         </NativeHeaderToolbar>
       ) : null}
-      {!usesCompactMailToolbar ? (
-        <NativeHeaderToolbar placement="right">
-          <NativeHeaderToolbar.Button
-            accessibilityLabel="Refresh files"
-            icon="arrow.clockwise"
-            onPress={entriesQuery.refresh}
-          />
-        </NativeHeaderToolbar>
-      ) : null}
       {usesCompactMailToolbar ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.SearchBarSlot />
@@ -655,22 +429,21 @@ export function ThreadFilesTreeScreen() {
         onSelectFile={handleSelectFile}
       />
       <FilesToolbarBottomFade />
-    </View>
+    </>
   );
 }
 
-export function ThreadFileScreen() {
+export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
   useAdaptiveWorkspacePaneRole("inspector");
-  const navigation = useAppNavigation();
+  const navigation = useNavigation();
   const { fileInspector, panes, toggleAuxiliaryPane } = useAdaptiveWorkspaceLayout();
   const iconColor = useThemeColor("--color-icon");
-  const params = useRouteParams<{
-    line?: string | string[];
-    path?: string | string[];
-  }>();
+  const params = props.route.params;
   const relativePath = normalizeRoutePath(params.path);
   const targetLine = normalizeRouteLine(firstRouteParam(params.line));
-  const { cwd, environmentId, projectName, selectedThread, threadId } = useThreadFilesWorkspace();
+  const { cwd, environmentId, projectName, selectedThread, threadId } = useThreadFilesWorkspace(
+    props.route.params,
+  );
   const [modeOverride, setModeOverride] = useState<{
     readonly path: string;
     readonly mode: FileViewMode;
@@ -711,15 +484,13 @@ export function ThreadFileScreen() {
 
   const handleSelectFile = useCallback(
     (path: string) => {
-      // We are already on the catch-all file route. Updating its params keeps
-      // the current native screen mounted while replacing the selected file in
-      // place, avoiding an RNSScreen snapshot/unmount for every tree click.
-      navigation.setParams({
-        line: undefined,
+      navigation.navigate("ThreadFile", {
+        environmentId: String(environmentId),
+        threadId: String(threadId),
         path: path.split("/").filter(Boolean),
       });
     },
-    [navigation],
+    [environmentId, navigation, threadId],
   );
   const renderInspector = useCallback(
     (headerInset: number) =>
@@ -753,19 +524,22 @@ export function ThreadFileScreen() {
     );
   }
 
+  const parentDir = relativePath.split("/").slice(0, -1).join("/");
+  const headerSubtitle = [projectName, parentDir].filter(Boolean).join(" · ");
+
   return (
     <ReviewHighlighterProvider>
       <View className="flex-1 bg-sheet">
         <NativeStackScreenOptions
           options={{
-            headerTitle: basename(relativePath),
-            headerTransparent: true,
-            headerShadowVisible: false,
-            headerStyle: { backgroundColor: "transparent" },
+            // Static header config lives in Stack.tsx (SOLID_HEADER_OPTIONS: solid
+            // sheet-colored header — this route's content scrolls internally, so
+            // there is nothing for glass to sample). Only dynamic values here.
             headerTintColor: iconColor,
-            scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
+            headerTitle: basename(relativePath),
             title: basename(relativePath),
-            unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
+            unstable_headerSubtitle:
+              Platform.OS === "ios" && headerSubtitle.length > 0 ? headerSubtitle : undefined,
           }}
         />
         <WorkspaceSidebarToolbar>
@@ -774,7 +548,12 @@ export function ThreadFileScreen() {
               accessibilityLabel="Return to chat"
               icon="chevron.left"
               onPress={() => {
-                navigation.replace(threadNavigation({ environmentId, threadId }));
+                navigation.dispatch(
+                  StackActions.replace("Thread", {
+                    environmentId: String(environmentId),
+                    threadId: String(threadId),
+                  }),
+                );
               }}
             />
           ) : null}
@@ -790,31 +569,56 @@ export function ThreadFileScreen() {
               separateBackground
             />
           ) : null}
-          <NativeHeaderToolbar.Button
-            accessibilityLabel="Refresh file"
-            icon="arrow.clockwise"
-            onPress={() => {
-              if (resolvedActiveMode === "preview" && (isBrowserFile || isImageFile)) {
-                setPreviewRevision((current) => current + 1);
-                return;
-              }
-              fileQuery.refresh();
-            }}
-          />
+          <NativeHeaderToolbar.Menu accessibilityLabel="File actions" icon="ellipsis">
+            {canPreview && !isImageFile ? (
+              <NativeHeaderToolbar.Menu inline>
+                <NativeHeaderToolbar.MenuAction
+                  icon="eye"
+                  isOn={resolvedActiveMode === "preview"}
+                  onPress={() => setModeOverride({ path: relativePath, mode: "preview" })}
+                >
+                  Preview
+                </NativeHeaderToolbar.MenuAction>
+                <NativeHeaderToolbar.MenuAction
+                  icon="doc.text"
+                  isOn={resolvedActiveMode === "source"}
+                  onPress={() => setModeOverride({ path: relativePath, mode: "source" })}
+                >
+                  Source
+                </NativeHeaderToolbar.MenuAction>
+              </NativeHeaderToolbar.Menu>
+            ) : null}
+            <NativeHeaderToolbar.MenuAction
+              icon="doc.on.doc"
+              onPress={() => copyTextWithHaptic(relativePath)}
+            >
+              Copy path
+            </NativeHeaderToolbar.MenuAction>
+            {isBrowserFile && typeof assetPreviewUri === "string" ? (
+              <NativeHeaderToolbar.MenuAction
+                icon="safari"
+                onPress={() => {
+                  void tryOpenExternalUrl(assetPreviewUri, "file-preview");
+                }}
+              >
+                Open in Safari
+              </NativeHeaderToolbar.MenuAction>
+            ) : null}
+            {resolvedActiveMode === "preview" && (isBrowserFile || isImageFile) ? (
+              <NativeHeaderToolbar.MenuAction
+                icon="arrow.clockwise"
+                onPress={() => {
+                  setPreviewRevision((current) => current + 1);
+                }}
+              >
+                Refresh
+              </NativeHeaderToolbar.MenuAction>
+            ) : null}
+          </NativeHeaderToolbar.Menu>
         </NativeHeaderToolbar>
         <AdaptiveInspectorLayout
           renderInspector={fileInspector.supported ? () => renderInspector(0) : undefined}
         >
-          <FilePreviewHeader
-            activeMode={resolvedActiveMode}
-            showModeSelector={canPreview && !isImageFile}
-            externalPreviewUri={isBrowserFile ? assetPreviewUri : undefined}
-            projectName={projectName}
-            relativePath={relativePath}
-            onSetMode={(mode) => {
-              setModeOverride({ path: relativePath, mode });
-            }}
-          />
           <FileContent
             activeMode={resolvedActiveMode}
             previewUri={previewUri}
@@ -823,6 +627,7 @@ export function ThreadFileScreen() {
             initialLine={targetLine}
             relativePath={relativePath}
             truncated={fileData?.truncated ?? false}
+            onRefresh={() => fileQuery.refresh()}
           />
         </AdaptiveInspectorLayout>
       </View>

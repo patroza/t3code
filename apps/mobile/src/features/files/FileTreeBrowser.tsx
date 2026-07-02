@@ -1,7 +1,15 @@
 import type { ProjectEntry } from "@t3tools/contracts";
 import { SymbolView } from "expo-symbols";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Platform,
+  Pressable,
+  RefreshControl,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
@@ -118,6 +126,10 @@ export function FileTreeBrowser(props: {
     readonly path: string;
     readonly selectedPathAtPress: string | null;
   } | null>(null);
+  const insets = useSafeAreaInsets();
+  // Native transparent-header height ≈ safe-area top + nav bar (~44). Matches the
+  // observed adjustedContentInset bottom (~102) seen in the native trace.
+  const headerInset = Platform.OS === "ios" ? insets.top + 44 : 0;
   const iconColor = String(useThemeColor("--color-icon-muted"));
   const { onPreviewFile, onSelectFile, selectedPath: controlledSelectedPath } = props;
   const controlledSelectedPathRef = useRef(controlledSelectedPath);
@@ -218,47 +230,54 @@ export function FileTreeBrowser(props: {
     [expandedPaths, handleSelectFile, iconColor, onPreviewFile, selectedPath, toggleDirectory],
   );
 
+  if (props.error && props.entries.length === 0) {
+    return (
+      <View className="flex-1 bg-sheet px-4 py-5">
+        <Text className="text-sm font-t3-bold text-foreground">Files unavailable</Text>
+        <Text className="mt-1 text-xs leading-[18px] text-foreground-muted">{props.error}</Text>
+      </View>
+    );
+  }
+
+  // SPIKE: render the FlatList as the screen's DIRECT content (no wrapping View), and
+  // mirror the Home ScrollView exactly — `contentInsetAdjustmentBehavior: "automatic"`
+  // with NO manual contentInset. iOS only applies the nav-bar top inset + scroll-edge
+  // blur to a scroll view in the screen's primary position; a scroll view buried in
+  // flex-1 Views is ignored, which is why the tree rendered under the header with no blur.
   return (
-    <View className="flex-1 bg-sheet">
-      {props.error && props.entries.length === 0 ? (
+    <FlatList
+      style={{ flex: 1 }}
+      data={visibleNodes}
+      keyExtractor={(item) => item.node.path}
+      contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+      scrollIndicatorInsets={
+        Platform.OS === "ios" ? { top: headerInset, left: 0, right: 0, bottom: 0 } : undefined
+      }
+      keyboardDismissMode="on-drag"
+      keyboardShouldPersistTaps="handled"
+      initialNumToRender={FILE_TREE_INITIAL_RENDER_COUNT}
+      maxToRenderPerBatch={FILE_TREE_RENDER_BATCH_SIZE}
+      updateCellsBatchingPeriod={16}
+      windowSize={5}
+      contentContainerStyle={{ paddingTop: 8, paddingBottom: 8 }}
+      refreshControl={<RefreshControl refreshing={props.isPending} onRefresh={props.onRefresh} />}
+      renderItem={renderItem}
+      ListEmptyComponent={
         <View className="px-4 py-5">
-          <Text className="text-sm font-t3-bold text-foreground">Files unavailable</Text>
-          <Text className="mt-1 text-xs leading-[18px] text-foreground-muted">{props.error}</Text>
+          {props.isPending ? (
+            <ActivityIndicator size="small" />
+          ) : (
+            <>
+              <Text className="text-sm font-t3-bold text-foreground">No files found</Text>
+              <Text className="mt-1 text-xs leading-[18px] text-foreground-muted">
+                {props.searchQuery.trim().length > 0
+                  ? "Try a different search."
+                  : "The workspace file index is empty."}
+              </Text>
+            </>
+          )}
         </View>
-      ) : (
-        <FlatList
-          data={visibleNodes}
-          keyExtractor={(item) => item.node.path}
-          contentInsetAdjustmentBehavior="automatic"
-          keyboardDismissMode="on-drag"
-          keyboardShouldPersistTaps="handled"
-          initialNumToRender={FILE_TREE_INITIAL_RENDER_COUNT}
-          maxToRenderPerBatch={FILE_TREE_RENDER_BATCH_SIZE}
-          updateCellsBatchingPeriod={16}
-          windowSize={5}
-          contentContainerStyle={{ paddingVertical: 8 }}
-          refreshControl={
-            <RefreshControl refreshing={props.isPending} onRefresh={props.onRefresh} />
-          }
-          renderItem={renderItem}
-          ListEmptyComponent={
-            <View className="px-4 py-5">
-              {props.isPending ? (
-                <ActivityIndicator size="small" />
-              ) : (
-                <>
-                  <Text className="text-sm font-t3-bold text-foreground">No files found</Text>
-                  <Text className="mt-1 text-xs leading-[18px] text-foreground-muted">
-                    {props.searchQuery.trim().length > 0
-                      ? "Try a different search."
-                      : "The workspace file index is empty."}
-                  </Text>
-                </>
-              )}
-            </View>
-          }
-        />
-      )}
-    </View>
+      }
+    />
   );
 }
