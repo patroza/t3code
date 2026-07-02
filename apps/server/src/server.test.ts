@@ -6177,6 +6177,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }),
               readEvents: () => Stream.empty,
             },
+            projectionSnapshotQuery: {
+              getThreadShellById: () =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      id: ThreadId.make("thread-bootstrap"),
+                      worktreePath: "/tmp/bootstrap-worktree",
+                    }),
+                  ),
+                ),
+            },
             projectSetupScriptRunner: {
               runForThread,
             },
@@ -6321,6 +6332,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             readEvents: () => Stream.empty,
           },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: ThreadId.make("thread-bootstrap-setup-failure"),
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
+          },
           projectSetupScriptRunner: {
             runForThread,
           },
@@ -6441,6 +6463,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               });
             },
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: ThreadId.make("thread-bootstrap-setup-activity-failure"),
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,

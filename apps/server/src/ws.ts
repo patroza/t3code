@@ -277,6 +277,11 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
+const BOOTSTRAP_WORKTREE_PROJECTION_TIMEOUT_MS = 5_000;
+const BOOTSTRAP_WORKTREE_PROJECTION_POLL_MS = 50;
+const BOOTSTRAP_WORKTREE_PROJECTION_ATTEMPTS = Math.ceil(
+  BOOTSTRAP_WORKTREE_PROJECTION_TIMEOUT_MS / BOOTSTRAP_WORKTREE_PROJECTION_POLL_MS,
+);
 
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
@@ -782,6 +787,30 @@ const makeWsRpcLayer = (
               );
             });
 
+          const waitForWorktreeProjection = (worktreePath: string) =>
+            Effect.gen(function* () {
+              for (let attempt = 0; attempt < BOOTSTRAP_WORKTREE_PROJECTION_ATTEMPTS; attempt++) {
+                const projectedThread = yield* projectionSnapshotQuery
+                  .getThreadShellById(command.threadId)
+                  .pipe(Effect.orElseSucceed(() => Option.none()));
+                if (
+                  Option.isSome(projectedThread) &&
+                  projectedThread.value.worktreePath === worktreePath
+                ) {
+                  return;
+                }
+                yield* Effect.sleep(BOOTSTRAP_WORKTREE_PROJECTION_POLL_MS);
+              }
+
+              return yield* new OrchestrationDispatchCommandError({
+                message: "Worktree bootstrap did not become visible before provider start.",
+                cause: {
+                  threadId: command.threadId,
+                  worktreePath,
+                },
+              });
+            });
+
           const runSetupProgram = () =>
             Effect.gen(function* () {
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
@@ -867,6 +896,7 @@ const makeWsRpcLayer = (
                 branch: worktree.worktree.refName,
                 worktreePath: targetWorktreePath,
               });
+              yield* waitForWorktreeProjection(targetWorktreePath);
               yield* refreshGitStatus(targetWorktreePath);
             }
 
