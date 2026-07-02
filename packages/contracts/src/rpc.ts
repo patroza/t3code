@@ -143,6 +143,9 @@ import {
   ServerProcessResourceHistoryResult,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
+  ServerExternalSessionImportError,
+  ServerImportExternalSessionsInput,
+  ServerImportExternalSessionsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
@@ -235,6 +238,7 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetHostResourceSnapshot: "server.getHostResourceSnapshot",
   serverSignalProcess: "server.signalProcess",
+  serverImportExternalSessions: "server.importExternalSessions",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -359,6 +363,12 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsServerImportExternalSessionsRpc = Rpc.make(WS_METHODS.serverImportExternalSessions, {
+  payload: ServerImportExternalSessionsInput,
+  success: ServerImportExternalSessionsResult,
+  error: Schema.Union([ServerExternalSessionImportError, EnvironmentAuthorizationError]),
 });
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
@@ -778,6 +788,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetHostResourceSnapshotRpc,
   WsServerSignalProcessRpc,
+  WsServerImportExternalSessionsRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,

@@ -16,6 +16,10 @@ export function homePath(value: string): string {
     : value;
 }
 
+export function iso(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
 /** Deterministic RFC-4122-shaped UUID from a namespace + key (stable across runs). */
 export function stableUuid(kind: string, key: string): string {
   const bytes = NodeCrypto.createHash("sha256").update(`${kind}:${key}`).digest().subarray(0, 16);

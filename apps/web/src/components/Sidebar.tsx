@@ -131,6 +131,7 @@ import {
 
 import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
+import { serverEnvironment } from "../state/server";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -1234,6 +1235,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const updateProject = useAtomCommand(projectEnvironment.update, {
     reportFailure: false,
   });
+  const importExternalSessions = useAtomCommand(serverEnvironment.importExternalSessions, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -1720,6 +1724,68 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [memberThreadCountByPhysicalKey, removeProject],
   );
 
+  const handleImportExternalSessions = useCallback(
+    async (member: SidebarProjectGroupMember) => {
+      const result = await importExternalSessions({
+        environmentId: member.environmentId,
+        input: {
+          cwd: member.workspaceRoot,
+          provider: "all",
+          limit: 50,
+          dryRun: false,
+          opencodeModel: "zai-coding-plan/glm-5.2",
+        },
+      });
+
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) {
+          return;
+        }
+        const error = squashAtomCommandFailure(result);
+        const message =
+          error instanceof Error ? error.message : "Unknown error importing sessions.";
+        console.error("Failed to import external sessions", {
+          projectId: member.id,
+          environmentId: member.environmentId,
+          ...safeErrorLogAttributes(error),
+        });
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Failed to import sessions for "${member.title}"`,
+            description: message,
+          }),
+        );
+        return;
+      }
+
+      const importedCount = result.value.results.filter(
+        (session) => session.status === "imported",
+      ).length;
+      const existingCount = result.value.results.filter(
+        (session) => session.status === "exists",
+      ).length;
+      toastManager.add(
+        stackedThreadToast({
+          type: importedCount > 0 ? "success" : "info",
+          title:
+            importedCount > 0
+              ? `Imported ${importedCount} session${importedCount === 1 ? "" : "s"}`
+              : "No new sessions found",
+          description:
+            existingCount > 0
+              ? `${existingCount} existing session${existingCount === 1 ? "" : "s"} skipped.`
+              : member.workspaceRoot,
+        }),
+      );
+
+      if (importedCount > 0) {
+        window.setTimeout(() => window.location.reload(), 250);
+      }
+    },
+    [importExternalSessions],
+  );
+
   const handleProjectButtonContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -1730,7 +1796,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "import-sessions" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1749,6 +1815,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
                 return;
+              case "import-sessions":
+                return handleImportExternalSessions(member);
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1763,7 +1831,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "copy-path" | "import-sessions" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1800,6 +1868,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
+            buildTargetedItem("import-sessions", "Import Agent Sessions"),
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -1819,6 +1888,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [
       copyPathToClipboard,
+      handleImportExternalSessions,
       handleRemoveProject,
       openProjectGroupingDialog,
       openProjectRenameDialog,
