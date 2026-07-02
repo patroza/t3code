@@ -2248,7 +2248,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const targetBranch = input.newRefName ?? input.refName;
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    const worktreeName = sanitizedBranch.startsWith(`${repoName}-`)
+      ? sanitizedBranch
+      : sanitizedBranch.startsWith("t3code-")
+        ? `${repoName}-${sanitizedBranch.slice("t3code-".length)}`
+        : sanitizedBranch;
+    const worktreePath = input.path ?? path.join(worktreesDir, repoName, worktreeName);
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];

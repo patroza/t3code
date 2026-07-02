@@ -375,6 +375,23 @@ function sessionErrorMessage(error: unknown): string {
     : "OpenCode session failed.";
 }
 
+function readOpenCodeResumeSessionId(resumeCursor: unknown): string | undefined {
+  if (!resumeCursor || typeof resumeCursor !== "object") {
+    return undefined;
+  }
+  const cursor = resumeCursor as {
+    readonly sessionId?: unknown;
+    readonly openCodeSessionId?: unknown;
+  };
+  const sessionId =
+    typeof cursor.sessionId === "string"
+      ? cursor.sessionId
+      : typeof cursor.openCodeSessionId === "string"
+        ? cursor.openCodeSessionId
+        : undefined;
+  return sessionId && sessionId.trim().length > 0 ? sessionId : undefined;
+}
+
 function updateProviderSession(
   context: OpenCodeSessionContext,
   patch: Partial<ProviderSession>,
@@ -1031,6 +1048,7 @@ export function makeOpenCodeAdapter(
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
         const directory = input.cwd ?? serverConfig.cwd;
+        const resumeSessionId = readOpenCodeResumeSessionId(input.resumeCursor);
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);
@@ -1070,16 +1088,22 @@ export function makeOpenCodeAdapter(
                   }),
                 );
               }
-              const openCodeSession = yield* runOpenCodeSdk("session.create", () =>
-                client.session.create({
-                  title: `T3 Code ${input.threadId}`,
-                  permission: buildOpenCodePermissionRules(input.runtimeMode),
-                }),
-              );
+              const openCodeSession = resumeSessionId
+                ? yield* runOpenCodeSdk("session.get", () =>
+                    client.session.get({ sessionID: resumeSessionId }),
+                  )
+                : yield* runOpenCodeSdk("session.create", () =>
+                    client.session.create({
+                      title: `T3 Code ${input.threadId}`,
+                      permission: buildOpenCodePermissionRules(input.runtimeMode),
+                    }),
+                  );
               if (!openCodeSession.data) {
                 return yield* new OpenCodeRuntimeError({
-                  operation: "session.create",
-                  detail: "OpenCode session.create returned no session payload.",
+                  operation: resumeSessionId ? "session.get" : "session.create",
+                  detail: resumeSessionId
+                    ? "OpenCode session.get returned no session payload."
+                    : "OpenCode session.create returned no session payload.",
                 });
               }
               return {
@@ -1103,11 +1127,13 @@ export function makeOpenCodeAdapter(
         if (raceWinner) {
           // Another call won the race – clean up the session we just created
           // (including the remote SDK session) and return the existing one.
-          yield* runOpenCodeSdk("session.abort", () =>
-            started.client.session.abort({
-              sessionID: started.openCodeSession.id,
-            }),
-          ).pipe(Effect.ignore);
+          if (!resumeSessionId) {
+            yield* runOpenCodeSdk("session.abort", () =>
+              started.client.session.abort({
+                sessionID: started.openCodeSession.id,
+              }),
+            ).pipe(Effect.ignore);
+          }
           yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
           return raceWinner.session;
         }
@@ -1121,6 +1147,7 @@ export function makeOpenCodeAdapter(
           cwd: directory,
           ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
           threadId: input.threadId,
+          resumeCursor: { sessionId: started.openCodeSession.id },
           createdAt,
           updatedAt: createdAt,
         };
