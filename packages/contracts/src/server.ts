@@ -406,6 +406,49 @@ export const ServerSignalProcessResult = Schema.Struct({
 });
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
+export const ExternalSessionImportProvider = Schema.Literals([
+  "all",
+  "codex",
+  "claude",
+  "opencode",
+]);
+export type ExternalSessionImportProvider = typeof ExternalSessionImportProvider.Type;
+
+export const ExternalSessionImportResultProvider = Schema.Literals([
+  "codex",
+  "claudeAgent",
+  "opencode",
+]);
+export type ExternalSessionImportResultProvider = typeof ExternalSessionImportResultProvider.Type;
+
+export const ExternalSessionImportStatus = Schema.Literals(["imported", "exists", "dry-run"]);
+export type ExternalSessionImportStatus = typeof ExternalSessionImportStatus.Type;
+
+export const ServerImportExternalSessionsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  provider: ExternalSessionImportProvider.pipe(Schema.withDecodingDefault(Effect.succeed("all"))),
+  limit: PositiveInt.pipe(Schema.withDecodingDefault(Effect.succeed(50))),
+  dryRun: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  opencodeModel: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed("zai-coding-plan/glm-5.2")),
+  ),
+});
+export type ServerImportExternalSessionsInput = typeof ServerImportExternalSessionsInput.Type;
+
+export const ServerImportedExternalSession = Schema.Struct({
+  provider: ExternalSessionImportResultProvider,
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  cwd: TrimmedNonEmptyString,
+  status: ExternalSessionImportStatus,
+});
+export type ServerImportedExternalSession = typeof ServerImportedExternalSession.Type;
+
+export const ServerImportExternalSessionsResult = Schema.Struct({
+  results: Schema.Array(ServerImportedExternalSession),
+});
+export type ServerImportExternalSessionsResult = typeof ServerImportExternalSessionsResult.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -567,5 +610,18 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
 ) {
   override get message(): string {
     return `Provider update failed for ${this.provider}: ${this.reason}`;
+  }
+}
+
+export class ServerExternalSessionImportError extends Schema.TaggedErrorClass<ServerExternalSessionImportError>()(
+  "ServerExternalSessionImportError",
+  {
+    cwd: TrimmedNonEmptyString,
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `External session import failed for ${this.cwd}: ${this.reason}`;
   }
 }

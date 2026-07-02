@@ -343,5 +343,9 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
+    importExternalSessions: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:import-external-sessions",
+      tag: WS_METHODS.serverImportExternalSessions,
+    }),
   };
 }
