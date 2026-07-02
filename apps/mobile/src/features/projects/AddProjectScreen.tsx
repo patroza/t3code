@@ -274,7 +274,7 @@ function EmptyEnvironmentState() {
         Add an environment before adding a project.
       </Text>
       <Pressable
-        onPress={() => navigation.dispatch(StackActions.replace("ConnectionsNew"))}
+        onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })}
         className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
       >
         <Text className="text-sm font-t3-bold text-primary-foreground">Add environment</Text>

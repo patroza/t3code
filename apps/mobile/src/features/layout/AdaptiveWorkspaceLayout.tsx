@@ -110,7 +110,7 @@ export function AdaptiveWorkspaceLayout(props: {
     useState<WorkspaceAuxiliaryPaneRole | null>(null);
   const baseLayout = useMemo(() => deriveLayout({ width, height }), [height, width]);
   const layout = baseLayout;
-  const shouldRenderPrimarySidebar = layout.usesSplitView && pathname !== "/";
+  const shouldRenderPrimarySidebar = layout.usesSplitView;
   const fileInspector = useMemo(
     () =>
       deriveFileInspectorPaneLayout({

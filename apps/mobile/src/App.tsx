@@ -21,6 +21,8 @@ import { useThemeColor } from "./lib/useThemeColor";
 
 import "../global.css";
 
+SplashScreen.preventAutoHideAsync();
+
 const appLinking = {
   prefixes: [Linking.createURL("/"), "t3code://", "t3code-dev://", "t3code-preview://"],
 };
@@ -37,8 +39,10 @@ export default function App() {
   const statusBarBg = useThemeColor("--color-status-bar");
 
   useEffect(() => {
-    if (fontsLoaded) SplashScreen.hide();
+    if (fontsLoaded) void SplashScreen.hideAsync();
   }, [fontsLoaded]);
+
+  if (!fontsLoaded) return null;
 
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
