@@ -357,6 +357,73 @@ Read-only mirror of settings usage blocks.
 
 ---
 
+## Upstream issues and PRs (`pingdotgg/t3code`)
+
+Surveyed 2026-07-04. Several upstream efforts overlap this plan; **PR #1732 is the primary implementation to align with or build on** rather than duplicating in parallel.
+
+### Tracking issue
+
+| Item | State | Relevance |
+| --- | --- | --- |
+| [#228 — feat: add usage / quota visibility for Codex sessions and accounts](https://github.com/pingdotgg/t3code/issues/228) | **Open** | Umbrella request: per-thread token usage, account rate limits/credits, lightweight UI summary, graceful degradation. Maintainer initially marked "not planned"; community interest remains high. [#673](https://github.com/pingdotgg/t3code/issues/673) was closed as duplicate of #228. |
+
+### Active upstream PRs (highest priority)
+
+| PR | State | Scope | Notes for this plan |
+| --- | --- | --- | --- |
+| [#1732 — feat: display provider usage limits in settings](https://github.com/pingdotgg/t3code/pull/1732) | **Open** (~4.5k LOC, 56 files) | End-to-end settings usage for **Codex, Claude, Cursor, OpenCode** | **Closest upstream match.** Adds `ServerProvider.usageLimits` (`ServerProviderUsageLimits` with `session`/`weekly` windows, `usedPercent`, `resetsAt`), `ProviderUsageState` service, per-driver probes (`codexUsageProbe`, `claudeUsageProbe`, `openCodeUsageLimits`, …), registry patch push, settings card UI. OpenCode: Go + Zen managed only. Cursor/Grok: explicit unavailable stubs until subscription read exists. Claims to fix #228. |
+| [#3691 — feat(codex): add account rotation and quota management](https://github.com/pingdotgg/t3code/pull/3691) | **Open** (~2.6k LOC) | Codex multi-account + auto-rotation on rate limits | Adjacent, not a substitute for usage UI. Touches auth homes and persisted config on limit events — coordinate if both land. |
+
+**PR #1732 schema vs this plan:** upstream uses `ServerProvider.usageLimits` with percent-based `session`/`weekly` windows; this plan proposes `ProviderUsageSnapshot` with richer `windows[]` (`used`/`limit`/`remaining`, multiple units). Before implementing locally, **diff against #1732** and either extend its contract or contribute missing pieces (Composer 2.5 cost matrix, Z.ai error path, `/settings/usage` overview) upstream.
+
+**PR #1732 server modules to mirror:**
+
+- `apps/server/src/provider/Layers/ProviderUsageState.ts`
+- `apps/server/src/provider/codexUsageProbe.ts`, `claudeUsageProbe.ts`, `openCodeUsageLimits.ts`
+- `apps/server/src/provider/providerUsageLimits.ts` (normalization + stale-merge rules)
+- `packages/contracts/src/server.ts` → `ServerProviderUsageLimits`
+
+### Closed PRs (superseded or maintenance-closed)
+
+Maintainer [juliusmarminge](https://github.com/juliusmarminge) closed several usage PRs in a June 2026 sweep, citing overlap with **#1732** and existing `account.rate-limits.updated` events:
+
+| PR | Title | Why closed / note |
+| --- | --- | --- |
+| [#2484](https://github.com/pingdotgg/t3code/pull/2484) | Add Codex usage indicator | Overlaps #1732; composer chip for Codex 5h + weekly |
+| [#2193](https://github.com/pingdotgg/t3code/pull/2193) | Surface provider rate limit usage in composer | Wired `account.rate-limits.updated` → activities → composer tooltip (Codex + Claude) |
+| [#2155](https://github.com/pingdotgg/t3code/pull/2155) | Account limit meter in composer | Codex-only composer meter |
+| [#2033](https://github.com/pingdotgg/t3code/pull/2033) | Add rate limit display to UI | Branch toolbar rate-limit component |
+| [#1605](https://github.com/pingdotgg/t3code/pull/1605) | Track provider usage and project weekly quota | Normalization + cache merge fixes for #228 |
+| [#880](https://github.com/pingdotgg/t3code/pull/880) / [#669](https://github.com/pingdotgg/t3code/pull/669) | Weekly/session usage pill in sidebar | Sidebar Codex rate-limit pill + config stream |
+| [#362](https://github.com/pingdotgg/t3code/pull/362) | Codex rate limit API in provider picker | Early `server.getCodexRateLimits` approach |
+| [#2197](https://github.com/pingdotgg/t3code/pull/2197) | Refresh button on sidebar usage card | Reuses `server.refreshProviders()` |
+| [#2201](https://github.com/pingdotgg/t3code/pull/2201) | Codex/sidebar usage refresh | Closed in same sweep |
+
+Useful implementation ideas from closed PRs still worth preserving in this plan:
+
+- Composer/footer indicator alongside settings ([ #2193](https://github.com/pingdotgg/t3code/pull/2193), [#2484](https://github.com/pingdotgg/t3code/pull/2484))
+- Sidebar refresh without opening settings ([#2197](https://github.com/pingdotgg/t3code/pull/2197))
+- Stale usage cache merge when newer snapshot omits usage ([#1605](https://github.com/pingdotgg/t3code/pull/1605))
+
+### Related issues (bugs, adjacent features)
+
+| Issue | State | Relevance |
+| --- | --- | --- |
+| [#2720 — Codex drains plan credits while idle](https://github.com/pingdotgg/t3code/issues/2720) | Open | **Usage refresh must not block chat and should avoid expensive idle polling.** Periodic `probeCodexAppServerProvider` / snapshot refresh may hit Codex APIs; align refresh cadence with #2720 mitigation. |
+| [#2209 — OpenCode + Gemini no quota-exceeded signal](https://github.com/pingdotgg/t3code/issues/2209) | Closed | Consolidated into #228; supports error-derived / exhausted-account UX for OpenCode backends. |
+| [#2518 — Compact per-turn session stats footer](https://github.com/pingdotgg/t3code/issues/2518) | Closed | **Complementary**, not duplicate: per-turn tok/sec/TTFT footer vs account quota. Uses same `ThreadTokenUsageSnapshot` pipeline. |
+| [#2034 / #2551 — Claude context window meter normalization](https://github.com/pingdotgg/t3code/pull/2551) | Closed | Per-thread context meter fixes; orthogonal to account quota. |
+
+### Alignment decisions for this worktree
+
+1. **Prefer building on or porting #1732** before inventing a parallel `ProviderUsageSnapshot` contract — upstream already chose `ServerProvider.usageLimits` + `ProviderUsageState`.
+2. **Cursor / Composer 2.5:** upstream #1732 stubs Cursor as unavailable (`source: "cursorAcp"`); this plan's Composer pool + pricing matrix is **still an gap** upstream.
+3. **OpenCode Z.ai:** upstream #1732 covers Go/Zen managed paths; Z.ai error-1113 fallback from this plan is **not** evident in #1732 — keep as follow-up.
+4. **Composer quota chip:** upstream trend is settings-first (#1732); composer indicators were closed as duplicate — decide whether to revive as thin client of `usageLimits` or stay settings-only.
+5. **Cross-provider overview page (`/settings/usage`):** not in upstream PRs; remains a distinct addition if desired after #1732 lands.
+
+---
+
 ## Related files
 
 | Area | Files |
