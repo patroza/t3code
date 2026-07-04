@@ -18,6 +18,10 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - COPYFILE_FICLONE reflink copies are not exposed by the FileSystem service.
+import * as NodeFS from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - COPYFILE_FICLONE reflink copies are not exposed by the FileSystem service.
+import * as NodeFSP from "node:fs/promises";
 
 import {
   GitCommandError,
@@ -47,6 +51,10 @@ const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
+const WORKTREE_INCLUDE_FILENAME = ".worktreeinclude";
+const WORKTREE_INCLUDE_LIST_MAX_OUTPUT_BYTES = 50_000_000;
+const WORKTREE_INCLUDE_LIST_TIMEOUT_MS = 120_000;
+const WORKTREE_INCLUDE_COPY_CONCURRENCY = 16;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 
@@ -2242,6 +2250,66 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const copyWorktreeIncludedPaths = Effect.fn("copyWorktreeIncludedPaths")(function* (
+    sourceRoot: string,
+    worktreePath: string,
+  ) {
+    const hasIncludeFile = yield* fileSystem
+      .exists(path.join(sourceRoot, WORKTREE_INCLUDE_FILENAME))
+      .pipe(Effect.orElseSucceed(() => false));
+    if (!hasIncludeFile) return;
+
+    const listResult = yield* executeGit(
+      "GitVcsDriver.createWorktree.listIncludedPaths",
+      sourceRoot,
+      [
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        `--exclude-from=${WORKTREE_INCLUDE_FILENAME}`,
+      ],
+      {
+        fallbackErrorDetail: `git ls-files --exclude-from=${WORKTREE_INCLUDE_FILENAME} failed`,
+        maxOutputBytes: WORKTREE_INCLUDE_LIST_MAX_OUTPUT_BYTES,
+        timeoutMs: WORKTREE_INCLUDE_LIST_TIMEOUT_MS,
+      },
+    );
+
+    const relativePaths = splitNullSeparatedGitStdoutPaths(listResult);
+    if (listResult.stdoutTruncated) {
+      yield* Effect.logWarning(
+        `${WORKTREE_INCLUDE_FILENAME} matched more files than can be listed; copying only the first ${relativePaths.length}`,
+      );
+    }
+
+    yield* Effect.forEach(
+      relativePaths,
+      (relativePath) =>
+        Effect.tryPromise(async () => {
+          const source = path.join(sourceRoot, relativePath);
+          const target = path.join(worktreePath, relativePath);
+          const stats = await NodeFSP.lstat(source);
+          await NodeFSP.mkdir(path.dirname(target), { recursive: true });
+          if (stats.isSymbolicLink()) {
+            await NodeFSP.symlink(await NodeFSP.readlink(source), target);
+          } else if (stats.isFile()) {
+            // COPYFILE_FICLONE clones with copy-on-write where the filesystem
+            // supports it (btrfs, XFS, APFS) and falls back to a regular copy.
+            await NodeFSP.copyFile(source, target, NodeFS.constants.COPYFILE_FICLONE);
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Failed to copy ${WORKTREE_INCLUDE_FILENAME} path into worktree: ${relativePath}`,
+              cause,
+            ),
+          ),
+        ),
+      { concurrency: WORKTREE_INCLUDE_COPY_CONCURRENCY, discard: true },
+    );
+  });
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input) {
@@ -2261,6 +2329,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
     });
+
+    yield* copyWorktreeIncludedPaths(input.cwd, worktreePath).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Failed to copy ${WORKTREE_INCLUDE_FILENAME} paths into worktree`,
+          cause,
+        ),
+      ),
+    );
 
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
