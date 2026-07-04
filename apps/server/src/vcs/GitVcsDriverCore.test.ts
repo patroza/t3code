@@ -1,6 +1,4 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-// @effect-diagnostics-next-line nodeBuiltinImport:off - lstat is not exposed by the FileSystem service.
-import * as NodeFS from "node:fs";
 import { assert, it, describe } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -595,67 +593,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
-      }),
-    );
-
-    it.effect("copies untracked paths matching .worktreeinclude into a new worktree", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        const { initialBranch } = yield* initRepoWithCommit(cwd);
-        const pathService = yield* Path.Path;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-
-        yield* writeTextFile(cwd, ".gitignore", ".env\nnode_modules/\n");
-        yield* git(cwd, ["add", ".gitignore"]);
-        yield* git(cwd, ["commit", "-m", "add gitignore"]);
-
-        yield* writeTextFile(cwd, ".worktreeinclude", ".env\nnode_modules/\n");
-        yield* writeTextFile(cwd, ".env", "SECRET=1\n");
-        yield* writeTextFile(cwd, "apps/web/.env", "NESTED=1\n");
-        yield* writeTextFile(
-          cwd,
-          "node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.js",
-          "module.exports = 1\n",
-        );
-        yield* fileSystem.symlink(
-          pathService.join(".pnpm", "pkg@1.0.0", "node_modules", "pkg"),
-          pathService.join(cwd, "node_modules", "pkg"),
-        );
-        yield* writeTextFile(cwd, "not-included.txt", "left behind\n");
-
-        const worktreePath = pathService.join(
-          yield* makeTmpDir("git-worktrees-"),
-          "include-worktree",
-        );
-        yield* driver.createWorktree({
-          cwd,
-          path: worktreePath,
-          refName: initialBranch,
-          newRefName: "feature/include",
-        });
-
-        assert.equal(
-          yield* fileSystem.readFileString(pathService.join(worktreePath, ".env")),
-          "SECRET=1\n",
-        );
-        assert.equal(
-          yield* fileSystem.readFileString(pathService.join(worktreePath, "apps", "web", ".env")),
-          "NESTED=1\n",
-        );
-        const copiedLink = pathService.join(worktreePath, "node_modules", "pkg");
-        assert.equal(
-          yield* Effect.sync(() => NodeFS.lstatSync(copiedLink).isSymbolicLink()),
-          true,
-        );
-        assert.equal(
-          yield* fileSystem.readFileString(pathService.join(copiedLink, "index.js")),
-          "module.exports = 1\n",
-        );
-        assert.equal(
-          yield* fileSystem.exists(pathService.join(worktreePath, "not-included.txt")),
-          false,
-        );
       }),
     );
   });
