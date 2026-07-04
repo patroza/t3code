@@ -12,4 +12,5 @@
 10. `10-unify-process-session-abstraction.md`
 19. `19-version-control-phase-1-vcs-driver-foundation.md`
 20. `20-version-control-phase-2-source-control-provider-foundation.md`
-21. `provider-usage-stats-overview.md` — provider-neutral quota stats + wishlist (remote host CPU/MEM/load)
+21. `provider-usage-stats-overview.md` — provider-neutral quota stats (Codex, Claude, Cursor Composer 2.5, OpenCode Go/Z.ai)
+22. `remote-host-resource-visibility.md` — wishlist: CPU/MEM/load % per connected remote environment
