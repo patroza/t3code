@@ -191,17 +191,33 @@ Build in `packages/shared` or `apps/server/src/provider/`:
 
 ### Codex
 
+Codex is the **most accessible** provider for programmatic usage/quota — but only when authenticated with a **ChatGPT subscription** (`codex login` / `authMode: chatgpt`). API-key-only Codex accounts typically do **not** get subscription rate-limit snapshots (upstream #1732 marks those as unavailable).
+
+#### Three surfaces (easy to conflate)
+
+| Surface | What it shows | T3 access today |
+| --- | --- | --- |
+| **Codex Cloud analytics (web)** | Human dashboard: usage activity, analytics | Browser only — [chatgpt.com/codex/cloud/settings/analytics#usage](https://chatgpt.com/codex/cloud/settings/analytics#usage) |
+| **`account/rateLimits/read`** (+ push `account/rateLimits/updated`) | **Quota headroom:** primary (≈5h session) + secondary (weekly) `usedPercent`, `resetsAt`, credits/spend controls, `planType` | **Live push** in `CodexAdapter`; **planned pull** on refresh |
+| **`account/usage/read`** | **Activity stats:** lifetime tokens, peak daily, streaks, daily usage buckets (ChatGPT profile backend — not recomputed locally) | Schema in `effect-codex-app-server`; **not called** from T3 server yet |
+
+The analytics page and `account/usage/read` are in the same **usage/analytics** family (how much you've consumed over time). **`account/rateLimits/read`** answers **"how much allowance is left?"** — that is what settings quota bars and composer limit indicators need. Issue [#673](https://github.com/pingdotgg/t3code/issues/673) pointed implementers at `account/rateLimits/read`, not scraping the web UI.
+
+OpenAI exposes both RPCs on the Codex app-server; T3 vendors schemas in `packages/effect-codex-app-server` but has not wired settings UI or pull-on-refresh yet (upstream [#1732](https://github.com/pingdotgg/t3code/pull/1732)).
+
+#### Mapping to plan windows
+
 | Source | Maps to window |
 | --- | --- |
 | `account/rateLimits/read`.rateLimits.primary | `primary` (≈5h) |
 | `.secondary` | `weekly` |
-| `.credits` | `credits` (USD) |
+| `.credits` / `.individualLimit` | `credits` (USD / spend cap) |
 | `.planType` | `plan.label` |
-| `account/usage/read`.summary | informational (not a limit window) |
+| `account/usage/read`.summary + `dailyUsageBuckets` | **informational** analytics (optional UI — not a limit bar) |
 | Push `account/rateLimits/updated` | merge if newer than poll |
 | `thread/tokenUsage/updated` | per-thread context (separate from quota snapshot) |
 
-Use `packages/effect-codex-app-server` typed schemas. Show `rateLimitsByLimitId` buckets when workspace member vs owner limits apply.
+Use `packages/effect-codex-app-server` typed schemas. Show `rateLimitsByLimitId` buckets when workspace member vs owner limits apply. Existing adapter: `CodexAdapter.ts` handles rate-limit **push**; add **pull** on refresh. Do **not** scrape the analytics HTML page.
 
 ### Claude
 
