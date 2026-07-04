@@ -532,6 +532,22 @@ const make = Effect.gen(function* () {
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
       if (
+        cwdChanged &&
+        activeSession?.provider === "opencode" &&
+        activeSession.resumeCursor !== undefined
+      ) {
+        return yield* new ProviderAdapterRequestError({
+          provider: activeSession.provider,
+          method: "thread.turn.start",
+          detail: [
+            `OpenCode session for thread '${threadId}' is bound to '${activeSession.cwd ?? "unknown"}' but the thread workspace is '${effectiveCwd ?? "unknown"}'.`,
+            "Refusing to resume or replace it silently because that would either run in the wrong directory or lose conversation history.",
+            "Stop this provider session and start a fresh thread/session for the selected worktree.",
+          ].join(" "),
+        });
+      }
+
+      if (
         !runtimeModeChanged &&
         !cwdChanged &&
         !instanceChanged &&
