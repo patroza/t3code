@@ -74,6 +74,7 @@ const CodexUserInputAnswerObject = Schema.Struct({
 });
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
+const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
 // TODO: Verify `packages/effect-codex-app-server/scripts/generate.ts` so the generated
 // `V2TurnStartParams` schema includes `collaborationMode` directly.
@@ -419,6 +420,14 @@ function classifyCodexStderrLine(rawLine: string): { readonly message: string } 
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
+  if (
+    isCodexAppServerRequestError(error) &&
+    error.code === -32602 &&
+    error.errorMessage.toLowerCase() === "invalid params"
+  ) {
+    return true;
+  }
+
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread")) {
     return false;
