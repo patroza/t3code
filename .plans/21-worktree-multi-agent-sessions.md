@@ -98,7 +98,75 @@ Aligns with Conductor ([#3697](https://github.com/pingdotgg/t3code/issues/3697),
 
 ## Implementation plan
 
-### Phase 1 — “New agent session on this worktree” (MVP)
+### Deployment surfaces
+
+This feature should be implemented at the shared web/orchestration layer, not as a desktop-only bridge feature.
+
+Supported surfaces:
+
+- **Local desktop client**: desktop shell renders `apps/web` against the local environment server.
+- **Mobile web browser → local server**: browser renders the same `apps/web` UI and dispatches to the local environment over HTTP/WebSocket.
+- **Laptop desktop client → remote/smart server**: desktop shell connects to a secondary/remote environment and dispatches the same orchestration commands scoped by `environmentId`.
+- **Mobile web browser → remote/smart server**: browser connects to the remote environment over HTTP/WebSocket and uses the same server-side thread/worktree metadata.
+
+Implementation rule:
+
+- Put seed/grouping behavior in `apps/web` and shared client-runtime helpers where possible.
+- Keep worktree creation/validation on the target environment server. The client must not assume the local desktop filesystem when the selected `environmentId` points at a remote server.
+- Always derive project/thread context from `ScopedProjectRef` / `ScopedThreadRef`; never from a process-global "local" project.
+- Treat `worktreePath` as opaque display/identity data from the target environment. Use it for grouping and command payloads, but only the target server should validate or operate on it.
+- The seed-only MVP works across local and remote environments because it only copies existing `branch` + `worktreePath` from a thread in the same project/environment into a new draft for that same project/environment.
+
+### Phase 0 — Seed-only MVP
+
+**Goal:** Unblock same-worktree multi-agent sessions today without introducing a new durable data model or protocol shape.
+
+The existing model is already sufficient for a narrow first cut:
+
+- Draft/server threads already carry `branch` + `worktreePath`.
+- `thread.turn.start` bootstrap `createThread` already accepts `worktreePath`.
+- `ChatView` only sends `prepareWorktree` when creating a new worktree; a draft with an attached `worktreePath` can start in that checkout without calling `gitWorkflow.createWorktree`.
+
+#### Web UI
+
+- Update `resolveSidebarNewThreadSeedContext` so a matching active thread or draft with `worktreePath` wins even when `defaultThreadEnvMode === "worktree"`.
+- Seed the new draft with:
+
+```ts
+{
+  branch,
+  worktreePath,
+  envMode: "local",
+}
+```
+
+`envMode: "local"` is intentional: it means "use the attached checkout" for this draft, not "create a new worktree on first send."
+
+#### Tests
+
+| Area | Cases |
+|------|-------|
+| `Sidebar.logic.test.ts` | Active server thread with `worktreePath` + default worktree mode → inherit path + branch, `envMode: "local"` |
+| `Sidebar.logic.test.ts` | Active draft thread with `worktreePath` + default worktree mode → inherit path + branch, `envMode: "local"` |
+| Web environment scoping tests | Same-worktree seed only when active thread/draft matches the target `projectId` and environment-scoped project ref |
+| Existing send/bootstrap tests | Rely on current coverage that `createThread.worktreePath` is persisted and no `prepareWorktree` runs unless requested |
+
+#### Acceptance criteria
+
+- From Codex thread on `~/.t3/worktrees/my-repo/feature-x`, user creates a new thread in the same project.
+- The draft starts with the same `branch` + `worktreePath`.
+- User picks Cursor before first send.
+- Provider cwd = existing worktree path.
+- No new branch/worktree is created.
+- Codex thread unchanged.
+
+#### Recovery / upstream compatibility
+
+- This is easily recoverable if upstream lands a first-class Conductor-style workspace model: existing data can be grouped or migrated by canonical `worktreePath`.
+- No DB table, event type, or provider resume semantics are committed in this MVP.
+- If upstream changes the workspace model, the fallback is to reinterpret these threads as sessions attached to a workspace derived from their existing `worktreePath`.
+
+### Phase 1 — Explicit “New agent session on this worktree”
 
 **Goal:** One explicit action from an existing worktree thread → new draft/thread with same `branch` + `worktreePath`, any provider, no `prepareWorktree`.
 
@@ -110,17 +178,20 @@ Aligns with Conductor ([#3697](https://github.com/pingdotgg/t3code/issues/3697),
 - Implementation: call `handleNewThread(projectRef, { branch, worktreePath, envMode: "local" })`.
   - Use `local` env mode to avoid accidental second worktree when project default is `worktree`.
 - Update `resolveSidebarNewThreadSeedContext`:
-  - When active thread has `worktreePath` and default is `worktree`, distinguish:
-    - **New worktree** (current behavior)
+  - Phase 0 already makes the default new-thread action inherit an attached worktree.
+  - This phase can add explicit affordances that distinguish:
+    - **New worktree**
     - **Same worktree, new session** (inherit path + branch, `envMode: "local"`)
 
 #### Mobile
 
 - Mirror in new-task flow: when viewing a worktree thread, offer **New session on this worktree** (reuse `selectedWorktreePath` + branch, skip `prepareWorktree`).
 
-#### Server / contracts
+#### Server / contracts (defer unless needed)
 
-Add bootstrap attach path (name TBD):
+The seed-only MVP does not require a new bootstrap attach path. Add one later only if we need to attach arbitrary external worktrees with server-side validation before first send.
+
+Possible future shape:
 
 ```ts
 // packages/contracts/src/orchestration.ts
@@ -145,7 +216,7 @@ Reject if path is main checkout when user intended isolated worktree, or branch 
 
 | Area | Cases |
 |------|-------|
-| `Sidebar.logic.test.ts` | Active worktree thread + default worktree mode → same-worktree seed |
+| `Sidebar.logic.test.ts` | Explicit same-worktree action → same-worktree seed |
 | `server.test.ts` | Bootstrap attach sets cwd; no `createWorktree` call |
 | `ChatView` send | Pre-set `worktreePath` → no `prepareWorktree` in bootstrap |
 
@@ -172,6 +243,20 @@ Reject if path is main checkout when user intended isolated worktree, or branch 
 - Client-side `WorktreeGroupKey = canonical(worktreePath) | "local:<branch>"`.
 - Derive groups from `OrchestrationThreadShell[]` + git status.
 - Defer DB `worktree_workspace` table until lifecycle/spotlight needs it.
+
+#### Non-durable grouping MVP
+
+This can be shipped without a durable `worktree_workspace` table:
+
+- In each project group, partition visible threads by canonical `worktreePath`.
+- Only render a subgroup when more than one thread references the same canonical worktree path.
+- Keep single-thread worktrees as normal rows to avoid extra sidebar noise.
+- Label subgroup headers from the worktree basename plus branch when available.
+- Put **+ New session** on the subgroup header; it calls the Phase 0 seed path with that group’s `branch` + `worktreePath`, `envMode: "local"`.
+- Treat `null` worktree paths as the main checkout group and do not subgroup them unless a later design wants local-session grouping.
+- Keep grouping scoped to a single environment/project. Identical path strings from different remote environments must not collapse together.
+
+This matches the Conductor mental model while remaining ephemeral: a restart or upstream migration can rebuild the same groups from thread shells.
 
 ---
 
@@ -208,10 +293,11 @@ Reusing the **directory** is not reusing the **agent session**. Options:
 
 | PR | Scope | Risk |
 |----|-------|------|
-| **A** | Attach flow + sidebar seed fix + tests | Low |
-| **B** | Worktree grouping + per-worktree “+ session” | Medium (UI/state) |
-| **C** | Handoff artifact (optional) | Medium |
-| **D** | Concurrency warning + docs | Low |
+| **A** | Seed-only MVP + sidebar tests | Low |
+| **B** | Non-durable worktree subgrouping + per-worktree “+ session” | Medium (UI/state) |
+| **C** | Optional attach validation/protocol if external worktree attach needs it | Medium |
+| **D** | Handoff artifact (optional) | Medium |
+| **E** | Concurrency warning + docs | Low |
 
 ---
 
@@ -277,14 +363,13 @@ Reusing the **directory** is not reusing the **agent session**. Options:
 
 | File | Change |
 |------|--------|
-| `packages/contracts/src/orchestration.ts` | `attachWorktree` bootstrap schema |
-| `apps/server/src/ws.ts` | Attach validation + meta update |
-| `apps/server/src/git/GitManager.ts` or VCS driver | Validate existing worktree |
 | `apps/web/src/components/Sidebar.logic.ts` | Seed context for same-worktree |
-| `apps/web/src/hooks/useHandleNewThread.ts` | Optional attach preset |
-| `apps/web/src/components/ChatView.tsx` | “New session here” action |
+| `apps/web/src/components/Sidebar.logic.test.ts` | Seed context regression tests |
+| `apps/web/src/components/Sidebar.tsx` | Optional non-durable subgrouping and “+ New session” action |
+| `apps/web/src/hooks/useHandleNewThread.ts` | Optional attach preset if needed by UI wiring |
+| `apps/web/src/components/ChatView.tsx` | Optional “New session here” action |
 | `apps/mobile/src/features/threads/new-task-flow-provider.tsx` | Mobile parity |
-| `*.test.ts` | Sidebar + server bootstrap tests |
+| `*.test.ts` | Sidebar seed tests; server bootstrap tests only if adding attach validation |
 
 ---
 
