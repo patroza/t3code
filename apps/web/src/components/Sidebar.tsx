@@ -326,6 +326,7 @@ interface SidebarThreadRowProps {
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
   jumpLabel: string | null;
+  showWorktreeIndicator?: boolean;
   appSettingsConfirmThreadArchive: boolean;
   renamingThreadKey: string | null;
   renamingTitle: string;
@@ -363,6 +364,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     orderedProjectThreadKeys,
     isActive,
     jumpLabel,
+    showWorktreeIndicator = true,
     appSettingsConfirmThreadArchive,
     renamingThreadKey,
     renamingTitle,
@@ -762,7 +764,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </TooltipPopup>
             </Tooltip>
           )}
-          <ThreadWorktreeIndicator thread={thread} />
+          {showWorktreeIndicator && <ThreadWorktreeIndicator thread={thread} />}
           {terminalStatus && (
             <Tooltip>
               <TooltipTrigger
@@ -981,8 +983,15 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   } = props;
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
-  const renderThreadRow = (thread: SidebarThreadSummary) => {
+  const renderThreadRow = (
+    thread: SidebarThreadSummary,
+    options: { readonly showWorktreeIndicator?: boolean } = {},
+  ) => {
     const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const worktreeIndicatorProps =
+      options.showWorktreeIndicator === undefined
+        ? {}
+        : { showWorktreeIndicator: options.showWorktreeIndicator };
     return (
       <SidebarThreadRow
         key={threadKey}
@@ -991,6 +1000,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         orderedProjectThreadKeys={orderedProjectThreadKeys}
         isActive={activeRouteThreadKey === threadKey}
         jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
+        {...worktreeIndicatorProps}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
         renamingThreadKey={renamingThreadKey}
         renamingTitle={renamingTitle}
@@ -1064,7 +1074,9 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                   </Tooltip>
                 </div>
               </SidebarMenuSubItem>
-              {section.threads.map((thread) => renderThreadRow(thread))}
+              {section.threads.map((thread) =>
+                renderThreadRow(thread, { showWorktreeIndicator: false }),
+              )}
             </React.Fragment>
           );
         })}

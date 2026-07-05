@@ -282,7 +282,7 @@ export function formatWorktreeGroupLabel(input: {
 }): string {
   const pathSegments = input.worktreePath.split(/[\\/]/u);
   const pathLabel = pathSegments.findLast((segment) => segment.length > 0) ?? input.worktreePath;
-  return input.branch ? `${pathLabel} · ${input.branch}` : pathLabel;
+  return input.branch ? `${input.branch} · ${pathLabel}` : pathLabel;
 }
 
 function worktreeSectionKey(thread: SidebarThreadSummary): string | null {

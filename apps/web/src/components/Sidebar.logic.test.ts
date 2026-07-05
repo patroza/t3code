@@ -404,7 +404,7 @@ describe("buildSidebarThreadWorktreeSections", () => {
     if (sections[0]?.kind !== "worktree") {
       throw new Error("expected worktree section");
     }
-    expect(sections[0].label).toBe("feature-a · feature/a");
+    expect(sections[0].label).toBe("feature/a · feature-a");
     expect(sections[0].worktreePath).toBe("/repo/.t3/worktrees/feature-a");
     expect(sections[0].threads.map((thread) => thread.id)).toEqual([
       ThreadId.make("thread-a"),
