@@ -44,6 +44,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
   DEFAULT_SERVER_SETTINGS,
+  type EnvironmentId,
   ProjectId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
@@ -326,6 +327,7 @@ interface SidebarThreadRowProps {
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
   jumpLabel: string | null;
+  showEnvironmentIndicator?: boolean;
   showWorktreeIndicator?: boolean;
   appSettingsConfirmThreadArchive: boolean;
   renamingThreadKey: string | null;
@@ -364,6 +366,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     orderedProjectThreadKeys,
     isActive,
     jumpLabel,
+    showEnvironmentIndicator = true,
     showWorktreeIndicator = true,
     appSettingsConfirmThreadArchive,
     renamingThreadKey,
@@ -839,7 +842,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             ) : null}
             <span className={threadMetaClassName}>
               <span className="inline-flex items-center gap-1">
-                {isRemoteThread && !isDesktopLocalThread && (
+                {showEnvironmentIndicator && isRemoteThread && !isDesktopLocalThread && (
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -889,6 +892,33 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     </SidebarMenuSubItem>
   );
 });
+
+const SidebarThreadGroupEnvironmentIndicator = memo(
+  function SidebarThreadGroupEnvironmentIndicator(props: { environmentId: EnvironmentId }) {
+    const environment = useEnvironment(props.environmentId);
+    const primaryEnvironmentId = usePrimaryEnvironmentId();
+    const isRemoteEnvironment =
+      primaryEnvironmentId !== null && props.environmentId !== primaryEnvironmentId;
+    const isDesktopLocalEnvironment =
+      environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
+    if (!isRemoteEnvironment || isDesktopLocalEnvironment) {
+      return null;
+    }
+    const label = environment?.label ?? "Remote";
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span aria-label={label} className="inline-flex shrink-0 items-center justify-center" />
+          }
+        >
+          <CloudIcon className="size-3 text-muted-foreground/45" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">{label}</TooltipPopup>
+      </Tooltip>
+    );
+  },
+);
 
 interface SidebarProjectThreadListProps {
   projectKey: string;
@@ -985,9 +1015,16 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
   const renderThreadRow = (
     thread: SidebarThreadSummary,
-    options: { readonly showWorktreeIndicator?: boolean } = {},
+    options: {
+      readonly showEnvironmentIndicator?: boolean;
+      readonly showWorktreeIndicator?: boolean;
+    } = {},
   ) => {
     const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const environmentIndicatorProps =
+      options.showEnvironmentIndicator === undefined
+        ? {}
+        : { showEnvironmentIndicator: options.showEnvironmentIndicator };
     const worktreeIndicatorProps =
       options.showWorktreeIndicator === undefined
         ? {}
@@ -1000,6 +1037,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         orderedProjectThreadKeys={orderedProjectThreadKeys}
         isActive={activeRouteThreadKey === threadKey}
         jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
+        {...environmentIndicatorProps}
         {...worktreeIndicatorProps}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
         renamingThreadKey={renamingThreadKey}
@@ -1053,6 +1091,11 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                 >
                   <ContainerIcon className="size-3 shrink-0" />
                   <span className="min-w-0 flex-1 truncate">{section.label}</span>
+                  {section.threads[0] ? (
+                    <SidebarThreadGroupEnvironmentIndicator
+                      environmentId={section.threads[0].environmentId}
+                    />
+                  ) : null}
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -1084,7 +1127,10 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               </SidebarMenuSubItem>
               <div className="ml-3 border-l border-border/70 pl-2">
                 {section.threads.map((thread) =>
-                  renderThreadRow(thread, { showWorktreeIndicator: false }),
+                  renderThreadRow(thread, {
+                    showEnvironmentIndicator: false,
+                    showWorktreeIndicator: false,
+                  }),
                 )}
               </div>
             </React.Fragment>
