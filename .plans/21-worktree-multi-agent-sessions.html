@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Worktree Multi-Agent Sessions — t3code Plan</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-dim: #1f3a5f;
+      --green: #3fb950;
+      --orange: #d29922;
+      --red: #f85149;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --max-width: 52rem;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
+    }
+
+    header {
+      margin-bottom: 2.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 1.875rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
+    }
+
+    .subtitle {
+      margin: 0 0 1rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+
+    .meta span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-plan { background: var(--accent-dim); color: var(--accent); }
+    .badge-mvp { background: #1a3d2e; color: var(--green); }
+    .badge-warn { background: #3d2e1a; color: var(--orange); }
+
+    h2 {
+      margin: 2.5rem 0 1rem;
+      font-size: 1.35rem;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    h2:first-of-type { border-top: none; padding-top: 0; }
+
+    h3 {
+      margin: 1.75rem 0 0.75rem;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    h4 {
+      margin: 1.25rem 0 0.5rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    p { margin: 0 0 1rem; }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    ul, ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+    li { margin-bottom: 0.35rem; }
+
+    code, pre {
+      font-family: var(--mono);
+      font-size: 0.875em;
+    }
+
+    code {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1em 0.35em;
+    }
+
+    pre {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      margin: 0 0 1rem;
+      line-height: 1.5;
+    }
+
+    pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 0.8125rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0 0 1.25rem;
+      font-size: 0.9rem;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface);
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+    .callout {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin: 0 0 1.25rem;
+    }
+
+    .callout-warn {
+      border-left-color: var(--orange);
+    }
+
+    .callout-success {
+      border-left-color: var(--green);
+    }
+
+    .diagram {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin: 0 0 1.25rem;
+      font-family: var(--mono);
+      font-size: 0.8125rem;
+      line-height: 1.55;
+      white-space: pre;
+      overflow-x: auto;
+    }
+
+    .phase-grid {
+      display: grid;
+      gap: 1rem;
+      margin: 0 0 1.25rem;
+    }
+
+    @media (min-width: 640px) {
+      .phase-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    .phase-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+    }
+
+    .phase-card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+    }
+
+    .phase-card p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 0 0 2rem;
+    }
+
+    .toc-title {
+      margin: 0 0 0.75rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .toc ol {
+      margin: 0;
+      padding-left: 1.25rem;
+    }
+
+    .toc li { margin-bottom: 0.25rem; }
+    .toc a { color: var(--text); font-size: 0.9rem; }
+    .toc a:hover { color: var(--accent); }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>Worktree Multi-Agent Sessions</h1>
+      <p class="subtitle">Reuse a git worktree/branch across multiple t3code threads and agents (e.g. Codex → Cursor on the same checkout).</p>
+      <div class="meta">
+        <span><strong>Status:</strong> <span class="badge badge-plan">Plan</span></span>
+        <span><strong>Date:</strong> 2026-07-05</span>
+        <span><strong>Repo:</strong> t3code</span>
+        <span><strong>Related:</strong> <a href="https://github.com/pingdotgg/t3code/issues/3697">#3697</a></span>
+      </div>
+    </header>
+
+    <nav class="toc" aria-label="Table of contents">
+      <div class="toc-title">Contents</div>
+      <ol>
+        <li><a href="#summary">Summary</a></li>
+        <li><a href="#problem">Problem</a></li>
+        <li><a href="#architecture">Current architecture</a></li>
+        <li><a href="#target">Target mental model</a></li>
+        <li><a href="#implementation">Implementation plan</a></li>
+        <li><a href="#prs">PR sequence</a></li>
+        <li><a href="#decisions">Open decisions</a></li>
+        <li><a href="#upstream">Related upstream issues &amp; PRs</a></li>
+        <li><a href="#files">Files touched</a></li>
+        <li><a href="#verification">Verification</a></li>
+      </ol>
+    </nav>
+
+    <section id="summary">
+      <h2>Summary</h2>
+      <p>Today t3code couples <strong>thread ≈ conversation ≈ provider binding ≈ workspace</strong>. A user who starts work in a worktree with Codex cannot easily open a <strong>second thread on the same worktree</strong> with Cursor.</p>
+      <p>The git layer mostly supports reuse already (<code>worktreePath</code> on a thread skips <code>prepareWorktree</code>), but product UX, sidebar seeding, and navigation work against the workflow.</p>
+      <p>This plan introduces an explicit <strong>“new agent session on this worktree”</strong> flow, fixes new-thread seeding, and lays groundwork for worktree-first navigation and optional context handoff.</p>
+    </section>
+
+    <section id="problem">
+      <h2>Problem</h2>
+
+      <h3>User story</h3>
+      <ol>
+        <li>Start a thread in <strong>New worktree</strong> mode with <strong>Codex</strong>.</li>
+        <li>Codex makes file changes on branch <code>t3code/abc123</code> under <code>~/.t3/worktrees/...</code>.</li>
+        <li>User wants a <strong>new t3code session</strong> on that <strong>same worktree</strong>, using <strong>Cursor</strong>, without creating another branch/worktree.</li>
+      </ol>
+
+      <h3>What fails today</h3>
+      <table>
+        <thead>
+          <tr><th>Gap</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Provider lock per thread</td>
+            <td>Server rejects switching <code>codex</code> → <code>cursor</code> in the same thread (<code>ProviderCommandReactor</code>)</td>
+          </tr>
+          <tr>
+            <td>New thread UX</td>
+            <td>When <code>defaultThreadEnvMode === "worktree"</code>, sidebar “New thread” always seeds a <strong>new</strong> worktree, not the active one</td>
+          </tr>
+          <tr>
+            <td>No first-class worktree entity</td>
+            <td><code>worktreePath</code> is thread metadata; no grouping or “+ session” affordance</td>
+          </tr>
+          <tr>
+            <td>No cross-agent handoff</td>
+            <td>Reusing cwd ≠ reusing provider resume cursor or native session history</td>
+          </tr>
+          <tr>
+            <td>Concurrent agents</td>
+            <td>No warning if two threads on same worktree run turns simultaneously</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="architecture">
+      <h2>Current architecture</h2>
+
+      <h3>Identity model</h3>
+      <table>
+        <thead>
+          <tr><th>Concept</th><th>Today</th><th>Implication</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Thread</strong></td>
+            <td>Messages + <code>modelSelection</code> + optional <code>session</code> + <code>branch</code> / <code>worktreePath</code></td>
+            <td>One conversation, one provider resume state</td>
+          </tr>
+          <tr>
+            <td><strong>Worktree</strong></td>
+            <td>Optional fields on <code>OrchestrationThreadShell</code></td>
+            <td>Not a durable workspace aggregate</td>
+          </tr>
+          <tr>
+            <td><strong>Provider session</strong></td>
+            <td>Per thread via <code>ensureSessionForThread</code></td>
+            <td>Cannot change driver after start</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Key code paths</h3>
+      <ul>
+        <li><strong>Provider lock (server)</strong> — <code>apps/server/src/orchestration/Layers/ProviderCommandReactor.ts</code>: rejects cross-<code>driverKind</code> switches and incompatible <code>continuationIdentity</code>.</li>
+        <li><strong>Worktree creation (client)</strong> — <code>apps/web/src/components/ChatView.tsx</code>: <code>prepareWorktree</code> only when first message, worktree mode, and <code>!worktreePath</code>. Pre-set path → reuse.</li>
+        <li><strong>New thread seeding</strong> — <code>apps/web/src/components/Sidebar.logic.ts</code>: default <code>worktree</code> mode does not inherit active thread path.</li>
+        <li><strong>Thread create (server)</strong> — <code>packages/contracts/src/orchestration.ts</code>: <code>ThreadCreateCommand</code> already accepts <code>branch</code> + <code>worktreePath</code>.</li>
+      </ul>
+
+      <div class="callout callout-warn">
+        <strong>Partial workaround today:</strong> set <code>defaultThreadEnvMode</code> to <code>local</code>, focus Codex worktree thread, New thread (inherits path), pick Cursor, send. Fragile and undocumented.
+      </div>
+    </section>
+
+    <section id="target">
+      <h2>Target mental model</h2>
+      <div class="diagram">Project
+ └── Worktree workspace (branch + path)     ← git isolation unit
+      ├── Thread A — Codex session        ← chat + provider resume
+      ├── Thread B — Cursor session
+      └── Thread C — plan-only / human</div>
+      <p>Aligns with Conductor (<a href="https://github.com/pingdotgg/t3code/issues/3697">#3697</a>, draft PR <a href="https://github.com/pingdotgg/t3code/pull/2708">#2708</a>).</p>
+    </section>
+
+    <section id="implementation">
+      <h2>Implementation plan</h2>
+
+      <div class="phase-grid">
+        <div class="phase-card">
+          <h3><span class="badge badge-mvp">Phase 1</span> New session on worktree</h3>
+          <p>Explicit action, sidebar seed fix, server <code>attachWorktree</code> validation. <strong>MVP.</strong></p>
+        </div>
+        <div class="phase-card">
+          <h3>Phase 2 — Worktree-first nav</h3>
+          <p>Sidebar grouping, per-worktree “+ session”, provider badges.</p>
+        </div>
+        <div class="phase-card">
+          <h3>Phase 3 — Context handoff</h3>
+          <p>Handoff artifact (summary + diffs + plan). No cross-provider resume bridge.</p>
+        </div>
+        <div class="phase-card">
+          <h3>Phase 4 — Safety</h3>
+          <p>Concurrent turn warning, env vars, optional worktree-scoped diff view.</p>
+        </div>
+      </div>
+
+      <h3>Phase 1 — MVP detail</h3>
+
+      <h4>Web UI</h4>
+      <ul>
+        <li>Add <strong>New agent session here</strong> on worktree threads (menu / git toolbar).</li>
+        <li>Call <code>handleNewThread(projectRef, { branch, worktreePath, envMode: "local" })</code>.</li>
+        <li>Fix <code>resolveSidebarNewThreadSeedContext</code>: offer <em>New worktree</em> vs <em>Same worktree, new session</em>.</li>
+      </ul>
+
+      <h4>Server / contracts</h4>
+      <pre><code>// packages/contracts/src/orchestration.ts
+const ThreadTurnStartBootstrapAttachWorktree = Schema.Struct({
+  worktreePath: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+});</code></pre>
+      <ul>
+        <li>Validate path is a git worktree for the project.</li>
+        <li>Dispatch <code>thread.meta.update</code>; do <strong>not</strong> call <code>createWorktree</code>.</li>
+      </ul>
+
+      <h4>Acceptance</h4>
+      <div class="callout callout-success">
+        From Codex thread on <code>~/.t3/worktrees/my-repo/feature-x</code> → new session → Cursor → send → same cwd, no new worktree, Codex thread unchanged.
+      </div>
+
+      <h3>Phase 3 — Handoff strategies</h3>
+      <table>
+        <thead>
+          <tr><th>Strategy</th><th>Effort</th><th>Recommendation</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>A. Empty new thread</td><td>None</td><td>OK for greenfield</td></tr>
+          <tr><td>B. Fork messages</td><td>Medium</td><td><a href="https://github.com/pingdotgg/t3code/issues/1404">#1404</a> pattern</td></tr>
+          <tr><td>C. Handoff artifact</td><td>Medium</td><td><strong>Preferred for Codex→Cursor</strong></td></tr>
+          <tr><td>D. Native resume bridge</td><td>Very high</td><td><strong>Do not pursue</strong> (<a href="https://github.com/pingdotgg/t3code/issues/2365">#2365</a>)</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="prs">
+      <h2>PR sequence</h2>
+      <table>
+        <thead>
+          <tr><th>PR</th><th>Scope</th><th>Risk</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>A</strong></td><td>Attach flow + sidebar seed fix + tests</td><td>Low</td></tr>
+          <tr><td><strong>B</strong></td><td>Worktree grouping + per-worktree “+ session”</td><td>Medium</td></tr>
+          <tr><td><strong>C</strong></td><td>Handoff artifact (optional)</td><td>Medium</td></tr>
+          <tr><td><strong>D</strong></td><td>Concurrency warning + docs</td><td>Low</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="decisions">
+      <h2>Open decisions</h2>
+      <ol>
+        <li><strong>Concurrent agents:</strong> warn only, or block second active session on same worktree?</li>
+        <li><strong>Handoff default:</strong> empty thread vs auto-inject summary?</li>
+        <li><strong>UI naming:</strong> “session” vs “thread” (avoid confusion with provider <code>session</code>)?</li>
+        <li><strong>Checkpoints:</strong> per-thread only, or shared worktree timeline?</li>
+      </ol>
+    </section>
+
+    <section id="upstream">
+      <h2>Related upstream issues &amp; PRs</h2>
+
+      <h3>Worktree reuse / multi-session</h3>
+      <table>
+        <thead><tr><th>ID</th><th>Title</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/3697">#3697</a></td><td>Group threads by worktree</td><td>Primary UX; Conductor model</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/pull/2708">#2708</a></td><td>Sidebar worktree grouping (DRAFT)</td><td>Follow-up: new threads in specific worktrees</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/1830">#1830</a></td><td>defaultThreadEnvMode reuses worktree (CLOSED)</td><td>Opposite bug</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/1714">#1714</a></td><td>External worktrees treated as Local</td><td>Attach must recognize existing worktrees</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/3653">#3653</a></td><td>Stale branch sync clears worktree path</td><td>Risk for attach flow</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/525">#525</a></td><td>Spotlight mode</td><td>Test from main checkout</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/3003">#3003</a></td><td>Thread env vars</td><td>Automation</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Provider switching (same thread — out of scope)</h3>
+      <table>
+        <thead><tr><th>ID</th><th>Title</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/2365">#2365</a></td><td>Switch Claude-compatible providers (CLOSED)</td><td>Resume incompatible</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/3604">#3604</a></td><td>OpenCode loses thread on follow-up</td><td>Session binding</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/3149">#3149</a></td><td>Cursor resume replays history</td><td>Dedup if copying messages</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Fork / delegation / import</h3>
+      <table>
+        <thead><tr><th>ID</th><th>Title</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/1404">#1404</a></td><td>Fork thread from message</td><td>Handoff pattern</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/538">#538</a></td><td>Subagent nested threads</td><td>Multi-agent</td></tr>
+          <tr><td><a href="https://github.com/pingdotgg/t3code/issues/3138">#3138</a></td><td>Orchestration/Delegation</td><td>Long-term</td></tr>
+          <tr><td>importSessions</td><td>Import external agent sessions</td><td>Similar attach-workspace pattern</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="files">
+      <h2>Files likely touched (Phase 1)</h2>
+      <table>
+        <thead><tr><th>File</th><th>Change</th></tr></thead>
+        <tbody>
+          <tr><td><code>packages/contracts/src/orchestration.ts</code></td><td><code>attachWorktree</code> bootstrap schema</td></tr>
+          <tr><td><code>apps/server/src/ws.ts</code></td><td>Attach validation + meta update</td></tr>
+          <tr><td><code>apps/server/src/git/GitManager.ts</code></td><td>Validate existing worktree</td></tr>
+          <tr><td><code>apps/web/src/components/Sidebar.logic.ts</code></td><td>Same-worktree seed context</td></tr>
+          <tr><td><code>apps/web/src/hooks/useHandleNewThread.ts</code></td><td>Attach preset</td></tr>
+          <tr><td><code>apps/web/src/components/ChatView.tsx</code></td><td>“New session here” action</td></tr>
+          <tr><td><code>apps/mobile/.../new-task-flow-provider.tsx</code></td><td>Mobile parity</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="verification">
+      <h2>Verification</h2>
+      <pre><code>vp check
+vp run typecheck
+vp test
+# Focused:
+vp run test -- Sidebar.logic.test.ts
+vp run test -- server.test.ts  # bootstrap attach cases</code></pre>
+      <p><strong>Manual:</strong></p>
+      <ol>
+        <li>Create Codex worktree thread; complete one turn.</li>
+        <li>Use <strong>New agent session here</strong> → Cursor → send.</li>
+        <li>Confirm same cwd in provider logs, no <code>git worktree add</code>.</li>
+        <li>Confirm Codex thread still resumable independently.</li>
+      </ol>
+    </section>
+
+    <footer>
+      <p>Markdown source: <code>.plans/21-worktree-multi-agent-sessions.md</code></p>
+      <p>t3code — Worktree Multi-Agent Sessions plan</p>
+    </footer>
+  </div>
+</body>
+</html>
