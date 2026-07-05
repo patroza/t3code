@@ -413,6 +413,44 @@ describe("buildSidebarThreadWorktreeSections", () => {
     expect(sections[1]?.kind).toBe("thread");
   });
 
+  it("groups multiple local checkout threads by resolved project path", () => {
+    const sections = buildSidebarThreadWorktreeSections(
+      [
+        makeSidebarThreadSummary({
+          id: ThreadId.make("thread-a"),
+          environmentId: EnvironmentId.make("env-1"),
+          projectId: ProjectId.make("project-1"),
+          branch: "main",
+          worktreePath: null,
+        }),
+        makeSidebarThreadSummary({
+          id: ThreadId.make("thread-b"),
+          environmentId: EnvironmentId.make("env-1"),
+          projectId: ProjectId.make("project-1"),
+          branch: "main",
+          worktreePath: null,
+        }),
+      ],
+      {
+        resolveLocalCheckoutPath: () => "/repo/t3code/",
+      },
+    );
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.kind).toBe("worktree");
+    if (sections[0]?.kind !== "worktree") {
+      throw new Error("expected checkout section");
+    }
+    expect(sections[0].source).toBe("local");
+    expect(sections[0].label).toBe("main · t3code");
+    expect(sections[0].checkoutPath).toBe("/repo/t3code");
+    expect(sections[0].worktreePath).toBeNull();
+    expect(sections[0].threads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
+    ]);
+  });
+
   it("does not group identical worktree paths across environments or projects", () => {
     const sections = buildSidebarThreadWorktreeSections([
       makeSidebarThreadSummary({
@@ -441,6 +479,9 @@ describe("buildSidebarThreadWorktreeSections", () => {
   it("normalizes worktree paths and formats labels", () => {
     expect(normalizeWorktreePathForSidebarGroup(" /repo/worktree// ")).toBe("/repo/worktree");
     expect(formatWorktreeGroupLabel({ worktreePath: "C:\\repo\\wt", branch: null })).toBe("wt");
+    expect(
+      formatWorktreeGroupLabel({ worktreePath: "/repo/t3code", branch: null, source: "local" }),
+    ).toBe("Local checkout · t3code");
   });
 });
 

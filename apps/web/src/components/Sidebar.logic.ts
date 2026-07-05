@@ -27,7 +27,9 @@ export type SidebarThreadWorktreeSection =
       key: string;
       label: string;
       branch: string | null;
-      worktreePath: string;
+      checkoutPath: string;
+      source: "local" | "worktree";
+      worktreePath: string | null;
       threads: SidebarThreadSummary[];
     };
 
@@ -279,61 +281,93 @@ export function normalizeWorktreePathForSidebarGroup(worktreePath: string | null
 export function formatWorktreeGroupLabel(input: {
   worktreePath: string;
   branch: string | null;
+  source?: "local" | "worktree";
 }): string {
   const pathSegments = input.worktreePath.split(/[\\/]/u);
   const pathLabel = pathSegments.findLast((segment) => segment.length > 0) ?? input.worktreePath;
-  return input.branch ? `${input.branch} · ${pathLabel}` : pathLabel;
+  if (input.branch) {
+    return `${input.branch} · ${pathLabel}`;
+  }
+  return input.source === "local" ? `Local checkout · ${pathLabel}` : pathLabel;
 }
 
-function worktreeSectionKey(thread: SidebarThreadSummary): string | null {
+function checkoutSectionBucket(
+  thread: SidebarThreadSummary,
+  resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null,
+): {
+  key: string;
+  checkoutPath: string;
+  source: "local" | "worktree";
+  worktreePath: string | null;
+} | null {
   const worktreePath = normalizeWorktreePathForSidebarGroup(thread.worktreePath);
-  if (!worktreePath) {
+  if (worktreePath) {
+    return {
+      key: `${thread.environmentId}:${thread.projectId}:worktree:${worktreePath}`,
+      checkoutPath: worktreePath,
+      source: "worktree",
+      worktreePath,
+    };
+  }
+  const localCheckoutPath = normalizeWorktreePathForSidebarGroup(
+    resolveLocalCheckoutPath?.(thread) ?? null,
+  );
+  if (!localCheckoutPath) {
     return null;
   }
-  return `${thread.environmentId}:${thread.projectId}:${worktreePath}`;
+  return {
+    key: `${thread.environmentId}:${thread.projectId}:local:${localCheckoutPath}`,
+    checkoutPath: localCheckoutPath,
+    source: "local",
+    worktreePath: null,
+  };
 }
 
 export function buildSidebarThreadWorktreeSections(
   threads: readonly SidebarThreadSummary[],
+  options: {
+    readonly resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null;
+  } = {},
 ): SidebarThreadWorktreeSection[] {
   const threadsByWorktreeKey = new Map<string, SidebarThreadSummary[]>();
   for (const thread of threads) {
-    const key = worktreeSectionKey(thread);
-    if (!key) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    if (!bucket) {
       continue;
     }
-    const existing = threadsByWorktreeKey.get(key);
+    const existing = threadsByWorktreeKey.get(bucket.key);
     if (existing) {
       existing.push(thread);
     } else {
-      threadsByWorktreeKey.set(key, [thread]);
+      threadsByWorktreeKey.set(bucket.key, [thread]);
     }
   }
 
   const emittedWorktreeKeys = new Set<string>();
   const sections: SidebarThreadWorktreeSection[] = [];
   for (const thread of threads) {
-    const key = worktreeSectionKey(thread);
-    const groupThreads = key ? threadsByWorktreeKey.get(key) : undefined;
-    if (!key || !groupThreads || groupThreads.length < 2) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    const groupThreads = bucket ? threadsByWorktreeKey.get(bucket.key) : undefined;
+    if (!bucket || !groupThreads || groupThreads.length < 2) {
       sections.push({ kind: "thread", thread });
       continue;
     }
-    if (emittedWorktreeKeys.has(key)) {
+    if (emittedWorktreeKeys.has(bucket.key)) {
       continue;
     }
-    emittedWorktreeKeys.add(key);
-    const worktreePath =
-      normalizeWorktreePathForSidebarGroup(thread.worktreePath) ?? thread.worktreePath ?? "";
+    emittedWorktreeKeys.add(bucket.key);
     sections.push({
       kind: "worktree",
-      key,
+      key: bucket.key,
       label: formatWorktreeGroupLabel({
-        worktreePath,
+        worktreePath: bucket.checkoutPath,
         branch: thread.branch,
+        source: bucket.source,
       }),
       branch: thread.branch,
-      worktreePath,
+      checkoutPath: bucket.checkoutPath,
+      source: bucket.source,
+      worktreePath: bucket.worktreePath,
       threads: groupThreads,
     });
   }

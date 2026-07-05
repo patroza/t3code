@@ -1059,7 +1059,11 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                         <button
                           type="button"
                           className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                          aria-label="New session on this worktree"
+                          aria-label={
+                            section.source === "worktree"
+                              ? "New session on this worktree"
+                              : "New session in this checkout"
+                          }
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -1070,13 +1074,19 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                     >
                       <FolderPlusIcon className="size-3" />
                     </TooltipTrigger>
-                    <TooltipPopup>New session on this worktree</TooltipPopup>
+                    <TooltipPopup>
+                      {section.source === "worktree"
+                        ? "New session on this worktree"
+                        : "New session in this checkout"}
+                    </TooltipPopup>
                   </Tooltip>
                 </div>
               </SidebarMenuSubItem>
-              {section.threads.map((thread) =>
-                renderThreadRow(thread, { showWorktreeIndicator: false }),
-              )}
+              <div className="ml-3 border-l border-border/70 pl-2">
+                {section.threads.map((thread) =>
+                  renderThreadRow(thread, { showWorktreeIndicator: false }),
+                )}
+              </div>
             </React.Fragment>
           );
         })}
@@ -1399,12 +1409,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       hiddenThreadStatus: resolveProjectStatusIndicator(
         hiddenThreads.map((thread) => resolveProjectThreadStatus(thread)),
       ),
-      renderedThreadSections: buildSidebarThreadWorktreeSections(renderedThreads),
+      renderedThreadSections: buildSidebarThreadWorktreeSections(renderedThreads, {
+        resolveLocalCheckoutPath: (thread) =>
+          memberProjectByScopedKey.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          )?.workspaceRoot ?? null,
+      }),
       showEmptyThreadState: projectExpanded && visibleProjectThreads.length === 0,
       shouldShowThreadPanel: projectExpanded || pinnedCollapsedThread !== null,
     };
   }, [
     isThreadListExpanded,
+    memberProjectByScopedKey,
     pinnedCollapsedThread,
     projectExpanded,
     projectThreads,
@@ -2051,8 +2067,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       void (async () => {
         const result = await settlePromise(() =>
           handleNewThread(scopeProjectRef(member.environmentId, member.id), {
-            branch: section.branch,
-            worktreePath: section.worktreePath,
+            ...(section.branch !== null ? { branch: section.branch } : {}),
+            ...(section.worktreePath !== null ? { worktreePath: section.worktreePath } : {}),
             envMode: "local",
           }),
         );
