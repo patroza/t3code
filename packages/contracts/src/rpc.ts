@@ -321,14 +321,11 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   error: EnvironmentAuthorizationError,
 });
 
-export const WsServerImportExternalSessionsRpc = Rpc.make(
-  WS_METHODS.serverImportExternalSessions,
-  {
-    payload: ServerImportExternalSessionsInput,
-    success: ServerImportExternalSessionsResult,
-    error: Schema.Union([ServerExternalSessionImportError, EnvironmentAuthorizationError]),
-  },
-);
+export const WsServerImportExternalSessionsRpc = Rpc.make(WS_METHODS.serverImportExternalSessions, {
+  payload: ServerImportExternalSessionsInput,
+  success: ServerImportExternalSessionsResult,
+  error: Schema.Union([ServerExternalSessionImportError, EnvironmentAuthorizationError]),
+});
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
   payload: Schema.Struct({}),

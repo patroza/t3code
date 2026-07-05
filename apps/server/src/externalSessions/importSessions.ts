@@ -260,7 +260,11 @@ function findProject(input: {
   readonly dbPath: string;
   readonly baseDir: string;
   readonly cwd: string;
-}): { readonly projectId: string; readonly workspaceRoot: string; readonly worktreePath: string | null } {
+}): {
+  readonly projectId: string;
+  readonly workspaceRoot: string;
+  readonly worktreePath: string | null;
+} {
   const worktreesRoot = NodePath.join(input.baseDir, "worktrees");
   const relativeWorktree = input.cwd.startsWith(`${worktreesRoot}${NodePath.sep}`)
     ? NodePath.relative(worktreesRoot, input.cwd)
@@ -293,7 +297,11 @@ function findProject(input: {
   };
 }
 
-function importSession(dbPath: string, baseDir: string, session: ExternalSession): "imported" | "exists" {
+function importSession(
+  dbPath: string,
+  baseDir: string,
+  session: ExternalSession,
+): "imported" | "exists" {
   const threadId = stableUuid(`t3-import-${session.provider}`, session.id);
   const exists = sqliteJson(
     dbPath,
@@ -364,7 +372,9 @@ COMMIT;
   return "imported";
 }
 
-export function runImportSessions(options: ImportSessionsOptions): ReadonlyArray<ImportSessionsResult> {
+export function runImportSessions(
+  options: ImportSessionsOptions,
+): ReadonlyArray<ImportSessionsResult> {
   const baseDir = homePath(options.baseDir ?? process.env.T3CODE_HOME ?? "~/.t3");
   const dbPath = NodePath.join(baseDir, "userdata", "state.sqlite");
   const cwd = normalizeCwd(options.cwd);

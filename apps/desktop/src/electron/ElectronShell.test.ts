@@ -39,8 +39,7 @@ describe("ElectronShell", () => {
   it.effect("opens VS Code Remote SSH URLs", () =>
     Effect.gen(function* () {
       openExternalMock.mockResolvedValue(undefined);
-      const url =
-        "vscode://vscode-remote/ssh-remote+patroza%40smart.local/home/patroza/project";
+      const url = "vscode://vscode-remote/ssh-remote+patroza%40smart.local/home/patroza/project";
 
       const electronShell = yield* ElectronShell.ElectronShell;
       const result = yield* electronShell.openExternal(url);

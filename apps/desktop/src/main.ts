@@ -8,12 +8,15 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
-if (process.platform === "linux") {
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+const hostProcessPlatform = Effect.runSync(HostProcessPlatform);
+
+if (hostProcessPlatform === "linux") {
   Electron.app.commandLine.appendSwitch("password-store", "gnome-libsecret");
 }
 
 import * as NetService from "@t3tools/shared/Net";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveRemoteT3CliPackageSpec } from "@t3tools/ssh/command";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };

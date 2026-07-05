@@ -185,6 +185,7 @@ import {
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
 import {
+  buildSidebarThreadWorktreeSections,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -200,6 +201,7 @@ import {
   sortProjectsForSidebar,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
+  type SidebarThreadWorktreeSection,
 } from "./Sidebar.logic";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
@@ -892,7 +894,7 @@ interface SidebarProjectThreadListProps {
   hasOverflowingThreads: boolean;
   hiddenThreadStatus: ThreadStatusPill | null;
   orderedProjectThreadKeys: readonly string[];
-  renderedThreads: readonly SidebarThreadSummary[];
+  renderedThreadSections: readonly SidebarThreadWorktreeSection[];
   showEmptyThreadState: boolean;
   shouldShowThreadPanel: boolean;
   isThreadListExpanded: boolean;
@@ -921,6 +923,9 @@ interface SidebarProjectThreadListProps {
     threadRef: ScopedThreadRef,
     position: { x: number; y: number },
   ) => Promise<void>;
+  createThreadForWorktreeSection: (
+    section: Extract<SidebarThreadWorktreeSection, { kind: "worktree" }>,
+  ) => void;
   clearSelection: () => void;
   commitRename: (
     threadRef: ScopedThreadRef,
@@ -943,7 +948,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     hasOverflowingThreads,
     hiddenThreadStatus,
     orderedProjectThreadKeys,
-    renderedThreads,
+    renderedThreadSections,
     showEmptyThreadState,
     shouldShowThreadPanel,
     isThreadListExpanded,
@@ -965,6 +970,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     navigateToThread,
     handleMultiSelectContextMenu,
     handleThreadContextMenu,
+    createThreadForWorktreeSection,
     clearSelection,
     commitRename,
     cancelRename,
@@ -975,6 +981,38 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   } = props;
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
+  const renderThreadRow = (thread: SidebarThreadSummary) => {
+    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    return (
+      <SidebarThreadRow
+        key={threadKey}
+        thread={thread}
+        projectCwd={projectCwd}
+        orderedProjectThreadKeys={orderedProjectThreadKeys}
+        isActive={activeRouteThreadKey === threadKey}
+        jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
+        appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
+        renamingThreadKey={renamingThreadKey}
+        renamingTitle={renamingTitle}
+        setRenamingTitle={setRenamingTitle}
+        startThreadRename={startThreadRename}
+        renamingInputRef={renamingInputRef}
+        renamingCommittedRef={renamingCommittedRef}
+        confirmingArchiveThreadKey={confirmingArchiveThreadKey}
+        setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
+        confirmArchiveButtonRefs={confirmArchiveButtonRefs}
+        handleThreadClick={handleThreadClick}
+        navigateToThread={navigateToThread}
+        handleMultiSelectContextMenu={handleMultiSelectContextMenu}
+        handleThreadContextMenu={handleThreadContextMenu}
+        clearSelection={clearSelection}
+        commitRename={commitRename}
+        cancelRename={cancelRename}
+        attemptArchiveThread={attemptArchiveThread}
+        openPrLink={openPrLink}
+      />
+    );
+  };
 
   return (
     <SidebarMenuSub
@@ -992,36 +1030,42 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         </SidebarMenuSubItem>
       ) : null}
       {shouldShowThreadPanel &&
-        renderedThreads.map((thread) => {
-          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        renderedThreadSections.map((section) => {
+          if (section.kind === "thread") {
+            return renderThreadRow(section.thread);
+          }
           return (
-            <SidebarThreadRow
-              key={threadKey}
-              thread={thread}
-              projectCwd={projectCwd}
-              orderedProjectThreadKeys={orderedProjectThreadKeys}
-              isActive={activeRouteThreadKey === threadKey}
-              jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
-              appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
-              renamingThreadKey={renamingThreadKey}
-              renamingTitle={renamingTitle}
-              setRenamingTitle={setRenamingTitle}
-              startThreadRename={startThreadRename}
-              renamingInputRef={renamingInputRef}
-              renamingCommittedRef={renamingCommittedRef}
-              confirmingArchiveThreadKey={confirmingArchiveThreadKey}
-              setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
-              confirmArchiveButtonRefs={confirmArchiveButtonRefs}
-              handleThreadClick={handleThreadClick}
-              navigateToThread={navigateToThread}
-              handleMultiSelectContextMenu={handleMultiSelectContextMenu}
-              handleThreadContextMenu={handleThreadContextMenu}
-              clearSelection={clearSelection}
-              commitRename={commitRename}
-              cancelRename={cancelRename}
-              attemptArchiveThread={attemptArchiveThread}
-              openPrLink={openPrLink}
-            />
+            <React.Fragment key={section.key}>
+              <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
+                <div
+                  data-thread-selection-safe
+                  className="flex h-6 w-full translate-x-0 items-center gap-1.5 px-2 text-left text-[10px] font-medium text-muted-foreground/70"
+                >
+                  <ContainerIcon className="size-3 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{section.label}</span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                          aria-label="New session on this worktree"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            createThreadForWorktreeSection(section);
+                          }}
+                        />
+                      }
+                    >
+                      <FolderPlusIcon className="size-3" />
+                    </TooltipTrigger>
+                    <TooltipPopup>New session on this worktree</TooltipPopup>
+                  </Tooltip>
+                </div>
+              </SidebarMenuSubItem>
+              {section.threads.map((thread) => renderThreadRow(thread))}
+            </React.Fragment>
           );
         })}
 
@@ -1298,7 +1342,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const {
     hasOverflowingThreads,
     hiddenThreadStatus,
-    renderedThreads,
+    renderedThreadSections,
     showEmptyThreadState,
     shouldShowThreadPanel,
   } = useMemo(() => {
@@ -1343,7 +1387,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       hiddenThreadStatus: resolveProjectStatusIndicator(
         hiddenThreads.map((thread) => resolveProjectThreadStatus(thread)),
       ),
-      renderedThreads,
+      renderedThreadSections: buildSidebarThreadWorktreeSections(renderedThreads),
       showEmptyThreadState: projectExpanded && visibleProjectThreads.length === 0,
       shouldShowThreadPanel: projectExpanded || pinnedCollapsedThread !== null,
     };
@@ -1628,8 +1672,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const importedCount = result.value.results.filter(
         (session) => session.status === "imported",
       ).length;
-      const existingCount = result.value.results.filter((session) => session.status === "exists")
-        .length;
+      const existingCount = result.value.results.filter(
+        (session) => session.status === "exists",
+      ).length;
       toastManager.add(
         stackedThreadToast({
           type: importedCount > 0 ? "success" : "info",
@@ -1974,6 +2019,44 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       })();
     },
     [handleNewThread, isMobile, router, serverConfigs, setOpenMobile],
+  );
+
+  const createThreadForWorktreeSection = useCallback(
+    (section: Extract<SidebarThreadWorktreeSection, { kind: "worktree" }>) => {
+      const firstThread = section.threads[0];
+      if (!firstThread) {
+        return;
+      }
+      const member = memberProjectByScopedKey.get(
+        scopedProjectKey(scopeProjectRef(firstThread.environmentId, firstThread.projectId)),
+      );
+      if (!member) {
+        return;
+      }
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      void (async () => {
+        const result = await settlePromise(() =>
+          handleNewThread(scopeProjectRef(member.environmentId, member.id), {
+            branch: section.branch,
+            worktreePath: section.worktreePath,
+            envMode: "local",
+          }),
+        );
+        if (result._tag === "Failure") {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [handleNewThread, isMobile, memberProjectByScopedKey, setOpenMobile],
   );
 
   const handleCreateThreadClick = useCallback(
@@ -2380,7 +2463,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         hasOverflowingThreads={hasOverflowingThreads}
         hiddenThreadStatus={hiddenThreadStatus}
         orderedProjectThreadKeys={orderedProjectThreadKeys}
-        renderedThreads={renderedThreads}
+        renderedThreadSections={renderedThreadSections}
         showEmptyThreadState={showEmptyThreadState}
         shouldShowThreadPanel={shouldShowThreadPanel}
         isThreadListExpanded={isThreadListExpanded}
@@ -2402,6 +2485,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         navigateToThread={navigateToThread}
         handleMultiSelectContextMenu={handleMultiSelectContextMenu}
         handleThreadContextMenu={handleThreadContextMenu}
+        createThreadForWorktreeSection={createThreadForWorktreeSection}
         clearSelection={clearSelection}
         commitRename={commitRename}
         cancelRename={cancelRename}

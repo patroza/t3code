@@ -17,6 +17,20 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // nearby thread usually reuses an already-hot subscription.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarThreadWorktreeSection =
+  | {
+      kind: "thread";
+      thread: SidebarThreadSummary;
+    }
+  | {
+      kind: "worktree";
+      key: string;
+      label: string;
+      branch: string | null;
+      worktreePath: string;
+      threads: SidebarThreadSummary[];
+    };
+
 type SidebarProject = {
   id: string;
   title: string;
@@ -205,6 +219,26 @@ export function resolveSidebarNewThreadSeedContext(input: {
   envMode: SidebarNewThreadEnvMode;
   startFromOrigin?: boolean;
 } {
+  if (
+    input.activeDraftThread?.projectId === input.projectId &&
+    input.activeDraftThread.worktreePath
+  ) {
+    return {
+      branch: input.activeDraftThread.branch,
+      worktreePath: input.activeDraftThread.worktreePath,
+      envMode: "local",
+      startFromOrigin: input.activeDraftThread.startFromOrigin,
+    };
+  }
+
+  if (input.activeThread?.projectId === input.projectId && input.activeThread.worktreePath) {
+    return {
+      branch: input.activeThread.branch,
+      worktreePath: input.activeThread.worktreePath,
+      envMode: "local",
+    };
+  }
+
   if (input.defaultEnvMode === "worktree") {
     return {
       envMode: "worktree",
@@ -231,6 +265,79 @@ export function resolveSidebarNewThreadSeedContext(input: {
   return {
     envMode: input.defaultEnvMode,
   };
+}
+
+export function normalizeWorktreePathForSidebarGroup(worktreePath: string | null): string | null {
+  const trimmed = worktreePath?.trim() ?? "";
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/u, "");
+  return withoutTrailingSeparators.length > 0 ? withoutTrailingSeparators : trimmed;
+}
+
+export function formatWorktreeGroupLabel(input: {
+  worktreePath: string;
+  branch: string | null;
+}): string {
+  const pathSegments = input.worktreePath.split(/[\\/]/u);
+  const pathLabel = pathSegments.findLast((segment) => segment.length > 0) ?? input.worktreePath;
+  return input.branch ? `${pathLabel} · ${input.branch}` : pathLabel;
+}
+
+function worktreeSectionKey(thread: SidebarThreadSummary): string | null {
+  const worktreePath = normalizeWorktreePathForSidebarGroup(thread.worktreePath);
+  if (!worktreePath) {
+    return null;
+  }
+  return `${thread.environmentId}:${thread.projectId}:${worktreePath}`;
+}
+
+export function buildSidebarThreadWorktreeSections(
+  threads: readonly SidebarThreadSummary[],
+): SidebarThreadWorktreeSection[] {
+  const threadsByWorktreeKey = new Map<string, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const key = worktreeSectionKey(thread);
+    if (!key) {
+      continue;
+    }
+    const existing = threadsByWorktreeKey.get(key);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      threadsByWorktreeKey.set(key, [thread]);
+    }
+  }
+
+  const emittedWorktreeKeys = new Set<string>();
+  const sections: SidebarThreadWorktreeSection[] = [];
+  for (const thread of threads) {
+    const key = worktreeSectionKey(thread);
+    const groupThreads = key ? threadsByWorktreeKey.get(key) : undefined;
+    if (!key || !groupThreads || groupThreads.length < 2) {
+      sections.push({ kind: "thread", thread });
+      continue;
+    }
+    if (emittedWorktreeKeys.has(key)) {
+      continue;
+    }
+    emittedWorktreeKeys.add(key);
+    const worktreePath =
+      normalizeWorktreePathForSidebarGroup(thread.worktreePath) ?? thread.worktreePath ?? "";
+    sections.push({
+      kind: "worktree",
+      key,
+      label: formatWorktreeGroupLabel({
+        worktreePath,
+        branch: thread.branch,
+      }),
+      branch: thread.branch,
+      worktreePath,
+      threads: groupThreads,
+    });
+  }
+  return sections;
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {

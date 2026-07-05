@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  buildSidebarThreadWorktreeSections,
   createThreadJumpHintVisibilityController,
+  formatWorktreeGroupLabel,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -10,6 +12,7 @@ import {
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
+  normalizeWorktreePathForSidebarGroup,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
@@ -32,6 +35,7 @@ import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type Project,
+  type SidebarThreadSummary,
   type Thread,
 } from "../types";
 
@@ -261,7 +265,7 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 });
 
 describe("resolveSidebarNewThreadSeedContext", () => {
-  it("prefers the default worktree mode over active thread context", () => {
+  it("inherits an active draft worktree context even when the default is new worktree mode", () => {
     expect(
       resolveSidebarNewThreadSeedContext({
         projectId: "project-1",
@@ -280,7 +284,29 @@ describe("resolveSidebarNewThreadSeedContext", () => {
         },
       }),
     ).toEqual({
-      envMode: "worktree",
+      branch: "feature/draft",
+      worktreePath: "/repo/.t3/worktrees/draft",
+      envMode: "local",
+      startFromOrigin: true,
+    });
+  });
+
+  it("inherits an active server thread worktree context even when the default is new worktree mode", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-1",
+        defaultEnvMode: "worktree",
+        activeThread: {
+          projectId: "project-1",
+          branch: "feature/existing",
+          worktreePath: "/repo/.t3/worktrees/existing",
+        },
+        activeDraftThread: null,
+      }),
+    ).toEqual({
+      branch: "feature/existing",
+      worktreePath: "/repo/.t3/worktrees/existing",
+      envMode: "local",
     });
   });
 
@@ -324,7 +350,7 @@ describe("resolveSidebarNewThreadSeedContext", () => {
     ).toEqual({
       branch: "feature/new-draft",
       worktreePath: "/repo/worktree",
-      envMode: "worktree",
+      envMode: "local",
       startFromOrigin: true,
     });
   });
@@ -344,6 +370,77 @@ describe("resolveSidebarNewThreadSeedContext", () => {
     ).toEqual({
       envMode: "worktree",
     });
+  });
+});
+
+describe("buildSidebarThreadWorktreeSections", () => {
+  it("groups multiple threads on the same environment project worktree", () => {
+    const sections = buildSidebarThreadWorktreeSections([
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-a"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        branch: "feature/a",
+        worktreePath: "/repo/.t3/worktrees/feature-a/",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-b"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        branch: "feature/a",
+        worktreePath: "/repo/.t3/worktrees/feature-a",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-c"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        branch: "feature/b",
+        worktreePath: "/repo/.t3/worktrees/feature-b",
+      }),
+    ]);
+
+    expect(sections).toHaveLength(2);
+    expect(sections[0]?.kind).toBe("worktree");
+    if (sections[0]?.kind !== "worktree") {
+      throw new Error("expected worktree section");
+    }
+    expect(sections[0].label).toBe("feature-a · feature/a");
+    expect(sections[0].worktreePath).toBe("/repo/.t3/worktrees/feature-a");
+    expect(sections[0].threads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
+    ]);
+    expect(sections[1]?.kind).toBe("thread");
+  });
+
+  it("does not group identical worktree paths across environments or projects", () => {
+    const sections = buildSidebarThreadWorktreeSections([
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-env-1"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        worktreePath: "/repo/worktree",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-env-2"),
+        environmentId: EnvironmentId.make("env-2"),
+        projectId: ProjectId.make("project-1"),
+        worktreePath: "/repo/worktree",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-project-2"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-2"),
+        worktreePath: "/repo/worktree",
+      }),
+    ]);
+
+    expect(sections.map((section) => section.kind)).toEqual(["thread", "thread", "thread"]);
+  });
+
+  it("normalizes worktree paths and formats labels", () => {
+    expect(normalizeWorktreePathForSidebarGroup(" /repo/worktree// ")).toBe("/repo/worktree");
+    expect(formatWorktreeGroupLabel({ worktreePath: "C:\\repo\\wt", branch: null })).toBe("wt");
   });
 });
 
@@ -837,6 +934,19 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     checkpoints: [],
     activities: [],
+    ...overrides,
+  };
+}
+
+function makeSidebarThreadSummary(
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    ...makeThread(overrides),
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
     ...overrides,
   };
 }
