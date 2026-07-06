@@ -415,6 +415,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Add project base directory"]
         : []),
+      ...(settings.terminalShell !== DEFAULT_UNIFIED_SETTINGS.terminalShell
+        ? ["Terminal shell"]
+        : []),
       ...(settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive
         ? ["Archive confirmation"]
         : []),
@@ -429,6 +432,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
+      settings.terminalShell,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
       settings.diffIgnoreWhitespace,
@@ -463,6 +467,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+      terminalShell: DEFAULT_UNIFIED_SETTINGS.terminalShell,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
@@ -821,6 +826,33 @@ export function GeneralSettingsPanel() {
               placeholder="~/"
               spellCheck={false}
               aria-label="Add project base directory"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Terminal shell"
+          description="Shell used for integrated terminals. Leave empty to use your OS login shell. Agent providers are unaffected."
+          resetAction={
+            settings.terminalShell !== DEFAULT_UNIFIED_SETTINGS.terminalShell ? (
+              <SettingResetButton
+                label="terminal shell"
+                onClick={() =>
+                  updateSettings({
+                    terminalShell: DEFAULT_UNIFIED_SETTINGS.terminalShell,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <DraftInput
+              className="w-full sm:w-72"
+              value={settings.terminalShell}
+              onCommit={(next) => updateSettings({ terminalShell: next })}
+              placeholder="/bin/zsh"
+              spellCheck={false}
+              aria-label="Terminal shell"
             />
           }
         />
