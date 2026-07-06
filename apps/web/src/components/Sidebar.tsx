@@ -329,6 +329,10 @@ interface SidebarThreadRowProps {
   jumpLabel: string | null;
   showEnvironmentIndicator?: boolean;
   showWorktreeIndicator?: boolean;
+  onCreateThreadInWorktree?: (
+    event: React.MouseEvent<HTMLButtonElement>,
+    thread: SidebarThreadSummary,
+  ) => void;
   appSettingsConfirmThreadArchive: boolean;
   renamingThreadKey: string | null;
   renamingTitle: string;
@@ -368,6 +372,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     jumpLabel,
     showEnvironmentIndicator = true,
     showWorktreeIndicator = true,
+    onCreateThreadInWorktree,
     appSettingsConfirmThreadArchive,
     renamingThreadKey,
     renamingTitle,
@@ -767,7 +772,18 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </TooltipPopup>
             </Tooltip>
           )}
-          {showWorktreeIndicator && <ThreadWorktreeIndicator thread={thread} />}
+          {showWorktreeIndicator && (
+            <ThreadWorktreeIndicator
+              thread={thread}
+              {...(onCreateThreadInWorktree
+                ? {
+                    onCreateSession: (event: React.MouseEvent<HTMLButtonElement>) => {
+                      onCreateThreadInWorktree(event, thread);
+                    },
+                  }
+                : {})}
+            />
+          )}
           {terminalStatus && (
             <Tooltip>
               <TooltipTrigger
@@ -1029,6 +1045,32 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       options.showWorktreeIndicator === undefined
         ? {}
         : { showWorktreeIndicator: options.showWorktreeIndicator };
+    const createThreadInWorktree =
+      options.showWorktreeIndicator !== false && thread.worktreePath?.trim()
+        ? {
+            onCreateThreadInWorktree: (
+              event: React.MouseEvent<HTMLButtonElement>,
+              actionThread: SidebarThreadSummary,
+            ) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const worktreePath = actionThread.worktreePath?.trim();
+              if (!worktreePath) {
+                return;
+              }
+              createThreadForWorktreeSection({
+                kind: "worktree",
+                key: `single:${threadKey}`,
+                label: "",
+                branch: actionThread.branch,
+                checkoutPath: worktreePath,
+                source: "worktree",
+                worktreePath,
+                threads: [actionThread],
+              });
+            },
+          }
+        : {};
     return (
       <SidebarThreadRow
         key={threadKey}
@@ -1039,6 +1081,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
         {...environmentIndicatorProps}
         {...worktreeIndicatorProps}
+        {...createThreadInWorktree}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
         renamingThreadKey={renamingThreadKey}
         renamingTitle={renamingTitle}

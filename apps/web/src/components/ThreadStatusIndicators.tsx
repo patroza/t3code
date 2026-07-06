@@ -4,7 +4,13 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import type { VcsStatusResult } from "@t3tools/contracts";
-import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
+import {
+  CloudIcon,
+  FolderGit2Icon,
+  FolderPlusIcon,
+  GitPullRequestIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { useMemo } from "react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { useProject } from "../state/entities";
@@ -97,8 +103,10 @@ export function terminalStatusFromRunningIds(
 
 export function ThreadWorktreeIndicator({
   thread,
+  onCreateSession,
 }: {
   thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  onCreateSession?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const worktreePath = thread.worktreePath?.trim();
   if (!worktreePath) {
@@ -114,15 +122,32 @@ export function ThreadWorktreeIndicator({
     <Tooltip>
       <TooltipTrigger
         render={
-          <span
-            role="img"
-            aria-label={tooltip}
-            data-testid={`thread-worktree-${thread.id}`}
-            className="inline-flex items-center justify-center"
-          />
+          onCreateSession ? (
+            <button
+              type="button"
+              aria-label="New session on this worktree"
+              data-testid={`thread-worktree-new-session-${thread.id}`}
+              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={onCreateSession}
+            />
+          ) : (
+            <span
+              role="img"
+              aria-label={tooltip}
+              data-testid={`thread-worktree-${thread.id}`}
+              className="inline-flex items-center justify-center"
+            />
+          )
         }
       >
-        <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        {onCreateSession ? (
+          <FolderPlusIcon className="size-3" />
+        ) : (
+          <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        )}
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>
