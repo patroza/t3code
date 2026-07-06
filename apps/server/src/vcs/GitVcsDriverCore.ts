@@ -1766,13 +1766,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const readRangeContext: GitVcsDriver.GitVcsDriver["Service"]["readRangeContext"] = Effect.fn(
     "readRangeContext",
   )(function* (cwd, baseRef) {
-    const range = `${baseRef}..HEAD`;
+    // Two-dot for `log` lists only the branch's own commits, while three-dot
+    // diffs against the merge-base (fork point) so commits that landed on the
+    // base branch after we forked are not reported as removals when the base
+    // is ahead of our fork point.
+    const commitRange = `${baseRef}..HEAD`;
+    const diffRange = `${baseRef}...HEAD`;
     const [commitSummary, diffSummary, diffPatch] = yield* Effect.all(
       [
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.log",
           cwd,
-          ["log", "--oneline", range],
+          ["log", "--oneline", commitRange],
           {
             maxOutputBytes: RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,
@@ -1781,7 +1786,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.diffStat",
           cwd,
-          ["diff", "--stat", range],
+          ["diff", "--stat", diffRange],
           {
             maxOutputBytes: RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,
@@ -1790,7 +1795,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.diffPatch",
           cwd,
-          ["diff", "--no-ext-diff", "--patch", "--minimal", range],
+          ["diff", "--no-ext-diff", "--patch", "--minimal", diffRange],
           {
             maxOutputBytes: RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,

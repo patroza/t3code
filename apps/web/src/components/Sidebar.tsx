@@ -766,20 +766,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span
-                  aria-label={threadModelPresentation.tooltip}
-                  className="inline-flex items-center justify-center rounded-sm text-muted-foreground/55"
-                  data-testid={`thread-provider-${thread.id}`}
-                />
-              }
-            >
-              <ProviderIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">{threadModelPresentation.tooltip}</TooltipPopup>
-          </Tooltip>
           {discoveredPorts.length > 0 && (
             <Tooltip>
               <TooltipTrigger
@@ -828,8 +814,22 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>
             </Tooltip>
           )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  aria-label={threadModelPresentation.tooltip}
+                  className="inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground/35 transition-colors hover:text-muted-foreground/55"
+                  data-testid={`thread-provider-${thread.id}`}
+                />
+              }
+            >
+              <ProviderIcon className="size-3.25" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">{threadModelPresentation.tooltip}</TooltipPopup>
+          </Tooltip>
           <div
-            className={`flex min-w-12 justify-end ${
+            className={`flex min-w-16 justify-end ${
               isRemoteThread ? "max-sm:min-w-24" : "max-sm:min-w-20"
             }`}
           >
@@ -885,7 +885,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               )
             ) : null}
             <span className={threadMetaClassName}>
-              <span className="inline-flex items-center gap-1">
+              <span className="inline-flex items-center gap-1.5">
                 {showEnvironmentIndicator && isRemoteThread && !isDesktopLocalThread && (
                   <Tooltip>
                     <TooltipTrigger
