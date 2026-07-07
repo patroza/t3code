@@ -684,9 +684,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               No models found
             </ComboboxEmpty>
             {!isSearching && selectedUsages.length > 0 ? (
-              <div className="flex flex-col gap-2.5 border-t bg-muted/40 px-4 py-2.5 text-xs">
+              <div className="flex max-h-40 shrink-0 flex-col gap-2 overflow-y-auto border-t bg-muted/40 px-4 py-2 text-xs [scrollbar-width:thin]">
                 {selectedUsages.map((usage) => (
-                  <AiUsageStats key={usage.provider} item={usage.item} className="min-w-0" />
+                  <AiUsageStats
+                    key={usage.provider}
+                    item={usage.item}
+                    compact
+                    className="min-w-0"
+                  />
                 ))}
               </div>
             ) : null}

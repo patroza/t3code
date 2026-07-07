@@ -16,19 +16,21 @@ function barColorClass(percent: number): string {
 }
 
 /**
- * Detailed per-provider usage stats: one row per rolling window with its value,
- * a slim usage bar, reset-in time and any pace warning. Reused by the icon
- * hover tooltips and the model-picker menu.
+ * Per-provider usage stats: one row per rolling window with its value, reset-in
+ * time and any pace warning. The default (tooltip) form shows a slim usage bar
+ * per window; the `compact` form drops the bars and the plain reset lines to
+ * stay small inside the model-picker menu so it never crowds out the list.
  */
 export function AiUsageStats(props: {
   item: AiUsageProviderStatus;
   className?: string;
+  compact?: boolean;
   nowMs?: number;
 }) {
-  const { item } = props;
+  const { item, compact = false } = props;
   const marker = usageMarkerForItem(item);
   return (
-    <div className={cn("flex min-w-44 flex-col gap-1.5", props.className)}>
+    <div className={cn("flex min-w-44 flex-col", compact ? "gap-1" : "gap-1.5", props.className)}>
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium">{usageProviderLabel(item.provider)}</span>
         {item.plan ? (
@@ -38,17 +40,20 @@ export function AiUsageStats(props: {
         ) : null}
       </div>
       {item.ok && item.windows.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
+        <div className={cn("flex flex-col", compact ? "gap-0.5" : "gap-1.5")}>
           {item.windows.map((window) => {
             const resets = formatResetsIn(window.resets_at, props.nowMs);
             const pace = formatPaceNote(window);
+            // In compact mode only surface a sub-line when there's a pace
+            // warning worth acting on; plain reset times stay in the hover form.
+            const showSubLine = compact ? Boolean(pace) : Boolean(resets || pace);
             return (
               <div key={window.id} className="flex flex-col gap-0.5">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">{window.label}</span>
                   <span className="tabular-nums">{formatWindowValue(window)}</span>
                 </div>
-                {typeof window.percent === "number" ? (
+                {!compact && typeof window.percent === "number" ? (
                   <div className="h-1 w-full overflow-hidden rounded-full bg-muted-foreground/15">
                     <div
                       className={cn("h-full rounded-full", barColorClass(window.percent))}
@@ -56,7 +61,7 @@ export function AiUsageStats(props: {
                     />
                   </div>
                 ) : null}
-                {resets || pace ? (
+                {showSubLine ? (
                   <div className="text-[10px] text-muted-foreground">
                     {resets ? `resets in ${resets}` : null}
                     {resets && pace ? " · " : null}
