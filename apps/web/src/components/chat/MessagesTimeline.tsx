@@ -106,6 +106,7 @@ import {
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { localizeZaiResetTime } from "../../providerErrorText";
 import {
   buildReviewCommentRenderablePatch,
   formatReviewCommentFence,
@@ -1915,7 +1916,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       normalizeCompactToolLabel(heading).toLowerCase()
       ? null
       : rawPreview;
-  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const displayText = localizeZaiResetTime(preview ? `${heading} - ${preview}` : heading);
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
