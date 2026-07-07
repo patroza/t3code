@@ -106,6 +106,7 @@ import {
   PreviewResizeInput,
   PreviewSessionSnapshot,
 } from "./preview.ts";
+import { AiUsageSnapshot } from "./aiUsage.ts";
 import {
   PreviewAutomationError,
   PreviewAutomationHost,
@@ -233,6 +234,7 @@ export const WS_METHODS = {
   subscribeTerminalMetadata: "subscribeTerminalMetadata",
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
+  subscribeAiUsage: "subscribeAiUsage",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
@@ -600,6 +602,13 @@ export const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(
   },
 );
 
+export const WsSubscribeAiUsageRpc = Rpc.make(WS_METHODS.subscribeAiUsage, {
+  payload: Schema.Struct({}),
+  success: AiUsageSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -751,6 +760,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
+  WsSubscribeAiUsageRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,

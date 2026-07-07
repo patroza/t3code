@@ -17,6 +17,7 @@ import {
   MessageId,
   ExternalLauncherCommandNotFoundError,
   type OrchestrationThreadShell,
+  AI_USAGE_UNAVAILABLE,
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -89,6 +90,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
@@ -669,6 +671,11 @@ const buildAppUnderTest = (options?: {
             retain: Effect.void,
             registerTerminalProcesses: () => Effect.void,
             unregisterTerminal: () => Effect.void,
+          }),
+          Layer.mock(AiUsageMonitorModule.AiUsageMonitor)({
+            current: () => Effect.succeed(AI_USAGE_UNAVAILABLE),
+            subscribe: () => Effect.void,
+            retain: Effect.void,
           }),
         ),
       ),

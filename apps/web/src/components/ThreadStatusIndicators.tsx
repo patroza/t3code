@@ -3,7 +3,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { EnvironmentId, VcsStatusResult } from "@t3tools/contracts";
 import {
   CloudIcon,
   FolderGit2Icon,
@@ -86,6 +86,23 @@ export function resolveThreadPr(
   }
 
   return gitStatus.pr ?? null;
+}
+
+export function usePrStatusIndicator(input: {
+  environmentId: EnvironmentId | null;
+  branch: string | null;
+  gitCwd: string | null;
+}): PrStatusIndicator | null {
+  const gitStatus = useEnvironmentQuery(
+    input.environmentId !== null && input.branch != null && input.gitCwd !== null
+      ? vcsEnvironment.status({
+          environmentId: input.environmentId,
+          input: { cwd: input.gitCwd },
+        })
+      : null,
+  );
+  const pr = resolveThreadPr(input.branch, gitStatus.data);
+  return prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
 }
 
 export function terminalStatusFromRunningIds(
@@ -223,16 +240,11 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
   );
   const threadProjectCwd = threadProject?.workspaceRoot ?? null;
   const gitCwd = thread.worktreePath ?? threadProjectCwd;
-  const gitStatus = useEnvironmentQuery(
-    thread.branch != null && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
-  const pr = resolveThreadPr(thread.branch, gitStatus.data);
-  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  const prStatus = usePrStatusIndicator({
+    environmentId: thread.environmentId,
+    branch: thread.branch,
+    gitCwd,
+  });
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,

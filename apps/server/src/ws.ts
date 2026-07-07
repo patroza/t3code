@@ -19,6 +19,7 @@ import {
   AuthAccessReadScope,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
+  type AiUsageSnapshot,
   type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
@@ -86,6 +87,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -350,6 +352,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.previewAutomationFocusHost, AuthOrchestrationOperateScope],
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeAiUsage, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
@@ -415,6 +418,7 @@ const makeWsRpcLayer = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
+      const aiUsageMonitor = yield* AiUsageMonitorModule.AiUsageMonitor;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const config = yield* ServerConfig.ServerConfig;
@@ -1812,6 +1816,20 @@ const makeWsRpcLayer = (
               }),
             ),
             { "rpc.aggregate": "preview" },
+          ),
+        [WS_METHODS.subscribeAiUsage]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeAiUsage,
+            Stream.callback<AiUsageSnapshot>((queue) =>
+              Effect.gen(function* () {
+                yield* aiUsageMonitor.retain;
+                yield* Queue.offer(queue, yield* aiUsageMonitor.current());
+                yield* aiUsageMonitor.subscribe((snapshot) =>
+                  Effect.asVoid(Queue.offer(queue, snapshot)),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "ai-usage" },
           ),
         [WS_METHODS.subscribeServerConfig]: (_input) =>
           observeRpcStreamEffect(

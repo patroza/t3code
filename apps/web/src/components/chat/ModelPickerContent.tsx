@@ -1,4 +1,5 @@
 import {
+  type AiUsageSnapshot,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
@@ -28,6 +29,8 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { providerModelKey, sortProviderModelItems } from "../../modelOrdering";
+import { resolveDriverUsages } from "../../aiUsageState";
+import { AiUsageStats } from "./AiUsageStats";
 
 type ModelPickerItem = {
   slug: string;
@@ -76,6 +79,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * for the locked-mode header.
    */
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  /** Latest AI-usage snapshot for rail markers + per-provider stats. */
+  usageSnapshot?: AiUsageSnapshot | null;
   keybindings?: ResolvedKeybindingsConfig;
   /**
    * Model options per instance. Keyed by `ProviderInstanceId` so the
@@ -251,6 +256,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return [...available, ...disabled];
   }, [instanceEntries, isLocked, matchesLockedProvider]);
   const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const selectedUsages = useMemo(() => {
+    const usageInstanceId =
+      selectedInstanceId === "favorites" ? props.activeInstanceId : selectedInstanceId;
+    const entry = entryByInstanceId.get(usageInstanceId);
+    return resolveDriverUsages(props.usageSnapshot, entry?.driverKind ?? null);
+  }, [entryByInstanceId, props.activeInstanceId, props.usageSnapshot, selectedInstanceId]);
   const instanceOrder = useMemo(
     () => instanceEntries.map((entry) => entry.instanceId),
     [instanceEntries],
@@ -530,6 +541,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             selectedInstanceId={selectedInstanceId}
             onSelectInstance={handleSelectInstance}
             instanceEntries={sidebarInstanceEntries}
+            usageSnapshot={props.usageSnapshot ?? null}
+            activeInstanceId={props.activeInstanceId}
+            activeModel={props.model}
             showFavorites
             {...(lockedDisabledInstanceIds
               ? {
@@ -669,6 +683,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             <ComboboxEmpty className="not-empty:py-6 empty:h-0 text-xs font-normal leading-snug">
               No models found
             </ComboboxEmpty>
+            {!isSearching && selectedUsages.length > 0 ? (
+              <div className="flex flex-col gap-2.5 border-t bg-muted/40 px-4 py-2.5 text-xs">
+                {selectedUsages.map((usage) => (
+                  <AiUsageStats key={usage.provider} item={usage.item} className="min-w-0" />
+                ))}
+              </div>
+            ) : null}
           </div>
         </Combobox>
       </div>

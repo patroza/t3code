@@ -1,4 +1,5 @@
 import {
+  type AiUsageSnapshot,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
@@ -10,6 +11,8 @@ import { Button, buttonVariants } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { AiUsageStats } from "./AiUsageStats";
 import { ModelPickerContent } from "./ModelPickerContent";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
@@ -30,6 +33,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   lockedContinuationGroupKey?: string | null;
   /** Instance entries rendered in the sidebar + used to resolve display name. */
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  /** Latest AI-usage snapshot for status markers + hover stats. */
+  usageSnapshot?: AiUsageSnapshot | null;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   activeProviderIconClassName?: string;
@@ -70,6 +75,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     (entry) => activeEntry !== null && entry.driverKind === activeEntry.driverKind,
   ).length;
   const showInstanceBadge = Boolean(activeEntry?.accentColor) || duplicateDriverCount > 1;
+  const activeUsage = useMemo(
+    () => resolveDriverUsage(props.usageSnapshot, activeEntry?.driverKind ?? null, props.model),
+    [props.usageSnapshot, activeEntry, props.model],
+  );
 
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
@@ -159,21 +168,45 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         }
       >
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          {activeEntry ? (
-            <ProviderInstanceIcon
-              driverKind={activeEntry.driverKind}
-              displayName={activeEntry.displayName}
-              accentColor={activeEntry.accentColor}
-              showBadge={showInstanceBadge}
-              className={showInstanceBadge ? "size-5" : "size-4"}
-              iconClassName={cn("size-4", props.activeProviderIconClassName)}
-              indicatorBackground="var(--input)"
-              badgeClassName={cn(
-                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
-                "px-0.5 text-[7px]",
-              )}
-            />
-          ) : null}
+          {activeEntry
+            ? (() => {
+                const activeDotClass = activeUsage
+                  ? usageDotFillClass(activeUsage.marker)
+                  : undefined;
+                const activeRingColor = activeUsage
+                  ? usageDotRingColor(activeUsage.marker)
+                  : undefined;
+                const providerIcon = (
+                  <ProviderInstanceIcon
+                    driverKind={activeEntry.driverKind}
+                    displayName={activeEntry.displayName}
+                    accentColor={activeEntry.accentColor}
+                    showBadge={showInstanceBadge}
+                    className={showInstanceBadge ? "size-5" : "size-4"}
+                    iconClassName={cn("size-4", props.activeProviderIconClassName)}
+                    indicatorBackground="var(--input)"
+                    badgeClassName={cn(
+                      "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
+                      "px-0.5 text-[7px]",
+                    )}
+                    {...(activeDotClass ? { statusDotClassName: activeDotClass } : {})}
+                    {...(activeRingColor ? { statusDotRingColor: activeRingColor } : {})}
+                  />
+                );
+                return activeUsage ? (
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                      {providerIcon}
+                    </TooltipTrigger>
+                    <TooltipPopup side="top" className="p-2 text-xs">
+                      <AiUsageStats item={activeUsage.item} />
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  providerIcon
+                );
+              })()
+            : null}
           <Tooltip>
             <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
               {triggerTitle}
@@ -196,6 +229,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           lockedProvider={props.lockedProvider}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
           instanceEntries={props.instanceEntries}
+          usageSnapshot={props.usageSnapshot ?? null}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}
           modelOptionsByInstance={props.modelOptionsByInstance}
           terminalOpen={props.terminalOpen ?? false}

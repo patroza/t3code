@@ -31,6 +31,18 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings sidebarHideProviderIcons", () => {
+  it("defaults to false", () => {
+    expect(decodeClientSettings({}).sidebarHideProviderIcons).toBe(false);
+  });
+
+  it("round-trips an explicit value", () => {
+    expect(decodeClientSettings({ sidebarHideProviderIcons: true }).sidebarHideProviderIcons).toBe(
+      true,
+    );
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});

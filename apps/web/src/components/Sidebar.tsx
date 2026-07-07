@@ -16,11 +16,10 @@ import {
 } from "lucide-react";
 import {
   ChangeRequestStatusIcon,
-  prStatusIndicator,
-  resolveThreadPr,
   terminalStatusFromRunningIds,
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
+  usePrStatusIndicator,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -117,9 +116,7 @@ import { useDesktopUpdateState } from "../state/desktopUpdate";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
 import { serverEnvironment } from "../state/server";
-import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
-import { vcsEnvironment } from "../state/vcs";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
   buildThreadRouteParams,
@@ -153,6 +150,7 @@ import {
 import { Input } from "./ui/input";
 import {
   Menu,
+  MenuCheckboxItem,
   MenuGroup,
   MenuPopup,
   MenuRadioGroup,
@@ -228,6 +226,43 @@ import {
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
 import { getDriverOption } from "./settings/providerDriverMeta";
 import { resolveThreadModelPresentation } from "../threadModelPresentation";
+import {
+  hasUsageMarker,
+  resolveDriverUsage,
+  usageDotFillClass,
+  usageDotRingColor,
+} from "../aiUsageState";
+import { useAiUsageSnapshot } from "../hooks/useAiUsageSnapshot";
+import { AiUsageStats } from "./chat/AiUsageStats";
+
+const EXTERNAL_SESSION_IMPORT_DISABLED = true;
+
+/**
+ * True while ⌘/Ctrl is held — but only wires up window listeners when
+ * `enabled` (the "hide provider icons unless ⌘" setting) is on, so the common
+ * case where the setting is off adds no per-row keyboard listeners.
+ */
+function useModifierRevealHeld(enabled: boolean): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!enabled) {
+      setHeld(false);
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => setHeld(event.metaKey || event.ctrlKey);
+    const onBlur = () => setHeld(false);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [enabled]);
+  return enabled && held;
+}
+
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -331,6 +366,7 @@ interface SidebarThreadRowProps {
   isActive: boolean;
   jumpLabel: string | null;
   showEnvironmentIndicator?: boolean;
+  showPrStatus?: boolean;
   showWorktreeIndicator?: boolean;
   onCreateThreadInWorktree?: (
     event: React.MouseEvent<HTMLButtonElement>,
@@ -374,6 +410,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     isActive,
     jumpLabel,
     showEnvironmentIndicator = true,
+    showPrStatus = true,
     showWorktreeIndicator = true,
     onCreateThreadInWorktree,
     appSettingsConfirmThreadArchive,
@@ -440,14 +477,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   );
   const threadProjectCwd = threadProject?.workspaceRoot ?? null;
   const gitCwd = thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
-  const gitStatus = useEnvironmentQuery(
-    thread.branch != null && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
   const isHighlighted = isActive || isSelected;
   const handleOpenDiscoveredPort = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -492,8 +521,30 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   );
   const ProviderIcon =
     getDriverOption(threadModelPresentation.driverKind ?? undefined)?.icon ?? BotIcon;
-  const pr = resolveThreadPr(thread.branch, gitStatus.data);
-  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      resolveDriverUsage(
+        aiUsageSnapshot,
+        threadModelPresentation.driverKind,
+        thread.modelSelection.model,
+      ),
+    [aiUsageSnapshot, threadModelPresentation.driverKind, thread.modelSelection.model],
+  );
+  const usageDotClass = threadUsage ? usageDotFillClass(threadUsage.marker) : undefined;
+  const usageRingColor = threadUsage ? usageDotRingColor(threadUsage.marker) : undefined;
+  const hasMarker = threadUsage ? hasUsageMarker(threadUsage.marker) : false;
+  const hideProviderIcons = useClientSettings<boolean>((s) => s.sidebarHideProviderIcons ?? false);
+  const revealHeld = useModifierRevealHeld(hideProviderIcons);
+  // Reveal the icon when the setting is off or ⌘ is held. When hidden, an
+  // active usage marker still shows so alerts are never lost.
+  const showProviderIcon = !hideProviderIcons || revealHeld;
+  const showProviderMarker = showProviderIcon || hasMarker;
+  const prStatus = usePrStatusIndicator({
+    environmentId: thread.environmentId,
+    branch: thread.branch,
+    gitCwd,
+  });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
@@ -718,7 +769,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          {prStatus && (
+          {showPrStatus && prStatus && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -814,20 +865,42 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>
             </Tooltip>
           )}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span
-                  aria-label={threadModelPresentation.tooltip}
-                  className="inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground/35 transition-colors hover:text-muted-foreground/55"
-                  data-testid={`thread-provider-${thread.id}`}
-                />
-              }
-            >
-              <ProviderIcon className="size-3.25" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">{threadModelPresentation.tooltip}</TooltipPopup>
-          </Tooltip>
+          {showProviderMarker && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label={threadModelPresentation.tooltip}
+                    className="relative inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground/30 transition-colors hover:text-muted-foreground/55"
+                    data-testid={`thread-provider-${thread.id}`}
+                  />
+                }
+              >
+                {showProviderIcon ? <ProviderIcon className="size-3.25 opacity-70" /> : null}
+                {usageDotClass ? (
+                  <span
+                    className={`pointer-events-none absolute -top-0.5 -right-0.5 size-1.5 rounded-full ${usageDotClass}`}
+                    style={{
+                      boxShadow: usageRingColor
+                        ? `0 0 0 1.5px ${usageRingColor}, 0 0 0 3px var(--sidebar, var(--background))`
+                        : "0 0 0 1.5px var(--sidebar, var(--background))",
+                    }}
+                    aria-hidden
+                  />
+                ) : null}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {threadUsage ? (
+                  <div className="flex flex-col gap-1.5 p-1 text-xs">
+                    <span className="font-medium">{threadModelPresentation.tooltip}</span>
+                    <AiUsageStats item={threadUsage.item} />
+                  </div>
+                ) : (
+                  threadModelPresentation.tooltip
+                )}
+              </TooltipPopup>
+            </Tooltip>
+          )}
           <div
             className={`flex min-w-16 justify-end ${
               isRemoteThread ? "max-sm:min-w-24" : "max-sm:min-w-20"
@@ -964,6 +1037,128 @@ const SidebarThreadGroupEnvironmentIndicator = memo(
   },
 );
 
+function SidebarThreadGroupLeadingIndicator(props: {
+  environmentId: EnvironmentId;
+  branch: string | null;
+  checkoutPath: string;
+  openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
+}) {
+  const prStatus = usePrStatusIndicator({
+    environmentId: props.environmentId,
+    branch: props.branch,
+    gitCwd: props.checkoutPath,
+  });
+  const handlePrClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (!prStatus) return;
+      props.openPrLink(event, prStatus.url);
+    },
+    [props, prStatus],
+  );
+
+  if (!prStatus) {
+    return <ContainerIcon className="size-3 shrink-0" />;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={prStatus.tooltip}
+            className={`inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm ${prStatus.colorClass} focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
+            onClick={handlePrClick}
+          />
+        }
+      >
+        <ChangeRequestStatusIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+const SidebarThreadWorktreeSectionBlock = memo(function SidebarThreadWorktreeSectionBlock(props: {
+  section: Extract<SidebarThreadWorktreeSection, { kind: "worktree" }>;
+  openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
+  createThreadForWorktreeSection: (
+    section: Extract<SidebarThreadWorktreeSection, { kind: "worktree" }>,
+  ) => void;
+  renderThreadRow: (
+    thread: SidebarThreadSummary,
+    options?: {
+      readonly showEnvironmentIndicator?: boolean;
+      readonly showPrStatus?: boolean;
+      readonly showWorktreeIndicator?: boolean;
+    },
+  ) => React.ReactNode;
+}) {
+  const firstThread = props.section.threads[0] ?? null;
+
+  return (
+    <React.Fragment>
+      <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
+        <div
+          data-thread-selection-safe
+          className="flex h-6 w-full translate-x-0 items-center gap-1.5 px-2 text-left text-[10px] font-medium text-muted-foreground/70"
+        >
+          {firstThread ? (
+            <SidebarThreadGroupLeadingIndicator
+              environmentId={firstThread.environmentId}
+              branch={props.section.branch}
+              checkoutPath={props.section.checkoutPath}
+              openPrLink={props.openPrLink}
+            />
+          ) : (
+            <ContainerIcon className="size-3 shrink-0" />
+          )}
+          <span className="min-w-0 flex-1 truncate">{props.section.label}</span>
+          {firstThread ? (
+            <SidebarThreadGroupEnvironmentIndicator environmentId={firstThread.environmentId} />
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                  aria-label={
+                    props.section.source === "worktree"
+                      ? "New session on this worktree"
+                      : "New session in this checkout"
+                  }
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    props.createThreadForWorktreeSection(props.section);
+                  }}
+                />
+              }
+            >
+              <FolderPlusIcon className="size-3" />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {props.section.source === "worktree"
+                ? "New session on this worktree"
+                : "New session in this checkout"}
+            </TooltipPopup>
+          </Tooltip>
+        </div>
+      </SidebarMenuSubItem>
+      <div className="ml-3 border-l border-border/70 pl-2">
+        {props.section.threads.map((thread) =>
+          props.renderThreadRow(thread, {
+            showEnvironmentIndicator: false,
+            showPrStatus: false,
+            showWorktreeIndicator: false,
+          }),
+        )}
+      </div>
+    </React.Fragment>
+  );
+});
+
 interface SidebarProjectThreadListProps {
   projectKey: string;
   projectExpanded: boolean;
@@ -1061,6 +1256,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     thread: SidebarThreadSummary,
     options: {
       readonly showEnvironmentIndicator?: boolean;
+      readonly showPrStatus?: boolean;
       readonly showWorktreeIndicator?: boolean;
     } = {},
   ) => {
@@ -1069,6 +1265,8 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       options.showEnvironmentIndicator === undefined
         ? {}
         : { showEnvironmentIndicator: options.showEnvironmentIndicator };
+    const prStatusProps =
+      options.showPrStatus === undefined ? {} : { showPrStatus: options.showPrStatus };
     const worktreeIndicatorProps =
       options.showWorktreeIndicator === undefined
         ? {}
@@ -1108,6 +1306,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         isActive={activeRouteThreadKey === threadKey}
         jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
         {...environmentIndicatorProps}
+        {...prStatusProps}
         {...worktreeIndicatorProps}
         {...createThreadInWorktree}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
@@ -1154,57 +1353,13 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             return renderThreadRow(section.thread);
           }
           return (
-            <React.Fragment key={section.key}>
-              <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
-                <div
-                  data-thread-selection-safe
-                  className="flex h-6 w-full translate-x-0 items-center gap-1.5 px-2 text-left text-[10px] font-medium text-muted-foreground/70"
-                >
-                  <ContainerIcon className="size-3 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">{section.label}</span>
-                  {section.threads[0] ? (
-                    <SidebarThreadGroupEnvironmentIndicator
-                      environmentId={section.threads[0].environmentId}
-                    />
-                  ) : null}
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-                          aria-label={
-                            section.source === "worktree"
-                              ? "New session on this worktree"
-                              : "New session in this checkout"
-                          }
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            createThreadForWorktreeSection(section);
-                          }}
-                        />
-                      }
-                    >
-                      <FolderPlusIcon className="size-3" />
-                    </TooltipTrigger>
-                    <TooltipPopup>
-                      {section.source === "worktree"
-                        ? "New session on this worktree"
-                        : "New session in this checkout"}
-                    </TooltipPopup>
-                  </Tooltip>
-                </div>
-              </SidebarMenuSubItem>
-              <div className="ml-3 border-l border-border/70 pl-2">
-                {section.threads.map((thread) =>
-                  renderThreadRow(thread, {
-                    showEnvironmentIndicator: false,
-                    showWorktreeIndicator: false,
-                  }),
-                )}
-              </div>
-            </React.Fragment>
+            <SidebarThreadWorktreeSectionBlock
+              key={section.key}
+              section={section}
+              openPrLink={openPrLink}
+              createThreadForWorktreeSection={createThreadForWorktreeSection}
+              renderThreadRow={renderThreadRow}
+            />
           );
         })}
 
@@ -1923,7 +2078,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
-            buildTargetedItem("import-sessions", "Import Agent Sessions"),
+            buildTargetedItem("import-sessions", "Import Agent Sessions", {
+              isDisabled: () => EXTERNAL_SESSION_IMPORT_DISABLED,
+            }),
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -2858,6 +3015,8 @@ function ProjectSortMenu({
   onThreadSortOrderChange,
   onProjectGroupingModeChange,
   onThreadPreviewCountChange,
+  hideProviderIcons,
+  onHideProviderIconsChange,
 }: {
   projectSortOrder: SidebarProjectSortOrder;
   threadSortOrder: SidebarThreadSortOrder;
@@ -2867,6 +3026,8 @@ function ProjectSortMenu({
   onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   onProjectGroupingModeChange: (mode: SidebarProjectGroupingMode) => void;
   onThreadPreviewCountChange: (count: SidebarThreadPreviewCount) => void;
+  hideProviderIcons: boolean;
+  onHideProviderIconsChange: (hide: boolean) => void;
 }) {
   const handleThreadPreviewCountChange = useCallback(
     (nextValue: number | null) => {
@@ -2968,6 +3129,20 @@ function ProjectSortMenu({
               </NumberFieldGroup>
             </NumberField>
           </div>
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <div className="px-2 pt-2 pb-1 font-medium text-muted-foreground sm:text-xs">
+            Provider icons
+          </div>
+          <MenuCheckboxItem
+            checked={hideProviderIcons}
+            onCheckedChange={(checked) => onHideProviderIconsChange(checked === true)}
+            closeOnClick={false}
+            className="min-h-7 py-1 sm:text-xs"
+          >
+            Hide unless ⌘ held
+          </MenuCheckboxItem>
         </MenuGroup>
         <MenuSeparator />
         <MenuGroup>
@@ -3232,6 +3407,13 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
+  const hideProviderIcons = useClientSettings<boolean>((s) => s.sidebarHideProviderIcons ?? false);
+  const handleHideProviderIconsChange = useCallback(
+    (hide: boolean) => {
+      updateSettings({ sidebarHideProviderIcons: hide });
+    },
+    [updateSettings],
+  );
 
   return (
     <SidebarContent className="gap-0">
@@ -3297,6 +3479,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               onThreadSortOrderChange={handleThreadSortOrderChange}
               onProjectGroupingModeChange={handleProjectGroupingModeChange}
               onThreadPreviewCountChange={handleThreadPreviewCountChange}
+              hideProviderIcons={hideProviderIcons}
+              onHideProviderIconsChange={handleHideProviderIconsChange}
             />
             <Tooltip>
               <TooltipTrigger
