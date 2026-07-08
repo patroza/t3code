@@ -363,6 +363,88 @@ function deriveTurnFolds(input: {
   return foldsByAnchorEntryId;
 }
 
+function timelineEntryBelongsToTurn(entry: TimelineEntry, turnId: TurnId): boolean {
+  if (entry.kind === "work") {
+    return entry.entry.turnId === turnId;
+  }
+  if (entry.kind === "message" && entry.message.role !== "user") {
+    return entry.message.turnId === turnId;
+  }
+  if (entry.kind === "proposed-plan") {
+    return entry.proposedPlan.turnId === turnId;
+  }
+  return false;
+}
+
+/**
+ * Cursor/Codex steer while a turn is running reuses the active turn id and
+ * keeps appending assistant deltas to an early message row. Chronological sort
+ * therefore leaves live work above later steer user messages. Reorder only
+ * while the turn is still running and at least one steer user message exists.
+ */
+export function reorderTimelineEntriesForSteeredTurn(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  input: {
+    readonly unsettledTurnId: TurnId;
+    readonly isWorking: boolean;
+  },
+): TimelineEntry[] {
+  if (!input.isWorking) {
+    return [...timelineEntries];
+  }
+
+  const sorted = [...timelineEntries].toSorted((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
+
+  let turnStartUserBoundary: string | null = null;
+  for (const entry of sorted) {
+    if (timelineEntryBelongsToTurn(entry, input.unsettledTurnId)) {
+      break;
+    }
+    if (entry.kind === "message" && entry.message.role === "user") {
+      turnStartUserBoundary = entry.message.createdAt;
+    }
+  }
+
+  if (turnStartUserBoundary === null) {
+    return [...timelineEntries];
+  }
+
+  const steerUserIds = new Set(
+    sorted
+      .filter(
+        (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
+          entry.kind === "message" &&
+          entry.message.role === "user" &&
+          entry.message.createdAt > turnStartUserBoundary!,
+      )
+      .map((entry) => entry.id),
+  );
+
+  if (steerUserIds.size === 0) {
+    return [...timelineEntries];
+  }
+
+  const prefix: TimelineEntry[] = [];
+  const steerTail: TimelineEntry[] = [];
+  const liveTail: TimelineEntry[] = [];
+
+  for (const entry of sorted) {
+    if (steerUserIds.has(entry.id)) {
+      steerTail.push(entry);
+      continue;
+    }
+    if (timelineEntryBelongsToTurn(entry, input.unsettledTurnId)) {
+      liveTail.push(entry);
+      continue;
+    }
+    prefix.push(entry);
+  }
+
+  return [...prefix, ...steerTail, ...liveTail];
+}
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestTurn?: TimelineLatestTurn | null;
@@ -383,6 +465,13 @@ export function deriveMessagesTimelineRows(input: {
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
+  const displayTimelineEntries =
+    unsettledTurnId !== null
+      ? reorderTimelineEntriesForSteeredTurn(input.timelineEntries, {
+          unsettledTurnId,
+          isWorking: input.isWorking,
+        })
+      : input.timelineEntries;
   const foldsByAnchorEntryId = deriveTurnFolds({
     timelineEntries: input.timelineEntries,
     terminalAssistantMessageIds,
@@ -398,8 +487,8 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  for (let index = 0; index < input.timelineEntries.length; index += 1) {
-    const timelineEntry = input.timelineEntries[index];
+  for (let index = 0; index < displayTimelineEntries.length; index += 1) {
+    const timelineEntry = displayTimelineEntries[index];
     if (!timelineEntry) {
       continue;
     }
@@ -423,8 +512,8 @@ export function deriveMessagesTimelineRows(input: {
     if (timelineEntry.kind === "work") {
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
-      while (cursor < input.timelineEntries.length) {
-        const nextEntry = input.timelineEntries[cursor];
+      while (cursor < displayTimelineEntries.length) {
+        const nextEntry = displayTimelineEntries[cursor];
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||

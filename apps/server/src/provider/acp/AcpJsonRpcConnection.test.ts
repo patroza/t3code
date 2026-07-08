@@ -492,6 +492,37 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect(
+    "falls back to a fresh session when session/load rejects a stale resume sessionId",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+        const started = yield* runtime.start();
+
+        // The persisted resume sessionId is rejected as invalid params, so startup
+        // recovers via session/new and yields the mock agent's fresh sessionId.
+        expect(started.sessionId).toBe("mock-session-1");
+      }).pipe(
+        Effect.provide(
+          AcpSessionRuntime.layer({
+            authMethodId: "test",
+            spawn: {
+              command: mockAgentCommand,
+              args: mockAgentArgs,
+              env: {
+                T3_ACP_FAIL_LOAD_SESSION_INVALID_PARAMS: "1",
+              },
+            },
+            cwd: process.cwd(),
+            resumeSessionId: "stale-session-id",
+            clientInfo: { name: "t3-test", version: "0.0.0" },
+          }),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+  );
+
   it.effect("ignores session/update replay notifications during session/load", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;

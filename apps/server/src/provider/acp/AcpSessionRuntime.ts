@@ -39,6 +39,25 @@ function formatConfigOptionValue(value: string | boolean): string {
   return JSON.stringify(value);
 }
 
+/**
+ * A persisted resume sessionId that the agent no longer recognizes — its process
+ * restarted, the session expired, or the agent's session format changed. Such a
+ * sessionId is unrecoverable, so `session/load` falls back to `session/new`
+ * instead of bricking the thread on every turn. The transcript stays intact in
+ * the orchestration store; only the agent's in-memory context is lost.
+ *
+ * `-32602` (Invalid params) is what Cursor's ACP agent returns for an unknown
+ * sessionId; `-32002` (Resource not found) is the cleaner "not found" signal if
+ * any agent adopts it. Other failures (transport, internal, spawn) are left to
+ * propagate so genuine infrastructure problems are not masked.
+ */
+const isStaleResumeSessionError = (
+  cause: EffectAcpErrors.AcpError,
+): cause is EffectAcpErrors.AcpRequestError => {
+  if (cause._tag !== "AcpRequestError") return false;
+  return cause.code === -32602 || cause.code === -32002;
+};
+
 export interface AcpSessionEventStreamBarrier {
   readonly _tag: "EventStreamBarrier";
   readonly acknowledge: Deferred.Deferred<void>;
@@ -544,9 +563,29 @@ export const make = (
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
+
+      const createSession = (): Effect.Effect<
+        {
+          readonly sessionId: string;
+          readonly result: EffectAcpSchema.NewSessionResponse;
+        },
+        EffectAcpErrors.AcpError
+      > => {
+        const createPayload = {
+          cwd: options.cwd,
+          mcpServers: options.mcpServers ?? [],
+        } satisfies EffectAcpSchema.NewSessionRequest;
+        return runLoggedRequest(
+          "session/new",
+          createPayload,
+          acp.agent.createSession(createPayload),
+        ).pipe(Effect.map((created) => ({ sessionId: created.sessionId, result: created })));
+      };
+
       if (options.resumeSessionId) {
+        const resumeSessionId = options.resumeSessionId;
         const loadPayload = {
-          sessionId: options.resumeSessionId,
+          sessionId: resumeSessionId,
           cwd: options.cwd,
           mcpServers: options.mcpServers ?? [],
         } satisfies EffectAcpSchema.LoadSessionRequest;
@@ -557,18 +596,17 @@ export const make = (
           options.sessionLoadReplayIdleGap ?? defaultSessionLoadReplayIdleGap,
         );
 
-        yield* Ref.set(
-          sessionLoadGateRef,
-          Option.some({
-            active: true,
-            lastActivityAtMillis: undefined,
-            idleGap: sessionLoadReplayIdleGap,
-            initializeResult,
-          }),
-        );
+        const loaded = yield* Effect.gen(function* () {
+          yield* Ref.set(
+            sessionLoadGateRef,
+            Option.some({
+              active: true,
+              lastActivityAtMillis: undefined,
+              idleGap: sessionLoadReplayIdleGap,
+              initializeResult,
+            }),
+          );
 
-        sessionId = options.resumeSessionId;
-        sessionSetupResult = yield* Effect.gen(function* () {
           yield* logRequest({
             method: "session/load",
             payload: loadPayload,
@@ -578,7 +616,7 @@ export const make = (
           const idleFiber = yield* waitForSessionLoadReplayIdle({
             gateRef: sessionLoadGateRef,
           }).pipe(Effect.forkIn(runtimeScope));
-          const loaded = yield* Effect.raceFirst(
+          const loadResult = yield* Effect.raceFirst(
             acp.agent.loadSession(loadPayload),
             Fiber.join(idleFiber),
           ).pipe(
@@ -616,20 +654,30 @@ export const make = (
             ),
           );
 
-          return loaded;
-        }).pipe(Effect.ensuring(Ref.set(sessionLoadGateRef, Option.none())));
-      } else {
-        const createPayload = {
-          cwd: options.cwd,
-          mcpServers: options.mcpServers ?? [],
-        } satisfies EffectAcpSchema.NewSessionRequest;
-        const created = yield* runLoggedRequest(
-          "session/new",
-          createPayload,
-          acp.agent.createSession(createPayload),
+          return { sessionId: resumeSessionId, result: loadResult };
+        }).pipe(
+          Effect.ensuring(Ref.set(sessionLoadGateRef, Option.none())),
+          Effect.catchIf(isStaleResumeSessionError, (cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning(
+                "ACP session/load rejected the persisted resume sessionId; starting a fresh session.",
+                {
+                  resumeSessionId,
+                  code: cause.code,
+                  message: cause.errorMessage,
+                },
+              );
+              return yield* createSession();
+            }),
+          ),
         );
+
+        sessionId = loaded.sessionId;
+        sessionSetupResult = loaded.result;
+      } else {
+        const created = yield* createSession();
         sessionId = created.sessionId;
-        sessionSetupResult = created;
+        sessionSetupResult = created.result;
       }
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));

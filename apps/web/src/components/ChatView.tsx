@@ -4282,19 +4282,20 @@ function ChatViewContent(props: ChatViewProps) {
       );
     } finally {
       sendInFlightRef.current = false;
-      if (!turnStartSucceeded) {
-        if (baseBranchForWorktree) {
-          setPendingWorktreeThreadIds((current) => {
-            if (!current.has(threadIdForSend)) {
-              return current;
-            }
-            const next = new Set(current);
-            next.delete(threadIdForSend);
-            return next;
-          });
-        }
-        resetLocalDispatch();
+      if (!turnStartSucceeded && baseBranchForWorktree) {
+        setPendingWorktreeThreadIds((current) => {
+          if (!current.has(threadIdForSend)) {
+            return current;
+          }
+          const next = new Set(current);
+          next.delete(threadIdForSend);
+          return next;
+        });
       }
+      // Clear dispatch lock once the RPC settles. Waiting for server turn
+      // metadata would leave follow-up sends blocked when the provider queues
+      // messages without advancing latestTurn while the current turn runs.
+      resetLocalDispatch();
     }
   };
 
@@ -4608,6 +4609,7 @@ function ChatViewContent(props: ChatViewProps) {
           }
         }
         sendInFlightRef.current = false;
+        resetLocalDispatch();
         return;
       }
 

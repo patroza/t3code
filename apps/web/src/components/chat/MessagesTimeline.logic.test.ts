@@ -1011,6 +1011,101 @@ describe("deriveMessagesTimelineRows", () => {
       expanded: true,
     });
   });
+
+  it("renders steer user messages above live active-turn output while running", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "settled-summary-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:30Z",
+          message: {
+            id: "settled-summary" as never,
+            role: "assistant",
+            text: "Submit latch fix summary.",
+            turnId: "turn-0" as never,
+            createdAt: "2026-01-01T00:00:30Z",
+            updatedAt: "2026-01-01T00:00:40Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "turn-start-user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:01:00Z",
+          message: {
+            id: "turn-start-user" as never,
+            role: "user",
+            text: "run my build/deploy script",
+            turnId: null,
+            createdAt: "2026-01-01T00:01:00Z",
+            updatedAt: "2026-01-01T00:01:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "active-assistant-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:01:05Z",
+          message: {
+            id: "active-assistant" as never,
+            role: "assistant",
+            text: "Tracing timeline ordering in Cursor steer turns.",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:01:05Z",
+            updatedAt: "2026-01-01T00:08:00Z",
+            streaming: true,
+          },
+        },
+        {
+          id: "active-work-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:07:00Z",
+          entry: {
+            id: "active-work",
+            createdAt: "2026-01-01T00:07:00Z",
+            turnId: "turn-1" as never,
+            label: "Searched codebase",
+            tone: "tool" as const,
+          },
+        },
+        {
+          id: "steer-user-entry",
+          kind: "message",
+          createdAt: "2026-01-01T00:08:30Z",
+          message: {
+            id: "steer-user" as never,
+            role: "user",
+            text: "how does our solution compare?",
+            turnId: null,
+            createdAt: "2026-01-01T00:08:30Z",
+            updatedAt: "2026-01-01T00:08:30Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "running",
+        startedAt: "2026-01-01T00:01:00Z",
+        completedAt: null,
+      },
+      runningTurnId: "turn-1" as never,
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:01:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "settled-summary-entry",
+      "turn-start-user-entry",
+      "steer-user-entry",
+      "active-assistant-entry",
+      "active-work-entry",
+      "working-indicator-row",
+    ]);
+  });
 });
 
 describe("computeStableMessagesTimelineRows", () => {

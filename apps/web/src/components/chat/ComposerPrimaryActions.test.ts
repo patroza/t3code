@@ -1,6 +1,63 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { formatPendingPrimaryActionLabel } from "./ComposerPrimaryActions";
+import {
+  formatPendingPrimaryActionLabel,
+  shouldDisableCollapsedComposerSubmitAction,
+  shouldShowComposerInterruptAction,
+} from "./ComposerPrimaryActions";
+
+describe("shouldShowComposerInterruptAction", () => {
+  it("shows interrupt while running with an empty composer", () => {
+    expect(
+      shouldShowComposerInterruptAction({
+        isRunning: true,
+        hasSendableContent: false,
+        promptHasText: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("shows submit while running once the composer has sendable content", () => {
+    expect(
+      shouldShowComposerInterruptAction({
+        isRunning: true,
+        hasSendableContent: true,
+        promptHasText: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowComposerInterruptAction({
+        isRunning: true,
+        hasSendableContent: false,
+        promptHasText: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldDisableCollapsedComposerSubmitAction", () => {
+  it("keeps the collapsed mobile submit button disabled while a turn is running", () => {
+    expect(
+      shouldDisableCollapsedComposerSubmitAction({
+        isRunning: true,
+        isSendBusy: false,
+        isConnecting: false,
+        hasSendableContent: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("enables the collapsed mobile submit button once the thread is idle", () => {
+    expect(
+      shouldDisableCollapsedComposerSubmitAction({
+        isRunning: false,
+        isSendBusy: false,
+        isConnecting: false,
+        hasSendableContent: true,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("formatPendingPrimaryActionLabel", () => {
   it("returns 'Submitting...' while responding", () => {
