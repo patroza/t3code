@@ -1908,16 +1908,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry, workspaceRoot);
+  // Localize provider error timestamps (z.ai reports reset times in UTC+8) on
+  // the actually-rendered `heading`/`preview` values. Applied exactly once here
+  // so the conversion is not run twice (which would shift the time again).
+  const heading = localizeZaiResetTime(toolWorkEntryHeading(workEntry));
+  const rawPreviewText = workEntryPreview(workEntry, workspaceRoot);
+  const rawPreview = rawPreviewText === null ? null : localizeZaiResetTime(rawPreviewText);
   const preview =
     rawPreview &&
     normalizeCompactToolLabel(rawPreview).toLowerCase() ===
       normalizeCompactToolLabel(heading).toLowerCase()
       ? null
       : rawPreview;
-  const displayText = localizeZaiResetTime(preview ? `${heading} - ${preview}` : heading);
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
+  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const expandedBodyRaw = buildToolCallExpandedBody(workEntry, workspaceRoot);
+  const expandedBody = expandedBodyRaw === null ? null : localizeZaiResetTime(expandedBodyRaw);
   const canExpand = expandedBody !== null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
