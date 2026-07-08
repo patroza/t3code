@@ -14,6 +14,8 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveSendEnvMode,
+  shouldRenderServerThreadRoute,
+  shouldTreatServerThreadAsActive,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -345,6 +347,44 @@ describe("shouldWriteThreadErrorToCurrentServerThread", () => {
         targetThreadId: threadId,
       }),
     ).toBe(false);
+  });
+});
+
+describe("server thread liveness", () => {
+  it("requires shell and detail before treating a server thread as active", () => {
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: true,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: false,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not keep server routes alive from stale cached detail alone", () => {
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: true,
+        hasDraftThread: false,
+      }),
+    ).toBe(true);
   });
 });
 

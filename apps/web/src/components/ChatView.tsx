@@ -196,6 +196,7 @@ import {
   useProject,
   useProjects,
   useThread,
+  useThreadShell,
   useThreadProposedPlans,
   useThreadRefs,
 } from "../state/entities";
@@ -233,6 +234,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldTreatServerThreadAsActive,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -1036,6 +1038,7 @@ function ChatViewContent(props: ChatViewProps) {
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
   const serverThread = useThread(routeKind === "server" ? routeThreadRef : null);
+  const serverThreadShell = useThreadShell(routeKind === "server" ? routeThreadRef : null);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
@@ -1240,8 +1243,15 @@ function ChatViewContent(props: ChatViewProps) {
         : undefined,
     [draftThread, fallbackDraftProject?.defaultModelSelection, threadId],
   );
-  const isServerThread = routeKind === "server" && serverThread !== null;
-  const activeThread = isServerThread ? serverThread : localDraftThread;
+  const isServerThread =
+    routeKind === "server" &&
+    shouldTreatServerThreadAsActive({
+      hasServerThreadShell: serverThreadShell !== null,
+      hasServerThreadDetail: serverThread !== null,
+    });
+  const activeThread: Thread | undefined = isServerThread
+    ? (serverThread ?? undefined)
+    : localDraftThread;
   const threadError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
     : localDraftError;
