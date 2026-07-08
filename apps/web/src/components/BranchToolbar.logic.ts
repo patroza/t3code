@@ -14,6 +14,7 @@ export interface EnvironmentOption {
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
+export type WorkspaceTarget = EnvMode | "current-worktree";
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
@@ -48,6 +49,16 @@ export function resolveEnvModeLabel(mode: EnvMode): string {
 
 export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null): string {
   return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
+}
+
+export function resolveWorkspaceTarget(input: {
+  effectiveEnvMode: EnvMode;
+  activeWorktreePath: string | null;
+}): WorkspaceTarget {
+  if (input.effectiveEnvMode === "worktree") {
+    return "worktree";
+  }
+  return input.activeWorktreePath ? "current-worktree" : "local";
 }
 
 export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {

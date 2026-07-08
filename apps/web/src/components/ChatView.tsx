@@ -208,7 +208,7 @@ import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
-import { resolveEffectiveEnvMode } from "./BranchToolbar.logic";
+import { resolveEffectiveEnvMode, type WorkspaceTarget } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
@@ -4886,8 +4886,9 @@ function ChatViewContent(props: ChatViewProps) {
       settings,
     ],
   );
-  const onEnvModeChange = useCallback(
-    (mode: DraftThreadEnvMode) => {
+  const onWorkspaceTargetChange = useCallback(
+    (target: WorkspaceTarget) => {
+      const mode: DraftThreadEnvMode = target === "worktree" ? "worktree" : "local";
       if (canOverrideServerThreadEnvMode) {
         setPendingServerThreadEnvMode(mode);
         scheduleComposerFocus();
@@ -4900,7 +4901,9 @@ function ChatViewContent(props: ChatViewProps) {
             envMode: mode,
             newWorktreesStartFromOrigin: settings.newWorktreesStartFromOrigin,
           }),
-          ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
+          ...(target !== "current-worktree" && draftThread?.worktreePath
+            ? { worktreePath: null }
+            : {}),
         });
       }
       scheduleComposerFocus();
@@ -5280,7 +5283,7 @@ function ChatViewContent(props: ChatViewProps) {
                       environmentId={activeThread.environmentId}
                       threadId={activeThread.id}
                       {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                      onEnvModeChange={onEnvModeChange}
+                      onWorkspaceTargetChange={onWorkspaceTargetChange}
                       startFromOrigin={startFromOrigin}
                       onStartFromOriginChange={onStartFromOriginChange}
                       {...(isPreparingWorktreeUi
