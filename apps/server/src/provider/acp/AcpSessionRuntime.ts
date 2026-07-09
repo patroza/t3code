@@ -40,23 +40,13 @@ function formatConfigOptionValue(value: string | boolean): string {
 }
 
 /**
- * A persisted resume sessionId that the agent no longer recognizes — its process
- * restarted, the session expired, or the agent's session format changed. Such a
- * sessionId is unrecoverable, so `session/load` falls back to `session/new`
- * instead of bricking the thread on every turn. The transcript stays intact in
- * the orchestration store; only the agent's in-memory context is lost.
- *
- * `-32602` (Invalid params) is what Cursor's ACP agent returns for an unknown
- * sessionId; `-32002` (Resource not found) is the cleaner "not found" signal if
- * any agent adopts it. Other failures (transport, internal, spawn) are left to
- * propagate so genuine infrastructure problems are not masked.
+ * Short, single-line summary of a session/load failure cause for diagnostics.
+ * Covers typed ACP errors and decode defects alike — some agents reject an
+ * unknown resume sessionId by throwing during response decoding rather than
+ * returning a clean JSON-RPC error, which surfaces as a defect.
  */
-const isStaleResumeSessionError = (
-  cause: EffectAcpErrors.AcpError,
-): cause is EffectAcpErrors.AcpRequestError => {
-  if (cause._tag !== "AcpRequestError") return false;
-  return cause.code === -32602 || cause.code === -32002;
-};
+const summarizeSessionLoadFailure = (cause: Cause.Cause<EffectAcpErrors.AcpError>): string =>
+  Cause.pretty(cause).split("\n")[0]?.trim().slice(0, 200) ?? "unknown";
 
 export interface AcpSessionEventStreamBarrier {
   readonly _tag: "EventStreamBarrier";
@@ -657,19 +647,29 @@ export const make = (
           return { sessionId: resumeSessionId, result: loadResult };
         }).pipe(
           Effect.ensuring(Ref.set(sessionLoadGateRef, Option.none())),
-          Effect.catchIf(isStaleResumeSessionError, (cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logWarning(
-                "ACP session/load rejected the persisted resume sessionId; starting a fresh session.",
-                {
-                  resumeSessionId,
-                  code: cause.code,
-                  message: cause.errorMessage,
-                },
-              );
-              return yield* createSession();
-            }),
-          ),
+          Effect.sandbox,
+          // `session/load` is a best-effort resume of the agent's in-memory
+          // context. If it fails for ANY reason — the agent rejected the stale
+          // sessionId (some agents throw a decode defect rather than returning a
+          // clean JSON-RPC error), a protocol mismatch, or a transport blip —
+          // recover with a fresh session instead of bricking the thread on every
+          // turn. The transcript stays intact in the orchestration store; only
+          // the agent's working context is lost. Genuine infrastructure failures
+          // (dead process, bad cwd) resurface when `createSession` fails too.
+          Effect.matchEffect({
+            onFailure: (cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning(
+                  "ACP session/load failed to resume the persisted sessionId; starting a fresh session.",
+                  {
+                    resumeSessionId,
+                    failure: summarizeSessionLoadFailure(cause),
+                  },
+                );
+                return yield* createSession();
+              }),
+            onSuccess: Effect.succeed,
+          }),
         );
 
         sessionId = loaded.sessionId;
