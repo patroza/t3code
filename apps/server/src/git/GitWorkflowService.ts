@@ -26,6 +26,8 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type VcsResolveBranchChangeRequestInput,
+  type VcsResolveBranchChangeRequestResult,
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
@@ -56,6 +58,9 @@ export class GitWorkflowService extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    readonly resolveBranchChangeRequest: (
+      input: VcsResolveBranchChangeRequestInput,
+    ) => Effect.Effect<VcsResolveBranchChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -284,6 +289,10 @@ export const make = Effect.gen(function* () {
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
+    ),
+    resolveBranchChangeRequest: routeGitManager(
+      "GitWorkflowService.resolveBranchChangeRequest",
+      gitManager.resolveBranchChangeRequest,
     ),
     preparePullRequestThread: routeGitManager(
       "GitWorkflowService.preparePullRequestThread",

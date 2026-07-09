@@ -81,11 +81,20 @@ export function resolveThreadPr(
   threadBranch: string | null,
   gitStatus: VcsStatusResult | null,
 ): ThreadPr | null {
-  if (threadBranch === null || gitStatus === null || gitStatus.refName !== threadBranch) {
+  if (threadBranch === null || gitStatus === null) {
     return null;
   }
 
-  return gitStatus.pr ?? null;
+  const pr = gitStatus.pr ?? null;
+  if (!pr) {
+    return null;
+  }
+
+  if (gitStatus.refName === threadBranch || pr.headRef === threadBranch) {
+    return pr;
+  }
+
+  return null;
 }
 
 export function usePrStatusIndicator(input: {
@@ -93,16 +102,18 @@ export function usePrStatusIndicator(input: {
   branch: string | null;
   gitCwd: string | null;
 }): PrStatusIndicator | null {
-  const gitStatus = useEnvironmentQuery(
+  const branchPrQuery = useEnvironmentQuery(
     input.environmentId !== null && input.branch != null && input.gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.resolveBranchChangeRequest({
           environmentId: input.environmentId,
-          input: { cwd: input.gitCwd },
+          input: { cwd: input.gitCwd, refName: input.branch },
         })
       : null,
   );
-  const pr = resolveThreadPr(input.branch, gitStatus.data);
-  return prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  return prStatusIndicator(
+    branchPrQuery.data?.pr ?? null,
+    branchPrQuery.data?.sourceControlProvider,
+  );
 }
 
 export function terminalStatusFromRunningIds(

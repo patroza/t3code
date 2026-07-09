@@ -368,6 +368,7 @@ interface SidebarThreadRowProps {
   showEnvironmentIndicator?: boolean;
   showPrStatus?: boolean;
   showWorktreeIndicator?: boolean;
+  gitCwd?: string | null;
   onCreateThreadInWorktree?: (
     event: React.MouseEvent<HTMLButtonElement>,
     thread: SidebarThreadSummary,
@@ -412,6 +413,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     showEnvironmentIndicator = true,
     showPrStatus = true,
     showWorktreeIndicator = true,
+    gitCwd: gitCwdOverride,
     onCreateThreadInWorktree,
     appSettingsConfirmThreadArchive,
     renamingThreadKey,
@@ -476,7 +478,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     ),
   );
   const threadProjectCwd = threadProject?.workspaceRoot ?? null;
-  const gitCwd = thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
+  const gitCwd = gitCwdOverride ?? thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
   const isHighlighted = isActive || isSelected;
   const handleOpenDiscoveredPort = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -1258,6 +1260,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       readonly showEnvironmentIndicator?: boolean;
       readonly showPrStatus?: boolean;
       readonly showWorktreeIndicator?: boolean;
+      readonly gitCwd?: string | null;
     } = {},
   ) => {
     const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -1267,6 +1270,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         : { showEnvironmentIndicator: options.showEnvironmentIndicator };
     const prStatusProps =
       options.showPrStatus === undefined ? {} : { showPrStatus: options.showPrStatus };
+    const gitCwdProps = options.gitCwd === undefined ? {} : { gitCwd: options.gitCwd };
     const worktreeIndicatorProps =
       options.showWorktreeIndicator === undefined
         ? {}
@@ -1308,6 +1312,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
         {...environmentIndicatorProps}
         {...prStatusProps}
         {...worktreeIndicatorProps}
+        {...gitCwdProps}
         {...createThreadInWorktree}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
         renamingThreadKey={renamingThreadKey}
@@ -1350,7 +1355,10 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       {shouldShowThreadPanel &&
         renderedThreadSections.map((section) => {
           if (section.kind === "thread") {
-            return renderThreadRow(section.thread);
+            return renderThreadRow(
+              section.thread,
+              section.checkoutPath ? { gitCwd: section.checkoutPath } : {},
+            );
           }
           return (
             <SidebarThreadWorktreeSectionBlock

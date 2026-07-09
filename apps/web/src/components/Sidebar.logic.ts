@@ -21,6 +21,8 @@ export type SidebarThreadWorktreeSection =
   | {
       kind: "thread";
       thread: SidebarThreadSummary;
+      /** Resolved checkout path for PR/git status when this thread is not grouped. */
+      checkoutPath?: string;
     }
   | {
       kind: "worktree";
@@ -349,7 +351,11 @@ export function buildSidebarThreadWorktreeSections(
     const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
     const groupThreads = bucket ? threadsByWorktreeKey.get(bucket.key) : undefined;
     if (!bucket || !groupThreads || groupThreads.length < 2) {
-      sections.push({ kind: "thread", thread });
+      sections.push({
+        kind: "thread",
+        thread,
+        ...(bucket ? { checkoutPath: bucket.checkoutPath } : {}),
+      });
       continue;
     }
     if (emittedWorktreeKeys.has(bucket.key)) {

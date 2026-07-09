@@ -27,6 +27,8 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   VcsStatusResult,
+  VcsResolveBranchChangeRequestInput,
+  VcsResolveBranchChangeRequestResult,
   ModelSelection,
 } from "@t3tools/contracts";
 import {
@@ -79,6 +81,9 @@ export class GitManager extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    readonly resolveBranchChangeRequest: (
+      input: VcsResolveBranchChangeRequestInput,
+    ) => Effect.Effect<VcsResolveBranchChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -1458,6 +1463,34 @@ export const make = Effect.gen(function* () {
     return { pullRequest };
   });
 
+  const resolveBranchChangeRequest: GitManager["Service"]["resolveBranchChangeRequest"] = Effect.fn(
+    "resolveBranchChangeRequest",
+  )(function* (input) {
+    const details = yield* gitCore
+      .statusDetailsLocal(input.cwd)
+      .pipe(
+        Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(nonRepositoryStatusDetails)),
+      );
+    if (!details.isRepo) {
+      return { pr: null };
+    }
+
+    const upstreamRef = yield* readConfigValueNullable(input.cwd, `branch.${input.refName}.merge`);
+    const hostingProvider = yield* resolveHostingProvider(input.cwd, input.refName);
+    const pr = yield* findLatestPr(input.cwd, {
+      branch: input.refName,
+      upstreamRef,
+    }).pipe(
+      Effect.map((latest) => (latest ? toStatusPr(latest) : null)),
+      Effect.orElseSucceed(() => null),
+    );
+
+    return {
+      pr,
+      ...(hostingProvider ? { sourceControlProvider: hostingProvider } : {}),
+    };
+  });
+
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
   )(function* (input) {
@@ -1866,6 +1899,7 @@ export const make = Effect.gen(function* () {
     invalidateRemoteStatus,
     invalidateStatus,
     resolvePullRequest,
+    resolveBranchChangeRequest,
     preparePullRequestThread,
     runStackedAction,
   });

@@ -163,6 +163,11 @@ export function createVcsEnvironmentAtoms<R, E>(
 
   return {
     listRefs,
+    resolveBranchChangeRequest: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:resolve-branch-change-request",
+      tag: WS_METHODS.vcsResolveBranchChangeRequest,
+      staleTimeMs: 60_000,
+    }),
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>

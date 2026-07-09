@@ -411,6 +411,10 @@ describe("buildSidebarThreadWorktreeSections", () => {
       ThreadId.make("thread-b"),
     ]);
     expect(sections[1]?.kind).toBe("thread");
+    if (sections[1]?.kind !== "thread") {
+      throw new Error("expected thread section");
+    }
+    expect(sections[1].checkoutPath).toBe("/repo/.t3/worktrees/feature-b");
   });
 
   it("groups multiple local checkout threads by resolved project path", () => {
@@ -451,6 +455,30 @@ describe("buildSidebarThreadWorktreeSections", () => {
     ]);
   });
 
+  it("attaches checkoutPath to single local checkout threads", () => {
+    const sections = buildSidebarThreadWorktreeSections(
+      [
+        makeSidebarThreadSummary({
+          id: ThreadId.make("thread-a"),
+          environmentId: EnvironmentId.make("env-1"),
+          projectId: ProjectId.make("project-1"),
+          branch: "main",
+          worktreePath: null,
+        }),
+      ],
+      {
+        resolveLocalCheckoutPath: () => "/repo/t3code/",
+      },
+    );
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]).toEqual({
+      kind: "thread",
+      checkoutPath: "/repo/t3code",
+      thread: expect.objectContaining({ id: ThreadId.make("thread-a") }),
+    });
+  });
+
   it("does not group identical worktree paths across environments or projects", () => {
     const sections = buildSidebarThreadWorktreeSections([
       makeSidebarThreadSummary({
@@ -474,6 +502,12 @@ describe("buildSidebarThreadWorktreeSections", () => {
     ]);
 
     expect(sections.map((section) => section.kind)).toEqual(["thread", "thread", "thread"]);
+    for (const section of sections) {
+      if (section.kind !== "thread") {
+        throw new Error("expected thread section");
+      }
+      expect(section.checkoutPath).toBe("/repo/worktree");
+    }
   });
 
   it("normalizes worktree paths and formats labels", () => {
