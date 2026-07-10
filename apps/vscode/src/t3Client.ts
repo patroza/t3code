@@ -15,6 +15,9 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadShell,
   type RuntimeMode,
+  type ApprovalRequestId,
+  type ProviderApprovalDecision,
+  type ProviderUserInputAnswers,
   type ServerConfig,
   type ThreadId,
   type UploadChatAttachment,
@@ -411,6 +414,38 @@ export class T3Client {
       commandId: newCommandId(),
       threadId: thread.id,
       ...(thread.latestTurn?.turnId === undefined ? {} : { turnId: thread.latestTurn.turnId }),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  async respondToApproval(
+    requestId: ApprovalRequestId,
+    decision: ProviderApprovalDecision,
+  ): Promise<void> {
+    const thread = this.#activeThread;
+    if (thread === null) throw new Error("Select a T3 Code thread before responding.");
+    await this.#dispatch({
+      type: "thread.approval.respond",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      requestId,
+      decision,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  async respondToUserInput(
+    requestId: ApprovalRequestId,
+    answers: ProviderUserInputAnswers,
+  ): Promise<void> {
+    const thread = this.#activeThread;
+    if (thread === null) throw new Error("Select a T3 Code thread before responding.");
+    await this.#dispatch({
+      type: "thread.user-input.respond",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      requestId,
+      answers,
       createdAt: new Date().toISOString(),
     });
   }

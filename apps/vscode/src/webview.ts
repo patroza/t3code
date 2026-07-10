@@ -57,6 +57,25 @@ interface ViewToolCall {
   readonly detail: string | null;
 }
 
+interface ViewPendingApproval {
+  readonly kind: "approval";
+  readonly requestId: string;
+  readonly requestKind: "command" | "file-read" | "file-change";
+  readonly detail: string | null;
+}
+
+interface ViewPendingUserInput {
+  readonly kind: "user-input";
+  readonly requestId: string;
+  readonly questions: ReadonlyArray<{
+    readonly id: string;
+    readonly header: string;
+    readonly question: string;
+    readonly multiSelect?: boolean;
+    readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>;
+  }>;
+}
+
 interface ViewState {
   readonly busy: boolean;
   readonly error: string | null;
@@ -78,6 +97,7 @@ interface ViewState {
     };
     readonly messages: ReadonlyArray<ViewMessage>;
     readonly toolCalls: ReadonlyArray<ViewToolCall>;
+    readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
   };
   readonly models: ReadonlyArray<{
     readonly instanceId: string;
@@ -125,6 +145,7 @@ const prompt = requiredElement<HTMLTextAreaElement>("prompt");
 const slashCommands = requiredElement<HTMLElement>("slash-commands");
 const send = requiredElement<HTMLButtonElement>("send");
 const pendingAttachments = requiredElement<HTMLElement>("pending-attachments");
+const pendingInteractions = requiredElement<HTMLElement>("pending-interactions");
 const contextButton = requiredElement<HTMLButtonElement>("context");
 const contextLabel = requiredElement<HTMLElement>("context-label");
 const contextWindowMeter = requiredElement<HTMLButtonElement>("context-window");
@@ -153,6 +174,7 @@ interface PendingImage {
 let pendingImages: PendingImage[] = [];
 let usageExpanded = false;
 let selectedSlashCommand = 0;
+const pendingAnswers = new Map<string, Record<string, string | string[]>>();
 
 const COMMANDS = [
   { name: "/new", description: "Start a new synchronized thread" },
@@ -411,6 +433,133 @@ function renderToolCall(tool: ViewToolCall): HTMLElement {
   return wrapper;
 }
 
+function approvalLabel(kind: ViewPendingApproval["requestKind"]): string {
+  if (kind === "command") return "Command approval";
+  if (kind === "file-read") return "File-read approval";
+  return "File-change approval";
+}
+
+function renderApproval(interaction: ViewPendingApproval): HTMLElement {
+  const card = document.createElement("section");
+  card.className = "interaction-card approval-card";
+  const heading = document.createElement("div");
+  heading.className = "interaction-heading";
+  heading.textContent = approvalLabel(interaction.requestKind);
+  card.append(heading);
+  if (interaction.detail !== null) {
+    const detail = document.createElement("div");
+    detail.className = "interaction-detail";
+    detail.textContent = interaction.detail;
+    card.append(detail);
+  }
+  const actions = document.createElement("div");
+  actions.className = "interaction-actions";
+  for (const [label, decision, className] of [
+    ["Deny", "decline", ""],
+    ["Allow for session", "acceptForSession", ""],
+    ["Allow", "accept", "allow"],
+  ] as const) {
+    const button = document.createElement("button");
+    button.textContent = label;
+    button.className = className;
+    button.addEventListener("click", () =>
+      post({ type: "approvalResponse", requestId: interaction.requestId, decision }),
+    );
+    actions.append(button);
+  }
+  card.append(actions);
+  return card;
+}
+
+function renderUserInput(interaction: ViewPendingUserInput): HTMLElement {
+  const card = document.createElement("section");
+  card.className = "interaction-card user-input-card";
+  const heading = document.createElement("div");
+  heading.className = "interaction-heading";
+  heading.textContent = "Input requested";
+  card.append(heading);
+  const answers = pendingAnswers.get(interaction.requestId) ?? {};
+  pendingAnswers.set(interaction.requestId, answers);
+  for (const question of interaction.questions) {
+    const group = document.createElement("fieldset");
+    group.className = "interaction-question-group";
+    const legend = document.createElement("legend");
+    legend.textContent = question.header;
+    const questionText = document.createElement("div");
+    questionText.className = "interaction-question";
+    questionText.textContent = question.question;
+    group.append(legend, questionText);
+    for (const option of question.options) {
+      const label = document.createElement("label");
+      label.className = "interaction-option";
+      const input = document.createElement("input");
+      input.type = question.multiSelect === true ? "checkbox" : "radio";
+      input.name = `${interaction.requestId}:${question.id}`;
+      const current = answers[question.id];
+      input.checked = Array.isArray(current)
+        ? current.includes(option.label)
+        : current === option.label;
+      input.addEventListener("change", () => {
+        if (question.multiSelect === true) {
+          const selected = Array.isArray(answers[question.id])
+            ? [...(answers[question.id] as string[])]
+            : [];
+          answers[question.id] = input.checked
+            ? [...new Set([...selected, option.label])]
+            : selected.filter((value) => value !== option.label);
+        } else if (input.checked) {
+          answers[question.id] = option.label;
+        }
+      });
+      const copy = document.createElement("span");
+      copy.textContent = option.label;
+      const description = document.createElement("small");
+      description.textContent = option.description;
+      copy.append(description);
+      label.append(input, copy);
+      group.append(label);
+    }
+    const custom = document.createElement("input");
+    custom.className = "interaction-custom";
+    custom.placeholder = "Other…";
+    custom.value =
+      typeof answers[question.id] === "string" &&
+      !question.options.some((option) => option.label === answers[question.id])
+        ? (answers[question.id] as string)
+        : "";
+    custom.addEventListener("input", () => {
+      if (custom.value.trim() !== "") answers[question.id] = custom.value.trim();
+      else delete answers[question.id];
+    });
+    group.append(custom);
+    card.append(group);
+  }
+  const actions = document.createElement("div");
+  actions.className = "interaction-actions";
+  const submit = document.createElement("button");
+  submit.className = "allow";
+  submit.textContent = "Submit";
+  submit.addEventListener("click", () => {
+    const complete = interaction.questions.every((question) => {
+      const answer = answers[question.id];
+      return typeof answer === "string" ? answer.trim() !== "" : (answer?.length ?? 0) > 0;
+    });
+    if (!complete) return;
+    post({ type: "userInputResponse", requestId: interaction.requestId, answers });
+  });
+  actions.append(submit);
+  card.append(actions);
+  return card;
+}
+
+function renderPendingInteractions(state: ViewState): void {
+  pendingInteractions.replaceChildren(
+    ...(state.activeThread?.pendingInteractions ?? []).map((interaction) =>
+      interaction.kind === "approval" ? renderApproval(interaction) : renderUserInput(interaction),
+    ),
+  );
+}
+
 function render(next: ViewState): void {
   currentState = next;
   const wasNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
@@ -443,6 +592,7 @@ function render(next: ViewState): void {
   }
   threads.disabled = next.busy;
   renderActiveStatus(next);
+  renderPendingInteractions(next);
 
   messages.replaceChildren();
   if (draftSelection !== null) {

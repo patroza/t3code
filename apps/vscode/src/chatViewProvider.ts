@@ -7,10 +7,11 @@ import type {
   ThreadId,
   UploadChatAttachment,
 } from "@t3tools/contracts";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { ApprovalRequestId, ProviderInstanceId } from "@t3tools/contracts";
 import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
+import { derivePendingInteractions } from "./pendingInteractions.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
 import { presentToolCalls } from "./toolPresentation.ts";
@@ -53,6 +54,16 @@ type WebviewRequest =
   | { readonly type: "openLink"; readonly href: string }
   | { readonly type: "openEditorContext"; readonly path: string; readonly detail: string }
   | { readonly type: "copyText"; readonly text: string }
+  | {
+      readonly type: "approvalResponse";
+      readonly requestId: string;
+      readonly decision: "accept" | "acceptForSession" | "decline";
+    }
+  | {
+      readonly type: "userInputResponse";
+      readonly requestId: string;
+      readonly answers: Readonly<Record<string, string | ReadonlyArray<string>>>;
+    }
   | { readonly type: "toggleProviderFavorite"; readonly instanceId: string }
   | { readonly type: "toggleModelFavorite"; readonly modelKey: string }
   | {
@@ -122,6 +133,30 @@ function isRequest(value: unknown): value is WebviewRequest {
     );
   }
   if (type === "openLink") return "href" in value && typeof value.href === "string";
+  if (type === "approvalResponse") {
+    return (
+      "requestId" in value &&
+      typeof value.requestId === "string" &&
+      "decision" in value &&
+      (value.decision === "accept" ||
+        value.decision === "acceptForSession" ||
+        value.decision === "decline")
+    );
+  }
+  if (type === "userInputResponse") {
+    return (
+      "requestId" in value &&
+      typeof value.requestId === "string" &&
+      "answers" in value &&
+      typeof value.answers === "object" &&
+      value.answers !== null &&
+      Object.values(value.answers).every(
+        (answer) =>
+          typeof answer === "string" ||
+          (Array.isArray(answer) && answer.every((entry) => typeof entry === "string")),
+      )
+    );
+  }
   if (type === "openEditorContext") {
     return (
       "path" in value &&
@@ -276,6 +311,21 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         case "copyText":
           await vscode.env.clipboard.writeText(message.text);
           return;
+        case "approvalResponse":
+          await this.#run(() =>
+            this.client.respondToApproval(
+              ApprovalRequestId.make(message.requestId),
+              message.decision,
+            ),
+          );
+          return;
+        case "userInputResponse":
+          await this.#run(() =>
+            this.client.respondToUserInput(ApprovalRequestId.make(message.requestId), {
+              ...message.answers,
+            }),
+          );
+          return;
         case "toggleProviderFavorite":
           await this.actions.toggleProviderFavorite(message.instanceId);
           this.#publish();
@@ -410,6 +460,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       }),
       turnStartedAt: thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? null,
       contextWindow: deriveContextWindowUsage(thread.activities),
+      pendingInteractions: derivePendingInteractions(thread.activities),
       toolCalls: presentToolCalls(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,
@@ -555,6 +606,17 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .attachment-name { display: block; padding: 5px 7px; overflow: hidden; color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
     .streaming::after { content: '▋'; animation: blink 1s steps(1) infinite; }
     @keyframes blink { 50% { opacity: 0; } }
+    #pending-interactions:empty { display: none; }
+    .interaction-card { margin-bottom: 8px; border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWidget-border)); border-radius: 7px; padding: 9px; background: color-mix(in srgb, var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background)) 55%, var(--vscode-sideBar-background)); }
+    .interaction-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .interaction-detail, .interaction-question { margin: 5px 0 8px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .interaction-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+    .interaction-actions .allow { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+    .interaction-question-group { margin: 8px 0; border: 0; padding: 0; }
+    .interaction-question-group legend { margin-bottom: 5px; font-weight: 600; }
+    .interaction-option { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 6px; margin: 4px 0; }
+    .interaction-option small { display: block; color: var(--vscode-descriptionForeground); }
+    .interaction-custom { width: 100%; margin-top: 5px; border: 1px solid var(--vscode-input-border); border-radius: 4px; padding: 5px 7px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     .composer { border-top: 1px solid var(--vscode-sideBar-border); padding: 8px 10px 10px; background: var(--vscode-sideBar-background); }
     #pending-attachments { display: flex; gap: 7px; overflow-x: auto; margin-bottom: 6px; }
     .pending-attachment { display: grid; grid-template-columns: 38px minmax(60px, 120px) auto; align-items: center; gap: 6px; flex: 0 0 auto; padding: 4px; border: 1px solid var(--vscode-input-border); border-radius: 6px; background: var(--vscode-input-background); }
@@ -636,6 +698,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     <div class="composer">
       <div id="status"></div>
       <div id="pending-attachments"></div>
+      <div id="pending-interactions"></div>
       <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><button id="context-window" hidden><span id="context-window-label"></span></button></div>
       <div class="prompt-wrap"><div id="slash-commands" hidden></div><textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea></div>
       <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
