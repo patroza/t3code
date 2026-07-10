@@ -358,6 +358,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         latestTurn: thread.latestTurn,
         session: thread.session,
       }),
+      turnStartedAt: thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? null,
       contextWindow: deriveContextWindowUsage(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,
@@ -503,7 +504,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     #context-window:not([hidden]) { display: inline-grid; place-items: center; }
     textarea { width: 100%; min-height: 72px; max-height: 220px; resize: vertical; border: 1px solid var(--vscode-input-border); border-radius: 6px; padding: 8px; outline: none; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     textarea:focus { border-color: var(--vscode-focusBorder); }
-    .composer-actions { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 7px; }
+    .composer-actions { display: grid; grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 7px; }
+    .provider-identity { position: relative; display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; }
+    #provider-icon { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; }
+    #provider-icon svg { width: 100%; height: 100%; }
+    #provider-usage-dot { position: absolute; left: -2px; top: -2px; width: 7px; height: 7px; border: 2px solid var(--vscode-sideBar-background); border-radius: 50%; }
+    #provider-usage-dot.warning { background: var(--vscode-charts-orange); }
+    #provider-usage-dot.critical { background: var(--vscode-charts-red); }
     .composer-actions select { border: 0; padding: 3px 18px 3px 0; color: var(--vscode-descriptionForeground); background-color: transparent; font-size: 11px; text-overflow: ellipsis; }
     #provider { max-width: 9rem; font-weight: 600; }
     #model { max-width: 14rem; }
@@ -538,7 +545,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <div id="model-options"></div>
       <div id="usage-details"></div>
       <textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea>
-      <div class="composer-actions"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><select id="model" aria-label="Thread model"><option>Select a model</option></select><button class="primary" id="send">Send</button></div>
+      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span><span id="provider-usage-dot" hidden></span></span><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><select id="model" aria-label="Thread model"><option>Select a model</option></select><button class="primary" id="send">Send</button></div>
     </div>
   </div>
   <script nonce="${scriptNonce}" src="${scriptUri}"></script>

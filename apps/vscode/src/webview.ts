@@ -5,6 +5,7 @@ import { marked } from "marked";
 import type { AiUsageSnapshot, AiUsageWindow } from "@t3tools/contracts";
 
 import { compactUsageSummary, usageForModel } from "./usagePresentation.ts";
+import { renderProviderIcon } from "./providerIcon.ts";
 
 interface VsCodeApi {
   readonly postMessage: (message: unknown) => void;
@@ -55,6 +56,7 @@ interface ViewState {
     readonly model: string;
     readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
     readonly status: ThreadDisplayStatus;
+    readonly turnStartedAt: string | null;
     readonly contextWindow: null | {
       readonly usedTokens: number;
       readonly maxTokens: number | null;
@@ -111,6 +113,8 @@ const contextLabel = requiredElement<HTMLElement>("context-label");
 const contextWindowMeter = requiredElement<HTMLButtonElement>("context-window");
 const contextWindowLabel = requiredElement<HTMLElement>("context-window-label");
 const provider = requiredElement<HTMLSelectElement>("provider");
+const providerIcon = requiredElement<HTMLElement>("provider-icon");
+const providerUsageDot = requiredElement<HTMLElement>("provider-usage-dot");
 const model = requiredElement<HTMLSelectElement>("model");
 const modelOptions = requiredElement<HTMLElement>("model-options");
 const usageDetails = requiredElement<HTMLElement>("usage-details");
@@ -177,6 +181,18 @@ function usageWindowValue(window: AiUsageWindow): string {
     return window.unit === "$" ? `$${window.used.toFixed(2)}` : `${window.used}`;
   }
   return "—";
+}
+
+function formatElapsed(startedAt: string, nowMs: number): string | null {
+  const startMs = Date.parse(startedAt);
+  if (!Number.isFinite(startMs)) return null;
+  const totalSeconds = Math.max(0, Math.floor((nowMs - startMs) / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function renderMarkdown(text: string): HTMLElement {
@@ -309,17 +325,7 @@ function render(next: ViewState): void {
     }
   }
   threads.disabled = next.busy;
-  const activeStatus = draftSelection === null ? next.activeThread?.status : undefined;
-  status.className = next.error === null ? (activeStatus?.kind ?? "") : "error";
-  status.textContent =
-    next.error ??
-    (next.busy
-      ? "Synchronizing…"
-      : activeStatus === undefined
-        ? ""
-        : activeStatus.kind === "working" || activeStatus.kind === "connecting"
-          ? `${activeStatus.label}…`
-          : activeStatus.label);
+  renderActiveStatus(next);
 
   messages.replaceChildren();
   if (draftSelection !== null) {
@@ -388,12 +394,55 @@ function render(next: ViewState): void {
   }
   renderModelOptions(next);
   renderUsageDetails(next);
-  const running = draftSelection === null && next.activeThread?.status.kind === "working";
+  renderProviderIdentity(next);
   provider.disabled = selection === null || draftSelection === null || next.busy;
-  model.disabled = selection === null || running || next.busy;
+  model.disabled = selection === null || next.busy;
   send.disabled = next.busy;
   prompt.disabled = next.busy;
   renderComposerAction();
+}
+
+function renderActiveStatus(state: ViewState): void {
+  const activeStatus = draftSelection === null ? state.activeThread?.status : undefined;
+  status.className = state.error === null ? (activeStatus?.kind ?? "") : "error";
+  if (state.error !== null) {
+    status.textContent = state.error;
+    return;
+  }
+  if (state.busy) {
+    status.textContent = "Synchronizing…";
+    return;
+  }
+  if (activeStatus === undefined) {
+    status.textContent = "";
+    return;
+  }
+  if (activeStatus.kind === "working") {
+    const elapsed = state.activeThread?.turnStartedAt
+      ? formatElapsed(state.activeThread.turnStartedAt, Date.now())
+      : null;
+    status.textContent = elapsed === null ? "Working…" : `Working for ${elapsed}`;
+    return;
+  }
+  status.textContent = activeStatus.kind === "connecting" ? "Connecting…" : activeStatus.label;
+}
+
+function renderProviderIdentity(state: ViewState): void {
+  const candidate = selectedModelCandidate(state);
+  if (candidate === undefined) {
+    providerIcon.replaceChildren();
+    providerUsageDot.hidden = true;
+    return;
+  }
+  renderProviderIcon(providerIcon, candidate.driver, candidate.providerLabel);
+  providerIcon.title = candidate.providerLabel;
+  const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
+  const percentages = usage?.windows
+    .map((window) => window.percent)
+    .filter((percent): percent is number => typeof percent === "number");
+  const worst = percentages && percentages.length > 0 ? Math.max(...percentages) : null;
+  providerUsageDot.hidden = worst === null || worst < 80;
+  providerUsageDot.className = worst !== null && worst >= 100 ? "critical" : "warning";
 }
 
 function renderContextWindow(state: ViewState): void {
@@ -742,3 +791,7 @@ prompt.addEventListener("keydown", (event) => {
   }
 });
 post({ type: "ready" });
+
+globalThis.setInterval(() => {
+  if (currentState !== null) renderActiveStatus(currentState);
+}, 1_000);
