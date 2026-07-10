@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import type { AiUsageSnapshot, AiUsageWindow } from "@t3tools/contracts";
 
+import { splitEditorContext } from "./editorContext.ts";
 import { compareModelUsage, usageForModel } from "./usagePresentation.ts";
 import { renderProviderIcon } from "./providerIcon.ts";
 
@@ -100,6 +101,7 @@ interface ViewState {
     readonly path: string;
     readonly startLine: number;
     readonly endLine: number;
+    readonly kind: "selection" | "cursor-line" | "reference";
   };
 }
 
@@ -272,14 +274,30 @@ function renderMessage(message: ViewMessage): HTMLElement {
   const role = document.createElement("div");
   role.className = "role";
   role.textContent = message.role === "assistant" ? "T3 Code" : message.role;
-  const attachmentOnlyText = message.text.startsWith(
+  const parsedContext = splitEditorContext(message.text);
+  const attachmentOnlyText = parsedContext.text.startsWith(
     "[User attached one or more images without additional text.",
   );
   const content = renderMarkdown(
-    attachmentOnlyText && message.attachments.length > 0 ? "" : message.text,
+    attachmentOnlyText && message.attachments.length > 0 ? "" : parsedContext.text,
   );
   if (message.streaming) content.classList.add("streaming");
   wrapper.append(role, content);
+  if (parsedContext.references.length > 0) {
+    const references = document.createElement("div");
+    references.className = "context-references";
+    for (const reference of parsedContext.references) {
+      const chip = document.createElement("button");
+      chip.className = "context-reference";
+      chip.textContent = `▱ ${reference.path} · ${reference.detail}`;
+      chip.title = `Open ${reference.path}`;
+      chip.addEventListener("click", () =>
+        post({ type: "openEditorContext", path: reference.path, detail: reference.detail }),
+      );
+      references.append(chip);
+    }
+    wrapper.append(references);
+  }
   if (message.attachments.length > 0) {
     const attachments = document.createElement("div");
     attachments.className = "attachments";
@@ -361,13 +379,20 @@ function render(next: ViewState): void {
   }
 
   const editorContext = next.editorContext;
-  contextButton.textContent = next.contextEnabled ? "◉ Context" : "○ Context";
-  contextLabel.textContent =
-    next.contextEnabled && editorContext !== null
-      ? `${editorContext.path}:${editorContext.startLine}${editorContext.endLine === editorContext.startLine ? "" : `-${editorContext.endLine}`}`
-      : next.contextEnabled
-        ? "No active editor"
-        : "Off";
+  contextButton.classList.toggle("excluded", !next.contextEnabled);
+  contextButton.title = next.contextEnabled
+    ? "Exclude active editor context"
+    : "Include active editor context";
+  contextButton.setAttribute("aria-pressed", String(next.contextEnabled));
+  const contextDescription =
+    editorContext === null
+      ? "No active editor"
+      : editorContext.kind === "selection"
+        ? `${editorContext.endLine - editorContext.startLine + 1} lines selected`
+        : `${editorContext.path}:${editorContext.startLine}`;
+  contextLabel.textContent = next.contextEnabled
+    ? contextDescription
+    : `Excluded · ${contextDescription}`;
   renderContextWindow(next);
   const selection = currentSelection(next);
   provider.replaceChildren();

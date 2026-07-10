@@ -115,13 +115,11 @@ async function referenceContexts(
 
 function configuration(): {
   readonly serverUrl: string;
-  readonly includeEditorContext: boolean;
   readonly runtimeMode: RuntimeMode;
 } {
   const config = vscode.workspace.getConfiguration("t3Code");
   return {
     serverUrl: config.get("serverUrl", "http://127.0.0.1:3773"),
-    includeEditorContext: config.get("includeEditorContext", true),
     runtimeMode: config.get<RuntimeMode>("defaultRuntimeMode", "full-access"),
   };
 }
@@ -224,13 +222,11 @@ export function activate(context: vscode.ExtensionContext): void {
     return thread.id;
   };
 
+  const editorContextStateKey = "t3Code.includeEditorContext";
+  const contextEnabled = () => context.globalState.get(editorContextStateKey, true);
   const toggleContext = async (): Promise<boolean> => {
-    const config = vscode.workspace.getConfiguration("t3Code");
-    const next = !config.get("includeEditorContext", true);
-    await config.update("includeEditorContext", next, vscode.ConfigurationTarget.Workspace);
-    void vscode.window.showInformationMessage(
-      `Automatic T3 editor context ${next ? "enabled" : "disabled"}.`,
-    );
+    const next = !contextEnabled();
+    await context.globalState.update(editorContextStateKey, next);
     return next;
   };
 
@@ -252,7 +248,7 @@ export function activate(context: vscode.ExtensionContext): void {
       createThread,
       selectThread: selectThreadById,
       toggleContext,
-      contextEnabled: () => configuration().includeEditorContext,
+      contextEnabled,
       runtimeMode: () => configuration().runtimeMode,
       editorContext: activeEditorContext,
       favoriteProviderIds: () => desktopFavorites.providerIds,
@@ -307,9 +303,8 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      const config = configuration();
       const explicit = await referenceContexts(request.references);
-      const automatic = config.includeEditorContext ? activeEditorContext() : null;
+      const automatic = contextEnabled() ? activeEditorContext() : null;
       const contexts = automatic === null ? explicit : [automatic, ...explicit];
       const prompt = composePrompt(request.prompt, contexts);
       for (const reference of request.references) {
@@ -357,7 +352,7 @@ export function activate(context: vscode.ExtensionContext): void {
         disposeThreadChange = () => disposable.dispose();
       });
       try {
-        await client.sendPrompt({ threadId, prompt, runtimeMode: config.runtimeMode });
+        await client.sendPrompt({ threadId, prompt, runtimeMode: configuration().runtimeMode });
         await completion;
       } finally {
         disposeThreadChange();

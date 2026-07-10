@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { composePrompt, renderTextContext } from "./editorContext.ts";
+import { composePrompt, renderTextContext, splitEditorContext } from "./editorContext.ts";
 
 describe("editor context", () => {
   it("describes precise selections", () => {
@@ -30,5 +30,9 @@ describe("editor context", () => {
     ]);
     expect(rendered).toMatch(/^Explain this\n\n<editor_context>/);
     expect(rendered).toContain("line 1, column 3");
+    expect(splitEditorContext(rendered)).toEqual({
+      text: "Explain this",
+      references: [{ path: "readme.md", detail: "line 1, column 3" }],
+    });
   });
 });

@@ -50,6 +50,7 @@ type WebviewRequest =
       readonly options: ModelSelection["options"];
     }
   | { readonly type: "openLink"; readonly href: string }
+  | { readonly type: "openEditorContext"; readonly path: string; readonly detail: string }
   | { readonly type: "copyText"; readonly text: string }
   | { readonly type: "toggleProviderFavorite"; readonly instanceId: string }
   | { readonly type: "toggleModelFavorite"; readonly modelKey: string }
@@ -120,6 +121,14 @@ function isRequest(value: unknown): value is WebviewRequest {
     );
   }
   if (type === "openLink") return "href" in value && typeof value.href === "string";
+  if (type === "openEditorContext") {
+    return (
+      "path" in value &&
+      typeof value.path === "string" &&
+      "detail" in value &&
+      typeof value.detail === "string"
+    );
+  }
   if (type === "copyText") return "text" in value && typeof value.text === "string";
   if (type === "toggleProviderFavorite") {
     return "instanceId" in value && typeof value.instanceId === "string";
@@ -247,6 +256,22 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         case "openLink":
           await this.#openLink(message.href);
           return;
+        case "openEditorContext": {
+          if (message.path.split("/").includes("..")) return;
+          const uri = vscode.Uri.joinPath(
+            vscode.Uri.file(this.actions.worktreePath()),
+            ...message.path.split("/"),
+          );
+          const document = await vscode.workspace.openTextDocument(uri);
+          const editor = await vscode.window.showTextDocument(document);
+          const line = /(?:line|lines)\s+(\d+)/u.exec(message.detail)?.[1];
+          if (line !== undefined) {
+            const position = new vscode.Position(Math.max(0, Number(line) - 1), 0);
+            editor.selection = new vscode.Selection(position, position);
+            editor.revealRange(new vscode.Range(position, position));
+          }
+          return;
+        }
         case "copyText":
           await vscode.env.clipboard.writeText(message.text);
           return;
@@ -517,8 +542,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .pending-attachment img { width: 38px; height: 38px; border-radius: 4px; object-fit: cover; }
     .pending-attachment span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
     .pending-attachment button { border: 0; padding: 2px 5px; background: transparent; font-size: 16px; }
-    .context { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--vscode-descriptionForeground); font-size: 11px; }
-    .context button { border: 0; background: transparent; padding: 2px 0; color: inherit; }
+    .context { display: flex; align-items: center; gap: 6px; min-height: 28px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .context #context { display: inline-flex; align-items: center; gap: 5px; max-width: min(26rem, calc(100% - 42px)); border: 0; border-radius: 5px; padding: 4px 7px; overflow: hidden; background: color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent); color: inherit; }
+    .context #context::before { content: '▱'; font-size: 14px; }
+    .context #context.excluded::before { content: '◉'; opacity: .65; }
+    #context-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .context-references { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+    .context-reference { max-width: 100%; border: 0; border-radius: 5px; padding: 4px 7px; overflow: hidden; background: color-mix(in srgb, var(--vscode-descriptionForeground) 12%, transparent); color: var(--vscode-descriptionForeground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
     #context-window { --context-percent: 0deg; position: relative; margin-left: auto; min-width: 30px; height: 22px; padding: 0 4px; border-radius: 11px; background: conic-gradient(var(--vscode-charts-blue) var(--context-percent), color-mix(in srgb, var(--vscode-descriptionForeground) 25%, transparent) 0); color: var(--vscode-foreground); font-size: 9px; font-weight: 600; }
     #context-window::before { content: ''; position: absolute; inset: 3px; z-index: 0; border-radius: inherit; background: var(--vscode-sideBar-background); }
     #context-window-label { position: relative; z-index: 1; }
@@ -580,7 +610,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     <div class="composer">
       <div id="status"></div>
       <div id="pending-attachments"></div>
-      <div class="context"><button id="context" title="Toggle automatic editor context">◉ Context</button><span id="context-label"></span><button id="context-window" hidden><span id="context-window-label"></span></button></div>
+      <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><button id="context-window" hidden><span id="context-window-label"></span></button></div>
       <textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea>
       <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
     </div>

@@ -8,6 +8,11 @@ export interface TextContext {
   readonly kind: "selection" | "cursor-line" | "reference";
 }
 
+export interface ParsedEditorContext {
+  readonly text: string;
+  readonly references: ReadonlyArray<{ readonly path: string; readonly detail: string }>;
+}
+
 const MAX_CONTEXT_CHARS = 48_000;
 
 function fenceFor(text: string): string {
@@ -33,4 +38,18 @@ export function renderTextContext(context: TextContext): string {
 export function composePrompt(prompt: string, contexts: ReadonlyArray<TextContext>): string {
   if (contexts.length === 0) return prompt;
   return `${prompt}\n\n<editor_context>\n${contexts.map(renderTextContext).join("\n\n")}\n</editor_context>`;
+}
+
+export function splitEditorContext(prompt: string): ParsedEditorContext {
+  const references: Array<{ path: string; detail: string }> = [];
+  const text = prompt.replace(
+    /\n*<editor_context>\s*([\s\S]*?)\s*<\/editor_context>\s*/gu,
+    (_match, body: string) => {
+      for (const heading of body.matchAll(/^###\s+(.+?)\s+\(([^\n)]+)\)\s*$/gmu)) {
+        references.push({ path: heading[1]!, detail: heading[2]! });
+      }
+      return "";
+    },
+  );
+  return { text: text.trim(), references };
 }

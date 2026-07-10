@@ -32,11 +32,12 @@ The same operations are also available through the optional native Chat particip
   thread. If none exists, it creates one.
 - `@t3 /history`, `/status`, and `/stop` inspect or control the selected server thread.
 
-Automatic editor context is enabled by default and can be disabled with `@t3 /context`, **T3 Code:
-Toggle Automatic Editor Context**, or the `t3Code.includeEditorContext` setting. A non-empty
+Active editor context is included by default and can be toggled from the composer, with
+`@t3 /context`, or **T3 Code: Toggle Automatic Editor Context**. This preference is kept in VS Code's
+extension state and never written to workspace settings. A non-empty
 selection includes the exact character range; an empty selection includes the cursor line and
 column. Explicit Chat references such as `#file` and attached selections are always included.
 
 The **T3 Code: Ask About Selection** editor action opens Chat with `@t3` prefilled. Context is sent
-inside a clearly delimited `<editor_context>` section using workspace-relative paths and language
-aware Markdown fences, so it is preserved in the synchronized T3 thread history.
+as structured-looking provider context using workspace-relative paths and language-aware Markdown
+fences. T3 Code clients present that envelope as a context reference rather than authored text.
