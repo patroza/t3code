@@ -13,7 +13,19 @@ interface ViewThread {
   readonly id: string;
   readonly title: string;
   readonly model: string;
-  readonly state: string;
+  readonly status: ThreadDisplayStatus;
+}
+
+interface ThreadDisplayStatus {
+  readonly kind:
+    | "working"
+    | "completed"
+    | "needs-wake-up"
+    | "connecting"
+    | "needs-attention"
+    | "error"
+    | "ready";
+  readonly label: string;
 }
 
 interface ViewMessage {
@@ -39,7 +51,7 @@ interface ViewState {
     readonly instanceId: string;
     readonly model: string;
     readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
-    readonly state: string;
+    readonly status: ThreadDisplayStatus;
     readonly messages: ReadonlyArray<ViewMessage>;
   };
   readonly models: ReadonlyArray<{
@@ -237,7 +249,7 @@ function render(next: ViewState): void {
     for (const thread of next.threads) {
       const option = document.createElement("option");
       option.value = thread.id;
-      option.textContent = `${thread.title} · ${thread.state}`;
+      option.textContent = `${thread.title} · ${thread.status.label}`;
       threads.append(option);
     }
   } else if (next.threads.length === 0) {
@@ -249,14 +261,23 @@ function render(next: ViewState): void {
     for (const thread of next.threads) {
       const option = document.createElement("option");
       option.value = thread.id;
-      option.textContent = `${thread.title} · ${thread.state}`;
+      option.textContent = `${thread.title} · ${thread.status.label}`;
       option.selected = thread.id === next.activeThread?.id;
       threads.append(option);
     }
   }
   threads.disabled = next.busy;
-  status.className = next.error === null ? "" : "error";
-  status.textContent = next.error ?? (next.busy ? "Synchronizing…" : "");
+  const activeStatus = draftSelection === null ? next.activeThread?.status : undefined;
+  status.className = next.error === null ? (activeStatus?.kind ?? "") : "error";
+  status.textContent =
+    next.error ??
+    (next.busy
+      ? "Synchronizing…"
+      : activeStatus === undefined
+        ? ""
+        : activeStatus.kind === "working" || activeStatus.kind === "connecting"
+          ? `${activeStatus.label}…`
+          : activeStatus.label);
 
   messages.replaceChildren();
   if (draftSelection !== null) {
@@ -317,7 +338,7 @@ function render(next: ViewState): void {
     }
   }
   renderModelOptions(next);
-  const running = draftSelection === null && next.activeThread?.state === "running";
+  const running = draftSelection === null && next.activeThread?.status.kind === "working";
   provider.disabled = selection === null || draftSelection === null || next.busy;
   model.disabled = selection === null || running || next.busy;
   send.disabled = next.busy;
@@ -326,7 +347,7 @@ function render(next: ViewState): void {
 }
 
 function isRunning(): boolean {
-  return draftSelection === null && currentState?.activeThread?.state === "running";
+  return draftSelection === null && currentState?.activeThread?.status.kind === "working";
 }
 
 function hasComposerInput(): boolean {
@@ -338,14 +359,6 @@ function renderComposerAction(): void {
   send.textContent = stopping ? "Stop" : "Send";
   send.title = stopping ? "Stop active turn" : "Send message";
   send.classList.toggle("stop-action", stopping);
-  const wasWorking = status.classList.contains("working");
-  if (isRunning() && (status.textContent === "" || wasWorking)) {
-    status.textContent = "Working";
-    status.classList.add("working");
-  } else {
-    status.classList.remove("working");
-    if (wasWorking && status.textContent === "Working") status.textContent = "";
-  }
 }
 
 function uploadImages(): Array<{

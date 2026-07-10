@@ -12,6 +12,7 @@ import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
 import type { T3Client } from "./t3Client.ts";
+import { resolveThreadDisplayStatus } from "./threadStatus.ts";
 
 interface ChatViewActions {
   readonly worktreePath: () => string;
@@ -76,10 +77,6 @@ function nonce(): string {
   return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
-}
-
-function threadState(thread: OrchestrationThreadShell): string {
-  return thread.latestTurn?.state ?? thread.session?.status ?? "idle";
 }
 
 function isRequest(value: unknown): value is WebviewRequest {
@@ -315,7 +312,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           id: thread.id,
           title: thread.title,
           model: thread.modelSelection.model,
-          state: threadState(thread),
+          status: resolveThreadDisplayStatus(thread),
           updatedAt: thread.updatedAt,
         })),
         activeThread: this.#serializeThread(this.client.activeThread),
@@ -353,7 +350,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       model: thread.modelSelection.model,
       instanceId: thread.modelSelection.instanceId,
       runtimeMode: thread.runtimeMode,
-      state: thread.latestTurn?.state ?? thread.session?.status ?? "idle",
+      status: resolveThreadDisplayStatus({
+        latestTurn: thread.latestTurn,
+        session: thread.session,
+      }),
       messages: thread.messages.map((message) => ({
         id: message.id,
         role: message.role,
@@ -435,9 +435,15 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     select { width: 100%; min-width: 0; border: 1px solid var(--vscode-dropdown-border); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border-radius: 4px; padding: 5px 7px; }
     #status { min-height: 0; padding: 0 10px; color: var(--vscode-descriptionForeground); font-size: 11px; }
     #status.error { color: var(--vscode-errorForeground); padding-top: 7px; padding-bottom: 7px; }
-    #status.working { padding-top: 6px; padding-bottom: 2px; }
-    #status.working::after { content: '…'; display: inline-block; width: 1.2em; overflow: hidden; vertical-align: bottom; animation: working-dots 1.2s steps(4, end) infinite; }
-    @keyframes working-dots { from { width: 0; } to { width: 1.2em; } }
+    #status:not(:empty) { padding-top: 7px; padding-bottom: 5px; }
+    #status:not(.error)::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); vertical-align: 1px; }
+    #status.working { color: var(--vscode-charts-blue); }
+    #status.working::before, #status.connecting::before { background: var(--vscode-charts-blue); animation: status-pulse 1.4s ease-in-out infinite; }
+    #status.completed { color: var(--vscode-charts-green); }
+    #status.completed::before { background: var(--vscode-charts-green); }
+    #status.needs-wake-up, #status.needs-attention { color: var(--vscode-charts-orange); }
+    #status.needs-wake-up::before, #status.needs-attention::before { background: var(--vscode-charts-orange); }
+    @keyframes status-pulse { 50% { opacity: .35; } }
     #messages { overflow-y: auto; padding: 12px 10px 18px; display: flex; flex-direction: column; gap: 14px; }
     .empty { margin: auto; max-width: 260px; text-align: center; color: var(--vscode-descriptionForeground); line-height: 1.5; }
     .message { min-width: 0; }
