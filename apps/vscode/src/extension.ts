@@ -10,7 +10,7 @@ import type {
 import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
-import { DesktopFavoritesStore } from "./desktopFavorites.ts";
+import { DesktopFavoritesStore, readDesktopServerUrl } from "./desktopFavorites.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
 
@@ -169,7 +169,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const ensureConnected = async (): Promise<void> => {
     const config = configuration();
-    await client.connect(config.serverUrl, await context.secrets.get(BEARER_TOKEN_SECRET));
+    const bearerToken = await context.secrets.get(BEARER_TOKEN_SECRET);
+    try {
+      await client.connect(config.serverUrl, bearerToken);
+    } catch (configuredCause) {
+      const desktopServerUrl = vscode.env.remoteName ? null : await readDesktopServerUrl();
+      if (desktopServerUrl === null || new URL(config.serverUrl).toString() === desktopServerUrl) {
+        throw configuredCause;
+      }
+      await client.connect(desktopServerUrl);
+    }
     await client.waitForShell();
   };
 

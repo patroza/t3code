@@ -9,6 +9,29 @@ interface FavoriteEntry {
   readonly model: string;
 }
 
+interface DesktopServerRuntime {
+  readonly origin?: unknown;
+}
+
+export async function readDesktopServerUrl(): Promise<string | null> {
+  for (const candidate of [
+    NodePath.join(NodeOS.homedir(), ".t3", "userdata", "server-runtime.json"),
+    NodePath.join(NodeOS.homedir(), ".t3", "dev", "server-runtime.json"),
+  ]) {
+    try {
+      const runtime = JSON.parse(
+        await NodeFS.promises.readFile(candidate, "utf8"),
+      ) as DesktopServerRuntime;
+      if (typeof runtime.origin === "string" && runtime.origin.trim() !== "") {
+        return new URL(runtime.origin).toString();
+      }
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") continue;
+    }
+  }
+  return null;
+}
+
 function isFavoriteEntry(value: unknown): value is FavoriteEntry {
   return (
     typeof value === "object" &&
