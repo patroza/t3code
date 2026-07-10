@@ -10,7 +10,11 @@ import type {
 import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
-import { DesktopFavoritesStore, readDesktopServerUrl } from "./desktopFavorites.ts";
+import {
+  DesktopFavoritesStore,
+  readDesktopBootstrapCredential,
+  readDesktopServerUrl,
+} from "./desktopFavorites.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
 
@@ -170,14 +174,30 @@ export function activate(context: vscode.ExtensionContext): void {
   const ensureConnected = async (): Promise<void> => {
     const config = configuration();
     const bearerToken = await context.secrets.get(BEARER_TOKEN_SECRET);
+    const bootstrapCredential = await readDesktopBootstrapCredential();
+    const connect = async (serverUrl: string): Promise<void> => {
+      if (bearerToken !== undefined && bearerToken !== "") {
+        try {
+          await client.connect(serverUrl, bearerToken);
+          return;
+        } catch (bearerCause) {
+          if (bootstrapCredential === null) throw bearerCause;
+        }
+      }
+      if (bootstrapCredential !== null) {
+        await client.connectWithBootstrap(serverUrl, bootstrapCredential);
+      } else {
+        await client.connect(serverUrl);
+      }
+    };
     try {
-      await client.connect(config.serverUrl, bearerToken);
+      await connect(config.serverUrl);
     } catch (configuredCause) {
       const desktopServerUrl = vscode.env.remoteName ? null : await readDesktopServerUrl();
       if (desktopServerUrl === null || new URL(config.serverUrl).toString() === desktopServerUrl) {
         throw configuredCause;
       }
-      await client.connect(desktopServerUrl);
+      await connect(desktopServerUrl);
     }
     await client.waitForShell();
   };

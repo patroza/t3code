@@ -30,6 +30,7 @@ import {
   type RpcSession,
 } from "@t3tools/client-runtime/rpc";
 import { resolveRemoteWebSocketConnectionUrl } from "@t3tools/client-runtime/authorization";
+import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
 import { applyShellStreamEvent } from "@t3tools/client-runtime/state/shell";
 import { applyThreadDetailEvent } from "@t3tools/client-runtime/state/threads";
@@ -223,6 +224,17 @@ export class T3Client {
       await this.#runtime.runPromise(Scope.close(scope, Exit.void));
       throw new Error(`Could not connect to T3 Code: ${messageFromCause(cause)}`, { cause });
     }
+  }
+
+  async connectWithBootstrap(httpBaseUrl: string, credential: string): Promise<void> {
+    const session = await this.#runtime.runPromise(
+      bootstrapRemoteBearerSession({
+        httpBaseUrl,
+        credential,
+        clientMetadata: { label: "T3 Code for VS Code", deviceType: "desktop" },
+      }),
+    );
+    await this.connect(httpBaseUrl, session.access_token);
   }
 
   projectsForWorktree(worktreePath: string): ReadonlyArray<OrchestrationProjectShell> {

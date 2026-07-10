@@ -32,6 +32,21 @@ export async function readDesktopServerUrl(): Promise<string | null> {
   return null;
 }
 
+export async function readDesktopBootstrapCredential(): Promise<string | null> {
+  for (const candidate of [
+    NodePath.join(NodeOS.homedir(), ".t3", "userdata", "local-bootstrap-credential"),
+    NodePath.join(NodeOS.homedir(), ".t3", "dev", "local-bootstrap-credential"),
+  ]) {
+    try {
+      const credential = (await NodeFS.promises.readFile(candidate, "utf8")).trim();
+      if (credential !== "") return credential;
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT") continue;
+    }
+  }
+  return null;
+}
+
 function isFavoriteEntry(value: unknown): value is FavoriteEntry {
   return (
     typeof value === "object" &&
