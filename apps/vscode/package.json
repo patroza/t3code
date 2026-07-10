@@ -1,7 +1,7 @@
 {
   "name": "t3-code",
   "displayName": "T3 Code",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "private": true,
   "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
@@ -124,6 +124,11 @@
         "category": "T3 Code"
       },
       {
+        "command": "t3Code.showDiagnostics",
+        "title": "T3 Code: Show Diagnostics",
+        "category": "T3 Code"
+      },
+      {
         "command": "t3Code.setBearerToken",
         "title": "T3 Code: Set Server Bearer Token",
         "category": "T3 Code"
@@ -183,6 +188,7 @@
     "onCommand:t3Code.openChat",
     "onCommand:t3Code.selectThread",
     "onCommand:t3Code.setBearerToken",
+    "onCommand:t3Code.showDiagnostics",
     "onCommand:t3Code.toggleEditorContext",
     "onView:t3Code.chatView",
     "onView:t3Code.chatViewSecondary"

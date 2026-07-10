@@ -112,6 +112,7 @@ function directRequest(input: {
 }
 
 export class T3Client {
+  readonly #log: (message: string) => void;
   readonly #runtime = ManagedRuntime.make(
     Layer.merge(
       rpcSessionFactoryLayer.pipe(Layer.provide(Socket.layerWebSocketConstructorGlobal)),
@@ -139,6 +140,10 @@ export class T3Client {
   #usageListeners = new Set<(snapshot: AiUsageSnapshot | null) => void>();
   #shellWaiters = new Set<(snapshot: OrchestrationShellSnapshot) => void>();
   #threadWaiters = new Set<(thread: OrchestrationThread) => void>();
+
+  constructor(log: (message: string) => void = () => {}) {
+    this.#log = log;
+  }
 
   get shell(): OrchestrationShellSnapshot | null {
     return this.#shell;
@@ -195,9 +200,14 @@ export class T3Client {
       readonly socketUrl: string;
     },
   ): Promise<void> {
+    const startedAt = Date.now();
     const normalizedBaseUrl = new URL(httpBaseUrl).toString();
     const key = `${normalizedBaseUrl}|${bearerToken ?? ""}`;
-    if (this.#session !== null && this.#connectionKey === key) return;
+    if (this.#session !== null && this.#connectionKey === key) {
+      this.#log(`connect reuse endpoint=${normalizedBaseUrl}`);
+      return;
+    }
+    this.#log(`connect start endpoint=${normalizedBaseUrl} prepared=${preparedAuth !== undefined}`);
     await this.#closeConnection();
 
     let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
@@ -252,6 +262,7 @@ export class T3Client {
       this.#session = session;
       this.#connectionKey = key;
       this.#serverConfig = await this.#runtime.runPromise(session.initialConfig);
+      this.#log(`rpc ready in ${Date.now() - startedAt}ms endpoint=${normalizedBaseUrl}`);
       this.#httpBaseUrl = normalizedBaseUrl;
       this.#bearerToken = bearerToken ?? null;
       await this.#loadShellSnapshot(normalizedBaseUrl, bearerToken);
@@ -275,6 +286,7 @@ export class T3Client {
           Effect.asVoid,
         ),
       );
+      this.#log(`connect complete in ${Date.now() - startedAt}ms endpoint=${normalizedBaseUrl}`);
     } catch (cause) {
       await this.#runtime.runPromise(Scope.close(scope, Exit.void));
       throw new Error(`Could not connect to T3 Code: ${messageFromCause(cause)}`, { cause });
@@ -283,7 +295,12 @@ export class T3Client {
 
   async connectWithBootstrap(httpBaseUrl: string, credential: string): Promise<void> {
     const baseUrl = new URL(httpBaseUrl);
-    if (this.#session !== null && this.#httpBaseUrl === baseUrl.toString()) return;
+    if (this.#session !== null && this.#httpBaseUrl === baseUrl.toString()) {
+      this.#log(`bootstrap reuse endpoint=${baseUrl}`);
+      return;
+    }
+    const startedAt = Date.now();
+    this.#log(`bootstrap start endpoint=${baseUrl}`);
     if (isLoopback(baseUrl)) {
       const body = new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -302,6 +319,7 @@ export class T3Client {
         },
         body,
       });
+      this.#log(`bootstrap token in ${Date.now() - startedAt}ms status=${response.status}`);
       const payload: unknown = JSON.parse(response.body);
       if (
         response.status < 200 ||
@@ -316,6 +334,9 @@ export class T3Client {
       const descriptorResponse = await directRequest({
         url: new URL("/.well-known/t3/environment", baseUrl),
       });
+      this.#log(
+        `bootstrap descriptor in ${Date.now() - startedAt}ms status=${descriptorResponse.status}`,
+      );
       const descriptor: unknown = JSON.parse(descriptorResponse.body);
       if (
         descriptorResponse.status < 200 ||
@@ -336,6 +357,7 @@ export class T3Client {
         method: "POST",
         headers: { authorization: `Bearer ${payload.access_token}` },
       });
+      this.#log(`bootstrap ticket in ${Date.now() - startedAt}ms status=${ticketResponse.status}`);
       const ticketPayload: unknown = JSON.parse(ticketResponse.body);
       if (
         ticketResponse.status < 200 ||
@@ -556,11 +578,13 @@ export class T3Client {
   }
 
   #startShellSubscription(session: RpcSession): void {
+    this.#log(`shell stream start after=${this.#shell?.snapshotSequence ?? "snapshot"}`);
     const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeShell](
       this.#shell === null ? {} : { afterSequence: this.#shell.snapshotSequence },
     ).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
+          this.#log(`shell stream item kind=${item.kind}`);
           if (item.kind === "snapshot") this.#shell = item.snapshot;
           else if (this.#shell !== null) this.#shell = applyShellStreamEvent(this.#shell, item);
           if (this.#shell !== null) {
@@ -570,11 +594,14 @@ export class T3Client {
           }
         }),
       ),
+      Effect.tapCause((cause) => Effect.sync(() => this.#log(`shell stream failed ${cause}`))),
     );
     this.#shellFiber = this.#runtime.runFork(stream);
   }
 
   async #loadShellSnapshot(httpBaseUrl: string, bearerToken?: string): Promise<void> {
+    const startedAt = Date.now();
+    this.#log(`shell HTTP start endpoint=${httpBaseUrl}`);
     const url = new URL("/api/orchestration/shell", httpBaseUrl);
     const headers =
       bearerToken === undefined || bearerToken === ""
@@ -590,6 +617,9 @@ export class T3Client {
     }
     const decode = Schema.decodeUnknownSync(Schema.fromJsonString(OrchestrationShellSnapshot));
     this.#shell = decode(response.body);
+    this.#log(
+      `shell HTTP complete in ${Date.now() - startedAt}ms projects=${this.#shell.projects.length} threads=${this.#shell.threads.length} sequence=${this.#shell.snapshotSequence}`,
+    );
     for (const resolve of this.#shellWaiters) resolve(this.#shell);
     this.#shellWaiters.clear();
     for (const listener of this.#shellListeners) listener(this.#shell);
@@ -608,12 +638,16 @@ export class T3Client {
   }
 
   #startThreadSubscription(session: RpcSession, threadId: ThreadId): void {
+    this.#log(
+      `thread stream start id=${threadId} after=${this.#activeThreadSequence ?? "snapshot"}`,
+    );
     const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeThread]({
       threadId,
       ...(this.#activeThreadSequence === null ? {} : { afterSequence: this.#activeThreadSequence }),
     }).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
+          this.#log(`thread stream item id=${threadId} kind=${item.kind}`);
           if (item.kind === "snapshot") {
             this.#activeThread = item.snapshot.thread;
             this.#activeThreadSequence = item.snapshot.snapshotSequence;
@@ -634,11 +668,16 @@ export class T3Client {
           this.#emitThread();
         }),
       ),
+      Effect.tapCause((cause) =>
+        Effect.sync(() => this.#log(`thread stream failed id=${threadId} ${cause}`)),
+      ),
     );
     this.#threadFiber = this.#runtime.runFork(stream);
   }
 
   async #loadThreadSnapshot(threadId: ThreadId): Promise<void> {
+    const startedAt = Date.now();
+    this.#log(`thread HTTP start id=${threadId}`);
     if (this.#httpBaseUrl === null) throw new Error("T3 Code is not connected.");
     const url = new URL(
       `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
@@ -660,6 +699,9 @@ export class T3Client {
     const snapshot = decode(response.body);
     this.#activeThread = snapshot.thread;
     this.#activeThreadSequence = snapshot.snapshotSequence;
+    this.#log(
+      `thread HTTP complete in ${Date.now() - startedAt}ms id=${threadId} messages=${snapshot.thread.messages.length} sequence=${snapshot.snapshotSequence}`,
+    );
     for (const resolve of this.#threadWaiters) resolve(this.#activeThread);
     this.#threadWaiters.clear();
     this.#emitThread();
