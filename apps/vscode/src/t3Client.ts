@@ -10,7 +10,7 @@ import {
   type ClientOrchestrationCommand,
   type ModelSelection,
   type OrchestrationProjectShell,
-  type OrchestrationShellSnapshot,
+  OrchestrationShellSnapshot,
   type OrchestrationThread,
   type OrchestrationThreadShell,
   type RuntimeMode,
@@ -40,6 +40,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
 
@@ -200,6 +201,7 @@ export class T3Client {
       this.#connectionKey = key;
       this.#serverConfig = await this.#runtime.runPromise(session.initialConfig);
       this.#httpBaseUrl = normalizedBaseUrl;
+      await this.#loadShellSnapshot(normalizedBaseUrl, bearerToken);
       this.#emitConnection(true);
       this.#startShellSubscription(session);
       this.#startUsageSubscription(session);
@@ -422,7 +424,9 @@ export class T3Client {
   }
 
   #startShellSubscription(session: RpcSession): void {
-    const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+    const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeShell](
+      this.#shell === null ? {} : { afterSequence: this.#shell.snapshotSequence },
+    ).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
           if (item.kind === "snapshot") this.#shell = item.snapshot;
@@ -436,6 +440,22 @@ export class T3Client {
       ),
     );
     this.#shellFiber = this.#runtime.runFork(stream);
+  }
+
+  async #loadShellSnapshot(httpBaseUrl: string, bearerToken?: string): Promise<void> {
+    const url = new URL("/api/orchestration/shell", httpBaseUrl);
+    const response = await globalThis.fetch(url, {
+      headers:
+        bearerToken === undefined || bearerToken === ""
+          ? {}
+          : { authorization: `Bearer ${bearerToken}` },
+    });
+    if (!response.ok) throw new Error(`Could not load T3 Code threads (HTTP ${response.status}).`);
+    const decode = Schema.decodeUnknownSync(Schema.fromJsonString(OrchestrationShellSnapshot));
+    this.#shell = decode(await response.text());
+    for (const resolve of this.#shellWaiters) resolve(this.#shell);
+    this.#shellWaiters.clear();
+    for (const listener of this.#shellListeners) listener(this.#shell);
   }
 
   #startUsageSubscription(session: RpcSession): void {
