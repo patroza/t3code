@@ -77,3 +77,29 @@ export function compactUsageSummary(item: AiUsageProviderStatus | null): string 
     .map(formatUsageWindow)
     .join(" · ");
 }
+
+export interface ModelUsageTarget {
+  readonly driver: string;
+  readonly model: string;
+}
+
+export interface ComparedModelUsage {
+  readonly summaries: ReadonlyArray<string>;
+  readonly commonSummary: string | null;
+  readonly varies: boolean;
+}
+
+export function compareModelUsage(
+  snapshot: AiUsageSnapshot | null,
+  models: ReadonlyArray<ModelUsageTarget>,
+): ComparedModelUsage {
+  const summaries = models.map((model) =>
+    compactUsageSummary(usageForModel(snapshot, model.driver, model.model)),
+  );
+  const distinct = new Set(summaries);
+  return {
+    summaries,
+    commonSummary: distinct.size === 1 ? (summaries[0] ?? null) : null,
+    varies: distinct.size > 1,
+  };
+}

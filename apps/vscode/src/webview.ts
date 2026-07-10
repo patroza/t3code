@@ -4,7 +4,7 @@ import DOMPurify from "dompurify";
 import { marked } from "marked";
 import type { AiUsageSnapshot, AiUsageWindow } from "@t3tools/contracts";
 
-import { compactUsageSummary, usageForModel } from "./usagePresentation.ts";
+import { compareModelUsage, usageForModel } from "./usagePresentation.ts";
 import { renderProviderIcon } from "./providerIcon.ts";
 
 interface VsCodeApi {
@@ -372,20 +372,29 @@ function render(next: ViewState): void {
     for (const [instanceId, candidate] of providers) {
       const option = document.createElement("option");
       option.value = instanceId;
+      const instanceModels = next.models.filter((model) => model.instanceId === instanceId);
+      const comparedUsage = compareModelUsage(next.aiUsage, instanceModels);
       const usage =
         draftSelection === null
           ? ""
-          : compactUsageSummary(usageForModel(next.aiUsage, candidate.driver, candidate.model));
+          : comparedUsage.varies
+            ? "Limits vary by model"
+            : (comparedUsage.commonSummary ?? "");
       option.textContent = `${candidate.providerLabel}${usage === "" ? "" : ` · ${usage}`}`;
       option.selected = instanceId === selection.instanceId;
       provider.append(option);
     }
-    for (const candidate of next.models.filter(
+    const selectedProviderModels = next.models.filter(
       (candidate) => candidate.instanceId === selection.instanceId,
-    )) {
+    );
+    const comparedUsage = compareModelUsage(next.aiUsage, selectedProviderModels);
+    for (const [index, candidate] of selectedProviderModels.entries()) {
       const option = document.createElement("option");
       option.value = candidate.model;
-      option.textContent = candidate.modelLabel;
+      const modelUsage = comparedUsage.varies
+        ? (comparedUsage.summaries[index] ?? "Usage unavailable")
+        : "";
+      option.textContent = `${candidate.modelLabel}${modelUsage === "" ? "" : ` · ${modelUsage}`}`;
       option.selected = candidate.model === selection.model;
       model.append(option);
     }
