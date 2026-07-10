@@ -45,7 +45,8 @@ interface ViewState {
   readonly models: ReadonlyArray<{
     readonly instanceId: string;
     readonly model: string;
-    readonly label: string;
+    readonly providerLabel: string;
+    readonly modelLabel: string;
     readonly optionDescriptors: ReadonlyArray<
       | {
           readonly id: string;
@@ -83,6 +84,7 @@ const send = requiredElement<HTMLButtonElement>("send");
 const pendingAttachments = requiredElement<HTMLElement>("pending-attachments");
 const contextButton = requiredElement<HTMLButtonElement>("context");
 const contextLabel = requiredElement<HTMLElement>("context-label");
+const provider = requiredElement<HTMLSelectElement>("provider");
 const model = requiredElement<HTMLSelectElement>("model");
 const modelOptions = requiredElement<HTMLElement>("model-options");
 let currentState: ViewState | null = null;
@@ -280,27 +282,43 @@ function render(next: ViewState): void {
       : next.contextEnabled
         ? "No active editor"
         : "Off";
-  model.replaceChildren();
   const selection = currentSelection(next);
+  provider.replaceChildren();
+  model.replaceChildren();
   if (selection === null) {
-    const option = document.createElement("option");
-    option.textContent = next.environmentLabel;
-    option.value = "";
-    model.append(option);
+    const providerOption = document.createElement("option");
+    providerOption.textContent = next.environmentLabel;
+    providerOption.value = "";
+    provider.append(providerOption);
+    const modelOption = document.createElement("option");
+    modelOption.textContent = "Select a thread";
+    modelOption.value = "";
+    model.append(modelOption);
   } else {
+    const providers = new Map<string, string>();
+    for (const candidate of next.models) {
+      providers.set(candidate.instanceId, candidate.providerLabel);
+    }
+    for (const [instanceId, label] of providers) {
+      const option = document.createElement("option");
+      option.value = instanceId;
+      option.textContent = label;
+      option.selected = instanceId === selection.instanceId;
+      provider.append(option);
+    }
     for (const candidate of next.models.filter(
-      (candidate) => draftSelection !== null || candidate.instanceId === selection.instanceId,
+      (candidate) => candidate.instanceId === selection.instanceId,
     )) {
       const option = document.createElement("option");
-      option.value = JSON.stringify([candidate.instanceId, candidate.model]);
-      option.textContent = candidate.label;
-      option.selected =
-        candidate.instanceId === selection.instanceId && candidate.model === selection.model;
+      option.value = candidate.model;
+      option.textContent = candidate.modelLabel;
+      option.selected = candidate.model === selection.model;
       model.append(option);
     }
   }
   renderModelOptions(next);
-  const running = next.activeThread?.state === "running";
+  const running = draftSelection === null && next.activeThread?.state === "running";
+  provider.disabled = selection === null || draftSelection === null || next.busy;
   model.disabled = selection === null || running || next.busy;
   send.disabled = next.busy;
   prompt.disabled = next.busy;
@@ -308,7 +326,7 @@ function render(next: ViewState): void {
 }
 
 function isRunning(): boolean {
-  return currentState?.activeThread?.state === "running";
+  return draftSelection === null && currentState?.activeThread?.state === "running";
 }
 
 function hasComposerInput(): boolean {
@@ -531,18 +549,25 @@ threads.addEventListener("change", () => {
     post({ type: "selectThread", threadId: threads.value });
   }
 });
+provider.addEventListener("change", () => {
+  if (draftSelection === null || currentState === null || provider.value === "") return;
+  const firstModel = currentState.models.find(
+    (candidate) => candidate.instanceId === provider.value,
+  );
+  if (firstModel === undefined) return;
+  draftSelection = { instanceId: firstModel.instanceId, model: firstModel.model, options: [] };
+  render(currentState);
+});
 model.addEventListener("change", () => {
-  if (model.value === "") return;
-  const parsed: unknown = JSON.parse(model.value);
-  if (!Array.isArray(parsed) || typeof parsed[0] !== "string" || typeof parsed[1] !== "string") {
-    return;
-  }
-  if (draftSelection !== null && currentState !== null) {
-    draftSelection = { instanceId: parsed[0], model: parsed[1], options: [] };
+  if (model.value === "" || currentState === null) return;
+  const selection = currentSelection(currentState);
+  if (selection === null) return;
+  if (draftSelection !== null) {
+    draftSelection = { instanceId: selection.instanceId, model: model.value, options: [] };
     render(currentState);
     return;
   }
-  post({ type: "selectModel", instanceId: parsed[0], model: parsed[1], options: [] });
+  post({ type: "selectModel", instanceId: selection.instanceId, model: model.value, options: [] });
 });
 requiredElement("new").addEventListener("click", () => {
   if (currentState === null) return;
