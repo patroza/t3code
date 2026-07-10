@@ -577,6 +577,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     #context-window:not([hidden]) { display: inline-grid; place-items: center; }
     textarea { width: 100%; min-height: 72px; max-height: 220px; resize: vertical; border: 1px solid var(--vscode-input-border); border-radius: 6px; padding: 8px; outline: none; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     textarea:focus { border-color: var(--vscode-focusBorder); }
+    .prompt-wrap { position: relative; }
+    #slash-commands { position: absolute; right: 0; bottom: calc(100% + 5px); left: 0; z-index: 5; overflow: hidden; border: 1px solid var(--vscode-editorWidget-border); border-radius: 7px; background: var(--vscode-editorWidget-background); box-shadow: 0 4px 18px var(--vscode-widget-shadow); }
+    #slash-commands[hidden] { display: none; }
+    .slash-command { display: grid; width: 100%; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; border: 0; border-radius: 0; padding: 7px 9px; text-align: left; background: transparent; color: var(--vscode-foreground); }
+    .slash-command:hover, .slash-command.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+    .slash-command-name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
+    .slash-command-description { overflow: hidden; color: var(--vscode-descriptionForeground); text-overflow: ellipsis; white-space: nowrap; }
     .composer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 7px; }
     .favorite-select { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
     .favorite-toggle { border: 0; padding: 2px 3px; opacity: 0; background: transparent; color: var(--vscode-descriptionForeground); font-size: 14px; line-height: 1; transition: opacity 120ms ease; }
@@ -630,7 +637,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <div id="status"></div>
       <div id="pending-attachments"></div>
       <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><button id="context-window" hidden><span id="context-window-label"></span></button></div>
-      <textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea>
+      <div class="prompt-wrap"><div id="slash-commands" hidden></div><textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea></div>
       <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
     </div>
   </div>

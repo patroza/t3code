@@ -122,6 +122,7 @@ const threads = requiredElement<HTMLSelectElement>("threads");
 const messages = requiredElement<HTMLElement>("messages");
 const status = requiredElement<HTMLElement>("status");
 const prompt = requiredElement<HTMLTextAreaElement>("prompt");
+const slashCommands = requiredElement<HTMLElement>("slash-commands");
 const send = requiredElement<HTMLButtonElement>("send");
 const pendingAttachments = requiredElement<HTMLElement>("pending-attachments");
 const contextButton = requiredElement<HTMLButtonElement>("context");
@@ -151,6 +152,15 @@ interface PendingImage {
 }
 let pendingImages: PendingImage[] = [];
 let usageExpanded = false;
+let selectedSlashCommand = 0;
+
+const COMMANDS = [
+  { name: "/new", description: "Start a new synchronized thread" },
+  { name: "/threads", description: "Choose a worktree thread" },
+  { name: "/model", description: "Choose the active model" },
+  { name: "/context", description: "Include or exclude editor context" },
+  { name: "/stop", description: "Stop the active turn" },
+] as const;
 
 marked.setOptions({
   gfm: true,
@@ -891,6 +901,8 @@ function renderModelOptions(state: ViewState): void {
 }
 
 function submit(): void {
+  const slash = prompt.value.trim();
+  if (slash.startsWith("/") && executeSlashCommand(slash)) return;
   if (!hasComposerInput()) return;
   const images = uploadImages();
   if (draftSelection !== null) {
@@ -905,6 +917,78 @@ function submit(): void {
     return;
   }
   post({ type: "send", text: prompt.value, images });
+}
+
+function beginNewThread(): void {
+  if (currentState === null) return;
+  const active = currentSelection(currentState);
+  const fallback = currentState.models[0];
+  if (active === null && fallback === undefined) return;
+  draftSelection = active ?? {
+    instanceId: fallback!.instanceId,
+    model: fallback!.model,
+    options: [],
+  };
+  prompt.value = "";
+  slashCommands.hidden = true;
+  render(currentState);
+  prompt.focus();
+}
+
+function executeSlashCommand(value: string): boolean {
+  const command = COMMANDS.find((candidate) => candidate.name === value.toLowerCase());
+  if (command === undefined) return false;
+  prompt.value = "";
+  slashCommands.hidden = true;
+  switch (command.name) {
+    case "/new":
+      beginNewThread();
+      break;
+    case "/threads":
+      threads.focus();
+      threads.click();
+      break;
+    case "/model":
+      model.focus();
+      model.click();
+      break;
+    case "/context":
+      post({ type: "toggleContext" });
+      break;
+    case "/stop":
+      post({ type: "stop" });
+      break;
+  }
+  renderComposerAction();
+  return true;
+}
+
+function matchingSlashCommands(): ReadonlyArray<(typeof COMMANDS)[number]> {
+  const query = prompt.value.trim().toLowerCase();
+  if (!query.startsWith("/") || query.includes(" ")) return [];
+  return COMMANDS.filter((command) => command.name.startsWith(query));
+}
+
+function renderSlashCommands(): void {
+  const matching = matchingSlashCommands();
+  selectedSlashCommand = Math.min(selectedSlashCommand, Math.max(0, matching.length - 1));
+  slashCommands.replaceChildren();
+  slashCommands.hidden = matching.length === 0;
+  for (const [index, command] of matching.entries()) {
+    const button = document.createElement("button");
+    button.className = `slash-command${index === selectedSlashCommand ? " selected" : ""}`;
+    button.type = "button";
+    const name = document.createElement("span");
+    name.className = "slash-command-name";
+    name.textContent = command.name;
+    const description = document.createElement("span");
+    description.className = "slash-command-description";
+    description.textContent = command.description;
+    button.append(name, description);
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => executeSlashCommand(command.name));
+    slashCommands.append(button);
+  }
 }
 
 function positionUsageDetails(): void {
@@ -986,26 +1070,18 @@ requiredElement("usage-toggle").addEventListener("click", () => {
 });
 requiredElement("usage-control").addEventListener("pointerenter", positionUsageDetails);
 globalThis.addEventListener("resize", positionUsageDetails);
-requiredElement("new").addEventListener("click", () => {
-  if (currentState === null) return;
-  const active = currentSelection(currentState);
-  const fallback = currentState.models[0];
-  if (active === null && fallback === undefined) return;
-  draftSelection = active ?? {
-    instanceId: fallback!.instanceId,
-    model: fallback!.model,
-    options: [],
-  };
-  render(currentState);
-  prompt.focus();
-});
+requiredElement("new").addEventListener("click", beginNewThread);
 requiredElement("refresh").addEventListener("click", () => post({ type: "refresh" }));
 contextButton.addEventListener("click", () => post({ type: "toggleContext" }));
 send.addEventListener("click", () => {
   if (isRunning() && !hasComposerInput()) post({ type: "stop" });
   else submit();
 });
-prompt.addEventListener("input", renderComposerAction);
+prompt.addEventListener("input", () => {
+  selectedSlashCommand = 0;
+  renderSlashCommands();
+  renderComposerAction();
+});
 prompt.addEventListener("paste", (event) => {
   const images = [...(event.clipboardData?.files ?? [])].filter((file) =>
     file.type.startsWith("image/"),
@@ -1015,8 +1091,26 @@ prompt.addEventListener("paste", (event) => {
   void addClipboardImages(images);
 });
 prompt.addEventListener("keydown", (event) => {
+  const matching = matchingSlashCommands();
+  if (matching.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+    event.preventDefault();
+    selectedSlashCommand =
+      (selectedSlashCommand + (event.key === "ArrowDown" ? 1 : -1) + matching.length) %
+      matching.length;
+    renderSlashCommands();
+    return;
+  }
+  if (event.key === "Escape" && !slashCommands.hidden) {
+    event.preventDefault();
+    slashCommands.hidden = true;
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
+    if (matching.length > 0) {
+      executeSlashCommand(matching[selectedSlashCommand]!.name);
+      return;
+    }
     submit();
   }
 });
