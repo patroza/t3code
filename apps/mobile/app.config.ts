@@ -26,9 +26,10 @@ const IOS_BUNDLE_IDENTIFIER = repoEnv.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER ?? "co
 const IOS_TEAM_ID = isIosPersonalTeamBuild
   ? repoEnv.T3CODE_MOBILE_IOS_TEAM_ID
   : (repoEnv.T3CODE_MOBILE_IOS_TEAM_ID ?? "ARK85ZXQ4Z");
-const EAS_PROJECT_ID =
-  repoEnv.T3CODE_MOBILE_EAS_PROJECT_ID ?? "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
 const EXPO_OWNER = repoEnv.T3CODE_MOBILE_EXPO_OWNER ?? "pingdotgg";
+const EAS_PROJECT_ID =
+  repoEnv.T3CODE_MOBILE_EAS_PROJECT_ID ??
+  (EXPO_OWNER === "pingdotgg" ? "d763fcb8-d37c-41ea-a773-b54a0ab4a454" : undefined);
 
 const VARIANT_CONFIG: Record<
   AppVariant,
@@ -130,12 +131,15 @@ const config: ExpoConfig = {
   orientation: "portrait",
   icon: "./assets/icon.png",
   userInterfaceStyle: "automatic",
-  updates: {
-    enabled: !IS_IOS_PERSONAL_TEAM_BUILD,
-    url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
-    checkAutomatically: "ON_LOAD",
-    fallbackToCacheTimeout: 0,
-  },
+  updates:
+    EAS_PROJECT_ID === undefined
+      ? { enabled: false }
+      : {
+          enabled: !IS_IOS_PERSONAL_TEAM_BUILD,
+          url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
+          checkAutomatically: "ON_LOAD",
+          fallbackToCacheTimeout: 0,
+        },
   ios: {
     icon: variant.iosIcon,
     supportsTablet: true,
@@ -295,9 +299,7 @@ const config: ExpoConfig = {
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
-    eas: {
-      projectId: EAS_PROJECT_ID,
-    },
+    ...(EAS_PROJECT_ID === undefined ? {} : { eas: { projectId: EAS_PROJECT_ID } }),
   },
   owner: EXPO_OWNER,
 };
