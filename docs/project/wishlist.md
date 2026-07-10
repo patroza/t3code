@@ -7,6 +7,69 @@ when it's ripe.
 
 ---
 
+## Reopen existing worktrees without an active thread
+
+**Status:** idea · **Area:** apps/web + apps/server (composer workspace picker, VCS RPC)
+
+### Problem / use case
+
+Worktrees are currently discoverable through threads and indirectly through the
+ref picker. If every thread associated with a worktree has been closed, the
+worktree disappears from the sidebar even though it still exists on disk.
+
+It is possible to create a draft in **Current checkout**, open the ref picker,
+and select a ref marked `worktree`, but that path is not obvious. A user looking
+for a workspace reasonably expects the workspace picker to list it.
+
+### Proposed solution
+
+Extend the existing **Current checkout** workspace dropdown to include existing
+worktrees for the selected project and environment:
+
+- Keep **Current checkout** and **New worktree** as the primary choices.
+- Add an **Existing worktrees** group showing the branch/ref and a compact path.
+- Selecting one creates or updates the draft with its `branch`, `worktreePath`,
+  and worktree environment mode; it must reuse the checkout without running
+  `git worktree add` or switching its ref.
+- Make the worktree group searchable and give the popup a bounded height with
+  proper keyboard-accessible scrolling/virtualization. Repositories may have
+  many worktrees, so the list must not grow the dropdown beyond the viewport.
+- Keep the ref picker's existing `worktree` badges as a complementary shortcut.
+
+### Smallest useful scope
+
+List attached, branch-backed worktrees in a scrollable **Existing worktrees**
+section of the workspace picker and allow opening a new draft in the selected
+worktree. Refresh the list when the picker opens and after worktree creation or
+removal.
+
+### Design notes
+
+- The current ref-list implementation already reads
+  `git worktree list --porcelain` and exposes a `worktreePath` on matching local
+  refs. This can support a prototype.
+- Prefer a dedicated `vcs.listWorktrees` RPC for the durable implementation so
+  discovery is independent of ref search/pagination and can include detached
+  HEAD worktrees and explicit prunable/missing-state handling.
+- Worktree identity should be its canonical path, not its branch name. Branch
+  and final path segment are display metadata.
+- Scope discovery to the selected project and execution environment; a local
+  worktree path is not assumed to exist in another environment.
+- The existing **Current checkout** wording should remain unchanged. It refers
+  to the project's primary checkout; existing worktrees are additional choices
+  in the same workspace menu.
+
+### Open questions
+
+- Should existing worktrees appear only in the composer workspace picker, or
+  also as threadless groups in the project sidebar?
+- Should missing/prunable worktrees be hidden, disabled with an explanation, or
+  offered with a prune action?
+- When the list is long, is one searchable combined workspace menu sufficient,
+  or should **Existing worktrees…** open a dedicated combobox/submenu?
+
+---
+
 ## Per-project idea queue + pluggable integrations (deferred, provider-agnostic drafts)
 
 **Status:** idea · **Area:** apps/web + apps/server (orchestration, MCP/RPC)
