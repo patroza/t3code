@@ -183,7 +183,15 @@ export class T3Client {
     return new Promise((resolve) => this.#threadWaiters.add(resolve));
   }
 
-  async connect(httpBaseUrl: string, bearerToken?: string): Promise<void> {
+  async connect(
+    httpBaseUrl: string,
+    bearerToken?: string,
+    preparedAuth?: {
+      readonly environmentId: EnvironmentId;
+      readonly label: string;
+      readonly socketUrl: string;
+    },
+  ): Promise<void> {
     const normalizedBaseUrl = new URL(httpBaseUrl).toString();
     const key = `${normalizedBaseUrl}|${bearerToken ?? ""}`;
     if (this.#session !== null && this.#connectionKey === key) return;
@@ -192,7 +200,11 @@ export class T3Client {
     let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
     let socketUrl = localSocketUrl(normalizedBaseUrl);
     let label = "T3 Code";
-    if (bearerToken !== undefined && bearerToken !== "") {
+    if (preparedAuth !== undefined) {
+      environmentId = preparedAuth.environmentId;
+      label = preparedAuth.label;
+      socketUrl = preparedAuth.socketUrl;
+    } else if (bearerToken !== undefined && bearerToken !== "") {
       const descriptor = await this.#runtime.runPromise(
         fetchRemoteEnvironmentDescriptor({ httpBaseUrl: normalizedBaseUrl }),
       );
@@ -297,7 +309,48 @@ export class T3Client {
       ) {
         throw new Error(`Could not authenticate with T3 Code (HTTP ${response.status}).`);
       }
-      await this.connect(baseUrl.toString(), payload.access_token);
+      const descriptorResponse = await directRequest({
+        url: new URL("/.well-known/t3/environment", baseUrl),
+      });
+      const descriptor: unknown = JSON.parse(descriptorResponse.body);
+      if (
+        descriptorResponse.status < 200 ||
+        descriptorResponse.status >= 300 ||
+        typeof descriptor !== "object" ||
+        descriptor === null ||
+        !("environmentId" in descriptor) ||
+        typeof descriptor.environmentId !== "string" ||
+        !("label" in descriptor) ||
+        typeof descriptor.label !== "string"
+      ) {
+        throw new Error(
+          `Could not identify the T3 Code environment (HTTP ${descriptorResponse.status}).`,
+        );
+      }
+      const ticketResponse = await directRequest({
+        url: new URL("/api/auth/websocket-ticket", baseUrl),
+        method: "POST",
+        headers: { authorization: `Bearer ${payload.access_token}` },
+      });
+      const ticketPayload: unknown = JSON.parse(ticketResponse.body);
+      if (
+        ticketResponse.status < 200 ||
+        ticketResponse.status >= 300 ||
+        typeof ticketPayload !== "object" ||
+        ticketPayload === null ||
+        !("ticket" in ticketPayload) ||
+        typeof ticketPayload.ticket !== "string"
+      ) {
+        throw new Error(`Could not open a T3 Code session (HTTP ${ticketResponse.status}).`);
+      }
+      const socketUrl = new URL(wsBaseUrl(baseUrl.toString()));
+      socketUrl.pathname = "/ws";
+      socketUrl.searchParams.set("wsTicket", ticketPayload.ticket);
+      await this.connect(baseUrl.toString(), payload.access_token, {
+        environmentId: EnvironmentId.make(descriptor.environmentId),
+        label: descriptor.label,
+        socketUrl: socketUrl.toString(),
+      });
       return;
     }
     const session = await this.#runtime.runPromise(
