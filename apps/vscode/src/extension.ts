@@ -156,7 +156,7 @@ function newestAssistantMessage(thread: OrchestrationThread): OrchestrationMessa
 
 export function activateExtension(
   context: vscode.ExtensionContext,
-  output: vscode.OutputChannel,
+  showDiagnostics: () => Promise<void>,
   log: (message: string) => void,
 ): void {
   log(
@@ -410,7 +410,7 @@ export function activateExtension(
   const participant = vscode.chat.createChatParticipant("t3-code.chat", handler);
   participant.iconPath = new vscode.ThemeIcon("comment-discussion");
   context.subscriptions.push(
-    vscode.commands.registerCommand("t3Code.showDiagnostics", () => output.show(true)),
+    vscode.commands.registerCommand("t3Code.showDiagnostics", showDiagnostics),
     chatView,
     vscode.window.registerWebviewViewProvider(T3ChatViewProvider.primaryViewType, chatView, {
       webviewOptions: { retainContextWhenHidden: true },

@@ -90,7 +90,11 @@ function directRequest(input: {
     const transport = input.url.protocol === "https:" ? NodeHttps : NodeHttp;
     const request = transport.request(
       input.url,
-      { method: input.method ?? "GET", headers: input.headers },
+      {
+        method: input.method ?? "GET",
+        headers: { connection: "close", ...input.headers },
+        agent: false,
+      },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer | string) =>
