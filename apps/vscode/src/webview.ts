@@ -1,7 +1,10 @@
 /* oxlint-disable no-unsanitized/property, unicorn/require-post-message-target-origin -- Markdown is sanitized; VS Code's postMessage API has no targetOrigin argument. */
-// @effect-diagnostics globalTimers:off
+// @effect-diagnostics globalDate:off globalTimers:off
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import type { AiUsageSnapshot, AiUsageWindow } from "@t3tools/contracts";
+
+import { compactUsageSummary, usageForModel } from "./usagePresentation.ts";
 
 interface VsCodeApi {
   readonly postMessage: (message: unknown) => void;
@@ -52,11 +55,19 @@ interface ViewState {
     readonly model: string;
     readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
     readonly status: ThreadDisplayStatus;
+    readonly contextWindow: null | {
+      readonly usedTokens: number;
+      readonly maxTokens: number | null;
+      readonly usedPercentage: number | null;
+      readonly totalProcessedTokens: number | null;
+      readonly compactsAutomatically: boolean;
+    };
     readonly messages: ReadonlyArray<ViewMessage>;
   };
   readonly models: ReadonlyArray<{
     readonly instanceId: string;
     readonly model: string;
+    readonly driver: string;
     readonly providerLabel: string;
     readonly modelLabel: string;
     readonly optionDescriptors: ReadonlyArray<
@@ -79,6 +90,7 @@ interface ViewState {
         }
     >;
   }>;
+  readonly aiUsage: AiUsageSnapshot | null;
   readonly contextEnabled: boolean;
   readonly editorContext: null | {
     readonly path: string;
@@ -96,9 +108,12 @@ const send = requiredElement<HTMLButtonElement>("send");
 const pendingAttachments = requiredElement<HTMLElement>("pending-attachments");
 const contextButton = requiredElement<HTMLButtonElement>("context");
 const contextLabel = requiredElement<HTMLElement>("context-label");
+const contextWindowMeter = requiredElement<HTMLButtonElement>("context-window");
+const contextWindowLabel = requiredElement<HTMLElement>("context-window-label");
 const provider = requiredElement<HTMLSelectElement>("provider");
 const model = requiredElement<HTMLSelectElement>("model");
 const modelOptions = requiredElement<HTMLElement>("model-options");
+const usageDetails = requiredElement<HTMLElement>("usage-details");
 let currentState: ViewState | null = null;
 let draftSelection: null | {
   instanceId: string;
@@ -135,6 +150,33 @@ function emptyMessage(text: string): HTMLElement {
   element.className = "empty";
   element.textContent = text;
   return element;
+}
+
+function formatTokens(value: number | null): string {
+  if (value === null) return "?";
+  if (value < 1_000) return `${Math.round(value)}`;
+  if (value < 1_000_000) return `${Math.round(value / 1_000)}k`;
+  return `${(value / 1_000_000).toFixed(1).replace(/\.0$/u, "")}m`;
+}
+
+function formatReset(resetsAt: number | null | undefined): string {
+  if (typeof resetsAt !== "number") return "";
+  const remainingMinutes = Math.max(0, Math.round((resetsAt * 1_000 - Date.now()) / 60_000));
+  if (remainingMinutes === 0) return "resetting";
+  const days = Math.floor(remainingMinutes / 1_440);
+  const hours = Math.floor((remainingMinutes % 1_440) / 60);
+  const minutes = remainingMinutes % 60;
+  if (days > 0) return `resets in ${days}d ${hours}h`;
+  if (hours > 0) return `resets in ${hours}h ${minutes}m`;
+  return `resets in ${minutes}m`;
+}
+
+function usageWindowValue(window: AiUsageWindow): string {
+  if (typeof window.percent === "number") return `${Math.round(window.percent)}%`;
+  if (typeof window.used === "number") {
+    return window.unit === "$" ? `$${window.used.toFixed(2)}` : `${window.used}`;
+  }
+  return "—";
 }
 
 function renderMarkdown(text: string): HTMLElement {
@@ -303,6 +345,7 @@ function render(next: ViewState): void {
       : next.contextEnabled
         ? "No active editor"
         : "Off";
+  renderContextWindow(next);
   const selection = currentSelection(next);
   provider.replaceChildren();
   model.replaceChildren();
@@ -316,14 +359,17 @@ function render(next: ViewState): void {
     modelOption.value = "";
     model.append(modelOption);
   } else {
-    const providers = new Map<string, string>();
+    const providers = new Map<string, (typeof next.models)[number]>();
     for (const candidate of next.models) {
-      providers.set(candidate.instanceId, candidate.providerLabel);
+      if (!providers.has(candidate.instanceId)) providers.set(candidate.instanceId, candidate);
     }
-    for (const [instanceId, label] of providers) {
+    for (const [instanceId, candidate] of providers) {
       const option = document.createElement("option");
       option.value = instanceId;
-      option.textContent = label;
+      const usage = compactUsageSummary(
+        usageForModel(next.aiUsage, candidate.driver, candidate.model),
+      );
+      option.textContent = `${candidate.providerLabel}${usage === "" ? "" : ` · ${usage}`}`;
       option.selected = instanceId === selection.instanceId;
       provider.append(option);
     }
@@ -332,18 +378,97 @@ function render(next: ViewState): void {
     )) {
       const option = document.createElement("option");
       option.value = candidate.model;
-      option.textContent = candidate.modelLabel;
+      const usage = compactUsageSummary(
+        usageForModel(next.aiUsage, candidate.driver, candidate.model),
+      );
+      option.textContent = `${candidate.modelLabel}${usage === "" ? "" : ` · ${usage}`}`;
       option.selected = candidate.model === selection.model;
       model.append(option);
     }
   }
   renderModelOptions(next);
+  renderUsageDetails(next);
   const running = draftSelection === null && next.activeThread?.status.kind === "working";
   provider.disabled = selection === null || draftSelection === null || next.busy;
   model.disabled = selection === null || running || next.busy;
   send.disabled = next.busy;
   prompt.disabled = next.busy;
   renderComposerAction();
+}
+
+function renderContextWindow(state: ViewState): void {
+  const usage = draftSelection === null ? state.activeThread?.contextWindow : null;
+  if (usage == null) {
+    contextWindowMeter.hidden = true;
+    return;
+  }
+  contextWindowMeter.hidden = false;
+  const percent = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
+  contextWindowMeter.style.setProperty("--context-percent", `${percent * 3.6}deg`);
+  contextWindowMeter.classList.toggle("critical", percent >= 90);
+  contextWindowLabel.textContent =
+    usage.usedPercentage === null ? formatTokens(usage.usedTokens) : `${Math.round(percent)}%`;
+  const details = [
+    `Context: ${formatTokens(usage.usedTokens)}${usage.maxTokens === null ? "" : ` / ${formatTokens(usage.maxTokens)}`}`,
+  ];
+  if (usage.totalProcessedTokens !== null) {
+    details.push(`Total processed: ${formatTokens(usage.totalProcessedTokens)}`);
+  }
+  if (usage.compactsAutomatically) details.push("Automatic compaction enabled");
+  contextWindowMeter.title = details.join("\n");
+  contextWindowMeter.setAttribute("aria-label", details.join(". "));
+}
+
+function renderUsageDetails(state: ViewState): void {
+  usageDetails.replaceChildren();
+  usageDetails.className = "";
+  const candidate = selectedModelCandidate(state);
+  if (candidate === undefined) return;
+  const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
+  if (usage === null) return;
+  usageDetails.className = "usage-details";
+  if (!usage.ok) {
+    const unavailable = document.createElement("div");
+    unavailable.className = "usage-unavailable";
+    unavailable.textContent = usage.error ?? "Usage unavailable";
+    usageDetails.append(unavailable);
+    return;
+  }
+  for (const window of usage.windows) {
+    const row = document.createElement("div");
+    row.className = "usage-window";
+    const heading = document.createElement("div");
+    heading.className = "usage-window-heading";
+    const label = document.createElement("span");
+    label.textContent = window.label;
+    const value = document.createElement("span");
+    value.textContent = usageWindowValue(window);
+    heading.append(label, value);
+    row.append(heading);
+    if (typeof window.percent === "number") {
+      const track = document.createElement("div");
+      track.className = "usage-track";
+      const fill = document.createElement("div");
+      fill.className = `usage-fill${window.percent >= 100 ? " critical" : window.percent >= 80 ? " warning" : ""}`;
+      fill.style.width = `${Math.max(0, Math.min(100, window.percent))}%`;
+      track.append(fill);
+      row.append(track);
+    }
+    const reset = formatReset(window.resets_at);
+    if (reset !== "") {
+      const resetLabel = document.createElement("div");
+      resetLabel.className = "usage-reset";
+      resetLabel.textContent = reset;
+      row.append(resetLabel);
+    }
+    usageDetails.append(row);
+  }
+  if (usage.stale) {
+    const stale = document.createElement("div");
+    stale.className = "usage-unavailable";
+    stale.textContent = "Showing last known usage";
+    usageDetails.append(stale);
+  }
 }
 
 function isRunning(): boolean {

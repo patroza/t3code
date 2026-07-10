@@ -2,6 +2,7 @@
 import {
   DEFAULT_MODEL,
   DEFAULT_RUNTIME_MODE,
+  type AiUsageSnapshot,
   EnvironmentId,
   ORCHESTRATION_WS_METHODS,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -81,16 +82,19 @@ export class T3Client {
   #session: RpcSession | null = null;
   #shellFiber: Fiber.Fiber<void, unknown> | null = null;
   #threadFiber: Fiber.Fiber<void, unknown> | null = null;
+  #usageFiber: Fiber.Fiber<void, unknown> | null = null;
   #closedFiber: Fiber.Fiber<void, never> | null = null;
   #shell: OrchestrationShellSnapshot | null = null;
   #activeThread: OrchestrationThread | null = null;
   #activeThreadId: ThreadId | null = null;
   #serverConfig: ServerConfig | null = null;
+  #aiUsage: AiUsageSnapshot | null = null;
   #httpBaseUrl: string | null = null;
   #connectionKey = "";
   #listeners = new Set<ThreadListener>();
   #shellListeners = new Set<ShellListener>();
   #connectionListeners = new Set<ConnectionListener>();
+  #usageListeners = new Set<(snapshot: AiUsageSnapshot | null) => void>();
   #shellWaiters = new Set<(snapshot: OrchestrationShellSnapshot) => void>();
   #threadWaiters = new Set<(thread: OrchestrationThread) => void>();
 
@@ -106,6 +110,10 @@ export class T3Client {
     return this.#serverConfig;
   }
 
+  get aiUsage(): AiUsageSnapshot | null {
+    return this.#aiUsage;
+  }
+
   onThreadChanged(listener: ThreadListener): { dispose(): void } {
     this.#listeners.add(listener);
     return { dispose: () => this.#listeners.delete(listener) };
@@ -119,6 +127,11 @@ export class T3Client {
   onConnectionChanged(listener: ConnectionListener): { dispose(): void } {
     this.#connectionListeners.add(listener);
     return { dispose: () => this.#connectionListeners.delete(listener) };
+  }
+
+  onAiUsageChanged(listener: (snapshot: AiUsageSnapshot | null) => void): { dispose(): void } {
+    this.#usageListeners.add(listener);
+    return { dispose: () => this.#usageListeners.delete(listener) };
   }
 
   async waitForShell(): Promise<OrchestrationShellSnapshot> {
@@ -188,6 +201,7 @@ export class T3Client {
       this.#httpBaseUrl = normalizedBaseUrl;
       this.#emitConnection(true);
       this.#startShellSubscription(session);
+      this.#startUsageSubscription(session);
       if (this.#activeThreadId !== null)
         this.#startThreadSubscription(session, this.#activeThreadId);
       this.#closedFiber = this.#runtime.runFork(
@@ -412,6 +426,18 @@ export class T3Client {
     this.#shellFiber = this.#runtime.runFork(stream);
   }
 
+  #startUsageSubscription(session: RpcSession): void {
+    const stream = session.client[WS_METHODS.subscribeAiUsage]({}).pipe(
+      Stream.runForEach((snapshot) =>
+        Effect.sync(() => {
+          this.#aiUsage = snapshot;
+          for (const listener of this.#usageListeners) listener(snapshot);
+        }),
+      ),
+    );
+    this.#usageFiber = this.#runtime.runFork(stream);
+  }
+
   #startThreadSubscription(session: RpcSession, threadId: ThreadId): void {
     const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeThread]({ threadId }).pipe(
       Stream.runForEach((item) =>
@@ -454,6 +480,12 @@ export class T3Client {
 
   async #closeConnection(): Promise<void> {
     await this.#stopThreadSubscription();
+    if (this.#usageFiber !== null) {
+      await this.#runtime.runPromise(Fiber.interrupt(this.#usageFiber));
+      this.#usageFiber = null;
+    }
+    this.#aiUsage = null;
+    for (const listener of this.#usageListeners) listener(null);
     if (this.#closedFiber !== null) {
       await this.#runtime.runPromise(Fiber.interrupt(this.#closedFiber));
       this.#closedFiber = null;

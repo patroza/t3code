@@ -13,6 +13,7 @@ import * as vscode from "vscode";
 import { composePrompt, type TextContext } from "./editorContext.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
+import { deriveContextWindowUsage } from "./usagePresentation.ts";
 
 interface ChatViewActions {
   readonly worktreePath: () => string;
@@ -139,6 +140,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     this.#disposables = [
       client.onShellChanged(() => this.#publish()),
       client.onThreadChanged(() => this.#publish()),
+      client.onAiUsageChanged(() => this.#publish()),
       client.onConnectionChanged((connected) => {
         if (!connected) this.#error = "Connection lost. Refresh to reconnect to T3 Code.";
         this.#publish();
@@ -323,11 +325,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
               provider.models.map((model) => ({
                 instanceId: provider.instanceId,
                 model: model.slug,
+                driver: provider.driver,
                 providerLabel: provider.displayName ?? provider.driver,
                 modelLabel: model.name,
                 optionDescriptors: model.capabilities?.optionDescriptors ?? [],
               })),
             ) ?? [],
+        aiUsage: this.client.aiUsage,
         contextEnabled: this.actions.contextEnabled(),
         editorContext:
           editorContext === null
@@ -354,6 +358,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         latestTurn: thread.latestTurn,
         session: thread.session,
       }),
+      contextWindow: deriveContextWindowUsage(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,
         role: message.role,
@@ -428,14 +433,14 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
     button.primary:hover { background: var(--vscode-button-hoverBackground); }
     button:disabled { opacity: .5; cursor: default; }
-    #app { height: 100%; display: grid; grid-template-rows: auto auto 1fr auto; }
+    #app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; }
     .toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 10px; border-bottom: 1px solid var(--vscode-sideBar-border); }
     .icon-button { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; padding: 0; }
     .icon-button svg { display: block; }
     select { width: 100%; min-width: 0; border: 1px solid var(--vscode-dropdown-border); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border-radius: 4px; padding: 5px 7px; }
     #status { min-height: 0; padding: 0 10px; color: var(--vscode-descriptionForeground); font-size: 11px; }
     #status.error { color: var(--vscode-errorForeground); padding-top: 7px; padding-bottom: 7px; }
-    #status:not(:empty) { padding-top: 7px; padding-bottom: 5px; }
+    #status:not(:empty) { padding: 0 0 6px; }
     #status:not(.error)::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); vertical-align: 1px; }
     #status.working { color: var(--vscode-charts-blue); }
     #status.working::before, #status.connecting::before { background: var(--vscode-charts-blue); animation: status-pulse 1.4s ease-in-out infinite; }
@@ -489,6 +494,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .pending-attachment button { border: 0; padding: 2px 5px; background: transparent; font-size: 16px; }
     .context { display: flex; align-items: center; gap: 6px; min-height: 24px; color: var(--vscode-descriptionForeground); font-size: 11px; }
     .context button { border: 0; background: transparent; padding: 2px 0; color: inherit; }
+    #context-window { --context-percent: 0deg; position: relative; margin-left: auto; min-width: 30px; height: 22px; padding: 0 4px; border-radius: 11px; background: conic-gradient(var(--vscode-charts-blue) var(--context-percent), color-mix(in srgb, var(--vscode-descriptionForeground) 25%, transparent) 0); color: var(--vscode-foreground); font-size: 9px; font-weight: 600; }
+    #context-window::before { content: ''; position: absolute; inset: 3px; z-index: 0; border-radius: inherit; background: var(--vscode-sideBar-background); }
+    #context-window-label { position: relative; z-index: 1; }
+    #context-window { isolation: isolate; }
+    #context-window::after { content: attr(aria-label); position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    #context-window.critical { background: conic-gradient(var(--vscode-charts-red) var(--context-percent), color-mix(in srgb, var(--vscode-descriptionForeground) 25%, transparent) 0); }
+    #context-window:not([hidden]) { display: inline-grid; place-items: center; }
     textarea { width: 100%; min-height: 72px; max-height: 220px; resize: vertical; border: 1px solid var(--vscode-input-border); border-radius: 6px; padding: 8px; outline: none; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     textarea:focus { border-color: var(--vscode-focusBorder); }
     .composer-actions { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 7px; }
@@ -499,6 +511,15 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     #model-options { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 3px 0 6px; }
     .model-option { display: flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 11px; }
     .model-option select { width: auto; padding: 2px 4px; }
+    .usage-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; margin: 2px 0 7px; padding: 7px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px; background: color-mix(in srgb, var(--vscode-editorWidget-background) 65%, transparent); }
+    .usage-window { min-width: 0; }
+    .usage-window-heading { display: flex; justify-content: space-between; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .usage-track { height: 3px; margin-top: 3px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--vscode-descriptionForeground) 18%, transparent); }
+    .usage-fill { height: 100%; border-radius: inherit; background: var(--vscode-charts-blue); }
+    .usage-fill.warning { background: var(--vscode-charts-orange); }
+    .usage-fill.critical { background: var(--vscode-charts-red); }
+    .usage-reset { margin-top: 2px; overflow: hidden; color: var(--vscode-descriptionForeground); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+    .usage-unavailable { color: var(--vscode-descriptionForeground); font-size: 10px; }
     #send.stop-action { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   </style>
 </head>
@@ -509,12 +530,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <button id="new" class="icon-button" title="New synchronized thread" aria-label="New synchronized thread"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7.5 2a.5.5 0 0 1 .5.5V7h4.5a.5.5 0 0 1 0 1H8v4.5a.5.5 0 0 1-1 0V8H2.5a.5.5 0 0 1 0-1H7V2.5a.5.5 0 0 1 .5-.5Z"/></svg></button>
       <button id="refresh" title="Refresh">↻</button>
     </div>
-    <div id="status"></div>
     <main id="messages"><div class="empty">Connecting to T3 Code…</div></main>
     <div class="composer">
+      <div id="status"></div>
       <div id="pending-attachments"></div>
-      <div class="context"><button id="context" title="Toggle automatic editor context">◉ Context</button><span id="context-label"></span></div>
+      <div class="context"><button id="context" title="Toggle automatic editor context">◉ Context</button><span id="context-label"></span><button id="context-window" hidden><span id="context-window-label"></span></button></div>
       <div id="model-options"></div>
+      <div id="usage-details"></div>
       <textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea>
       <div class="composer-actions"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><select id="model" aria-label="Thread model"><option>Select a model</option></select><button class="primary" id="send">Send</button></div>
     </div>
