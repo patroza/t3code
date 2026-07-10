@@ -13,6 +13,7 @@ import * as vscode from "vscode";
 import { composePrompt, type TextContext } from "./editorContext.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
+import { presentToolCalls } from "./toolPresentation.ts";
 import { deriveContextWindowUsage } from "./usagePresentation.ts";
 
 interface ChatViewActions {
@@ -409,11 +410,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       }),
       turnStartedAt: thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? null,
       contextWindow: deriveContextWindowUsage(thread.activities),
+      toolCalls: presentToolCalls(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,
         role: message.role,
         text: message.text,
         streaming: message.streaming,
+        createdAt: message.createdAt,
         attachments: (message.attachments ?? []).map((attachment) => ({
           ...attachment,
           previewUrl: this.#attachmentUrls.get(attachment.id) ?? null,
@@ -505,6 +508,19 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .message { min-width: 0; }
     .message.user { align-self: flex-end; max-width: 92%; border-radius: 12px 12px 3px 12px; padding: 8px 10px; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
     .message.assistant, .message.system { align-self: stretch; }
+    .tool-call { align-self: stretch; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .tool-call summary { display: grid; grid-template-columns: 22px auto minmax(0, 1fr) auto; align-items: center; min-height: 28px; gap: 4px; border-radius: 5px; padding: 3px 6px; cursor: pointer; list-style: none; }
+    .tool-call summary::-webkit-details-marker { display: none; }
+    .tool-call summary:hover { background: color-mix(in srgb, var(--vscode-descriptionForeground) 8%, transparent); }
+    .tool-call-icon { display: inline-grid; width: 20px; height: 20px; place-items: center; font-family: var(--vscode-editor-font-family); color: var(--vscode-descriptionForeground); }
+    .tool-call-title { overflow: hidden; color: var(--vscode-foreground); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-call-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-call-state { margin-left: 4px; color: var(--vscode-charts-green); }
+    .tool-call.running .tool-call-state { color: var(--vscode-charts-blue); animation: status-pulse 1.4s ease-in-out infinite; }
+    .tool-call.failed .tool-call-state { color: var(--vscode-errorForeground); }
+    .tool-call.stopped .tool-call-state { color: var(--vscode-charts-orange); }
+    .tool-call.not-expandable summary { cursor: default; }
+    .tool-call-detail { max-height: 260px; overflow: auto; margin: 3px 6px 4px 28px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 5px; padding: 8px 10px; background: var(--vscode-textCodeBlock-background); color: var(--vscode-editor-foreground); font: 11px/1.45 var(--vscode-editor-font-family); white-space: pre-wrap; overflow-wrap: anywhere; }
     .role { color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
     .content { overflow-wrap: anywhere; line-height: 1.55; }
     .markdown-body > :first-child { margin-top: 0; }

@@ -38,12 +38,23 @@ interface ViewMessage {
   readonly role: "user" | "assistant" | "system";
   readonly text: string;
   readonly streaming: boolean;
+  readonly createdAt: string;
   readonly attachments: ReadonlyArray<{
     readonly id: string;
     readonly name: string;
     readonly mimeType: string;
     readonly previewUrl: string | null;
   }>;
+}
+
+interface ViewToolCall {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly title: string;
+  readonly itemType: string | null;
+  readonly status: "running" | "completed" | "failed" | "stopped";
+  readonly preview: string | null;
+  readonly detail: string | null;
 }
 
 interface ViewState {
@@ -66,6 +77,7 @@ interface ViewState {
       readonly compactsAutomatically: boolean;
     };
     readonly messages: ReadonlyArray<ViewMessage>;
+    readonly toolCalls: ReadonlyArray<ViewToolCall>;
   };
   readonly models: ReadonlyArray<{
     readonly instanceId: string;
@@ -344,6 +356,51 @@ function renderMessage(message: ViewMessage): HTMLElement {
   return wrapper;
 }
 
+function toolIcon(itemType: string | null): string {
+  if (itemType === "command_execution") return ">_";
+  if (itemType === "file_change") return "±";
+  if (itemType === "web_search") return "⌕";
+  if (itemType === "image_view") return "◉";
+  return "⌘";
+}
+
+function renderToolCall(tool: ViewToolCall): HTMLElement {
+  const wrapper = document.createElement("details");
+  wrapper.className = `tool-call ${tool.status}`;
+  const summary = document.createElement("summary");
+  const icon = document.createElement("span");
+  icon.className = "tool-call-icon";
+  icon.textContent = toolIcon(tool.itemType);
+  const title = document.createElement("span");
+  title.className = "tool-call-title";
+  title.textContent = tool.title;
+  const preview = document.createElement("span");
+  preview.className = "tool-call-preview";
+  preview.textContent = tool.preview === null ? "" : ` · ${tool.preview.replace(/\s+/gu, " ")}`;
+  const state = document.createElement("span");
+  state.className = "tool-call-state";
+  state.textContent =
+    tool.status === "completed"
+      ? "✓"
+      : tool.status === "running"
+        ? "●"
+        : tool.status === "stopped"
+          ? "■"
+          : "×";
+  summary.append(icon, title, preview, state);
+  wrapper.append(summary);
+  if (tool.detail !== null) {
+    const detail = document.createElement("pre");
+    detail.className = "tool-call-detail";
+    detail.textContent = tool.detail;
+    wrapper.append(detail);
+  } else {
+    wrapper.classList.add("not-expandable");
+    summary.addEventListener("click", (event) => event.preventDefault());
+  }
+  return wrapper;
+}
+
 function render(next: ViewState): void {
   currentState = next;
   const wasNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
@@ -380,7 +437,10 @@ function render(next: ViewState): void {
   messages.replaceChildren();
   if (draftSelection !== null) {
     messages.append(emptyMessage("Choose a provider and model, then send your first message."));
-  } else if (next.activeThread === null || next.activeThread.messages.length === 0) {
+  } else if (
+    next.activeThread === null ||
+    (next.activeThread.messages.length === 0 && next.activeThread.toolCalls.length === 0)
+  ) {
     messages.append(
       emptyMessage(
         next.activeThread === null
@@ -389,7 +449,21 @@ function render(next: ViewState): void {
       ),
     );
   } else {
-    messages.append(...next.activeThread.messages.map(renderMessage));
+    const timeline = [
+      ...next.activeThread.messages.map((message) => ({
+        createdAt: message.createdAt,
+        order: 0,
+        element: renderMessage(message),
+      })),
+      ...next.activeThread.toolCalls.map((tool) => ({
+        createdAt: tool.createdAt,
+        order: 1,
+        element: renderToolCall(tool),
+      })),
+    ].toSorted(
+      (left, right) => left.createdAt.localeCompare(right.createdAt) || left.order - right.order,
+    );
+    messages.append(...timeline.map((item) => item.element));
     if (wasNearBottom) messages.scrollTop = messages.scrollHeight;
   }
 
