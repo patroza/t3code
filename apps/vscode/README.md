@@ -14,9 +14,11 @@ remain synchronized. It also provides an optional native `@t3` participant insid
 4. Select the **T3 Code** tab in the secondary sidebar. Use **T3 Code: Open Chat** from the Command
    Palette if the secondary sidebar is hidden.
 
-For a different backend, set `t3Code.serverUrl`. Remote servers can use **T3 Code: Set Server
-Bearer Token**; the token is stored in VS Code secret storage and exchanged for a short-lived
-WebSocket ticket.
+The extension first uses the backend advertised by the T3 Desktop runtime beside its extension
+host. This works independently in local, SSH, and other remote windows and avoids treating a
+synced `127.0.0.1` setting as the same machine. For a fallback backend, set `t3Code.serverUrl`.
+Remote servers can use **T3 Code: Set Server Bearer Token**; the token is stored in VS Code secret
+storage and exchanged for a short-lived WebSocket ticket.
 
 ## Dedicated chat workflow
 

@@ -15,6 +15,7 @@ import {
   readDesktopBootstrapCredential,
   readDesktopServerUrl,
 } from "./desktopFavorites.ts";
+import { serverCandidates } from "./serverResolution.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
 
@@ -200,16 +201,23 @@ export function activate(context: vscode.ExtensionContext): void {
         await client.connect(serverUrl);
       }
     };
-    try {
-      await connect(config.serverUrl);
-    } catch (configuredCause) {
-      const desktopServerUrl = vscode.env.remoteName ? null : await readDesktopServerUrl();
-      if (desktopServerUrl === null || new URL(config.serverUrl).toString() === desktopServerUrl) {
-        throw configuredCause;
+    const desktopServerUrl = await readDesktopServerUrl();
+    const candidates = serverCandidates(desktopServerUrl, config.serverUrl);
+    let lastCause: unknown = new Error("No T3 Code server endpoint is available.");
+    for (const candidate of candidates) {
+      try {
+        log(`connection candidate source=${candidate.source} endpoint=${candidate.url}`);
+        await connect(candidate.url);
+        await client.waitForShell();
+        return;
+      } catch (cause) {
+        lastCause = cause;
+        log(
+          `connection candidate failed source=${candidate.source} endpoint=${candidate.url} error=${cause instanceof Error ? cause.message : String(cause)}`,
+        );
       }
-      await connect(desktopServerUrl);
     }
-    await client.waitForShell();
+    throw lastCause;
   };
 
   const rememberThread = async (threadId: ThreadId): Promise<void> => {

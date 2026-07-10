@@ -1,7 +1,7 @@
 {
   "name": "t3-code",
   "displayName": "T3 Code",
-  "version": "0.0.26",
+  "version": "0.0.27",
   "private": true,
   "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
@@ -160,7 +160,7 @@
           "type": "string",
           "scope": "machine",
           "default": "http://127.0.0.1:3773",
-          "description": "T3 Code server HTTP URL. WebSocket and environment endpoints are derived from it."
+          "description": "Fallback T3 Code server HTTP URL when no local T3 Desktop runtime is advertised. WebSocket and environment endpoints are derived from it."
         },
         "t3Code.defaultRuntimeMode": {
           "type": "string",
