@@ -856,20 +856,44 @@ const makeWsRpcLayer = (
 
           const bootstrapProgram = Effect.gen(function* () {
             if (bootstrap?.createThread) {
-              yield* orchestrationEngine.dispatch({
-                type: "thread.create",
-                commandId: yield* serverCommandId("bootstrap-thread-create"),
-                threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
-                title: bootstrap.createThread.title,
-                modelSelection: bootstrap.createThread.modelSelection,
-                runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
-                branch: bootstrap.createThread.branch,
-                worktreePath: bootstrap.createThread.worktreePath,
-                createdAt: bootstrap.createThread.createdAt,
-              });
-              createdThread = true;
+              createdThread = yield* orchestrationEngine
+                .dispatch({
+                  type: "thread.create",
+                  commandId: yield* serverCommandId("bootstrap-thread-create"),
+                  threadId: command.threadId,
+                  projectId: bootstrap.createThread.projectId,
+                  title: bootstrap.createThread.title,
+                  modelSelection: bootstrap.createThread.modelSelection,
+                  runtimeMode: bootstrap.createThread.runtimeMode,
+                  interactionMode: bootstrap.createThread.interactionMode,
+                  branch: bootstrap.createThread.branch,
+                  worktreePath: bootstrap.createThread.worktreePath,
+                  createdAt: bootstrap.createThread.createdAt,
+                })
+                .pipe(
+                  Effect.as(true),
+                  Effect.catch((createError) => {
+                    if (
+                      createError._tag !== "OrchestrationCommandInvariantError" ||
+                      !createError.detail.includes("already exists")
+                    ) {
+                      return Effect.fail(createError);
+                    }
+                    return projectionSnapshotQuery.getThreadShellById(command.threadId).pipe(
+                      Effect.matchEffect({
+                        onFailure: () => Effect.fail(createError),
+                        onSuccess: Option.match({
+                          // A reconnect can replay the bootstrap after its
+                          // thread.create committed but before the turn-start
+                          // response reached the client. Resume the remaining
+                          // bootstrap instead of rejecting the duplicate.
+                          onSome: () => Effect.succeed(false),
+                          onNone: () => Effect.fail(createError),
+                        }),
+                      }),
+                    );
+                  }),
+                );
             }
 
             if (bootstrap?.prepareWorktree) {
