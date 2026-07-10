@@ -87,6 +87,8 @@ export interface DesktopBackendStartConfig {
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
+  /** Connect to this already-running backend without owning or terminating its process. */
+  readonly reuseExisting?: boolean;
   // Present for a WSL run after the configured/default distro has been
   // resolved to the concrete distro passed to wsl.exe.
   readonly runningDistro?: string;
@@ -144,7 +146,10 @@ class BackendProcessSpawnError extends Schema.TaggedErrorClass<BackendProcessSpa
   }
 }
 
-type BackendProcessError = BackendProcessBootstrapEncodeError | BackendProcessSpawnError;
+type BackendProcessError =
+  | BackendProcessBootstrapEncodeError
+  | BackendProcessSpawnError
+  | BackendTimeoutError;
 
 interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly readinessTimeout?: Duration.Duration;
@@ -329,6 +334,14 @@ const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   options: RunBackendProcessOptions,
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  if (options.reuseExisting) {
+    yield* waitForHttpReady(
+      options.httpBaseUrl,
+      options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
+    );
+    yield* options.onReady?.() ?? Effect.void;
+    return yield* Effect.never;
+  }
   const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
     Effect.mapError(
       (cause) => new BackendProcessBootstrapEncodeError({ entryPath: options.entryPath, cause }),

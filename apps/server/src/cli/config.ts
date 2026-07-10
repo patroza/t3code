@@ -1,5 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
@@ -21,6 +25,20 @@ export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).p
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
   Flag.optional,
 );
+
+function getOrCreateLocalBootstrapCredential(path: string): string {
+  try {
+    return NodeFS.readFileSync(path, "utf8").trim();
+  } catch {
+    const credential = NodeCrypto.randomBytes(24).toString("hex");
+    try {
+      NodeFS.writeFileSync(path, `${credential}\n`, { mode: 0o600, flag: "wx" });
+      return credential;
+    } catch {
+      return NodeFS.readFileSync(path, "utf8").trim();
+    }
+  }
+}
 export const portFlag = Flag.integer("port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("Port for the HTTP/WebSocket server."),
@@ -289,6 +307,11 @@ export const resolveServerConfig = (
       ),
       () => mode === "desktop",
     );
+    const localBootstrapCredentialPath = path.join(
+      derivedPaths.stateDir,
+      LOCAL_BOOTSTRAP_CREDENTIAL_FILE,
+    );
+    getOrCreateLocalBootstrapCredential(localBootstrapCredentialPath);
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(

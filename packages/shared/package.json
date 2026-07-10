@@ -75,6 +75,10 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./serverRuntime": {
+      "types": "./src/serverRuntime.ts",
+      "import": "./src/serverRuntime.ts"
+    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"

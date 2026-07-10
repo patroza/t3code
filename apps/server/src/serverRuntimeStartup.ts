@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics preferSchemaOverJson:off
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -21,6 +23,9 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import { SERVER_RUNTIME_DESCRIPTOR_FILE } from "@t3tools/shared/serverRuntime";
 
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -432,6 +437,39 @@ export const make = Effect.gen(function* () {
       yield* commandGate.signalCommandReady;
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+      const runtimeDescriptorPath = NodePath.join(
+        serverConfig.stateDir,
+        SERVER_RUNTIME_DESCRIPTOR_FILE,
+      );
+      const descriptorHost =
+        serverConfig.host === undefined || isWildcardHost(serverConfig.host)
+          ? "127.0.0.1"
+          : serverConfig.host;
+      const runtimeStartedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          runtimeDescriptorPath,
+          `${JSON.stringify({
+            version: 1,
+            pid: process.pid,
+            stateDir: serverConfig.stateDir,
+            httpBaseUrl: `http://${formatHostForUrl(descriptorHost)}:${serverConfig.port}`,
+            startedAt: runtimeStartedAt,
+          })}\n`,
+          { mode: 0o600 },
+        ),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          try {
+            const current = JSON.parse(await NodeFSP.readFile(runtimeDescriptorPath, "utf8")) as {
+              pid?: unknown;
+            };
+            if (current.pid === process.pid)
+              await NodeFSP.rm(runtimeDescriptorPath, { force: true });
+          } catch {}
+        }),
+      );
       yield* Effect.logDebug("startup phase: publishing ready event");
       yield* runStartupPhase(
         "ready.publish",
