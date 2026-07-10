@@ -23,7 +23,9 @@ if (
   );
 }
 const IOS_BUNDLE_IDENTIFIER = repoEnv.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER ?? "com.t3tools.t3code";
-const IOS_TEAM_ID = repoEnv.T3CODE_MOBILE_IOS_TEAM_ID ?? "ARK85ZXQ4Z";
+const IOS_TEAM_ID = isIosPersonalTeamBuild
+  ? repoEnv.T3CODE_MOBILE_IOS_TEAM_ID
+  : (repoEnv.T3CODE_MOBILE_IOS_TEAM_ID ?? "ARK85ZXQ4Z");
 const EAS_PROJECT_ID =
   repoEnv.T3CODE_MOBILE_EAS_PROJECT_ID ?? "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
 const EXPO_OWNER = repoEnv.T3CODE_MOBILE_EXPO_OWNER ?? "pingdotgg";
@@ -129,7 +131,7 @@ const config: ExpoConfig = {
   icon: "./assets/icon.png",
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: true,
+    enabled: !IS_IOS_PERSONAL_TEAM_BUILD,
     url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
@@ -141,11 +143,15 @@ const config: ExpoConfig = {
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
-    appleTeamId: IOS_TEAM_ID,
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    ...(IOS_TEAM_ID ? { appleTeamId: IOS_TEAM_ID } : {}),
+    ...(IS_IOS_PERSONAL_TEAM_BUILD
+      ? {}
+      : {
+          associatedDomains: [
+            `applinks:${variant.relyingParty}`,
+            `webcredentials:${variant.relyingParty}`,
+          ],
+        }),
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
