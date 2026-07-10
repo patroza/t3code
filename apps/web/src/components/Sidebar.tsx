@@ -20,6 +20,8 @@ import {
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
   usePrStatusIndicator,
+  useThreadGroupPrStatus,
+  type PrStatusIndicator,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -1040,16 +1042,10 @@ const SidebarThreadGroupEnvironmentIndicator = memo(
 );
 
 function SidebarThreadGroupLeadingIndicator(props: {
-  environmentId: EnvironmentId;
-  branch: string | null;
-  checkoutPath: string;
+  prStatus: PrStatusIndicator | null;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
 }) {
-  const prStatus = usePrStatusIndicator({
-    environmentId: props.environmentId,
-    branch: props.branch,
-    gitCwd: props.checkoutPath,
-  });
+  const prStatus = props.prStatus;
   const handlePrClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       if (!prStatus) return;
@@ -1093,10 +1089,17 @@ const SidebarThreadWorktreeSectionBlock = memo(function SidebarThreadWorktreeSec
       readonly showEnvironmentIndicator?: boolean;
       readonly showPrStatus?: boolean;
       readonly showWorktreeIndicator?: boolean;
+      readonly gitCwd?: string | null;
     },
   ) => React.ReactNode;
 }) {
   const firstThread = props.section.threads[0] ?? null;
+  const groupPrStatus = useThreadGroupPrStatus({
+    environmentId: firstThread ? firstThread.environmentId : null,
+    cwd: props.section.checkoutPath,
+    threads: props.section.threads,
+  });
+  const memberShowPrStatus = !groupPrStatus.allSame;
 
   return (
     <React.Fragment>
@@ -1107,9 +1110,7 @@ const SidebarThreadWorktreeSectionBlock = memo(function SidebarThreadWorktreeSec
         >
           {firstThread ? (
             <SidebarThreadGroupLeadingIndicator
-              environmentId={firstThread.environmentId}
-              branch={props.section.branch}
-              checkoutPath={props.section.checkoutPath}
+              prStatus={groupPrStatus.shared}
               openPrLink={props.openPrLink}
             />
           ) : (
@@ -1152,8 +1153,9 @@ const SidebarThreadWorktreeSectionBlock = memo(function SidebarThreadWorktreeSec
         {props.section.threads.map((thread) =>
           props.renderThreadRow(thread, {
             showEnvironmentIndicator: false,
-            showPrStatus: false,
+            showPrStatus: memberShowPrStatus,
             showWorktreeIndicator: false,
+            gitCwd: props.section.checkoutPath,
           }),
         )}
       </div>

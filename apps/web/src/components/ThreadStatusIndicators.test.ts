@@ -1,7 +1,12 @@
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { prStatusIndicator, resolveThreadPr } from "./ThreadStatusIndicators";
+import {
+  prStatusIndicator,
+  resolveThreadPr,
+  computeGroupPrConsensus,
+  type PrStatusIndicator,
+} from "./ThreadStatusIndicators";
 
 const openPr = {
   number: 42,
@@ -64,5 +69,52 @@ describe("prStatusIndicator", () => {
       label: "PR open",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
     });
+  });
+});
+
+const openIndicator: PrStatusIndicator = {
+  label: "PR open",
+  colorClass: "text-emerald-600 dark:text-emerald-300/90",
+  tooltip: "#42 PR open: Add feature",
+  url: "https://github.com/org/repo/pull/42",
+};
+
+const mergedIndicator: PrStatusIndicator = {
+  label: "PR merged",
+  colorClass: "text-violet-600 dark:text-violet-300/90",
+  tooltip: "#7 PR merged: Other",
+  url: "https://github.com/org/repo/pull/7",
+};
+
+describe("computeGroupPrConsensus", () => {
+  it("returns a rolled-up shared indicator when every member agrees", () => {
+    const consensus = computeGroupPrConsensus([openIndicator, openIndicator, openIndicator]);
+    expect(consensus.allSame).toBe(true);
+    expect(consensus.shared).toEqual(openIndicator);
+  });
+
+  it("defers to per-member indicators when any member differs", () => {
+    const consensus = computeGroupPrConsensus([openIndicator, mergedIndicator, openIndicator]);
+    expect(consensus.allSame).toBe(false);
+    expect(consensus.shared).toBeNull();
+  });
+
+  it("still rolls up when every member lacks a PR", () => {
+    const consensus = computeGroupPrConsensus([null, null]);
+    expect(consensus.allSame).toBe(true);
+    expect(consensus.shared).toBeNull();
+  });
+
+  it("does not roll up when some members lack a PR and others have one", () => {
+    const consensus = computeGroupPrConsensus([openIndicator, null]);
+    expect(consensus.allSame).toBe(false);
+    expect(consensus.shared).toBeNull();
+  });
+
+  it("treats an empty group as agreeing on nothing", () => {
+    const consensus = computeGroupPrConsensus([]);
+    expect(consensus.allSame).toBe(true);
+    expect(consensus.shared).toBeNull();
+    expect(consensus.indicators).toEqual([]);
   });
 });

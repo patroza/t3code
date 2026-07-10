@@ -2,7 +2,7 @@
  * AI usage - Schemas for the local `ai-usage` daemon feed.
  *
  * A user-run daemon (`ai-usage serve`) exposes normalized coding-plan usage
- * across providers (codex, claude, cursor, zai, opencode) on a small HTTP API.
+ * across providers (codex, claude, cursor, zai, opencode, grok) on a small HTTP API.
  * The server polls its `/dms` endpoint on an interval and fans the latest
  * snapshot to subscribers so the web can mark providers that are near or over
  * their plan limits and help pick the best available AI for a new thread.

@@ -55,12 +55,13 @@ function immediateUsageWindow(item: AiUsageProviderStatus): AiUsageWindow | unde
  * The daemon provider slugs a driver can route to. Most drivers map 1:1, but
  * the `opencode` driver hosts multiple coding plans (opencode-go and z.ai), so
  * it lists both. Order is "default first" — the head is used when no model slug
- * disambiguates. Drivers with no usage feed (e.g. `grok`) return `[]`.
+ * disambiguates. Drivers with no usage feed return `[]`.
  */
 const USAGE_PROVIDERS_BY_DRIVER: Record<string, readonly string[]> = {
   claudeAgent: ["claude"],
   codex: ["codex"],
   cursor: ["cursor"],
+  grok: ["grok"],
   opencode: ["opencode", "zai"],
 };
 
@@ -68,6 +69,7 @@ const USAGE_PROVIDER_LABELS: Record<string, string> = {
   claude: "Claude",
   codex: "Codex",
   cursor: "Cursor",
+  grok: "Grok",
   opencode: "OpenCode",
   zai: "z.ai",
 };

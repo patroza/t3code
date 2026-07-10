@@ -32,6 +32,7 @@ describe("mapDriverToUsageProvider", () => {
     expect(mapDriverToUsageProvider(driver("claudeAgent"), null)).toBe("claude");
     expect(mapDriverToUsageProvider(driver("codex"), null)).toBe("codex");
     expect(mapDriverToUsageProvider(driver("cursor"), null)).toBe("cursor");
+    expect(mapDriverToUsageProvider(driver("grok"), null)).toBe("grok");
     expect(mapDriverToUsageProvider(driver("opencode"), "gpt-oss")).toBe("opencode");
   });
 
@@ -42,7 +43,6 @@ describe("mapDriverToUsageProvider", () => {
   });
 
   it("returns null for drivers with no usage feed", () => {
-    expect(mapDriverToUsageProvider(driver("grok"), null)).toBeNull();
     expect(mapDriverToUsageProvider(null, null)).toBeNull();
     expect(mapDriverToUsageProvider(driver("some-fork-driver"), null)).toBeNull();
   });
@@ -161,13 +161,13 @@ describe("resolveDriverUsage + usageRank", () => {
   });
 
   it("returns null for unmapped drivers", () => {
-    expect(resolveDriverUsage(snapshot, driver("grok"), null)).toBeNull();
+    expect(resolveDriverUsage(snapshot, driver("some-unknown"), null)).toBeNull();
   });
 
   it("ranks by the daemon's item order, trailing unknowns", () => {
     expect(usageRank(snapshot, driver("claudeAgent"), null)).toBe(0);
     expect(usageRank(snapshot, driver("codex"), null)).toBe(1);
-    expect(usageRank(snapshot, driver("grok"), null)).toBe(Number.POSITIVE_INFINITY);
+    expect(usageRank(snapshot, driver("some-unknown"), null)).toBe(Number.POSITIVE_INFINITY);
   });
 
   it("returns null / infinity when the snapshot is unavailable", () => {
@@ -199,7 +199,7 @@ describe("opencode hosts opencode-go + z.ai", () => {
   it("lists both providers for the opencode driver", () => {
     expect(usageProvidersForDriver(driver("opencode"))).toEqual(["opencode", "zai"]);
     expect(usageProvidersForDriver(driver("codex"))).toEqual(["codex"]);
-    expect(usageProvidersForDriver(driver("grok"))).toEqual([]);
+    expect(usageProvidersForDriver(driver("grok"))).toEqual(["grok"]);
   });
 
   it("resolves both hosted providers present in the snapshot", () => {
@@ -218,6 +218,8 @@ describe("opencode hosts opencode-go + z.ai", () => {
   it("labels providers for display", () => {
     expect(usageProviderLabel("zai")).toBe("z.ai");
     expect(usageProviderLabel("opencode")).toBe("OpenCode");
+    expect(usageProviderLabel("grok")).toBe("Grok");
+    expect(usageProviderLabel("codex")).toBe("Codex");
   });
 });
 
