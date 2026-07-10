@@ -10,6 +10,7 @@ import type {
 import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
+import { DesktopFavoritesStore } from "./desktopFavorites.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
 
@@ -153,6 +154,13 @@ function newestAssistantMessage(thread: OrchestrationThread): OrchestrationMessa
 
 export function activate(context: vscode.ExtensionContext): void {
   const client = new T3Client();
+  const desktopFavorites = new DesktopFavoritesStore();
+  context.subscriptions.push(desktopFavorites);
+  void desktopFavorites.initialize().catch((error: unknown) => {
+    void vscode.window.showWarningMessage(
+      `T3 Code could not load desktop favorites: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   const [major = 1, minor = 0] = vscode.version.split(".").map(Number);
   const supportsSecondarySidebar = major > 1 || (major === 1 && minor >= 106);
   void vscode.commands.executeCommand(
@@ -247,6 +255,11 @@ export function activate(context: vscode.ExtensionContext): void {
       contextEnabled: () => configuration().includeEditorContext,
       runtimeMode: () => configuration().runtimeMode,
       editorContext: activeEditorContext,
+      favoriteProviderIds: () => desktopFavorites.providerIds,
+      favoriteModelKeys: () => desktopFavorites.modelKeys,
+      toggleProviderFavorite: (instanceId) => desktopFavorites.toggleProvider(instanceId),
+      toggleModelFavorite: (modelKey) => desktopFavorites.toggleModel(modelKey),
+      onFavoritesChanged: desktopFavorites.onDidChange,
     },
     context.extensionUri,
   );

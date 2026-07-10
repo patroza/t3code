@@ -21,6 +21,7 @@ import {
   getTriggerDisplayModelName,
 } from "./providerIconUtils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import { useClientSettings } from "~/hooks/useSettings";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /**
@@ -50,15 +51,25 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
+  const favoriteProviderIds = useClientSettings((settings) => settings.providerFavorites ?? []);
+  const orderedInstanceEntries = useMemo(() => {
+    const favorites = new Set(favoriteProviderIds);
+    return props.instanceEntries
+      .map((entry, index) => ({ entry, index, favorite: favorites.has(entry.instanceId) }))
+      .toSorted(
+        (left, right) => Number(right.favorite) - Number(left.favorite) || left.index - right.index,
+      )
+      .map(({ entry }) => entry);
+  }, [favoriteProviderIds, props.instanceEntries]);
 
   // Resolve the active instance entry by exact routing key. The composer
   // resolves fallbacks before rendering this component; if the selected
   // instance disappears, do not infer a replacement from its driver kind.
   const activeEntry = useMemo(() => {
     return (
-      props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
+      orderedInstanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
     );
-  }, [props.activeInstanceId, props.instanceEntries]);
+  }, [props.activeInstanceId, orderedInstanceEntries]);
 
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
@@ -71,7 +82,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     selectedInstanceOptions[0];
   const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
   const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
-  const duplicateDriverCount = props.instanceEntries.filter(
+  const duplicateDriverCount = orderedInstanceEntries.filter(
     (entry) => activeEntry !== null && entry.driverKind === activeEntry.driverKind,
   ).length;
   const showInstanceBadge = Boolean(activeEntry?.accentColor) || duplicateDriverCount > 1;
@@ -228,7 +239,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           model={props.model}
           lockedProvider={props.lockedProvider}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
-          instanceEntries={props.instanceEntries}
+          instanceEntries={orderedInstanceEntries}
           usageSnapshot={props.usageSnapshot ?? null}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}
           modelOptionsByInstance={props.modelOptionsByInstance}

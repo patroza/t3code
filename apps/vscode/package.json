@@ -1,7 +1,7 @@
 {
   "name": "t3-code",
   "displayName": "T3 Code",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "private": true,
   "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
@@ -170,6 +170,11 @@
           ],
           "default": "full-access",
           "description": "Runtime mode for new T3 Code threads."
+        },
+        "t3Code.desktopClientSettingsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to T3 Desktop's client-settings.json for sharing provider and model favorites. The default auto-detects ~/.t3/userdata or ~/.t3/dev."
         }
       }
     }

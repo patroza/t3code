@@ -65,6 +65,9 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  providerFavorites: Schema.Array(ProviderInstanceId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   providerModelPreferences: Schema.Record(
     ProviderInstanceId,
     Schema.Struct({
@@ -396,7 +399,6 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
-
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
   // shims and the server starts hydrating instances from it. Driver-specific
@@ -557,6 +559,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  providerFavorites: Schema.optionalKey(Schema.Array(ProviderInstanceId)),
   providerModelPreferences: Schema.optionalKey(
     Schema.Record(
       ProviderInstanceId,

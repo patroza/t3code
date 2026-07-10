@@ -25,6 +25,11 @@ interface ChatViewActions {
   readonly contextEnabled: () => boolean;
   readonly runtimeMode: () => RuntimeMode;
   readonly editorContext: () => TextContext | null;
+  readonly favoriteProviderIds: () => ReadonlyArray<string>;
+  readonly favoriteModelKeys: () => ReadonlyArray<string>;
+  readonly toggleProviderFavorite: (instanceId: string) => Promise<void>;
+  readonly toggleModelFavorite: (modelKey: string) => Promise<void>;
+  readonly onFavoritesChanged: vscode.Event<void>;
 }
 
 type WebviewRequest =
@@ -46,6 +51,8 @@ type WebviewRequest =
     }
   | { readonly type: "openLink"; readonly href: string }
   | { readonly type: "copyText"; readonly text: string }
+  | { readonly type: "toggleProviderFavorite"; readonly instanceId: string }
+  | { readonly type: "toggleModelFavorite"; readonly modelKey: string }
   | {
       readonly type: "send";
       readonly text: string;
@@ -114,6 +121,12 @@ function isRequest(value: unknown): value is WebviewRequest {
   }
   if (type === "openLink") return "href" in value && typeof value.href === "string";
   if (type === "copyText") return "text" in value && typeof value.text === "string";
+  if (type === "toggleProviderFavorite") {
+    return "instanceId" in value && typeof value.instanceId === "string";
+  }
+  if (type === "toggleModelFavorite") {
+    return "modelKey" in value && typeof value.modelKey === "string";
+  }
   return (
     type === "send" && "text" in value && typeof value.text === "string" && hasImageArray(value)
   );
@@ -150,6 +163,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("t3Code")) void this.#refresh();
       }),
+      actions.onFavoritesChanged(() => this.#publish()),
     ];
   }
 
@@ -235,6 +249,14 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           return;
         case "copyText":
           await vscode.env.clipboard.writeText(message.text);
+          return;
+        case "toggleProviderFavorite":
+          await this.actions.toggleProviderFavorite(message.instanceId);
+          this.#publish();
+          return;
+        case "toggleModelFavorite":
+          await this.actions.toggleModelFavorite(message.modelKey);
+          this.#publish();
           return;
         case "stop":
           await this.#run(() => this.client.interrupt());
@@ -332,6 +354,8 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
               })),
             ) ?? [],
         aiUsage: this.client.aiUsage,
+        favoriteProviderIds: this.actions.favoriteProviderIds(),
+        favoriteModelKeys: this.actions.favoriteModelKeys(),
         contextEnabled: this.actions.contextEnabled(),
         editorContext:
           editorContext === null
@@ -505,7 +529,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     textarea { width: 100%; min-height: 72px; max-height: 220px; resize: vertical; border: 1px solid var(--vscode-input-border); border-radius: 6px; padding: 8px; outline: none; background: var(--vscode-input-background); color: var(--vscode-input-foreground); }
     textarea:focus { border-color: var(--vscode-focusBorder); }
     .composer-actions { display: grid; grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 7px; }
-    .provider-identity { position: relative; display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; }
+    .favorite-select { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+    .favorite-toggle { border: 0; padding: 2px 3px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 14px; line-height: 1; }
+    .favorite-toggle.active { color: var(--vscode-charts-yellow, #cca700); }
+    .provider-identity { position: relative; display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border: 0; padding: 2px; background: transparent; color: inherit; }
     #provider-icon { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; }
     #provider-icon svg { width: 100%; height: 100%; }
     #provider-usage-dot { position: absolute; left: -2px; top: -2px; width: 7px; height: 7px; border: 2px solid var(--vscode-sideBar-background); border-radius: 50%; }
@@ -542,10 +569,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <div id="status"></div>
       <div id="pending-attachments"></div>
       <div class="context"><button id="context" title="Toggle automatic editor context">◉ Context</button><span id="context-label"></span><button id="context-window" hidden><span id="context-window-label"></span></button></div>
-      <div id="model-options"></div>
-      <div id="usage-details"></div>
       <textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea>
-      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span><span id="provider-usage-dot" hidden></span></span><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><select id="model" aria-label="Thread model"><option>Select a model</option></select><button class="primary" id="send">Send</button></div>
+      <div id="model-options"></div>
+      <div class="composer-actions"><button id="usage-toggle" class="provider-identity" title="Show provider usage" aria-label="Show provider usage"><span id="provider-icon"></span><span id="provider-usage-dot" hidden></span></button><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><button class="primary" id="send">Send</button></div>
+      <div id="usage-details" hidden></div>
     </div>
   </div>
   <script nonce="${scriptNonce}" src="${scriptUri}"></script>

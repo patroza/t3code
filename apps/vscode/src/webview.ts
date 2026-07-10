@@ -93,6 +93,8 @@ interface ViewState {
     >;
   }>;
   readonly aiUsage: AiUsageSnapshot | null;
+  readonly favoriteProviderIds: ReadonlyArray<string>;
+  readonly favoriteModelKeys: ReadonlyArray<string>;
   readonly contextEnabled: boolean;
   readonly editorContext: null | {
     readonly path: string;
@@ -115,7 +117,9 @@ const contextWindowLabel = requiredElement<HTMLElement>("context-window-label");
 const provider = requiredElement<HTMLSelectElement>("provider");
 const providerIcon = requiredElement<HTMLElement>("provider-icon");
 const providerUsageDot = requiredElement<HTMLElement>("provider-usage-dot");
+const favoriteProvider = requiredElement<HTMLButtonElement>("favorite-provider");
 const model = requiredElement<HTMLSelectElement>("model");
+const favoriteModel = requiredElement<HTMLButtonElement>("favorite-model");
 const modelOptions = requiredElement<HTMLElement>("model-options");
 const usageDetails = requiredElement<HTMLElement>("usage-details");
 let currentState: ViewState | null = null;
@@ -133,6 +137,7 @@ interface PendingImage {
   readonly dataUrl: string;
 }
 let pendingImages: PendingImage[] = [];
+let usageExpanded = false;
 
 marked.setOptions({
   gfm: true,
@@ -181,6 +186,19 @@ function usageWindowValue(window: AiUsageWindow): string {
     return window.unit === "$" ? `$${window.used.toFixed(2)}` : `${window.used}`;
   }
   return "—";
+}
+
+function modelFavoriteKey(instanceId: string, modelSlug: string): string {
+  return `${instanceId}:${modelSlug}`;
+}
+
+function favoritesFirst<A>(items: ReadonlyArray<A>, isFavorite: (item: A) => boolean): A[] {
+  return items
+    .map((item, index) => ({ item, index, favorite: isFavorite(item) }))
+    .toSorted(
+      (left, right) => Number(right.favorite) - Number(left.favorite) || left.index - right.index,
+    )
+    .map(({ item }) => item);
 }
 
 function formatElapsed(startedAt: string, nowMs: number): string | null {
@@ -369,7 +387,10 @@ function render(next: ViewState): void {
     for (const candidate of next.models) {
       if (!providers.has(candidate.instanceId)) providers.set(candidate.instanceId, candidate);
     }
-    for (const [instanceId, candidate] of providers) {
+    const favoriteProviderIds = new Set(next.favoriteProviderIds);
+    for (const [instanceId, candidate] of favoritesFirst([...providers.entries()], ([instanceId]) =>
+      favoriteProviderIds.has(instanceId),
+    )) {
       const option = document.createElement("option");
       option.value = instanceId;
       const instanceModels = next.models.filter((model) => model.instanceId === instanceId);
@@ -384,8 +405,10 @@ function render(next: ViewState): void {
       option.selected = instanceId === selection.instanceId;
       provider.append(option);
     }
-    const selectedProviderModels = next.models.filter(
-      (candidate) => candidate.instanceId === selection.instanceId,
+    const favoriteModelKeys = new Set(next.favoriteModelKeys);
+    const selectedProviderModels = favoritesFirst(
+      next.models.filter((candidate) => candidate.instanceId === selection.instanceId),
+      (candidate) => favoriteModelKeys.has(modelFavoriteKey(candidate.instanceId, candidate.model)),
     );
     const comparedUsage = compareModelUsage(next.aiUsage, selectedProviderModels);
     for (const [index, candidate] of selectedProviderModels.entries()) {
@@ -402,11 +425,32 @@ function render(next: ViewState): void {
   renderModelOptions(next);
   renderUsageDetails(next);
   renderProviderIdentity(next);
+  renderFavoriteControls(next);
   provider.disabled = selection === null || draftSelection === null || next.busy;
   model.disabled = selection === null || next.busy;
   send.disabled = next.busy;
   prompt.disabled = next.busy;
   renderComposerAction();
+}
+
+function renderFavoriteControls(state: ViewState): void {
+  const selection = currentSelection(state);
+  favoriteProvider.disabled = selection === null;
+  favoriteModel.disabled = selection === null;
+  const providerActive =
+    selection !== null && state.favoriteProviderIds.includes(selection.instanceId);
+  const modelActive =
+    selection !== null &&
+    state.favoriteModelKeys.includes(modelFavoriteKey(selection.instanceId, selection.model));
+  for (const [button, active, noun] of [
+    [favoriteProvider, providerActive, "provider"],
+    [favoriteModel, modelActive, "model"],
+  ] as const) {
+    button.textContent = active ? "★" : "☆";
+    button.classList.toggle("active", active);
+    button.title = `${active ? "Remove" : "Add"} ${noun} ${active ? "from" : "to"} favorites`;
+    button.setAttribute("aria-label", button.title);
+  }
 }
 
 function renderActiveStatus(state: ViewState): void {
@@ -478,10 +522,18 @@ function renderContextWindow(state: ViewState): void {
 function renderUsageDetails(state: ViewState): void {
   usageDetails.replaceChildren();
   usageDetails.className = "";
+  usageDetails.hidden = true;
+  const usageToggle = requiredElement<HTMLButtonElement>("usage-toggle");
+  usageToggle.title = "Provider usage unavailable";
+  usageToggle.setAttribute("aria-label", usageToggle.title);
   const candidate = selectedModelCandidate(state);
   if (candidate === undefined) return;
   const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
   if (usage === null) return;
+  usageToggle.title = usageExpanded ? "Hide provider usage" : "Show provider usage";
+  usageToggle.setAttribute("aria-label", usageToggle.title);
+  if (!usageExpanded) return;
+  usageDetails.hidden = false;
   usageDetails.className = "usage-details";
   if (!usage.ok) {
     const unavailable = document.createElement("div");
@@ -762,6 +814,26 @@ model.addEventListener("change", () => {
     return;
   }
   post({ type: "selectModel", instanceId: selection.instanceId, model: model.value, options: [] });
+});
+favoriteProvider.addEventListener("click", () => {
+  if (currentState === null) return;
+  const selection = currentSelection(currentState);
+  if (selection !== null)
+    post({ type: "toggleProviderFavorite", instanceId: selection.instanceId });
+});
+favoriteModel.addEventListener("click", () => {
+  if (currentState === null) return;
+  const selection = currentSelection(currentState);
+  if (selection !== null) {
+    post({
+      type: "toggleModelFavorite",
+      modelKey: modelFavoriteKey(selection.instanceId, selection.model),
+    });
+  }
+});
+requiredElement("usage-toggle").addEventListener("click", () => {
+  usageExpanded = !usageExpanded;
+  if (currentState !== null) renderUsageDetails(currentState);
 });
 requiredElement("new").addEventListener("click", () => {
   if (currentState === null) return;
