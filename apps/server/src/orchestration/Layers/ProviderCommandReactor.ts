@@ -896,7 +896,32 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    // Clearing the projection here is authoritative: a persisted session may
+    // say "running" even though its provider process disappeared yesterday.
+    // Provider cancellation remains best-effort so Abort always restores a
+    // usable composer without mistaking a quiet, live process for a dead one.
+    yield* providerService
+      .interruptTurn({ threadId: event.payload.threadId })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider turn interrupt failed", { cause }),
+        ),
+      );
+
+    const latestThread = yield* resolveThread(event.payload.threadId);
+    const session = latestThread?.session;
+    if (session && session.status !== "stopped") {
+      yield* setThreadSession({
+        threadId: event.payload.threadId,
+        session: {
+          ...session,
+          status: "ready",
+          activeTurnId: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (

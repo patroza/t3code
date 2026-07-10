@@ -476,6 +476,45 @@ export function makeCursorAdapter(
         });
       });
 
+    const handleUnexpectedProcessExit = Effect.fn("handleUnexpectedCursorProcessExit")(function* (
+      ctx: CursorSessionContext,
+      exitCode: number | undefined,
+    ) {
+      yield* withThreadLock(
+        ctx.threadId,
+        Effect.gen(function* () {
+          if (ctx.stopped) return;
+          ctx.stopped = true;
+          yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+          yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+          sessions.delete(ctx.threadId);
+          const reason =
+            exitCode === undefined
+              ? "Cursor ACP process exited unexpectedly."
+              : `Cursor ACP process exited unexpectedly with code ${exitCode}.`;
+          yield* offerRuntimeEvent({
+            type: "runtime.error",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { message: reason, class: "transport_error" },
+          });
+          yield* offerRuntimeEvent({
+            type: "session.exited",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { reason, recoverable: true, exitKind: "error" },
+          });
+          // Events must be published before closing the scope because this
+          // watcher is itself owned by the session scope.
+          yield* Scope.close(ctx.scope, Exit.void);
+        }),
+      );
+    });
+
     const startSession: CursorAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
@@ -780,6 +819,11 @@ export function makeCursorAdapter(
             promptsInFlight: 0,
             stopped: false,
           };
+
+          yield* acp.processExit.pipe(
+            Effect.flatMap((exitCode) => handleUnexpectedProcessExit(ctx, exitCode)),
+            Effect.forkIn(sessionScope),
+          );
 
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
