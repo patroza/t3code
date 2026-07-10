@@ -1,7 +1,7 @@
 {
   "name": "t3-code",
   "displayName": "T3 Code",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "private": true,
   "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
@@ -188,7 +188,6 @@
     "onView:t3Code.chatViewSecondary"
   ],
   "extensionKind": [
-    "ui",
     "workspace"
   ],
   "engines": {
