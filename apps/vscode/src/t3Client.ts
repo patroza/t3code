@@ -13,6 +13,7 @@ import {
   type ModelSelection,
   type OrchestrationProjectShell,
   OrchestrationShellSnapshot,
+  OrchestrationThreadDetailSnapshot,
   type OrchestrationThread,
   type OrchestrationThreadShell,
   type RuntimeMode,
@@ -125,10 +126,12 @@ export class T3Client {
   #closedFiber: Fiber.Fiber<void, never> | null = null;
   #shell: OrchestrationShellSnapshot | null = null;
   #activeThread: OrchestrationThread | null = null;
+  #activeThreadSequence: number | null = null;
   #activeThreadId: ThreadId | null = null;
   #serverConfig: ServerConfig | null = null;
   #aiUsage: AiUsageSnapshot | null = null;
   #httpBaseUrl: string | null = null;
+  #bearerToken: string | null = null;
   #connectionKey = "";
   #listeners = new Set<ThreadListener>();
   #shellListeners = new Set<ShellListener>();
@@ -250,6 +253,7 @@ export class T3Client {
       this.#connectionKey = key;
       this.#serverConfig = await this.#runtime.runPromise(session.initialConfig);
       this.#httpBaseUrl = normalizedBaseUrl;
+      this.#bearerToken = bearerToken ?? null;
       await this.#loadShellSnapshot(normalizedBaseUrl, bearerToken);
       this.#emitConnection(true);
       this.#startShellSubscription(session);
@@ -396,8 +400,10 @@ export class T3Client {
     const session = this.#requireSession();
     this.#activeThreadId = threadId;
     this.#activeThread = null;
+    this.#activeThreadSequence = null;
     this.#emitThread();
     await this.#stopThreadSubscription();
+    await this.#loadThreadSnapshot(threadId);
     this.#startThreadSubscription(session, threadId);
   }
 
@@ -451,6 +457,8 @@ export class T3Client {
       createdAt,
     });
     this.#activeThreadId = threadId;
+    this.#activeThread = null;
+    this.#activeThreadSequence = null;
     await this.#stopThreadSubscription();
     this.#startThreadSubscription(session, threadId);
     return threadId;
@@ -600,11 +608,15 @@ export class T3Client {
   }
 
   #startThreadSubscription(session: RpcSession, threadId: ThreadId): void {
-    const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeThread]({ threadId }).pipe(
+    const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+      threadId,
+      ...(this.#activeThreadSequence === null ? {} : { afterSequence: this.#activeThreadSequence }),
+    }).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
           if (item.kind === "snapshot") {
             this.#activeThread = item.snapshot.thread;
+            this.#activeThreadSequence = item.snapshot.snapshotSequence;
           } else if (this.#activeThread !== null) {
             const result = applyThreadDetailEvent(this.#activeThread, item.event);
             this.#activeThread =
@@ -613,6 +625,7 @@ export class T3Client {
                 : result.kind === "deleted"
                   ? null
                   : this.#activeThread;
+            this.#activeThreadSequence = item.event.sequence;
           }
           if (this.#activeThread !== null) {
             for (const resolve of this.#threadWaiters) resolve(this.#activeThread);
@@ -623,6 +636,33 @@ export class T3Client {
       ),
     );
     this.#threadFiber = this.#runtime.runFork(stream);
+  }
+
+  async #loadThreadSnapshot(threadId: ThreadId): Promise<void> {
+    if (this.#httpBaseUrl === null) throw new Error("T3 Code is not connected.");
+    const url = new URL(
+      `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
+      this.#httpBaseUrl,
+    );
+    const headers =
+      this.#bearerToken === null ? {} : { authorization: `Bearer ${this.#bearerToken}` };
+    const response = isLoopback(url)
+      ? await directRequest({ url, headers })
+      : await globalThis
+          .fetch(url, { headers })
+          .then(async (result) => ({ status: result.status, body: await result.text() }));
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`Could not load the T3 Code thread (HTTP ${response.status}).`);
+    }
+    const decode = Schema.decodeUnknownSync(
+      Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
+    );
+    const snapshot = decode(response.body);
+    this.#activeThread = snapshot.thread;
+    this.#activeThreadSequence = snapshot.snapshotSequence;
+    for (const resolve of this.#threadWaiters) resolve(this.#activeThread);
+    this.#threadWaiters.clear();
+    this.#emitThread();
   }
 
   #emitThread(): void {
@@ -660,9 +700,12 @@ export class T3Client {
       this.#scope = null;
     }
     this.#session = null;
+    this.#activeThread = null;
+    this.#activeThreadSequence = null;
     this.#shell = null;
     this.#serverConfig = null;
     this.#httpBaseUrl = null;
+    this.#bearerToken = null;
     this.#connectionKey = "";
   }
 }
