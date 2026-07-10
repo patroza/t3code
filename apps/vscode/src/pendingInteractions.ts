@@ -54,6 +54,16 @@ function questions(value: unknown): ReadonlyArray<UserInputQuestion> | null {
   return parsed.length === value.length && parsed.length > 0 ? parsed : null;
 }
 
+function isStaleFailure(payload: Record<string, unknown>): boolean {
+  const detail = typeof payload.detail === "string" ? payload.detail.toLowerCase() : "";
+  return (
+    detail.includes("stale pending approval request") ||
+    detail.includes("stale pending user-input request") ||
+    detail.includes("unknown pending approval request") ||
+    detail.includes("unknown pending user-input request")
+  );
+}
+
 export function derivePendingInteractions(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<PendingInteraction> {
@@ -88,6 +98,12 @@ export function derivePendingInteractions(
         });
       }
     } else if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
+      pending.delete(requestId);
+    } else if (
+      (activity.kind === "provider.approval.respond.failed" ||
+        activity.kind === "provider.user-input.respond.failed") &&
+      isStaleFailure(payload)
+    ) {
       pending.delete(requestId);
     }
   }

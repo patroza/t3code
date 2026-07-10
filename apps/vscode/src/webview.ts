@@ -176,6 +176,11 @@ let pendingImages: PendingImage[] = [];
 let usageExpanded = false;
 let selectedSlashCommand = 0;
 const pendingAnswers = new Map<string, Record<string, string | string[]>>();
+const submittedAnswers = new Map<
+  string,
+  Readonly<Record<string, string | ReadonlyArray<string>>>
+>();
+const submittedApprovals = new Map<string, string>();
 
 const COMMANDS = [
   { name: "/new", description: "Start a new synchronized thread" },
@@ -463,6 +468,15 @@ function renderApproval(interaction: ViewPendingApproval): HTMLElement {
   heading.className = "interaction-heading";
   heading.textContent = approvalLabel(interaction.requestKind);
   card.append(heading);
+  const submitted = submittedApprovals.get(interaction.requestId);
+  if (submitted !== undefined) {
+    heading.textContent = "Approval response submitted";
+    const detail = document.createElement("div");
+    detail.className = "interaction-detail";
+    detail.textContent = submitted;
+    card.append(detail);
+    return card;
+  }
   if (interaction.detail !== null) {
     const detail = document.createElement("div");
     detail.className = "interaction-detail";
@@ -479,9 +493,11 @@ function renderApproval(interaction: ViewPendingApproval): HTMLElement {
     const button = document.createElement("button");
     button.textContent = label;
     button.className = className;
-    button.addEventListener("click", () =>
-      post({ type: "approvalResponse", requestId: interaction.requestId, decision }),
-    );
+    button.addEventListener("click", () => {
+      submittedApprovals.set(interaction.requestId, label);
+      if (currentState !== null) renderPendingInteractions(currentState);
+      post({ type: "approvalResponse", requestId: interaction.requestId, decision });
+    });
     actions.append(button);
   }
   card.append(actions);
@@ -495,6 +511,18 @@ function renderUserInput(interaction: ViewPendingUserInput): HTMLElement {
   heading.className = "interaction-heading";
   heading.textContent = "Input requested";
   card.append(heading);
+  const submitted = submittedAnswers.get(interaction.requestId);
+  if (submitted !== undefined) {
+    heading.textContent = "Input submitted";
+    for (const question of interaction.questions) {
+      const answer = submitted[question.id];
+      const row = document.createElement("div");
+      row.className = "interaction-detail";
+      row.textContent = `${question.header}: ${Array.isArray(answer) ? answer.join(", ") : String(answer ?? "")}`;
+      card.append(row);
+    }
+    return card;
+  }
   const answers = pendingAnswers.get(interaction.requestId) ?? {};
   pendingAnswers.set(interaction.requestId, answers);
   for (const question of interaction.questions) {
@@ -562,6 +590,8 @@ function renderUserInput(interaction: ViewPendingUserInput): HTMLElement {
       return typeof answer === "string" ? answer.trim() !== "" : (answer?.length ?? 0) > 0;
     });
     if (!complete) return;
+    submittedAnswers.set(interaction.requestId, { ...answers });
+    if (currentState !== null) renderPendingInteractions(currentState);
     post({ type: "userInputResponse", requestId: interaction.requestId, answers });
   });
   actions.append(submit);
@@ -570,6 +600,15 @@ function renderUserInput(interaction: ViewPendingUserInput): HTMLElement {
 }
 
 function renderPendingInteractions(state: ViewState): void {
+  const activeIds = new Set(
+    (state.activeThread?.pendingInteractions ?? []).map((interaction) => interaction.requestId),
+  );
+  for (const requestId of submittedAnswers.keys()) {
+    if (!activeIds.has(requestId)) submittedAnswers.delete(requestId);
+  }
+  for (const requestId of submittedApprovals.keys()) {
+    if (!activeIds.has(requestId)) submittedApprovals.delete(requestId);
+  }
   pendingInteractions.replaceChildren(
     ...(state.activeThread?.pendingInteractions ?? []).map((interaction) =>
       interaction.kind === "approval" ? renderApproval(interaction) : renderUserInput(interaction),

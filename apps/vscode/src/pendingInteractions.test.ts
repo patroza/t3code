@@ -49,4 +49,31 @@ describe("derivePendingInteractions", () => {
     ]);
     expect(pending).toMatchObject({ kind: "user-input", requestId: "question" });
   });
+
+  it("removes requests that the provider reports as stale", () => {
+    expect(
+      derivePendingInteractions([
+        activity(
+          "user-input.requested",
+          {
+            requestId: "stale",
+            questions: [
+              {
+                id: "choice",
+                header: "Choice",
+                question: "Which?",
+                options: [{ label: "One", description: "First." }],
+              },
+            ],
+          },
+          1,
+        ),
+        activity(
+          "provider.user-input.respond.failed",
+          { requestId: "stale", detail: "Stale pending user-input request: stale" },
+          2,
+        ),
+      ]),
+    ).toEqual([]);
+  });
 });
