@@ -372,9 +372,10 @@ function render(next: ViewState): void {
     for (const [instanceId, candidate] of providers) {
       const option = document.createElement("option");
       option.value = instanceId;
-      const usage = compactUsageSummary(
-        usageForModel(next.aiUsage, candidate.driver, candidate.model),
-      );
+      const usage =
+        draftSelection === null
+          ? ""
+          : compactUsageSummary(usageForModel(next.aiUsage, candidate.driver, candidate.model));
       option.textContent = `${candidate.providerLabel}${usage === "" ? "" : ` · ${usage}`}`;
       option.selected = instanceId === selection.instanceId;
       provider.append(option);
@@ -384,10 +385,7 @@ function render(next: ViewState): void {
     )) {
       const option = document.createElement("option");
       option.value = candidate.model;
-      const usage = compactUsageSummary(
-        usageForModel(next.aiUsage, candidate.driver, candidate.model),
-      );
-      option.textContent = `${candidate.modelLabel}${usage === "" ? "" : ` · ${usage}`}`;
+      option.textContent = candidate.modelLabel;
       option.selected = candidate.model === selection.model;
       model.append(option);
     }
