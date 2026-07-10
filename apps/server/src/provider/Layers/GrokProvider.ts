@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -260,6 +261,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   if (Exit.isFailure(discoveryExit)) {
     yield* Effect.logWarning("Grok ACP model discovery failed", {
       errorTag: causeErrorTag(discoveryExit.cause),
+      causeDetail: Cause.pretty(discoveryExit.cause),
     });
     return buildServerProvider({
       presentation: GROK_PRESENTATION,

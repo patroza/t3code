@@ -580,5 +580,16 @@ export const layerChildProcess = (
 ): Layer.Layer<AcpClient> => {
   const stdio = makeChildStdio(handle);
   const terminationError = makeTerminationError(handle);
-  return Layer.effect(AcpClient, make(stdio, options, terminationError));
+  return Layer.effect(
+    AcpClient,
+    Effect.gen(function* () {
+      const decoder = new TextDecoder();
+      yield* Stream.runForEach(handle.stderr, (chunk) =>
+        Effect.sync(() => {
+          process.stderr.write(`[acp-child-stderr] ${decoder.decode(chunk, { stream: true })}`);
+        }),
+      ).pipe(Effect.ignore, Effect.forkScoped);
+      return yield* make(stdio, options, terminationError);
+    }),
+  );
 };

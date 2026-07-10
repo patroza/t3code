@@ -5,6 +5,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ModelSelection,
+  type OrchestrationSession,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -293,6 +294,22 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+export function interruptSessionAfterServerRestart(
+  session: OrchestrationSession | null,
+  updatedAt: string,
+): OrchestrationSession | null {
+  if (session?.status !== "starting" && session?.status !== "running") {
+    return null;
+  }
+  return {
+    ...session,
+    status: "interrupted",
+    activeTurnId: null,
+    lastError: "Server restarted while the agent was working. Send a follow-up to resume it.",
+    updatedAt,
+  };
+}
+
 export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const keybindings = yield* Keybindings.Keybindings;
@@ -301,6 +318,8 @@ export const make = Effect.gen(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+  const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const crypto = yield* Crypto.Crypto;
 
   const commandGate = yield* makeCommandGate;
@@ -348,6 +367,32 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+      }),
+    );
+
+    yield* runStartupPhase(
+      "sessions.interrupt-stale",
+      Effect.gen(function* () {
+        const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+        const updatedAt = DateTime.formatIso(yield* DateTime.now);
+        let interruptedCount = 0;
+        for (const thread of snapshot.threads) {
+          const session = interruptSessionAfterServerRestart(thread.session, updatedAt);
+          if (session === null) continue;
+          yield* orchestrationEngine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make(yield* crypto.randomUUIDv4),
+            threadId: thread.id,
+            session,
+            createdAt: updatedAt,
+          });
+          interruptedCount += 1;
+        }
+        if (interruptedCount > 0) {
+          yield* Effect.logWarning("interrupted stale provider sessions after server restart", {
+            interruptedCount,
+          });
+        }
       }),
     );
 

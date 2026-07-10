@@ -23,6 +23,54 @@ it("uses the canonical Codex default for auto-bootstrapped model selection", () 
   });
 });
 
+it("marks a running session as interrupted after a server restart", () => {
+  const updatedAt = "2026-07-10T12:00:00.000Z";
+  assert.deepStrictEqual(
+    ServerRuntimeStartup.interruptSessionAfterServerRestart(
+      {
+        threadId: ThreadId.make("thread-running-at-restart"),
+        status: "running",
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access",
+        activeTurnId: "turn-running-at-restart" as never,
+        lastError: null,
+        updatedAt: "2026-07-10T11:59:00.000Z",
+      },
+      updatedAt,
+    ),
+    {
+      threadId: ThreadId.make("thread-running-at-restart"),
+      status: "interrupted",
+      providerName: "Codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: "Server restarted while the agent was working. Send a follow-up to resume it.",
+      updatedAt,
+    },
+  );
+});
+
+it("does not mark an already idle session as interrupted after restart", () => {
+  assert.equal(
+    ServerRuntimeStartup.interruptSessionAfterServerRestart(
+      {
+        threadId: ThreadId.make("thread-idle-at-restart"),
+        status: "ready",
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-07-10T11:59:00.000Z",
+      },
+      "2026-07-10T12:00:00.000Z",
+    ),
+    null,
+  );
+});
+
 it.effect("enqueueCommand waits for readiness and then drains queued work", () =>
   Effect.scoped(
     Effect.gen(function* () {
