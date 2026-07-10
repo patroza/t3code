@@ -116,7 +116,6 @@ const contextWindowMeter = requiredElement<HTMLButtonElement>("context-window");
 const contextWindowLabel = requiredElement<HTMLElement>("context-window-label");
 const provider = requiredElement<HTMLSelectElement>("provider");
 const providerIcon = requiredElement<HTMLElement>("provider-icon");
-const providerUsageDot = requiredElement<HTMLElement>("provider-usage-dot");
 const favoriteProvider = requiredElement<HTMLButtonElement>("favorite-provider");
 const model = requiredElement<HTMLSelectElement>("model");
 const favoriteModel = requiredElement<HTMLButtonElement>("favorite-model");
@@ -482,18 +481,10 @@ function renderProviderIdentity(state: ViewState): void {
   const candidate = selectedModelCandidate(state);
   if (candidate === undefined) {
     providerIcon.replaceChildren();
-    providerUsageDot.hidden = true;
     return;
   }
   renderProviderIcon(providerIcon, candidate.driver, candidate.providerLabel);
   providerIcon.title = candidate.providerLabel;
-  const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
-  const percentages = usage?.windows
-    .map((window) => window.percent)
-    .filter((percent): percent is number => typeof percent === "number");
-  const worst = percentages && percentages.length > 0 ? Math.max(...percentages) : null;
-  providerUsageDot.hidden = worst === null || worst < 80;
-  providerUsageDot.className = worst !== null && worst >= 100 ? "critical" : "warning";
 }
 
 function renderContextWindow(state: ViewState): void {
@@ -521,20 +512,22 @@ function renderContextWindow(state: ViewState): void {
 
 function renderUsageDetails(state: ViewState): void {
   usageDetails.replaceChildren();
-  usageDetails.className = "";
-  usageDetails.hidden = true;
   const usageToggle = requiredElement<HTMLButtonElement>("usage-toggle");
+  const usageLabel = requiredElement<HTMLElement>("usage-label");
+  usageToggle.style.setProperty("--usage-primary", "0deg");
+  usageToggle.style.setProperty("--usage-secondary", "0deg");
+  usageToggle.className = "";
+  usageToggle.hidden = true;
+  usageLabel.textContent = "—";
   usageToggle.title = "Provider usage unavailable";
   usageToggle.setAttribute("aria-label", usageToggle.title);
   const candidate = selectedModelCandidate(state);
   if (candidate === undefined) return;
   const usage = usageForModel(state.aiUsage, candidate.driver, candidate.model);
   if (usage === null) return;
-  usageToggle.title = usageExpanded ? "Hide provider usage" : "Show provider usage";
+  usageToggle.hidden = false;
+  usageToggle.title = "Provider usage — hover for details; click to pin";
   usageToggle.setAttribute("aria-label", usageToggle.title);
-  if (!usageExpanded) return;
-  usageDetails.hidden = false;
-  usageDetails.className = "usage-details";
   if (!usage.ok) {
     const unavailable = document.createElement("div");
     unavailable.className = "usage-unavailable";
@@ -542,6 +535,23 @@ function renderUsageDetails(state: ViewState): void {
     usageDetails.append(unavailable);
     return;
   }
+  const percentages = usage.windows
+    .map((window) => window.percent)
+    .filter((percent): percent is number => typeof percent === "number");
+  const primary = percentages[0] ?? 0;
+  const secondary = percentages[1] ?? primary;
+  const worst = percentages.length > 0 ? Math.max(...percentages) : null;
+  usageToggle.style.setProperty(
+    "--usage-primary",
+    `${Math.max(0, Math.min(100, primary)) * 3.6}deg`,
+  );
+  usageToggle.style.setProperty(
+    "--usage-secondary",
+    `${Math.max(0, Math.min(100, secondary)) * 3.6}deg`,
+  );
+  usageToggle.classList.toggle("warning", worst !== null && worst >= 80 && worst < 100);
+  usageToggle.classList.toggle("critical", worst !== null && worst >= 100);
+  usageLabel.textContent = worst === null ? "—" : `${Math.round(worst)}%`;
   for (const window of usage.windows) {
     const row = document.createElement("div");
     row.className = "usage-window";
@@ -833,7 +843,7 @@ favoriteModel.addEventListener("click", () => {
 });
 requiredElement("usage-toggle").addEventListener("click", () => {
   usageExpanded = !usageExpanded;
-  if (currentState !== null) renderUsageDetails(currentState);
+  requiredElement("usage-control").classList.toggle("pinned", usageExpanded);
 });
 requiredElement("new").addEventListener("click", () => {
   if (currentState === null) return;
