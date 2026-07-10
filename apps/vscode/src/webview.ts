@@ -730,10 +730,19 @@ function renderModelOptions(state: ViewState): void {
     const label = document.createElement("label");
     label.className = "model-option";
     const title = document.createElement("span");
-    title.textContent = descriptor.label;
+    const optionIdentity = `${descriptor.id} ${descriptor.label}`.toLowerCase();
+    const compactIcon =
+      optionIdentity.includes("service") || optionIdentity.includes("tier") ? "ϟ" : null;
+    const omitVisibleLabel = optionIdentity.includes("reason");
+    title.textContent = compactIcon ?? (omitVisibleLabel ? "" : descriptor.label);
+    title.hidden = omitVisibleLabel;
+    title.className = compactIcon === null ? "" : "model-option-icon";
+    title.title = descriptor.label;
     label.append(title);
     if (descriptor.type === "select") {
       const select = document.createElement("select");
+      select.setAttribute("aria-label", descriptor.label);
+      select.title = descriptor.label;
       for (const choice of descriptor.options) {
         const option = document.createElement("option");
         option.value = choice.id;
@@ -754,6 +763,7 @@ function renderModelOptions(state: ViewState): void {
     } else {
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
+      checkbox.setAttribute("aria-label", descriptor.label);
       checkbox.checked = Boolean(values.get(descriptor.id) ?? descriptor.currentValue ?? false);
       checkbox.addEventListener("change", () => {
         const options = selectedOptions(state).filter((option) => option.id !== descriptor.id);
