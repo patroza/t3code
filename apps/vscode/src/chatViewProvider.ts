@@ -431,7 +431,8 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         this.#attachmentLoads.add(attachment.id);
         void this.client
           .createAttachmentUrl(attachment.id)
-          .then((url) => this.#attachmentUrls.set(attachment.id, url))
+          .then((url) => vscode.env.asExternalUri(vscode.Uri.parse(url)))
+          .then((uri) => this.#attachmentUrls.set(attachment.id, uri.toString(true)))
           .catch(() => undefined)
           .finally(() => {
             this.#attachmentLoads.delete(attachment.id);
@@ -518,6 +519,8 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .markdown-body blockquote { margin-left: 0; padding: .1em 0 .1em .85em; border-left: 3px solid var(--vscode-textBlockQuote-border); color: var(--vscode-textBlockQuote-foreground); background: var(--vscode-textBlockQuote-background); }
     .markdown-body a { color: var(--vscode-textLink-foreground); text-decoration: none; }
     .markdown-body a:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+    .markdown-body .inline-code-link:hover { text-decoration: none; }
+    .markdown-body .inline-code-link:hover code { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
     .markdown-body code { font-family: var(--vscode-editor-font-family); font-size: .92em; background: var(--vscode-textCodeBlock-background); border-radius: 4px; padding: .12em .35em; }
     .markdown-body pre { overflow: auto; padding: 10px 12px; margin: 0; background: var(--vscode-textCodeBlock-background); border-radius: 0 0 6px 6px; }
     .markdown-body pre code { padding: 0; background: transparent; border-radius: 0; white-space: pre; }
@@ -586,7 +589,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .model-option-icon { display: inline-grid; width: 17px; height: 17px; place-items: center; font-size: 13px; }
     .model-option select { width: auto; max-width: 7rem; border: 0; padding: 2px 14px 2px 2px; background-color: transparent; color: var(--vscode-descriptionForeground); }
     #send { margin-left: auto; }
-    .usage-details { position: absolute; right: 0; bottom: calc(100% + 7px); z-index: 10; display: none; grid-template-columns: repeat(2, minmax(105px, 1fr)); width: min(270px, calc(100vw - 28px)); gap: 8px; padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 7px; background: var(--vscode-editorWidget-background); box-shadow: 0 4px 12px color-mix(in srgb, #000 28%, transparent); }
+    .usage-details { position: fixed; z-index: 10; display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 8px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 7px; background: var(--vscode-editorWidget-background); box-shadow: 0 4px 12px color-mix(in srgb, #000 28%, transparent); }
     .usage-control:hover .usage-details, .usage-control:focus-within .usage-details, .usage-control.pinned .usage-details { display: grid; }
     .usage-window { min-width: 0; }
     .usage-window-heading { display: flex; justify-content: space-between; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 10px; }

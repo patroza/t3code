@@ -182,13 +182,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const ensureConnected = async (): Promise<void> => {
-    const startedAt = Date.now();
     const config = configuration();
     const bearerToken = await context.secrets.get(BEARER_TOKEN_SECRET);
     const bootstrapCredential = await readDesktopBootstrapCredential();
-    log(
-      `ensure start endpoint=${config.serverUrl} bearer=${bearerToken ? "stored" : "none"} bootstrap=${bootstrapCredential ? "available" : "missing"}`,
-    );
     const connect = async (serverUrl: string): Promise<void> => {
       if (bearerToken !== undefined && bearerToken !== "") {
         try {
@@ -214,7 +210,6 @@ export function activate(context: vscode.ExtensionContext): void {
       await connect(desktopServerUrl);
     }
     await client.waitForShell();
-    log(`ensure complete in ${Date.now() - startedAt}ms endpoint=${config.serverUrl}`);
   };
 
   const rememberThread = async (threadId: ThreadId): Promise<void> => {

@@ -231,6 +231,21 @@ function renderMarkdown(text: string): HTMLElement {
     });
   }
 
+  for (const code of content.querySelectorAll<HTMLElement>("code:not(pre code)")) {
+    const href = code.textContent?.trim() ?? "";
+    if (!/^https?:\/\/\S+$/iu.test(href)) continue;
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.rel = "noreferrer noopener";
+    anchor.className = "inline-code-link";
+    anchor.addEventListener("click", (event) => {
+      event.preventDefault();
+      post({ type: "openLink", href });
+    });
+    code.before(anchor);
+    anchor.append(code);
+  }
+
   for (const pre of content.querySelectorAll<HTMLPreElement>("pre")) {
     const code = pre.querySelector("code");
     if (code === null) continue;
@@ -818,6 +833,20 @@ function submit(): void {
   post({ type: "send", text: prompt.value, images });
 }
 
+function positionUsageDetails(): void {
+  const toggle = requiredElement<HTMLElement>("usage-toggle");
+  const viewportPadding = 8;
+  const width = Math.min(270, Math.max(0, globalThis.innerWidth - viewportPadding * 2));
+  const toggleBounds = toggle.getBoundingClientRect();
+  const left = Math.min(
+    Math.max(viewportPadding, toggleBounds.right - width),
+    Math.max(viewportPadding, globalThis.innerWidth - width - viewportPadding),
+  );
+  usageDetails.style.width = `${width}px`;
+  usageDetails.style.left = `${left}px`;
+  usageDetails.style.bottom = `${Math.max(viewportPadding, globalThis.innerHeight - toggleBounds.top + 7)}px`;
+}
+
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (typeof event.data !== "object" || event.data === null || !("type" in event.data)) return;
   if (event.data.type === "state" && "state" in event.data) render(event.data.state as ViewState);
@@ -877,9 +906,12 @@ favoriteModel.addEventListener("click", () => {
   }
 });
 requiredElement("usage-toggle").addEventListener("click", () => {
+  positionUsageDetails();
   usageExpanded = !usageExpanded;
   requiredElement("usage-control").classList.toggle("pinned", usageExpanded);
 });
+requiredElement("usage-control").addEventListener("pointerenter", positionUsageDetails);
+globalThis.addEventListener("resize", positionUsageDetails);
 requiredElement("new").addEventListener("click", () => {
   if (currentState === null) return;
   const active = currentSelection(currentState);

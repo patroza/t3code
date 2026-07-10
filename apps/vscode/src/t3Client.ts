@@ -158,10 +158,7 @@ export class T3Client {
     const startedAt = Date.now();
     const normalizedBaseUrl = new URL(httpBaseUrl).toString();
     const key = `${normalizedBaseUrl}|${bearerToken ?? ""}`;
-    if (this.#session !== null && this.#connectionKey === key) {
-      this.#log(`connect reuse endpoint=${normalizedBaseUrl}`);
-      return;
-    }
+    if (this.#session !== null && this.#connectionKey === key) return;
     this.#log(`connect start endpoint=${normalizedBaseUrl}`);
     await this.#closeConnection();
 
@@ -246,10 +243,7 @@ export class T3Client {
 
   async connectWithBootstrap(httpBaseUrl: string, credential: string): Promise<void> {
     const baseUrl = new URL(httpBaseUrl);
-    if (this.#session !== null && this.#httpBaseUrl === baseUrl.toString()) {
-      this.#log(`bootstrap reuse endpoint=${baseUrl}`);
-      return;
-    }
+    if (this.#session !== null && this.#httpBaseUrl === baseUrl.toString()) return;
     const startedAt = Date.now();
     this.#log(`bootstrap start endpoint=${baseUrl}`);
     const session = await this.#runtime.runPromise(
@@ -452,13 +446,11 @@ export class T3Client {
   }
 
   #startShellSubscription(session: RpcSession): void {
-    this.#log(`shell stream start after=${this.#shell?.snapshotSequence ?? "snapshot"}`);
     const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeShell](
       this.#shell === null ? {} : { afterSequence: this.#shell.snapshotSequence },
     ).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
-          this.#log(`shell stream item kind=${item.kind}`);
           if (item.kind === "snapshot") this.#shell = item.snapshot;
           else if (this.#shell !== null) this.#shell = applyShellStreamEvent(this.#shell, item);
           if (this.#shell !== null) {
@@ -475,7 +467,6 @@ export class T3Client {
 
   async #loadShellSnapshot(httpBaseUrl: string, bearerToken?: string): Promise<void> {
     const startedAt = Date.now();
-    this.#log(`shell HTTP start endpoint=${httpBaseUrl}`);
     const url = new URL("/api/orchestration/shell", httpBaseUrl);
     const headers =
       bearerToken === undefined || bearerToken === ""
@@ -508,16 +499,12 @@ export class T3Client {
   }
 
   #startThreadSubscription(session: RpcSession, threadId: ThreadId): void {
-    this.#log(
-      `thread stream start id=${threadId} after=${this.#activeThreadSequence ?? "snapshot"}`,
-    );
     const stream = session.client[ORCHESTRATION_WS_METHODS.subscribeThread]({
       threadId,
       ...(this.#activeThreadSequence === null ? {} : { afterSequence: this.#activeThreadSequence }),
     }).pipe(
       Stream.runForEach((item) =>
         Effect.sync(() => {
-          this.#log(`thread stream item id=${threadId} kind=${item.kind}`);
           if (item.kind === "snapshot") {
             this.#activeThread = item.snapshot.thread;
             this.#activeThreadSequence = item.snapshot.snapshotSequence;
@@ -547,7 +534,6 @@ export class T3Client {
 
   async #loadThreadSnapshot(threadId: ThreadId): Promise<void> {
     const startedAt = Date.now();
-    this.#log(`thread HTTP start id=${threadId}`);
     if (this.#httpBaseUrl === null) throw new Error("T3 Code is not connected.");
     const url = new URL(
       `/api/orchestration/threads/${encodeURIComponent(threadId)}`,
