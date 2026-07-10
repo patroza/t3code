@@ -1,6 +1,4 @@
-// @effect-diagnostics globalDate:off globalFetch:off nodeBuiltinImport:off - VS Code loopback traffic must bypass its patched fetch transport.
-import * as NodeHttp from "node:http";
-import * as NodeHttps from "node:https";
+// @effect-diagnostics globalDate:off globalFetch:off
 import {
   DEFAULT_MODEL,
   DEFAULT_RUNTIME_MODE,
@@ -74,45 +72,6 @@ function normalizedPath(path: string): string {
 function messageFromCause(cause: unknown): string {
   if (cause instanceof Error && cause.message.trim() !== "") return cause.message;
   return String(cause);
-}
-
-function isLoopback(url: URL): boolean {
-  return url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
-}
-
-function directRequest(input: {
-  readonly url: URL;
-  readonly method?: string;
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly body?: string;
-}): Promise<{ readonly status: number; readonly body: string }> {
-  return new Promise((resolve, reject) => {
-    const transport = input.url.protocol === "https:" ? NodeHttps : NodeHttp;
-    const request = transport.request(
-      input.url,
-      {
-        method: input.method ?? "GET",
-        headers: { connection: "close", ...input.headers },
-        agent: false,
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk: Buffer | string) =>
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
-        );
-        response.on("end", () =>
-          resolve({
-            status: response.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-          }),
-        );
-      },
-    );
-    request.setTimeout(10_000, () => request.destroy(new Error("T3 Code request timed out.")));
-    request.on("error", reject);
-    if (input.body !== undefined) request.write(input.body);
-    request.end();
-  });
 }
 
 export class T3Client {
@@ -195,15 +154,7 @@ export class T3Client {
     return new Promise((resolve) => this.#threadWaiters.add(resolve));
   }
 
-  async connect(
-    httpBaseUrl: string,
-    bearerToken?: string,
-    preparedAuth?: {
-      readonly environmentId: EnvironmentId;
-      readonly label: string;
-      readonly socketUrl: string;
-    },
-  ): Promise<void> {
+  async connect(httpBaseUrl: string, bearerToken?: string): Promise<void> {
     const startedAt = Date.now();
     const normalizedBaseUrl = new URL(httpBaseUrl).toString();
     const key = `${normalizedBaseUrl}|${bearerToken ?? ""}`;
@@ -211,17 +162,13 @@ export class T3Client {
       this.#log(`connect reuse endpoint=${normalizedBaseUrl}`);
       return;
     }
-    this.#log(`connect start endpoint=${normalizedBaseUrl} prepared=${preparedAuth !== undefined}`);
+    this.#log(`connect start endpoint=${normalizedBaseUrl}`);
     await this.#closeConnection();
 
     let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
     let socketUrl = localSocketUrl(normalizedBaseUrl);
     let label = "T3 Code";
-    if (preparedAuth !== undefined) {
-      environmentId = preparedAuth.environmentId;
-      label = preparedAuth.label;
-      socketUrl = preparedAuth.socketUrl;
-    } else if (bearerToken !== undefined && bearerToken !== "") {
+    if (bearerToken !== undefined && bearerToken !== "") {
       const descriptor = await this.#runtime.runPromise(
         fetchRemoteEnvironmentDescriptor({ httpBaseUrl: normalizedBaseUrl }),
       );
@@ -305,84 +252,6 @@ export class T3Client {
     }
     const startedAt = Date.now();
     this.#log(`bootstrap start endpoint=${baseUrl}`);
-    if (isLoopback(baseUrl)) {
-      const body = new URLSearchParams({
-        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-        subject_token: credential,
-        subject_token_type: "urn:t3:params:oauth:token-type:environment-bootstrap",
-        requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-        client_label: "T3 Code for VS Code",
-        client_device_type: "desktop",
-      }).toString();
-      const response = await directRequest({
-        url: new URL("/oauth/token", baseUrl),
-        method: "POST",
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "content-length": String(Buffer.byteLength(body)),
-        },
-        body,
-      });
-      this.#log(`bootstrap token in ${Date.now() - startedAt}ms status=${response.status}`);
-      const payload: unknown = JSON.parse(response.body);
-      if (
-        response.status < 200 ||
-        response.status >= 300 ||
-        typeof payload !== "object" ||
-        payload === null ||
-        !("access_token" in payload) ||
-        typeof payload.access_token !== "string"
-      ) {
-        throw new Error(`Could not authenticate with T3 Code (HTTP ${response.status}).`);
-      }
-      const descriptorResponse = await directRequest({
-        url: new URL("/.well-known/t3/environment", baseUrl),
-      });
-      this.#log(
-        `bootstrap descriptor in ${Date.now() - startedAt}ms status=${descriptorResponse.status}`,
-      );
-      const descriptor: unknown = JSON.parse(descriptorResponse.body);
-      if (
-        descriptorResponse.status < 200 ||
-        descriptorResponse.status >= 300 ||
-        typeof descriptor !== "object" ||
-        descriptor === null ||
-        !("environmentId" in descriptor) ||
-        typeof descriptor.environmentId !== "string" ||
-        !("label" in descriptor) ||
-        typeof descriptor.label !== "string"
-      ) {
-        throw new Error(
-          `Could not identify the T3 Code environment (HTTP ${descriptorResponse.status}).`,
-        );
-      }
-      const ticketResponse = await directRequest({
-        url: new URL("/api/auth/websocket-ticket", baseUrl),
-        method: "POST",
-        headers: { authorization: `Bearer ${payload.access_token}` },
-      });
-      this.#log(`bootstrap ticket in ${Date.now() - startedAt}ms status=${ticketResponse.status}`);
-      const ticketPayload: unknown = JSON.parse(ticketResponse.body);
-      if (
-        ticketResponse.status < 200 ||
-        ticketResponse.status >= 300 ||
-        typeof ticketPayload !== "object" ||
-        ticketPayload === null ||
-        !("ticket" in ticketPayload) ||
-        typeof ticketPayload.ticket !== "string"
-      ) {
-        throw new Error(`Could not open a T3 Code session (HTTP ${ticketResponse.status}).`);
-      }
-      const socketUrl = new URL(wsBaseUrl(baseUrl.toString()));
-      socketUrl.pathname = "/ws";
-      socketUrl.searchParams.set("wsTicket", ticketPayload.ticket);
-      await this.connect(baseUrl.toString(), payload.access_token, {
-        environmentId: EnvironmentId.make(descriptor.environmentId),
-        label: descriptor.label,
-        socketUrl: socketUrl.toString(),
-      });
-      return;
-    }
     const session = await this.#runtime.runPromise(
       bootstrapRemoteBearerSession({
         httpBaseUrl,
@@ -390,6 +259,7 @@ export class T3Client {
         clientMetadata: { label: "T3 Code for VS Code", deviceType: "desktop" },
       }),
     );
+    this.#log(`bootstrap complete in ${Date.now() - startedAt}ms endpoint=${baseUrl}`);
     await this.connect(httpBaseUrl, session.access_token);
   }
 
@@ -611,16 +481,12 @@ export class T3Client {
       bearerToken === undefined || bearerToken === ""
         ? {}
         : { authorization: `Bearer ${bearerToken}` };
-    const response = isLoopback(url)
-      ? await directRequest({ url, headers })
-      : await globalThis
-          .fetch(url, { headers })
-          .then(async (result) => ({ status: result.status, body: await result.text() }));
-    if (response.status < 200 || response.status >= 300) {
+    const response = await globalThis.fetch(url, { headers });
+    if (!response.ok) {
       throw new Error(`Could not load T3 Code threads (HTTP ${response.status}).`);
     }
     const decode = Schema.decodeUnknownSync(Schema.fromJsonString(OrchestrationShellSnapshot));
-    this.#shell = decode(response.body);
+    this.#shell = decode(await response.text());
     this.#log(
       `shell HTTP complete in ${Date.now() - startedAt}ms projects=${this.#shell.projects.length} threads=${this.#shell.threads.length} sequence=${this.#shell.snapshotSequence}`,
     );
@@ -689,18 +555,14 @@ export class T3Client {
     );
     const headers =
       this.#bearerToken === null ? {} : { authorization: `Bearer ${this.#bearerToken}` };
-    const response = isLoopback(url)
-      ? await directRequest({ url, headers })
-      : await globalThis
-          .fetch(url, { headers })
-          .then(async (result) => ({ status: result.status, body: await result.text() }));
-    if (response.status < 200 || response.status >= 300) {
+    const response = await globalThis.fetch(url, { headers });
+    if (!response.ok) {
       throw new Error(`Could not load the T3 Code thread (HTTP ${response.status}).`);
     }
     const decode = Schema.decodeUnknownSync(
       Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
     );
-    const snapshot = decode(response.body);
+    const snapshot = decode(await response.text());
     this.#activeThread = snapshot.thread;
     this.#activeThreadSequence = snapshot.snapshotSequence;
     this.#log(
