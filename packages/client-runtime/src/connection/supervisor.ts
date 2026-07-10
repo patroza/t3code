@@ -414,6 +414,18 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
                     }),
                   ),
               }),
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  "Foreground connection health check failed; keeping the open WebSocket lease.",
+                ).pipe(
+                  Effect.annotateLogs({
+                    "environment.id": target.environmentId,
+                    "environment.label": target.label,
+                    "connection.probe.reason": error.reason,
+                    "connection.probe.detail": error.detail,
+                  }),
+                ),
+              ),
               Effect.forkChild,
             );
             for (;;) {

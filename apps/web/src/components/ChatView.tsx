@@ -64,6 +64,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
+import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
@@ -138,7 +139,7 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
-import { cn, randomHex } from "~/lib/utils";
+import { cn, newCommandId, randomHex } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -149,6 +150,11 @@ import {
   projectScriptIdFromCommand,
 } from "~/projectScripts";
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import {
+  enqueueThreadTurn,
+  listQueuedThreadTurns,
+  removeQueuedThreadTurn,
+} from "../threadTurnOutbox";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -1161,6 +1167,7 @@ function ChatViewContent(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const queuedTurnDrainInFlightRef = useRef(false);
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
   useLayoutEffect(() => {
@@ -1456,6 +1463,69 @@ function ChatViewContent(props: ChatViewProps) {
       connection: activeEnvironment.connection,
     };
   }, [activeEnvironment, activeEnvironmentUnavailable, activeEnvironmentUnavailableLabel]);
+
+  useEffect(() => {
+    if (
+      activeEnvironmentConnectionPhase !== "connected" ||
+      activeThread == null ||
+      activeThread.session?.status === "running" ||
+      activeThread.session?.status === "starting" ||
+      queuedTurnDrainInFlightRef.current
+    ) {
+      return;
+    }
+
+    const drainThread = activeThread;
+    let cancelled = false;
+    queuedTurnDrainInFlightRef.current = true;
+    void listQueuedThreadTurns()
+      .then(async (turns) => {
+        const turn = turns.find(
+          (candidate) =>
+            candidate.environmentId === drainThread.environmentId &&
+            candidate.input.threadId === drainThread.id,
+        );
+        if (!turn || cancelled) return;
+
+        const result = await startThreadTurn({
+          environmentId: turn.environmentId,
+          input: turn.input,
+        });
+        if (result._tag === "Success") {
+          await removeQueuedThreadTurn(turn.messageId).catch((error) => {
+            console.warn("[thread-turn-outbox] failed to remove delivered turn", error);
+          });
+          return;
+        }
+
+        const error = squashAtomCommandFailure(result);
+        const message = error instanceof Error ? error.message : String(error);
+        if (!isTransportConnectionErrorMessage(message)) {
+          await removeQueuedThreadTurn(turn.messageId).catch((removeError) => {
+            console.warn("[thread-turn-outbox] failed to remove rejected turn", removeError);
+          });
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Queued message was rejected",
+              description:
+                error instanceof Error ? error.message : "Failed to send queued message.",
+            }),
+          );
+        }
+      })
+      .catch((error) => {
+        console.warn("[thread-turn-outbox] failed to drain queued turn", error);
+      })
+      .finally(() => {
+        queuedTurnDrainInFlightRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEnvironmentConnectionPhase, activeThread, startThreadTurn]);
+
   const handleReconnectActiveEnvironment = useCallback(
     async (environmentId: EnvironmentId) => {
       const result = await retryEnvironment(environmentId);
@@ -3909,14 +3979,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
-    if (
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
-      return;
+    if (!activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -4141,7 +4204,7 @@ function ChatViewContent(props: ChatViewProps) {
 
       let failure: AtomCommandResult<unknown, unknown> | null = null;
       // Auto-title from first message
-      if (isFirstMessage && isServerThread) {
+      if (isFirstMessage && isServerThread && !activeEnvironmentUnavailable) {
         const titleResult = await updateThreadMetadata({
           environmentId,
           input: {
@@ -4154,7 +4217,7 @@ function ChatViewContent(props: ChatViewProps) {
         }
       }
 
-      if (failure === null && isServerThread) {
+      if (failure === null && isServerThread && !activeEnvironmentUnavailable) {
         const settingsResult = await persistThreadSettingsForNextTurn({
           threadId: threadIdForSend,
           createdAt: messageCreatedAt,
@@ -4203,27 +4266,56 @@ function ChatViewContent(props: ChatViewProps) {
                   : {}),
               }
             : undefined;
+        const queuedTurnInput = {
+          commandId: newCommandId(),
+          threadId: threadIdForSend,
+          message: {
+            messageId: messageIdForSend,
+            role: "user" as const,
+            text: outgoingMessageText,
+            attachments: turnAttachmentsResult.value,
+          },
+          modelSelection: ctxSelectedModelSelection,
+          titleSeed: title,
+          runtimeMode,
+          interactionMode,
+          ...(bootstrap ? { bootstrap } : {}),
+          createdAt: messageCreatedAt,
+        };
+        let outboxPersisted = true;
+        try {
+          await enqueueThreadTurn({
+            messageId: messageIdForSend,
+            environmentId,
+            input: queuedTurnInput,
+            queuedAt: messageCreatedAt,
+          });
+        } catch (error) {
+          outboxPersisted = false;
+          console.warn("[thread-turn-outbox] failed to persist outgoing turn", error);
+        }
         const startResult = await startThreadTurn({
           environmentId,
-          input: {
-            threadId: threadIdForSend,
-            message: {
-              messageId: messageIdForSend,
-              role: "user",
-              text: outgoingMessageText,
-              attachments: turnAttachmentsResult.value,
-            },
-            modelSelection: ctxSelectedModelSelection,
-            titleSeed: title,
-            runtimeMode,
-            interactionMode,
-            ...(bootstrap ? { bootstrap } : {}),
-            createdAt: messageCreatedAt,
-          },
+          input: queuedTurnInput,
         });
         if (startResult._tag === "Failure") {
-          failure = startResult;
+          const error = squashAtomCommandFailure(startResult);
+          const message = error instanceof Error ? error.message : String(error);
+          if (outboxPersisted && isTransportConnectionErrorMessage(message)) {
+            turnStartSucceeded = true;
+            setThreadError(threadIdForSend, "Connection interrupted. Message queued for retry.");
+          } else {
+            if (outboxPersisted) {
+              await removeQueuedThreadTurn(messageIdForSend).catch((removeError) => {
+                console.warn("[thread-turn-outbox] failed to remove rejected turn", removeError);
+              });
+            }
+            failure = startResult;
+          }
         } else {
+          await removeQueuedThreadTurn(messageIdForSend).catch((error) => {
+            console.warn("[thread-turn-outbox] failed to remove delivered turn", error);
+          });
           turnStartSucceeded = true;
         }
       }
@@ -5223,7 +5315,7 @@ function ChatViewContent(props: ChatViewProps) {
                       isConnecting={isConnecting}
                       isSendBusy={isSendBusy}
                       isPreparingWorktree={isPreparingWorktreeUi}
-                      environmentUnavailable={activeEnvironmentUnavailableState}
+                      environmentUnavailable={null}
                       activePendingApproval={activePendingApproval}
                       pendingApprovals={pendingApprovals}
                       pendingUserInputs={pendingUserInputs}

@@ -20,6 +20,14 @@ T3 Connect is optional and disabled in a fresh clone. Public configuration belon
 repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
 [`../../.env.example`](../../.env.example).
 
+To sign a fork with your own Apple Developer account, set
+`T3CODE_MOBILE_IOS_TEAM_ID`, `T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER`,
+`T3CODE_MOBILE_EAS_PROJECT_ID`, and `T3CODE_MOBILE_EXPO_OWNER` in the repository-root
+`.env.local`. Development and preview builds append `.dev` and `.preview` to your bundle
+identifier. Run `eas init` once under your Expo account to create the project ID, then use
+the existing EAS iOS build commands below. EAS can perform the build remotely; a local
+`ios:*` build still requires macOS and Xcode.
+
 ## Development
 
 Start Metro for the dev client:

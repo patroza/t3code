@@ -22,6 +22,11 @@ if (
     "T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when T3CODE_IOS_PERSONAL_TEAM=1.",
   );
 }
+const IOS_BUNDLE_IDENTIFIER = repoEnv.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER ?? "com.t3tools.t3code";
+const IOS_TEAM_ID = repoEnv.T3CODE_MOBILE_IOS_TEAM_ID ?? "ARK85ZXQ4Z";
+const EAS_PROJECT_ID =
+  repoEnv.T3CODE_MOBILE_EAS_PROJECT_ID ?? "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
+const EXPO_OWNER = repoEnv.T3CODE_MOBILE_EXPO_OWNER ?? "pingdotgg";
 
 const VARIANT_CONFIG: Record<
   AppVariant,
@@ -40,7 +45,7 @@ const VARIANT_CONFIG: Record<
     scheme: "t3code-dev",
     iosIcon: "./assets/icon-composer-dev.icon",
     splashIcon: "./assets/splash-icon-dev.png",
-    iosBundleIdentifier: "com.t3tools.t3code.dev",
+    iosBundleIdentifier: `${IOS_BUNDLE_IDENTIFIER}.dev`,
     androidPackage: "com.t3tools.t3code.dev",
     relyingParty: "clerk.t3.codes",
   },
@@ -49,7 +54,7 @@ const VARIANT_CONFIG: Record<
     scheme: "t3code-preview",
     iosIcon: "./assets/icon-composer-prod.icon",
     splashIcon: "./assets/splash-icon-prod.png",
-    iosBundleIdentifier: "com.t3tools.t3code.preview",
+    iosBundleIdentifier: `${IOS_BUNDLE_IDENTIFIER}.preview`,
     androidPackage: "com.t3tools.t3code.preview",
     relyingParty: "clerk.t3.codes",
   },
@@ -58,7 +63,7 @@ const VARIANT_CONFIG: Record<
     scheme: "t3code",
     iosIcon: "./assets/icon-composer-prod.icon",
     splashIcon: "./assets/splash-icon-prod.png",
-    iosBundleIdentifier: "com.t3tools.t3code",
+    iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     androidPackage: "com.t3tools.t3code",
     relyingParty: "clerk.t3.codes",
   },
@@ -125,7 +130,7 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   updates: {
     enabled: true,
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
@@ -136,7 +141,7 @@ const config: ExpoConfig = {
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
+    appleTeamId: IOS_TEAM_ID,
     associatedDomains: [
       `applinks:${variant.relyingParty}`,
       `webcredentials:${variant.relyingParty}`,
@@ -285,10 +290,10 @@ const config: ExpoConfig = {
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
     eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+      projectId: EAS_PROJECT_ID,
     },
   },
-  owner: "pingdotgg",
+  owner: EXPO_OWNER,
 };
 
 export default config;
