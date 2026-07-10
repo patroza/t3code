@@ -131,9 +131,17 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   renderTrailingContent?: (thread: TThread) => ReactNode;
   runThread: (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) => Promise<void>;
   limit?: number;
+  /**
+   * When true, archived threads are kept instead of filtered out. Used by the
+   * command palette's "include archived" search, which merges in archived
+   * threads from a separate snapshot query.
+   */
+  includeArchived?: boolean;
 }): CommandPaletteActionItem[] {
   const sortedThreads = sortThreads(
-    input.threads.filter((thread) => thread.archivedAt === null),
+    input.includeArchived === true
+      ? input.threads
+      : input.threads.filter((thread) => thread.archivedAt === null),
     input.sortOrder,
   );
   const visibleThreads =

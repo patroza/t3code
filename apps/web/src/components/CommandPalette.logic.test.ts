@@ -162,4 +162,33 @@ describe("buildThreadActionItems", () => {
 
     expect(items.map((item) => item.value)).toEqual(["thread:thread-active"]);
   });
+
+  it("keeps archived threads when includeArchived is set", () => {
+    const items = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-active"),
+          title: "Active thread",
+          createdAt: "2026-03-02T00:00:00.000Z",
+          updatedAt: "2026-03-19T00:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-archived"),
+          title: "Archived thread",
+          archivedAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:00.000Z",
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      includeArchived: true,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(items.map((item) => item.value)).toEqual([
+      "thread:thread-archived",
+      "thread:thread-active",
+    ]);
+  });
 });
