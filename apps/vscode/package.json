@@ -1,7 +1,7 @@
 {
   "name": "t3-code",
   "displayName": "T3 Code",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "private": true,
   "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
@@ -13,7 +13,7 @@
   "type": "module",
   "main": "./dist/extension.cjs",
   "scripts": {
-    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
+    "build": "esbuild src/bootstrap.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run"
   },

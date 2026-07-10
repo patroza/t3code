@@ -154,10 +154,11 @@ function newestAssistantMessage(thread: OrchestrationThread): OrchestrationMessa
   return thread.messages.findLast((message) => message.role === "assistant") ?? null;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
-  const output = vscode.window.createOutputChannel("T3 Code", { log: true });
-  context.subscriptions.push(output);
-  const log = (message: string) => output.info(message);
+export function activateExtension(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+  log: (message: string) => void,
+): void {
   log(
     `activate version=${String(context.extension.packageJSON.version)} remote=${vscode.env.remoteName ?? "local"} workspace=${worktreePath()}`,
   );
