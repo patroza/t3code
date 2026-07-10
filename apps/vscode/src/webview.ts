@@ -55,6 +55,7 @@ interface ViewToolCall {
   readonly status: "running" | "completed" | "failed" | "stopped";
   readonly preview: string | null;
   readonly detail: string | null;
+  readonly changedFiles: ReadonlyArray<string>;
 }
 
 interface ViewPendingApproval {
@@ -426,7 +427,23 @@ function renderToolCall(tool: ViewToolCall): HTMLElement {
     detail.className = "tool-call-detail";
     detail.textContent = tool.detail;
     wrapper.append(detail);
-  } else {
+  }
+  if (tool.changedFiles.length > 0) {
+    const files = document.createElement("div");
+    files.className = "tool-changed-files";
+    for (const path of tool.changedFiles) {
+      const button = document.createElement("button");
+      button.className = "tool-changed-file";
+      button.title = `Open ${path}`;
+      button.textContent = path;
+      button.addEventListener("click", () =>
+        post({ type: "openEditorContext", path, detail: "changed file" }),
+      );
+      files.append(button);
+    }
+    wrapper.append(files);
+  }
+  if (tool.detail === null && tool.changedFiles.length === 0) {
     wrapper.classList.add("not-expandable");
     summary.addEventListener("click", (event) => event.preventDefault());
   }

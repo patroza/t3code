@@ -68,4 +68,28 @@ describe("presentToolCalls", () => {
   it("omits non-tool activities", () => {
     expect(presentToolCalls([activity({ id: "message", kind: "message.created" })])).toEqual([]);
   });
+
+  it("collects and deduplicates nested changed file paths", () => {
+    const [tool] = presentToolCalls([
+      activity({
+        id: "files",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: {
+            item: {
+              changes: [
+                { path: "src/one.ts" },
+                { filename: "src/two.ts" },
+                { newPath: "src/one.ts" },
+              ],
+            },
+          },
+        },
+      }),
+    ]);
+    expect(tool?.changedFiles).toEqual(["src/one.ts", "src/two.ts"]);
+    expect(tool?.preview).toBe("2 changed files");
+  });
 });

@@ -572,6 +572,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .tool-call.stopped .tool-call-state { color: var(--vscode-charts-orange); }
     .tool-call.not-expandable summary { cursor: default; }
     .tool-call-detail { max-height: 260px; overflow: auto; margin: 3px 6px 4px 28px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 5px; padding: 8px 10px; background: var(--vscode-textCodeBlock-background); color: var(--vscode-editor-foreground); font: 11px/1.45 var(--vscode-editor-font-family); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .tool-changed-files { display: flex; flex-direction: column; gap: 2px; margin: 3px 6px 5px 28px; }
+    .tool-changed-file { position: relative; border: 0; padding: 3px 7px 3px 20px; overflow: hidden; background: transparent; color: var(--vscode-textLink-foreground); font-family: var(--vscode-editor-font-family); font-size: 10px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-changed-file::before { content: '±'; position: absolute; left: 6px; color: var(--vscode-descriptionForeground); }
+    .tool-changed-file:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-textLink-activeForeground); }
     .role { color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
     .content { overflow-wrap: anywhere; line-height: 1.55; }
     .markdown-body > :first-child { margin-top: 0; }

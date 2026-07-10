@@ -8,6 +8,7 @@ export interface PresentedToolCall {
   readonly status: "running" | "completed" | "failed" | "stopped";
   readonly preview: string | null;
   readonly detail: string | null;
+  readonly changedFiles: ReadonlyArray<string>;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -54,6 +55,43 @@ function rawOutputDetail(payload: Record<string, unknown>): string | null {
   return text(rawOutput.content) ?? text(rawOutput.stdout);
 }
 
+function collectChangedFiles(value: unknown, target: string[], seen: Set<string>, depth = 0): void {
+  if (depth > 4 || target.length >= 12) return;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectChangedFiles(entry, target, seen, depth + 1);
+    return;
+  }
+  const data = record(value);
+  if (data === null) return;
+  for (const key of ["path", "filePath", "relativePath", "filename", "newPath", "oldPath"]) {
+    const path = text(data[key]);
+    if (path !== null && !seen.has(path)) {
+      seen.add(path);
+      target.push(path);
+    }
+  }
+  for (const key of [
+    "item",
+    "result",
+    "input",
+    "data",
+    "changes",
+    "files",
+    "edits",
+    "patch",
+    "patches",
+    "operations",
+  ]) {
+    if (key in data) collectChangedFiles(data[key], target, seen, depth + 1);
+  }
+}
+
+function changedFiles(payload: Record<string, unknown>): ReadonlyArray<string> {
+  const files: string[] = [];
+  collectChangedFiles(payload.data, files, new Set());
+  return files;
+}
+
 function expandedDetail(payload: Record<string, unknown>, command: string | null): string | null {
   const data = record(payload.data);
   const item = record(data?.item);
@@ -82,7 +120,12 @@ function present(activity: OrchestrationThreadActivity): PresentedToolCall | nul
   const command = toolCommand(payload);
   const title = text(payload.title) ?? activity.summary.replace(/\s+complete(?:d)?$/iu, "").trim();
   const detail = expandedDetail(payload, command);
-  const rawPreview = command ?? text(payload.detail) ?? rawOutputDetail(payload);
+  const files = changedFiles(payload);
+  const rawPreview =
+    command ??
+    text(payload.detail) ??
+    rawOutputDetail(payload) ??
+    (files.length > 0 ? `${files.length} changed file${files.length === 1 ? "" : "s"}` : null);
   const preview = rawPreview === title ? null : rawPreview;
   return {
     id: activity.id,
@@ -92,6 +135,7 @@ function present(activity: OrchestrationThreadActivity): PresentedToolCall | nul
     status: lifecycleStatus(activity, payload),
     preview,
     detail,
+    changedFiles: files,
   };
 }
 
@@ -117,6 +161,7 @@ export function presentToolCalls(
         ...tool,
         preview: tool.preview ?? previous.preview,
         detail: tool.detail ?? previous.detail,
+        changedFiles: [...new Set([...previous.changedFiles, ...tool.changedFiles])],
         collapseKey,
       };
     } else {
