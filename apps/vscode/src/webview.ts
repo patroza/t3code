@@ -99,6 +99,14 @@ interface ViewState {
     readonly messages: ReadonlyArray<ViewMessage>;
     readonly toolCalls: ReadonlyArray<ViewToolCall>;
     readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
+    readonly tasks: null | {
+      readonly explanation: string | null;
+      readonly createdAt: string;
+      readonly tasks: ReadonlyArray<{
+        readonly step: string;
+        readonly status: "pending" | "inProgress" | "completed";
+      }>;
+    };
   };
   readonly models: ReadonlyArray<{
     readonly instanceId: string;
@@ -158,6 +166,8 @@ const model = requiredElement<HTMLSelectElement>("model");
 const favoriteModel = requiredElement<HTMLButtonElement>("favorite-model");
 const modelOptions = requiredElement<HTMLElement>("model-options");
 const usageDetails = requiredElement<HTMLElement>("usage-details");
+const tasksDetails = requiredElement<HTMLElement>("tasks-details");
+const tasksLabel = requiredElement<HTMLElement>("tasks-label");
 let currentState: ViewState | null = null;
 let draftSelection: null | {
   instanceId: string;
@@ -174,6 +184,7 @@ interface PendingImage {
 }
 let pendingImages: PendingImage[] = [];
 let usageExpanded = false;
+let tasksExpanded = false;
 let selectedSlashCommand = 0;
 const pendingAnswers = new Map<string, Record<string, string | string[]>>();
 const submittedAnswers = new Map<
@@ -616,6 +627,41 @@ function renderPendingInteractions(state: ViewState): void {
   );
 }
 
+function renderTasks(state: ViewState): void {
+  const presented = state.activeThread?.tasks ?? null;
+  tasksDetails.replaceChildren();
+  if (presented === null) {
+    tasksLabel.textContent = "Tasks";
+    const empty = document.createElement("div");
+    empty.className = "tasks-empty";
+    empty.textContent = "No task list for this thread yet.";
+    tasksDetails.append(empty);
+    return;
+  }
+  const completed = presented.tasks.filter((task) => task.status === "completed").length;
+  tasksLabel.textContent = `Tasks ${completed}/${presented.tasks.length}`;
+  if (presented.explanation !== null) {
+    const explanation = document.createElement("div");
+    explanation.className = "tasks-explanation";
+    explanation.textContent = presented.explanation;
+    tasksDetails.append(explanation);
+  }
+  const list = document.createElement("ol");
+  list.className = "tasks-list";
+  for (const task of presented.tasks) {
+    const item = document.createElement("li");
+    item.className = `task-item ${task.status}`;
+    const icon = document.createElement("span");
+    icon.className = "task-icon";
+    icon.textContent = task.status === "completed" ? "✓" : task.status === "inProgress" ? "◔" : "·";
+    const text = document.createElement("span");
+    text.textContent = task.step;
+    item.append(icon, text);
+    list.append(item);
+  }
+  tasksDetails.append(list);
+}
+
 function render(next: ViewState): void {
   currentState = next;
   const wasNearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
@@ -649,6 +695,7 @@ function render(next: ViewState): void {
   threads.disabled = next.busy;
   renderActiveStatus(next);
   renderPendingInteractions(next);
+  renderTasks(next);
 
   messages.replaceChildren();
   if (draftSelection !== null) {
@@ -1211,6 +1258,20 @@ function positionUsageDetails(): void {
   usageDetails.style.bottom = `${Math.max(viewportPadding, globalThis.innerHeight - toggleBounds.top + 7)}px`;
 }
 
+function positionTasksDetails(): void {
+  const toggle = requiredElement<HTMLElement>("tasks-toggle");
+  const viewportPadding = 8;
+  const width = Math.min(320, Math.max(0, globalThis.innerWidth - viewportPadding * 2));
+  const toggleBounds = toggle.getBoundingClientRect();
+  const left = Math.min(
+    Math.max(viewportPadding, toggleBounds.right - width),
+    Math.max(viewportPadding, globalThis.innerWidth - width - viewportPadding),
+  );
+  tasksDetails.style.width = `${width}px`;
+  tasksDetails.style.left = `${left}px`;
+  tasksDetails.style.bottom = `${Math.max(viewportPadding, globalThis.innerHeight - toggleBounds.top + 7)}px`;
+}
+
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (typeof event.data !== "object" || event.data === null || !("type" in event.data)) return;
   if (event.data.type === "state" && "state" in event.data) render(event.data.state as ViewState);
@@ -1275,7 +1336,16 @@ requiredElement("usage-toggle").addEventListener("click", () => {
   requiredElement("usage-control").classList.toggle("pinned", usageExpanded);
 });
 requiredElement("usage-control").addEventListener("pointerenter", positionUsageDetails);
-globalThis.addEventListener("resize", positionUsageDetails);
+requiredElement("tasks-toggle").addEventListener("click", () => {
+  positionTasksDetails();
+  tasksExpanded = !tasksExpanded;
+  requiredElement("tasks-control").classList.toggle("pinned", tasksExpanded);
+});
+requiredElement("tasks-control").addEventListener("pointerenter", positionTasksDetails);
+globalThis.addEventListener("resize", () => {
+  positionUsageDetails();
+  positionTasksDetails();
+});
 requiredElement("new").addEventListener("click", beginNewThread);
 requiredElement("refresh").addEventListener("click", () => post({ type: "refresh" }));
 contextButton.addEventListener("click", () => post({ type: "toggleContext" }));

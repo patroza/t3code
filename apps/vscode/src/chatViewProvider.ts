@@ -14,6 +14,7 @@ import { composePrompt, type TextContext } from "./editorContext.ts";
 import { derivePendingInteractions } from "./pendingInteractions.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
+import { presentTasks } from "./taskPresentation.ts";
 import { presentToolCalls } from "./toolPresentation.ts";
 import { deriveContextWindowUsage } from "./usagePresentation.ts";
 
@@ -461,6 +462,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       turnStartedAt: thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? null,
       contextWindow: deriveContextWindowUsage(thread.activities),
       pendingInteractions: derivePendingInteractions(thread.activities),
+      tasks: presentTasks(thread.activities, thread.latestTurn?.turnId ?? null),
       toolCalls: presentToolCalls(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,
@@ -659,6 +661,20 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     #provider-icon { display: inline-flex; width: 17px; height: 17px; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; }
     #provider-icon svg { width: 100%; height: 100%; }
     .usage-control { position: relative; }
+    .tasks-control { position: relative; }
+    #tasks-toggle { display: inline-flex; align-items: center; gap: 5px; border: 0; padding: 4px 6px; background: transparent; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+    #tasks-toggle:hover { color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-descriptionForeground) 10%, transparent); }
+    .tasks-icon { font-size: 14px; line-height: 1; }
+    .tasks-details { position: fixed; z-index: 20; display: none; max-height: min(360px, calc(100vh - 24px)); overflow: auto; border: 1px solid var(--vscode-editorWidget-border); border-radius: 8px; padding: 8px; background: var(--vscode-editorWidget-background); box-shadow: 0 5px 22px var(--vscode-widget-shadow); color: var(--vscode-foreground); }
+    .tasks-control:hover .tasks-details, .tasks-control:focus-within .tasks-details, .tasks-control.pinned .tasks-details { display: block; }
+    .tasks-empty, .tasks-explanation { padding: 6px 7px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.4; }
+    .tasks-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+    .task-item { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 5px; border-radius: 5px; padding: 6px 7px; font-size: 11px; line-height: 1.4; }
+    .task-item.inProgress { background: color-mix(in srgb, var(--vscode-charts-blue) 10%, transparent); color: var(--vscode-foreground); }
+    .task-item.completed { color: var(--vscode-descriptionForeground); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--vscode-descriptionForeground) 35%, transparent); }
+    .task-icon { display: inline-grid; width: 18px; height: 18px; place-items: center; border: 1px solid var(--vscode-editorWidget-border); border-radius: 50%; color: var(--vscode-descriptionForeground); text-decoration: none; }
+    .task-item.inProgress .task-icon { border-color: var(--vscode-charts-blue); color: var(--vscode-charts-blue); animation: status-pulse 1.4s ease-in-out infinite; }
+    .task-item.completed .task-icon { border-color: color-mix(in srgb, var(--vscode-charts-green) 55%, transparent); color: var(--vscode-charts-green); }
     #usage-toggle { --usage-primary: 0deg; --usage-secondary: 0deg; position: relative; width: 35px; height: 27px; border: 0; padding: 0; background: transparent; color: var(--vscode-foreground); }
     .usage-ring { position: absolute; display: block; border-radius: 50%; }
     .usage-ring::after { content: ''; position: absolute; border-radius: inherit; background: var(--vscode-sideBar-background); }
@@ -705,7 +721,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <div id="pending-interactions"></div>
       <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><button id="context-window" hidden><span id="context-window-label"></span></button></div>
       <div class="prompt-wrap"><div id="slash-commands" hidden></div><textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea></div>
-      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
+      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="tasks-control" class="tasks-control"><button id="tasks-toggle" title="Thread tasks" aria-label="Thread tasks"><span class="tasks-icon">☑</span><span id="tasks-label">Tasks</span></button><div id="tasks-details" class="tasks-details"></div></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
     </div>
   </div>
   <script nonce="${scriptNonce}" src="${scriptUri}"></script>
