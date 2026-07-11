@@ -21,7 +21,7 @@ find_latest_appimage() {
 cd "${ROOT_DIR}"
 
 pnpm run build
-pnpm run dist:desktop:linux
+pnpm run dist:desktop:linux:appimage
 
 APPIMAGE_PATH="$(find_latest_appimage)"
 
