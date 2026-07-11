@@ -179,6 +179,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./userInputTranscript": {
+      "types": "./src/userInputTranscript.ts",
+      "import": "./src/userInputTranscript.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"

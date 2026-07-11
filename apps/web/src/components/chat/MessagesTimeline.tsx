@@ -1839,6 +1839,12 @@ function buildToolCallExpandedBody(
   if (workEntry.detail?.trim()) {
     blocks.push(workEntry.detail.trim());
   }
+  if (
+    workEntry.userInputTranscript?.trim() &&
+    workEntry.userInputTranscript.trim() !== workEntry.detail?.trim()
+  ) {
+    blocks.push(workEntry.userInputTranscript.trim());
+  }
   const changedFiles = workEntry.changedFiles ?? [];
   if (changedFiles.length > 0) {
     blocks.push(

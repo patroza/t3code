@@ -8,6 +8,7 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTranscript";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -74,6 +75,7 @@ interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
+  userInputTranscript?: string;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -233,6 +235,9 @@ function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
   const ordered = Arr.sort(activities, activityOrder);
+  const resolvedUserInputs = new Map(
+    deriveResolvedUserInputTranscripts(activities).map((entry) => [entry.activityId, entry]),
+  );
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -240,7 +245,13 @@ function deriveWorkLogEntries(
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    const resolvedUserInput = resolvedUserInputs.get(activity.id);
+    if (resolvedUserInput) {
+      entry.detail = resolvedUserInput.preview;
+      entry.userInputTranscript = resolvedUserInput.detail;
+    }
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries);
 }
@@ -542,6 +553,7 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
   }
   appendUniqueBlock(entry.rawCommand ?? entry.command);
   appendUniqueBlock(entry.detail);
+  appendUniqueBlock(entry.userInputTranscript);
   if ((entry.changedFiles?.length ?? 0) > 0) {
     appendUniqueBlock(entry.changedFiles!.join("\n"));
   }

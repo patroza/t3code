@@ -54,6 +54,40 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("shows submitted structured answers in the feed", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-input"),
+      projectId: ProjectId.make("project-input"),
+      title: "Input thread",
+      activities: [
+        makeActivity({
+          id: EventId.make("input-requested"),
+          kind: "user-input.requested",
+          summary: "User input requested",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            requestId: "request-1",
+            questions: [{ id: "goal", header: "Goal", question: "What is the goal?", options: [] }],
+          },
+        }),
+        makeActivity({
+          id: EventId.make("input-resolved"),
+          kind: "user-input.resolved",
+          summary: "User input submitted",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          payload: { requestId: "request-1", answers: { goal: "Make it sleep" } },
+        }),
+      ],
+    });
+
+    const resolved = buildThreadFeed(thread)
+      .filter((entry) => entry.type === "activity-group")
+      .flatMap((entry) => entry.activities)
+      .find((entry) => entry.id === "input-resolved");
+    expect(resolved?.detail).toBe("Make it sleep");
+    expect(resolved?.fullDetail).toContain("What is the goal?\nMake it sleep");
+  });
+
   it("keeps historic work entries attributed to their turns", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),

@@ -691,6 +691,34 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("shows submitted structured answers with their question transcript", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "input-requested",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "request-1",
+          questions: [{ id: "goal", header: "Goal", question: "What is the goal?", options: [] }],
+        },
+      }),
+      makeActivity({
+        id: "input-resolved",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        payload: { requestId: "request-1", answers: { goal: "Make it sleep" } },
+      }),
+    ];
+
+    const resolved = deriveWorkLogEntries(activities).find(
+      (entry) => entry.id === "input-resolved",
+    );
+    expect(resolved?.detail).toBe("Make it sleep");
+    expect(resolved?.userInputTranscript).toBe("What is the goal?\nMake it sleep");
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

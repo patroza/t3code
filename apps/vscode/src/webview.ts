@@ -58,6 +58,16 @@ interface ViewToolCall {
   readonly changedFiles: ReadonlyArray<string>;
 }
 
+interface ViewResolvedUserInput {
+  readonly activityId: string;
+  readonly createdAt: string;
+  readonly answers: ReadonlyArray<{
+    readonly header: string;
+    readonly question: string;
+    readonly answer: string;
+  }>;
+}
+
 interface ViewPendingApproval {
   readonly kind: "approval";
   readonly requestId: string;
@@ -98,6 +108,7 @@ interface ViewState {
     };
     readonly messages: ReadonlyArray<ViewMessage>;
     readonly toolCalls: ReadonlyArray<ViewToolCall>;
+    readonly resolvedUserInputs: ReadonlyArray<ViewResolvedUserInput>;
     readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
     readonly tasks: null | {
       readonly explanation: string | null;
@@ -466,6 +477,30 @@ function renderToolCall(tool: ViewToolCall): HTMLElement {
   return wrapper;
 }
 
+function renderResolvedUserInput(input: ViewResolvedUserInput): HTMLElement {
+  const wrapper = document.createElement("section");
+  wrapper.className = "message user user-input-response";
+
+  const role = document.createElement("div");
+  role.className = "message-role";
+  role.textContent = "You answered";
+  wrapper.append(role);
+
+  for (const entry of input.answers) {
+    const answer = document.createElement("div");
+    answer.className = "user-input-response-item";
+    const question = document.createElement("div");
+    question.className = "user-input-response-question";
+    question.textContent = entry.question;
+    const value = document.createElement("div");
+    value.className = "user-input-response-answer";
+    value.textContent = entry.answer;
+    answer.append(question, value);
+    wrapper.append(answer);
+  }
+  return wrapper;
+}
+
 function approvalLabel(kind: ViewPendingApproval["requestKind"]): string {
   if (kind === "command") return "Command approval";
   if (kind === "file-read") return "File-read approval";
@@ -702,7 +737,9 @@ function render(next: ViewState): void {
     messages.append(emptyMessage("Choose a provider and model, then send your first message."));
   } else if (
     next.activeThread === null ||
-    (next.activeThread.messages.length === 0 && next.activeThread.toolCalls.length === 0)
+    (next.activeThread.messages.length === 0 &&
+      next.activeThread.toolCalls.length === 0 &&
+      next.activeThread.resolvedUserInputs.length === 0)
   ) {
     messages.append(
       emptyMessage(
@@ -722,6 +759,11 @@ function render(next: ViewState): void {
         createdAt: tool.createdAt,
         order: 1,
         element: renderToolCall(tool),
+      })),
+      ...next.activeThread.resolvedUserInputs.map((input) => ({
+        createdAt: input.createdAt,
+        order: 2,
+        element: renderResolvedUserInput(input),
       })),
     ].toSorted(
       (left, right) => left.createdAt.localeCompare(right.createdAt) || left.order - right.order,

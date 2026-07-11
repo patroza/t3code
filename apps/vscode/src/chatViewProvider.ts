@@ -16,6 +16,7 @@ import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
 import { presentTasks } from "./taskPresentation.ts";
 import { presentToolCalls } from "./toolPresentation.ts";
+import { presentResolvedUserInputs } from "./userInputPresentation.ts";
 import { deriveContextWindowUsage } from "./usagePresentation.ts";
 
 interface ChatViewActions {
@@ -473,6 +474,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       pendingInteractions: derivePendingInteractions(thread.activities),
       tasks: presentTasks(thread.activities, thread.latestTurn?.turnId ?? null),
       toolCalls: presentToolCalls(thread.activities),
+      resolvedUserInputs: presentResolvedUserInputs(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,
         role: message.role,
@@ -569,6 +571,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .empty { margin: auto; max-width: 260px; text-align: center; color: var(--vscode-descriptionForeground); line-height: 1.5; }
     .message { min-width: 0; }
     .message.user { align-self: flex-end; max-width: 92%; border-radius: 12px 12px 3px 12px; padding: 8px 10px; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); }
+    .user-input-response { display: grid; gap: 8px; }
+    .user-input-response-item { display: grid; gap: 2px; }
+    .user-input-response-question { color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .user-input-response-answer { white-space: pre-wrap; overflow-wrap: anywhere; }
     .message.assistant, .message.system { align-self: stretch; }
     .tool-call { align-self: stretch; min-width: 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
     .tool-call summary { display: grid; grid-template-columns: 22px auto minmax(0, 1fr) auto; align-items: center; min-height: 28px; gap: 4px; border-radius: 5px; padding: 3px 6px; cursor: pointer; list-style: none; }

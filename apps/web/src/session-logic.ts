@@ -12,6 +12,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTranscript";
 
 import type {
   ChatMessage,
@@ -78,6 +79,7 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
+  userInputTranscript?: string;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -628,6 +630,9 @@ export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const resolvedUserInputs = new Map(
+    deriveResolvedUserInputTranscripts(activities).map((entry) => [entry.activityId, entry]),
+  );
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -635,7 +640,13 @@ export function deriveWorkLogEntries(
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    const resolvedUserInput = resolvedUserInputs.get(activity.id);
+    if (resolvedUserInput) {
+      entry.detail = resolvedUserInput.preview;
+      entry.userInputTranscript = resolvedUserInput.detail;
+    }
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
     const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
