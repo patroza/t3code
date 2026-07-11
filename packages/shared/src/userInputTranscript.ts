@@ -69,7 +69,7 @@ export function deriveResolvedUserInputTranscripts(
   const questionsByRequestId = new Map<string, ReadonlyArray<UserInputQuestion>>();
   const transcripts: ResolvedUserInputTranscript[] = [];
 
-  for (const activity of [...activities].toSorted(compareActivities)) {
+  for (const activity of [...activities].sort(compareActivities)) {
     const payload = record(activity.payload);
     const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
     if (!requestId) continue;
