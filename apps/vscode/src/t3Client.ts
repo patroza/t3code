@@ -361,10 +361,12 @@ export class T3Client {
     readonly threadId: ThreadId;
     readonly prompt: string;
     readonly runtimeMode?: RuntimeMode;
+    readonly modelSelection?: ModelSelection;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
   }): Promise<void> {
     const thread = this.#activeThread;
-    const modelSelection = thread?.modelSelection ?? this.#defaultModelSelection();
+    const modelSelection =
+      input.modelSelection ?? thread?.modelSelection ?? this.#defaultModelSelection();
     await this.#dispatch({
       type: "thread.turn.start",
       commandId: newCommandId(),

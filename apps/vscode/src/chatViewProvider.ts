@@ -258,11 +258,15 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           await this.#run(async () => {
             const authored = message.text.trim();
             if (authored === "" && message.images.length === 0) return;
-            const threadId = await this.actions.createThread(authored.slice(0, 80) || "Image", {
+            const modelSelection: ModelSelection = {
               instanceId: ProviderInstanceId.make(message.instanceId),
               model: message.model,
               ...(message.options === undefined ? {} : { options: message.options }),
-            });
+            };
+            const threadId = await this.actions.createThread(
+              authored.slice(0, 80) || "Image",
+              modelSelection,
+            );
             const editorContext = this.actions.contextEnabled()
               ? this.actions.editorContext()
               : null;
@@ -270,8 +274,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
               threadId,
               prompt: composePrompt(authored, editorContext === null ? [] : [editorContext]),
               runtimeMode: this.actions.runtimeMode(),
+              modelSelection,
               attachments: message.images,
             });
+            // The shell/title update can arrive before the detail stream. Hydrate
+            // the authoritative first message before the webview leaves draft mode.
+            await this.client.selectThread(threadId);
+            await this.client.waitForActiveThread();
             await this.#view?.webview.postMessage({ type: "sentNewThread" });
           });
           return;
