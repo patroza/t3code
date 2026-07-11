@@ -25,6 +25,7 @@
 
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -340,7 +341,19 @@ const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
     );
     yield* options.onReady?.() ?? Effect.void;
-    return yield* Effect.never;
+    // We don't own the reused backend process, so there's no child exit to
+    // await — park until the run scope closes (stop()/quit). Using a
+    // scope-finalizer-completed Deferred instead of `Effect.never` lets
+    // `closeRun` unblock this fiber; `Effect.never` would leave it parked
+    // forever, deadlocking shutdown and orphaning the windowless app.
+    const released = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+    yield* Deferred.await(released);
+    return {
+      code: Option.none(),
+      reason: "reused backend released",
+      result: Result.succeed(ChildProcessSpawner.ExitCode(0)),
+    };
   }
   const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
     Effect.mapError(
