@@ -989,9 +989,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
-        <AssistantChangedFilesSection
+        <AssistantChangedFilesOverview
           turnSummary={row.assistantTurnDiffSummary}
-          routeThreadKey={ctx.routeThreadKey}
           resolvedTheme={ctx.resolvedTheme}
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
@@ -1188,16 +1187,18 @@ function WorkGroupToggleTimelineRow({
   );
 }
 
-/** Subscribes directly to the UI state store for expand/collapse state,
- *  so toggling re-renders only this component — not the entire list. */
-const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({
+/**
+ * Renders the "CHANGED FILES (N) +A -D" overview header inline in the conversation.
+ * Tree of individual files is collapsed by default (local state so it doesn't persist
+ * as a "huge" block in history if you expand it temporarily). "View diff" opens the
+ * full side panel (like Plan/Tasks).
+ */
+const AssistantChangedFilesOverview = memo(function AssistantChangedFilesOverview({
   turnSummary,
-  routeThreadKey,
   resolvedTheme,
   onOpenTurnDiff,
 }: {
   turnSummary: TurnDiffSummary | undefined;
-  routeThreadKey: string;
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }) {
@@ -1205,43 +1206,21 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   const checkpointFiles = turnSummary.files;
   if (checkpointFiles.length === 0) return null;
 
-  return (
-    <AssistantChangedFilesSectionInner
-      turnSummary={turnSummary}
-      checkpointFiles={checkpointFiles}
-      routeThreadKey={routeThreadKey}
-      resolvedTheme={resolvedTheme}
-      onOpenTurnDiff={onOpenTurnDiff}
-    />
-  );
-});
-
-/** Inner component that only mounts when there are actual changed files,
- *  so the store subscription is unconditional (no hooks after early return). */
-function AssistantChangedFilesSectionInner({
-  turnSummary,
-  checkpointFiles,
-  routeThreadKey,
-  resolvedTheme,
-  onOpenTurnDiff,
-}: {
-  turnSummary: TurnDiffSummary;
-  checkpointFiles: TurnDiffSummary["files"];
-  routeThreadKey: string;
-  resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-}) {
-  const allDirectoriesExpanded = useUiStateStore(
-    (store) => store.threadChangedFilesExpandedById[routeThreadKey]?.[turnSummary.turnId] ?? true,
-  );
-  const setExpanded = useUiStateStore((store) => store.setThreadChangedFilesExpanded);
+  const [showTree, setShowTree] = useState(false);
   const summaryStat = summarizeTurnDiffStats(checkpointFiles);
   const changedFileCountLabel = String(checkpointFiles.length);
 
   return (
-    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
-      <div className="sticky top-2 z-10 mb-1.5 flex items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:absolute before:inset-x-0 before:-top-2 before:h-2 before:bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:content-['']">
-        <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+    <div className="mt-2">
+      <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={() => setShowTree((v) => !v)}
+        >
+          <ChevronRightIcon
+            className={cn("size-3 transition-transform", showTree && "rotate-90")}
+          />
           <span>Changed files ({changedFileCountLabel})</span>
           {hasNonZeroStat(summaryStat) && (
             <>
@@ -1249,38 +1228,47 @@ function AssistantChangedFilesSectionInner({
               <DiffStatLabel additions={summaryStat.additions} deletions={summaryStat.deletions} />
             </>
           )}
-        </p>
+        </button>
+
         <div className="flex items-center gap-1.5">
           <Button
             type="button"
             size="xs"
             variant="outline"
             data-scroll-anchor-ignore
-            onClick={() => setExpanded(routeThreadKey, turnSummary.turnId, !allDirectoriesExpanded)}
-          >
-            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
             onClick={() => onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)}
           >
             View diff
           </Button>
+          {showTree && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              data-scroll-anchor-ignore
+              onClick={() => setShowTree(false)}
+            >
+              Hide files
+            </Button>
+          )}
         </div>
       </div>
-      <ChangedFilesTree
-        key={`changed-files-tree:${turnSummary.turnId}`}
-        turnId={turnSummary.turnId}
-        files={checkpointFiles}
-        allDirectoriesExpanded={allDirectoriesExpanded}
-        resolvedTheme={resolvedTheme}
-        onOpenTurnDiff={onOpenTurnDiff}
-      />
+
+      {showTree && (
+        <div className="mt-1.5 rounded-lg border border-border/80 bg-card/45 p-2.5">
+          <ChangedFilesTree
+            key={`changed-files-tree:${turnSummary.turnId}`}
+            turnId={turnSummary.turnId}
+            files={checkpointFiles}
+            allDirectoriesExpanded={false}
+            resolvedTheme={resolvedTheme}
+            onOpenTurnDiff={onOpenTurnDiff}
+          />
+        </div>
+      )}
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Leaf components

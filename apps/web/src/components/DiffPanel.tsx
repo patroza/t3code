@@ -24,6 +24,11 @@ import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
+import { useUiStateStore } from "~/uiStateStore";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { ChangedFilesTree } from "./chat/ChangedFilesTree";
+import { summarizeTurnDiffStats } from "../lib/turnDiffTree";
+import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
 import { useTheme } from "../hooks/useTheme";
 import {
   buildFileDiffRenderKey,
@@ -269,6 +274,22 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
   const selectedCheckpointTurnCount =
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
+
+  // For embedding the changed files tree (moved out of chat history into this panel, like Plan/Tasks).
+  const threadRefForKey =
+    routeThreadRef?.environmentId && routeThreadRef?.threadId
+      ? {
+          environmentId: routeThreadRef.environmentId as any,
+          threadId: routeThreadRef.threadId as any,
+        }
+      : null;
+  const routeThreadKey = threadRefForKey ? scopedThreadKey(threadRefForKey) : "";
+  const allDirectoriesExpanded = useUiStateStore((store) =>
+    routeThreadKey && selectedTurn
+      ? (store.threadChangedFilesExpandedById[routeThreadKey]?.[selectedTurn.turnId] ?? false)
+      : false,
+  );
+  const setThreadChangedFilesExpanded = useUiStateStore((s) => s.setThreadChangedFilesExpanded);
   const latestTurn = orderedTurnDiffSummaries[0];
   const selectedScopeLabel =
     selectedTurnId === null
@@ -760,6 +781,51 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
                 This diff was truncated because it exceeded the preview limit. The changes shown are
                 incomplete.
               </p>
+            )}
+
+            {selectedTurn && selectedTurn.files.length > 0 && (
+              <div className="shrink-0 border-b border-border/60 bg-card/40 p-2 text-xs">
+                <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+                  <span>
+                    Changed files ({selectedTurn.files.length})
+                    {(() => {
+                      const st = summarizeTurnDiffStats(selectedTurn.files);
+                      return hasNonZeroStat(st) ? (
+                        <>
+                          {" "}
+                          • <DiffStatLabel additions={st.additions} deletions={st.deletions} />
+                        </>
+                      ) : null;
+                    })()}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded border border-border/70 px-1.5 py-0.5 text-[10px] hover:bg-accent"
+                    onClick={() =>
+                      selectedTurn &&
+                      setThreadChangedFilesExpanded(
+                        routeThreadKey,
+                        selectedTurn.turnId,
+                        !allDirectoriesExpanded,
+                      )
+                    }
+                  >
+                    {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
+                  </button>
+                </div>
+                <ChangedFilesTree
+                  turnId={selectedTurn.turnId}
+                  files={selectedTurn.files}
+                  allDirectoriesExpanded={allDirectoriesExpanded}
+                  resolvedTheme={resolvedTheme}
+                  onOpenTurnDiff={(_turnId, filePath) => {
+                    if (filePath) {
+                      // Reveal the file inside the current diff view (best effort via primary action)
+                      openDiffFile(filePath);
+                    }
+                  }}
+                />
+              </div>
             )}
             {selectedPatchError && !renderablePatch && (
               <div className="px-3">

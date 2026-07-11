@@ -24,6 +24,7 @@ Object.assign(process.env, loadRepoEnv());
 
 const BASE_SERVER_PORT = 13773;
 const BASE_WEB_PORT = 5733;
+const BASE_MOBILE_PORT = 8081;
 const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
@@ -45,6 +46,10 @@ const MODE_ARGS = {
   "dev:server": ["run", "--filter=t3", "dev"],
   "dev:web": ["run", "--filter=@t3tools/web", "dev"],
   "dev:desktop": ["run", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "dev"],
+  "dev:mobile": ["run", "--filter=@t3tools/mobile", "dev"],
+  "dev:mobile:client": ["run", "--filter=@t3tools/mobile", "dev:client"],
+  "run:mobile:ios": ["run", "--filter=@t3tools/mobile", "ios:dev"],
+  "run:mobile:android": ["run", "--filter=@t3tools/mobile", "android:dev"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 type DevMode = keyof typeof MODE_ARGS;
@@ -87,8 +92,10 @@ export class DevRunnerPortExhaustedError extends Schema.TaggedErrorClass<DevRunn
     startOffset: Schema.Number,
     requireServerPort: Schema.Boolean,
     requireWebPort: Schema.Boolean,
+    requireMobilePort: Schema.Boolean,
     baseServerPort: Schema.Number,
     baseWebPort: Schema.Number,
+    baseMobilePort: Schema.Number,
     maximumPort: Schema.Number,
   },
 ) {
@@ -101,7 +108,16 @@ export class DevRunnerProcessError extends Schema.TaggedErrorClass<DevRunnerProc
   "DevRunnerProcessError",
   {
     operation: Schema.Literals(["spawn", "wait-for-exit"]),
-    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop"]),
+    mode: Schema.Literals([
+      "dev",
+      "dev:server",
+      "dev:web",
+      "dev:desktop",
+      "dev:mobile",
+      "dev:mobile:client",
+      "run:mobile:ios",
+      "run:mobile:android",
+    ]),
     executable: Schema.Literal("vp"),
     argumentCount: Schema.Number,
     shell: Schema.Boolean,
@@ -116,7 +132,16 @@ export class DevRunnerProcessError extends Schema.TaggedErrorClass<DevRunnerProc
 export class DevRunnerProcessExitError extends Schema.TaggedErrorClass<DevRunnerProcessExitError>()(
   "DevRunnerProcessExitError",
   {
-    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop"]),
+    mode: Schema.Literals([
+      "dev",
+      "dev:server",
+      "dev:web",
+      "dev:desktop",
+      "dev:mobile",
+      "dev:mobile:client",
+      "run:mobile:ios",
+      "run:mobile:android",
+    ]),
     executable: Schema.Literal("vp"),
     argumentCount: Schema.Number,
     shell: Schema.Boolean,
@@ -220,6 +245,7 @@ interface CreateDevRunnerEnvInput {
   readonly baseEnv: NodeJS.ProcessEnv;
   readonly serverOffset: number;
   readonly webOffset: number;
+  readonly mobileOffset?: number;
   readonly t3Home: string | undefined;
   readonly noBrowser: boolean | undefined;
   readonly autoBootstrapProjectFromCwd: boolean | undefined;
@@ -234,6 +260,7 @@ export function createDevRunnerEnv({
   baseEnv,
   serverOffset,
   webOffset,
+  mobileOffset,
   t3Home,
   noBrowser,
   autoBootstrapProjectFromCwd,
@@ -245,8 +272,14 @@ export function createDevRunnerEnv({
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
+    const mobilePort = mobileOffset !== undefined ? BASE_MOBILE_PORT + mobileOffset : undefined;
     const resolvedBaseDir = yield* resolveBaseDir(t3Home);
     const isDesktopMode = mode === "dev:desktop";
+    const isMobileMode =
+      mode === "dev:mobile" ||
+      mode === "dev:mobile:client" ||
+      mode === "run:mobile:ios" ||
+      mode === "run:mobile:android";
 
     const output: NodeJS.ProcessEnv = {
       ...baseEnv,
@@ -256,6 +289,12 @@ export function createDevRunnerEnv({
         `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
       T3CODE_HOME: resolvedBaseDir,
     };
+
+    if (mobilePort !== undefined) {
+      output.EXPO_PORT = String(mobilePort);
+      // Also set for Metro directly in some cases
+      output.METRO_PORT = String(mobilePort);
+    }
 
     if (!isDesktopMode) {
       output.T3CODE_PORT = String(serverPort);
@@ -349,6 +388,7 @@ interface FindFirstAvailableOffsetInput<R = NetService.NetService> {
   readonly startOffset: number;
   readonly requireServerPort: boolean;
   readonly requireWebPort: boolean;
+  readonly requireMobilePort?: boolean;
   readonly checkPortAvailability?: PortAvailabilityCheck<R>;
 }
 
@@ -356,6 +396,7 @@ export function findFirstAvailableOffset<R = NetService.NetService>({
   startOffset,
   requireServerPort,
   requireWebPort,
+  requireMobilePort = false,
   checkPortAvailability,
 }: FindFirstAvailableOffsetInput<R>): Effect.Effect<number, DevRunnerPortExhaustedError, R> {
   return Effect.gen(function* () {
@@ -364,13 +405,19 @@ export function findFirstAvailableOffset<R = NetService.NetService>({
 
     for (let candidate = startOffset; ; candidate += 1) {
       const { serverPort, webPort } = portPairForOffset(candidate);
+      const mobilePort = BASE_MOBILE_PORT + candidate;
       const serverPortOutOfRange = serverPort > MAX_PORT;
       const webPortOutOfRange = webPort > MAX_PORT;
+      const mobilePortOutOfRange = mobilePort > MAX_PORT;
 
       if (
         (requireServerPort && serverPortOutOfRange) ||
         (requireWebPort && webPortOutOfRange) ||
-        (!requireServerPort && !requireWebPort && (serverPortOutOfRange || webPortOutOfRange))
+        (requireMobilePort && mobilePortOutOfRange) ||
+        (!requireServerPort &&
+          !requireWebPort &&
+          !requireMobilePort &&
+          (serverPortOutOfRange || webPortOutOfRange || mobilePortOutOfRange))
       ) {
         break;
       }
@@ -381,6 +428,9 @@ export function findFirstAvailableOffset<R = NetService.NetService>({
       }
       if (requireWebPort) {
         checks.push(checkPort(webPort));
+      }
+      if (requireMobilePort) {
+        checks.push(checkPort(mobilePort));
       }
 
       if (checks.length === 0) {
@@ -397,8 +447,10 @@ export function findFirstAvailableOffset<R = NetService.NetService>({
       startOffset,
       requireServerPort,
       requireWebPort,
+      requireMobilePort: requireMobilePort ?? false,
       baseServerPort: BASE_SERVER_PORT,
       baseWebPort: BASE_WEB_PORT,
+      baseMobilePort: BASE_MOBILE_PORT,
       maximumPort: MAX_PORT,
     });
   });
@@ -419,7 +471,7 @@ export function resolveModePortOffsets<R = NetService.NetService>({
   hasExplicitDevUrl,
   checkPortAvailability,
 }: ResolveModePortOffsetsInput<R>): Effect.Effect<
-  { readonly serverOffset: number; readonly webOffset: number },
+  { readonly serverOffset: number; readonly webOffset: number; readonly mobileOffset: number },
   DevRunnerPortExhaustedError,
   R
 > {
@@ -429,7 +481,7 @@ export function resolveModePortOffsets<R = NetService.NetService>({
 
     if (mode === "dev:web") {
       if (hasExplicitDevUrl) {
-        return { serverOffset: startOffset, webOffset: startOffset };
+        return { serverOffset: startOffset, webOffset: startOffset, mobileOffset: startOffset };
       }
 
       const webOffset = yield* findFirstAvailableOffset({
@@ -438,12 +490,12 @@ export function resolveModePortOffsets<R = NetService.NetService>({
         requireWebPort: true,
         checkPortAvailability: checkPort,
       });
-      return { serverOffset: startOffset, webOffset };
+      return { serverOffset: startOffset, webOffset, mobileOffset: startOffset };
     }
 
     if (mode === "dev:server") {
       if (hasExplicitServerPort) {
-        return { serverOffset: startOffset, webOffset: startOffset };
+        return { serverOffset: startOffset, webOffset: startOffset, mobileOffset: startOffset };
       }
 
       const serverOffset = yield* findFirstAvailableOffset({
@@ -452,7 +504,26 @@ export function resolveModePortOffsets<R = NetService.NetService>({
         requireWebPort: false,
         checkPortAvailability: checkPort,
       });
-      return { serverOffset, webOffset: serverOffset };
+      return { serverOffset, webOffset: serverOffset, mobileOffset: startOffset };
+    }
+
+    const isMobileMode =
+      mode === "dev:mobile" ||
+      mode === "dev:mobile:client" ||
+      mode === "run:mobile:ios" ||
+      mode === "run:mobile:android";
+
+    if (isMobileMode) {
+      // For mobile modes, find an offset where the Metro port (8081+) is free.
+      // We still use the same offset for server/web env vars.
+      const mobileOffset = yield* findFirstAvailableOffset({
+        startOffset,
+        requireServerPort: false,
+        requireWebPort: false,
+        requireMobilePort: true,
+        checkPortAvailability: checkPort,
+      });
+      return { serverOffset: startOffset, webOffset: startOffset, mobileOffset };
     }
 
     const sharedOffset = yield* findFirstAvailableOffset({
@@ -462,7 +533,7 @@ export function resolveModePortOffsets<R = NetService.NetService>({
       checkPortAvailability: checkPort,
     });
 
-    return { serverOffset: sharedOffset, webOffset: sharedOffset };
+    return { serverOffset: sharedOffset, webOffset: sharedOffset, mobileOffset: sharedOffset };
   });
 }
 
@@ -493,7 +564,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
 
     const { offset, source } = yield* resolveOffset({ portOffset, devInstance });
 
-    const { serverOffset, webOffset } = yield* resolveModePortOffsets({
+    const { serverOffset, webOffset, mobileOffset } = yield* resolveModePortOffsets({
       mode: input.mode,
       startOffset: offset,
       hasExplicitServerPort: input.port !== undefined,
@@ -506,6 +577,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       baseEnv: hostEnvironment,
       serverOffset,
       webOffset,
+      mobileOffset,
       t3Home: input.t3Home,
       noBrowser: input.noBrowser,
       autoBootstrapProjectFromCwd: input.autoBootstrapProjectFromCwd,
@@ -517,22 +589,35 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
 
     const selectionSuffix =
       serverOffset !== offset || webOffset !== offset
-        ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
+        ? ` selectedOffset(server=${serverOffset},web=${webOffset},mobile=${mobileOffset})`
         : "";
 
+    const mobilePortInfo = env.EXPO_PORT ? ` mobilePort=${env.EXPO_PORT}` : "";
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env.T3CODE_HOME)}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)}${mobilePortInfo} baseDir=${String(env.T3CODE_HOME)}`,
     );
 
     if (input.dryRun) {
       return;
     }
 
-    const spawnCommand = yield* resolveSpawnCommand(
-      "vp",
-      [...MODE_ARGS[input.mode], ...input.runArgs],
-      { env },
-    );
+    const isMobileMode =
+      input.mode === "dev:mobile" ||
+      input.mode === "dev:mobile:client" ||
+      input.mode === "run:mobile:ios" ||
+      input.mode === "run:mobile:android";
+
+    let vpArgs: string[] = [...MODE_ARGS[input.mode]];
+    if (isMobileMode && env.EXPO_PORT) {
+      // Pass --port to expo start / expo run so it uses the allocated mobile port (e.g. 8081 + offset)
+      if (!vpArgs.includes("--")) {
+        vpArgs.push("--");
+      }
+      vpArgs.push("--port", env.EXPO_PORT);
+    }
+    vpArgs = [...vpArgs, ...input.runArgs];
+
+    const spawnCommand = yield* resolveSpawnCommand("vp", vpArgs, { env });
     const processContext = {
       mode: input.mode,
       executable: "vp" as const,
