@@ -19,8 +19,15 @@ interface ExternalSession {
   readonly model: string;
   readonly branch: string | null;
   readonly firstMessage: string | null;
+  readonly messages: ReadonlyArray<ExternalMessage>;
   readonly resumeCursor: unknown;
   readonly modelOptions?: ReadonlyArray<{ readonly id: string; readonly value: unknown }>;
+}
+
+interface ExternalMessage {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAtMs: number;
 }
 
 export interface ImportSessionsOptions {
@@ -38,6 +45,7 @@ export interface ImportSessionsResult {
   readonly id: string;
   readonly title: string;
   readonly cwd: string;
+  readonly messageCount: number;
   readonly status: ImportSessionStatus;
 }
 
@@ -54,6 +62,59 @@ function iso(ms: number): string {
 function shortTitle(value: string): string {
   const trimmed = value.trim().replace(/\s+/g, " ");
   return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed || "Imported session";
+}
+
+function firstNonEmpty(...values: ReadonlyArray<unknown>): string | undefined {
+  return values.find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
+function textParts(content: unknown, textKeys: ReadonlyArray<string>): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") return [];
+      const record = part as Record<string, unknown>;
+      for (const key of textKeys) {
+        if (typeof record[key] === "string") return [record[key]];
+      }
+      return [];
+    })
+    .join("\n")
+    .trim();
+}
+
+function readJsonLines(file: string): ReadonlyArray<Record<string, unknown>> {
+  if (!NodeFS.existsSync(file)) return [];
+  return NodeFS.readFileSync(file, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function readOpenCodeExport(sessionId: string): Record<string, unknown> {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-opencode-export-"));
+  const exportPath = NodePath.join(tempDir, "session.json");
+  const output = NodeFS.openSync(exportPath, "w");
+  try {
+    NodeChildProcess.execFileSync("opencode", ["export", sessionId], {
+      stdio: ["ignore", output, "ignore"],
+    });
+    return JSON.parse(NodeFS.readFileSync(exportPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  } finally {
+    NodeFS.closeSync(output);
+    NodeFS.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function stableUuid(kind: string, key: string): string {
@@ -117,25 +178,49 @@ function readCodexSessions(input: {
     .join(" AND ");
   return sqliteJson(
     dbPath,
-    `SELECT id,title,preview,first_user_message,cwd,created_at_ms,updated_at_ms,model,reasoning_effort,git_branch FROM threads WHERE ${where} ORDER BY updated_at_ms DESC LIMIT ${Number(input.limit)}`,
-  ).map((row) => ({
-    provider: "codex",
-    id: String(row.id),
-    title: shortTitle(String(row.title ?? row.preview ?? row.first_user_message ?? row.id)),
-    cwd: String(row.cwd),
-    createdAtMs: Number(row.created_at_ms ?? Date.now()),
-    updatedAtMs: Number(row.updated_at_ms ?? row.created_at_ms ?? Date.now()),
-    model: String(row.model ?? "gpt-5.5"),
-    branch: typeof row.git_branch === "string" && row.git_branch.length > 0 ? row.git_branch : null,
-    firstMessage:
-      typeof row.first_user_message === "string" && row.first_user_message.length > 0
-        ? row.first_user_message
-        : null,
-    resumeCursor: { threadId: String(row.id) },
-    ...(typeof row.reasoning_effort === "string" && row.reasoning_effort.length > 0
-      ? { modelOptions: [{ id: "reasoningEffort", value: row.reasoning_effort }] }
-      : {}),
-  }));
+    `SELECT id,title,preview,first_user_message,rollout_path,cwd,created_at_ms,updated_at_ms,model,reasoning_effort,git_branch FROM threads WHERE ${where} ORDER BY updated_at_ms DESC LIMIT ${Number(input.limit)}`,
+  ).map((row) => {
+    const messages = readJsonLines(String(row.rollout_path)).flatMap(
+      (entry): ReadonlyArray<ExternalMessage> => {
+        if (entry.type !== "response_item" || !entry.payload || typeof entry.payload !== "object")
+          return [];
+        const payload = entry.payload as Record<string, unknown>;
+        if (payload.type !== "message" || (payload.role !== "user" && payload.role !== "assistant"))
+          return [];
+        const text = textParts(payload.content, ["text"]);
+        if (!text) return [];
+        const time = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+        return [
+          {
+            role: payload.role,
+            text,
+            createdAtMs: Number.isFinite(time) ? time : Number(row.created_at_ms ?? Date.now()),
+          },
+        ];
+      },
+    );
+    const firstMessage = messages.find((message) => message.role === "user")?.text ?? null;
+    return {
+      provider: "codex",
+      id: String(row.id),
+      title: shortTitle(
+        firstNonEmpty(row.title, row.preview, firstMessage, row.first_user_message) ??
+          "Imported session",
+      ),
+      cwd: String(row.cwd),
+      createdAtMs: Number(row.created_at_ms ?? Date.now()),
+      updatedAtMs: Number(row.updated_at_ms ?? row.created_at_ms ?? Date.now()),
+      model: String(row.model ?? "gpt-5.5"),
+      branch:
+        typeof row.git_branch === "string" && row.git_branch.length > 0 ? row.git_branch : null,
+      firstMessage,
+      messages,
+      resumeCursor: { threadId: String(row.id) },
+      ...(typeof row.reasoning_effort === "string" && row.reasoning_effort.length > 0
+        ? { modelOptions: [{ id: "reasoningEffort", value: row.reasoning_effort }] }
+        : {}),
+    };
+  });
 }
 
 function readClaudeSessions(input: {
@@ -149,26 +234,23 @@ function readClaudeSessions(input: {
   }
   const files = NodeFS.readdirSync(root, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map((entry) => NodePath.join(entry.parentPath, entry.name));
+    .map((entry) => NodePath.join(entry.parentPath, entry.name))
+    .filter((file) => !file.split(NodePath.sep).includes("subagents"));
   const sessions = files.flatMap((file): ReadonlyArray<ExternalSession> => {
     const id = NodePath.basename(file, ".jsonl");
     if (input.sessionId && id !== input.sessionId) {
       return [];
     }
-    const lines = NodeFS.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    const lines = readJsonLines(file);
     let cwd = "";
     let createdAtMs = Number.POSITIVE_INFINITY;
     let updatedAtMs = 0;
     let firstMessage: string | null = null;
+    let generatedTitle: string | undefined;
+    const messages: Array<ExternalMessage> = [];
     let lastAssistantUuid: string | undefined;
     let model = "claude-fable-5";
-    for (const line of lines) {
-      let row: Record<string, unknown>;
-      try {
-        row = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
+    for (const row of lines) {
       if (typeof row.cwd === "string" && row.cwd.length > 0) {
         cwd = row.cwd;
       }
@@ -182,21 +264,24 @@ function readClaudeSessions(input: {
       if (typeof row.model === "string") {
         model = row.model;
       }
+      if (row.type === "ai-title") generatedTitle = firstNonEmpty(row.aiTitle) ?? generatedTitle;
       if (typeof row.uuid === "string" && row.type === "assistant") {
         lastAssistantUuid = row.uuid;
       }
-      if (!firstMessage && row.type === "user" && row.message && typeof row.message === "object") {
-        const content = (row.message as { readonly content?: unknown }).content;
-        if (Array.isArray(content)) {
-          const text = content
-            .flatMap((part) =>
-              part && typeof part === "object" && "text" in part && typeof part.text === "string"
-                ? [part.text]
-                : [],
-            )
-            .join("\n")
-            .trim();
-          firstMessage = text || null;
+      if (
+        (row.type === "user" || row.type === "assistant") &&
+        row.message &&
+        typeof row.message === "object"
+      ) {
+        const text = textParts((row.message as { readonly content?: unknown }).content, ["text"]);
+        if (text) {
+          const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : Number.NaN;
+          messages.push({
+            role: row.type,
+            text,
+            createdAtMs: Number.isFinite(time) ? time : updatedAtMs || Date.now(),
+          });
+          if (!firstMessage && row.type === "user") firstMessage = text;
         }
       }
     }
@@ -207,13 +292,14 @@ function readClaudeSessions(input: {
       {
         provider: "claudeAgent",
         id,
-        title: shortTitle(firstMessage ?? id),
+        title: shortTitle(generatedTitle ?? firstMessage ?? "Imported session"),
         cwd,
         createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : updatedAtMs || Date.now(),
         updatedAtMs: updatedAtMs || Date.now(),
         model,
         branch: null,
         firstMessage,
+        messages,
         resumeCursor: {
           resume: id,
           ...(lastAssistantUuid ? { resumeSessionAt: lastAssistantUuid } : {}),
@@ -241,19 +327,61 @@ function readOpenCodeSessions(input: {
   return (JSON.parse(out) as Array<Record<string, unknown>>)
     .filter((row) => !input.sessionId || row.id === input.sessionId)
     .filter((row) => !input.cwd || row.directory === input.cwd)
-    .map((row) => ({
-      provider: "opencode",
-      id: String(row.id),
-      title: shortTitle(String(row.title ?? row.id)),
-      cwd: String(row.directory),
-      createdAtMs: Number(row.created ?? Date.now()),
-      updatedAtMs: Number(row.updated ?? row.created ?? Date.now()),
-      model: input.model,
-      branch: null,
-      firstMessage: null,
-      resumeCursor: { sessionId: String(row.id) },
-      modelOptions: [{ id: "agent", value: "build" }],
-    }));
+    .map((row) => {
+      const exported = readOpenCodeExport(String(row.id));
+      const exportedMessages = Array.isArray(exported.messages) ? exported.messages : [];
+      const messages = exportedMessages.flatMap((item): ReadonlyArray<ExternalMessage> => {
+        if (!item || typeof item !== "object") return [];
+        const record = item as Record<string, unknown>;
+        const info =
+          record.info && typeof record.info === "object"
+            ? (record.info as Record<string, unknown>)
+            : {};
+        if (info.role !== "user" && info.role !== "assistant") return [];
+        const parts = Array.isArray(record.parts)
+          ? record.parts.filter(
+              (part) =>
+                part &&
+                typeof part === "object" &&
+                (part as Record<string, unknown>).type === "text",
+            )
+          : [];
+        const text = textParts(parts, ["text"]);
+        if (!text) return [];
+        const time =
+          info.time && typeof info.time === "object"
+            ? Number((info.time as Record<string, unknown>).created)
+            : Number.NaN;
+        return [
+          {
+            role: info.role,
+            text,
+            createdAtMs: Number.isFinite(time) ? time : Number(row.created ?? Date.now()),
+          },
+        ];
+      });
+      const exportedInfo =
+        exported.info && typeof exported.info === "object"
+          ? (exported.info as Record<string, unknown>)
+          : {};
+      const firstMessage = messages.find((message) => message.role === "user")?.text ?? null;
+      return {
+        provider: "opencode",
+        id: String(row.id),
+        title: shortTitle(
+          firstNonEmpty(row.title, exportedInfo.title, firstMessage) ?? "Imported session",
+        ),
+        cwd: String(row.directory),
+        createdAtMs: Number(row.created ?? Date.now()),
+        updatedAtMs: Number(row.updated ?? row.created ?? Date.now()),
+        model: input.model,
+        branch: null,
+        firstMessage,
+        messages,
+        resumeCursor: { sessionId: String(row.id) },
+        modelOptions: [{ id: "agent", value: "build" }],
+      };
+    });
 }
 
 function findProject(input: {
@@ -305,9 +433,13 @@ function importSession(
   const threadId = stableUuid(`t3-import-${session.provider}`, session.id);
   const exists = sqliteJson(
     dbPath,
-    `SELECT thread_id FROM provider_session_runtime WHERE thread_id = ${sql(threadId)} LIMIT 1`,
+    `SELECT runtime.thread_id, COUNT(messages.message_id) AS message_count
+     FROM provider_session_runtime AS runtime
+     LEFT JOIN projection_thread_messages AS messages ON messages.thread_id = runtime.thread_id
+     WHERE runtime.thread_id = ${sql(threadId)}
+     GROUP BY runtime.thread_id LIMIT 1`,
   )[0];
-  if (exists) {
+  if (exists && Number(exists.message_count) > 1) {
     return "exists";
   }
   const createdAt = iso(session.createdAtMs);
@@ -319,7 +451,16 @@ function importSession(
     model: session.model,
     ...(session.modelOptions ? { options: session.modelOptions } : {}),
   };
-  const messageId = stableUuid("t3-import-message", `${session.provider}:${session.id}`);
+  const messageRows = session.messages
+    .map((message, index) => {
+      const timestamp = iso(message.createdAtMs);
+      return `INSERT INTO projection_thread_messages (message_id,thread_id,turn_id,role,text,is_streaming,created_at,updated_at,attachments_json)
+VALUES (${sql(stableUuid("t3-import-message", `${session.provider}:${session.id}:${index}`))},${sql(threadId)},NULL,${sql(message.role)},${sql(message.text)},0,${sql(timestamp)},${sql(timestamp)},'[]');`;
+    })
+    .join("\n");
+  const latestUserMessageAt =
+    session.messages.findLast((message) => message.role === "user")?.createdAtMs ??
+    session.createdAtMs;
   const runtimePayload = {
     cwd: session.cwd,
     model: session.model,
@@ -351,17 +492,30 @@ function importSession(
     createdAt,
     updatedAt,
   };
+  if (exists) {
+    sqliteExec(
+      dbPath,
+      `
+BEGIN;
+UPDATE projection_threads SET title = ${sql(session.title)}, updated_at = ${sql(updatedAt)}, latest_user_message_at = ${sql(iso(latestUserMessageAt))} WHERE thread_id = ${sql(threadId)};
+DELETE FROM projection_thread_messages WHERE thread_id = ${sql(threadId)};
+${messageRows}
+COMMIT;
+`,
+    );
+    return "imported";
+  }
   const script = `
 BEGIN;
 INSERT OR IGNORE INTO projection_projects (project_id,title,workspace_root,scripts_json,created_at,updated_at,deleted_at,default_model_selection_json)
 VALUES (${sql(project.projectId)},${sql(projectTitle)},${sql(project.workspaceRoot)},'[]',${sql(createdAt)},${sql(createdAt)},NULL,${sql(JSON.stringify(modelSelection))});
 INSERT INTO projection_threads (thread_id,project_id,title,branch,worktree_path,latest_turn_id,created_at,updated_at,deleted_at,runtime_mode,interaction_mode,model_selection_json,archived_at,latest_user_message_at,pending_approval_count,pending_user_input_count,has_actionable_proposed_plan)
-VALUES (${sql(threadId)},${sql(project.projectId)},${sql(session.title)},${sql(session.branch)},${sql(project.worktreePath)},NULL,${sql(createdAt)},${sql(updatedAt)},NULL,'full-access','default',${sql(JSON.stringify(modelSelection))},NULL,${sql(createdAt)},0,0,0);
+VALUES (${sql(threadId)},${sql(project.projectId)},${sql(session.title)},${sql(session.branch)},${sql(project.worktreePath)},NULL,${sql(createdAt)},${sql(updatedAt)},NULL,'full-access','default',${sql(JSON.stringify(modelSelection))},NULL,${sql(iso(latestUserMessageAt))},0,0,0);
 INSERT INTO projection_thread_sessions (thread_id,status,provider_name,provider_session_id,provider_thread_id,active_turn_id,last_error,updated_at,runtime_mode,provider_instance_id)
 VALUES (${sql(threadId)},'stopped',${sql(session.provider)},NULL,NULL,NULL,NULL,${sql(updatedAt)},'full-access',${sql(session.provider)});
 INSERT INTO provider_session_runtime (thread_id,provider_name,provider_instance_id,adapter_key,runtime_mode,status,last_seen_at,resume_cursor_json,runtime_payload_json)
 VALUES (${sql(threadId)},${sql(session.provider)},${sql(session.provider)},${sql(session.provider)},'full-access','stopped',${sql(updatedAt)},${sql(JSON.stringify(session.resumeCursor))},${sql(JSON.stringify(runtimePayload))});
-${session.firstMessage ? `INSERT INTO projection_thread_messages (message_id,thread_id,turn_id,role,text,is_streaming,created_at,updated_at,attachments_json) VALUES (${sql(messageId)},${sql(threadId)},NULL,'user',${sql(session.firstMessage)},0,${sql(createdAt)},${sql(createdAt)},'[]');` : ""}
+${messageRows}
 INSERT INTO orchestration_events (event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,command_id,causation_event_id,correlation_id,actor_kind,payload_json,metadata_json)
 VALUES (${sql(stableUuid("event-created", threadId))},'thread',${sql(threadId)},0,'thread.created',${sql(createdAt)},NULL,NULL,NULL,'system',${sql(JSON.stringify(threadCreated))},'{}');
 INSERT INTO orchestration_events (event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,command_id,causation_event_id,correlation_id,actor_kind,payload_json,metadata_json)
@@ -401,6 +555,7 @@ export function runImportSessions(
     id: session.id,
     title: session.title,
     cwd: session.cwd,
+    messageCount: session.messages.length,
     status: options.dryRun ? "dry-run" : importSession(dbPath, baseDir, session),
   }));
 }
@@ -413,6 +568,9 @@ export function formatImportSessionsResults(
     return JSON.stringify(results, null, 2);
   }
   return results
-    .map((result) => `${result.status}\t${result.provider}\t${result.id}\t${result.title}`)
+    .map(
+      (result) =>
+        `${result.status}\t${result.provider}\t${result.id}\t${result.messageCount} messages\t${result.title}`,
+    )
     .join("\n");
 }
