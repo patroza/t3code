@@ -431,6 +431,23 @@ function importSession(
   session: ExternalSession,
 ): "imported" | "exists" {
   const threadId = stableUuid(`t3-import-${session.provider}`, session.id);
+  const resumeIdPath =
+    session.provider === "codex"
+      ? "$.threadId"
+      : session.provider === "claudeAgent"
+        ? "$.resume"
+        : "$.sessionId";
+  const nativeThread = sqliteJson(
+    dbPath,
+    `SELECT thread_id FROM provider_session_runtime
+     WHERE provider_name = ${sql(session.provider)}
+       AND thread_id != ${sql(threadId)}
+       AND json_extract(resume_cursor_json, ${sql(resumeIdPath)}) = ${sql(session.id)}
+     LIMIT 1`,
+  )[0];
+  if (nativeThread) {
+    return "exists";
+  }
   const exists = sqliteJson(
     dbPath,
     `SELECT runtime.thread_id, COUNT(messages.message_id) AS message_count
