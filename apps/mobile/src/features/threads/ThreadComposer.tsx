@@ -46,12 +46,11 @@ import {
   ComposerToolbarTrigger,
 } from "../../components/ComposerToolbarTrigger";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
 import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
 import {
   hasUsageMarker,
   resolveDriverUsage,
-  type UsageMarker,
 } from "@t3tools/client-runtime/state/aiUsagePresentation";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
@@ -602,64 +601,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   const showUsageMarker = threadUsage ? hasUsageMarker(threadUsage.marker) : false;
 
-  const usageDotStyle = useMemo(() => {
-    if (!threadUsage) return null;
-    const { fill, outlookAtRisk } = threadUsage.marker;
-    if (fill === "critical") {
-      return { backgroundColor: "#f87171", ring: outlookAtRisk ? "#fbbf24" : null };
-    }
-    if (fill === "warn") {
-      return { backgroundColor: "#fbbf24", ring: outlookAtRisk ? "#fbbf24" : null };
-    }
-    if (outlookAtRisk) {
-      return { backgroundColor: "#a1a1aa", ring: "#fbbf24" };
-    }
-    return null;
-  }, [threadUsage]);
-
-  const currentModelIconNode = useMemo(
-    () => (
-      <View
-        style={{
-          width: 18,
-          height: 18,
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-        }}
-      >
-        <ProviderIcon provider={currentModelOption?.providerDriver} size={14} />
-        {showUsageMarker && usageDotStyle ? (
-          <View
-            style={{
-              position: "absolute",
-              top: -1,
-              right: -1,
-              width: usageDotStyle.ring ? 7 : 5,
-              height: usageDotStyle.ring ? 7 : 5,
-              borderRadius: 999,
-              backgroundColor: usageDotStyle.ring ? "transparent" : usageDotStyle.backgroundColor,
-              borderWidth: usageDotStyle.ring ? 1 : 0,
-              borderColor: usageDotStyle.ring ?? undefined,
-            }}
-          >
-            <View
-              style={{
-                position: "absolute",
-                top: usageDotStyle.ring ? 1 : 0,
-                left: usageDotStyle.ring ? 1 : 0,
-                right: usageDotStyle.ring ? 1 : 0,
-                bottom: usageDotStyle.ring ? 1 : 0,
-                borderRadius: 999,
-                backgroundColor: usageDotStyle.backgroundColor,
-              }}
-            />
-          </View>
-        ) : null}
-      </View>
-    ),
-    [currentModelOption?.providerDriver, showUsageMarker, usageDotStyle],
+  const currentModelIconNode = (
+    <ProviderUsageIcon
+      provider={currentModelOption?.providerDriver}
+      size={14}
+      marker={threadUsage?.marker ?? null}
+    />
   );
+
+  const currentUsageNote = threadUsage
+    ? (threadUsage.item.windows
+        .map((w) => (typeof w.percent === "number" ? `${w.percent}%` : null))
+        .find(Boolean) ?? null)
+    : null;
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -677,11 +631,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerGroups.map((group) => ({
         id: `provider:${group.providerKey}`,
         title: group.providerLabel,
-        subtitle: group.models.find(
-          (model) =>
-            model.selection.instanceId === currentModelSelection.instanceId &&
-            model.selection.model === currentModelSelection.model,
-        )?.label,
+        subtitle: (() => {
+          const selected = group.models.find(
+            (model) =>
+              model.selection.instanceId === currentModelSelection.instanceId &&
+              model.selection.model === currentModelSelection.model,
+          );
+          if (!selected) return undefined;
+          return currentUsageNote ? `${selected.label} · ${currentUsageNote}` : selected.label;
+        })(),
         subactions: group.models.map((option) => ({
           id: `model:${option.key}`,
           title: option.label,

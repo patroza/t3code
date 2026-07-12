@@ -2,6 +2,7 @@ import {
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
+  type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -22,6 +23,8 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { VisualStudioCode } from "../Icons";
 import { readLocalApi } from "~/localApi";
+import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -37,6 +40,9 @@ interface ChatHeaderProps {
   rightPanelOpen: boolean;
   gitCwd: string | null;
   isPreparingWorktree: boolean;
+  /** For showing usage dot on the active thread's model at conversation level. */
+  activeThreadDriverKind?: ProviderDriverKind | null;
+  activeThreadModel?: string | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -114,6 +120,8 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   gitCwd,
   isPreparingWorktree,
+  activeThreadDriverKind,
+  activeThreadModel,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -141,6 +149,14 @@ export const ChatHeader = memo(function ChatHeader({
     void readLocalApi()?.shell.openExternal(remoteVscodeTarget.uri);
   }, [remoteVscodeTarget]);
 
+  const aiUsageSnapshot = useAiUsageSnapshot(activeThreadEnvironmentId);
+  const headerUsage = useMemo(
+    () => resolveDriverUsage(aiUsageSnapshot, activeThreadDriverKind, activeThreadModel),
+    [aiUsageSnapshot, activeThreadDriverKind, activeThreadModel],
+  );
+  const headerDotClass = headerUsage ? usageDotFillClass(headerUsage.marker) : undefined;
+  const headerRingColor = headerUsage ? usageDotRingColor(headerUsage.marker) : undefined;
+
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -157,6 +173,18 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
         </Tooltip>
+        {headerDotClass ? (
+          <span
+            className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass}`}
+            style={
+              headerRingColor
+                ? { boxShadow: `0 0 0 1.5px ${headerRingColor}, 0 0 0 3px var(--card)` }
+                : undefined
+            }
+            aria-label="provider usage status"
+            title="Usage status for current model"
+          />
+        ) : null}
       </div>
       <div
         data-chat-header-actions
