@@ -860,9 +860,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </View>
           ) : null}
           {!isExpanded ? (
-            <View style={{ width: 18, height: 18, marginRight: 4, marginLeft: 2 }}>
-              {currentModelIconNode}
-            </View>
+            <ControlPillMenu
+              actions={modelMenuActions}
+              onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
+            >
+              <View style={{ width: 18, height: 18, marginRight: 4, marginLeft: 2 }}>
+                {currentModelIconNode}
+              </View>
+            </ControlPillMenu>
           ) : null}
           {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>

@@ -13,6 +13,7 @@ import { memo, useCallback, useMemo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { AiUsageStats } from "./AiUsageStats";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
@@ -173,7 +174,26 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
         </Tooltip>
-        {headerDotClass ? (
+        {headerDotClass && headerUsage ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass} cursor-help`}
+                  style={
+                    headerRingColor
+                      ? { boxShadow: `0 0 0 1.5px ${headerRingColor}, 0 0 0 3px var(--card)` }
+                      : undefined
+                  }
+                  aria-label="provider usage status"
+                />
+              }
+            />
+            <TooltipPopup side="bottom" className="p-2 text-xs">
+              <AiUsageStats item={headerUsage.item} />
+            </TooltipPopup>
+          </Tooltip>
+        ) : headerDotClass ? (
           <span
             className={`inline-block size-2 shrink-0 rounded-full ${headerDotClass}`}
             style={
