@@ -182,18 +182,37 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.workspaceRoot).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AssetWorkspaceRootNormalizationError({
-              resource: input.resource,
-              cause,
-            }),
-        ),
-      );
-      const relativePath = path.isAbsolute(input.resource.path)
-        ? path.relative(workspaceRoot, input.resource.path)
+      const projectWorkspaceRoot = yield* workspacePaths
+        .normalizeWorkspaceRoot(input.workspaceRoot)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new AssetWorkspaceRootNormalizationError({
+                resource: input.resource,
+                cause,
+              }),
+          ),
+        );
+      const projectRelativePath = path.isAbsolute(input.resource.path)
+        ? path.relative(projectWorkspaceRoot, input.resource.path)
         : input.resource.path;
+      const isAbsoluteOutsideProject =
+        path.isAbsolute(input.resource.path) &&
+        (projectRelativePath.startsWith("..") || path.isAbsolute(projectRelativePath));
+      const workspaceRoot = isAbsoluteOutsideProject
+        ? yield* workspacePaths.normalizeWorkspaceRoot(path.dirname(input.resource.path)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AssetWorkspaceRootNormalizationError({
+                  resource: input.resource,
+                  cause,
+                }),
+            ),
+          )
+        : projectWorkspaceRoot;
+      const relativePath = isAbsoluteOutsideProject
+        ? path.basename(input.resource.path)
+        : projectRelativePath;
       const resolved = yield* workspacePaths
         .resolveRelativePathWithinRoot({ workspaceRoot, relativePath })
         .pipe(

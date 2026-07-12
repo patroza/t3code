@@ -3377,6 +3377,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
+  deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
 }) {
   const { project, thread } = props.entry;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
@@ -3392,6 +3393,25 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   );
   const revealHeld = useModifierRevealHeld(hideProviderIcons);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renamingTitle, setRenamingTitle] = useState(thread.title);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameCommitStartedRef = useRef(false);
+  const confirmThreadDelete = useClientSettings<boolean>(
+    (settings) => settings.confirmThreadDelete,
+  );
+  const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const { copyToClipboard: copyThreadId } = useCopyToClipboard<{ threadId: ThreadId }>({
+    onCopy: ({ threadId }) =>
+      toastManager.add({ type: "success", title: "Thread ID copied", description: threadId }),
+  });
+  const { copyToClipboard: copyPath } = useCopyToClipboard<{ path: string }>({
+    onCopy: ({ path }) =>
+      toastManager.add({ type: "success", title: "Path copied", description: path }),
+  });
   const isThreadRunning =
     thread.session?.status === "running" && thread.session.activeTurnId != null;
   const threadStatus = resolveThreadStatusPill({ thread: { ...thread, lastVisitedAt } });
@@ -3461,6 +3481,99 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     [props, thread],
   );
 
+  const commitRename = useCallback(async () => {
+    if (renameCommitStartedRef.current) return;
+    renameCommitStartedRef.current = true;
+    const trimmed = renamingTitle.trim();
+    setIsRenaming(false);
+    if (!trimmed) {
+      toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+      return;
+    }
+    if (trimmed === thread.title) return;
+    const result = await updateThreadMetadata({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, title: trimmed },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to rename thread",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [renamingTitle, thread.environmentId, thread.id, thread.title, updateThreadMetadata]);
+
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const api = readLocalApi();
+      if (!api) return;
+      void (async () => {
+        const clicked = await api.contextMenu.show(
+          [
+            { id: "rename", label: "Rename thread" },
+            { id: "mark-unread", label: "Mark unread" },
+            { id: "copy-path", label: "Copy Path" },
+            { id: "copy-thread-id", label: "Copy Thread ID" },
+            { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+          ],
+          { x: event.clientX, y: event.clientY },
+        );
+        if (clicked === "rename") {
+          renameCommitStartedRef.current = false;
+          setRenamingTitle(thread.title);
+          setIsRenaming(true);
+          requestAnimationFrame(() => {
+            renameInputRef.current?.focus();
+            renameInputRef.current?.select();
+          });
+        } else if (clicked === "mark-unread") {
+          markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+        } else if (clicked === "copy-path") {
+          copyPath(gitCwd, { path: gitCwd });
+        } else if (clicked === "copy-thread-id") {
+          copyThreadId(thread.id, { threadId: thread.id });
+        } else if (clicked === "delete") {
+          if (
+            confirmThreadDelete &&
+            !(await api.dialogs.confirm(
+              `Delete thread "${thread.title}"?\nThis permanently clears conversation history for this thread.`,
+            ))
+          ) {
+            return;
+          }
+          const result = await props.deleteThread(threadRef);
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to delete thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+        }
+      })();
+    },
+    [
+      confirmThreadDelete,
+      copyPath,
+      copyThreadId,
+      gitCwd,
+      markThreadUnread,
+      props,
+      thread,
+      threadKey,
+      threadRef,
+    ],
+  );
+
   return (
     <SidebarMenuSubItem
       className="group/recent-thread w-full"
@@ -3474,6 +3587,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
         data-testid={`recent-thread-${thread.id}`}
         className="relative isolate"
         onClick={() => props.navigateToThread(threadRef)}
+        onContextMenu={handleContextMenu}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
@@ -3512,7 +3626,28 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             </Tooltip>
           ) : null}
           {threadStatus ? <ThreadStatusLabel status={threadStatus} /> : null}
-          <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+          {isRenaming ? (
+            <input
+              ref={renameInputRef}
+              className="min-w-0 flex-1 rounded border border-ring bg-transparent px-0.5 text-xs outline-none"
+              value={renamingTitle}
+              onChange={(event) => setRenamingTitle(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitRename();
+                } else if (event.key === "Escape") {
+                  setIsRenaming(false);
+                }
+              }}
+              onBlur={() => void commitRename()}
+            />
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+          )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {props.jumpLabel ? (
@@ -3630,6 +3765,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
+  deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -3659,6 +3795,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
               navigateToThread={props.navigateToThread}
               handleNewThread={props.handleNewThread}
               archiveThread={props.archiveThread}
+              deleteThread={props.deleteThread}
             />
           );
         })}
@@ -3810,6 +3947,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         navigateToThread={navigateToThread}
         handleNewThread={handleNewThread}
         archiveThread={archiveThread}
+        deleteThread={deleteThread}
         threadJumpLabelByKey={threadJumpLabelByKey}
       />
       <SidebarGroup className="px-2 py-2">
