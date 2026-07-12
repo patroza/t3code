@@ -1,5 +1,7 @@
 # AGENTS.md
 
+See [AGENTS-PATROZA.md](./AGENTS-PATROZA.md) for patroza-specific workflow notes.
+
 ## Task Completion Requirements
 
 - `vp check` and `vp run typecheck` must pass before considering tasks completed.
