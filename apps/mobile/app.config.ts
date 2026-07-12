@@ -135,7 +135,7 @@ const config: ExpoConfig = {
     EAS_PROJECT_ID === undefined
       ? { enabled: false }
       : {
-          enabled: !IS_IOS_PERSONAL_TEAM_BUILD,
+          enabled: !isIosPersonalTeamBuild,
           url: `https://u.expo.dev/${EAS_PROJECT_ID}`,
           checkAutomatically: "ON_LOAD",
           fallbackToCacheTimeout: 0,
@@ -148,7 +148,7 @@ const config: ExpoConfig = {
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
     ...(IOS_TEAM_ID ? { appleTeamId: IOS_TEAM_ID } : {}),
-    ...(IS_IOS_PERSONAL_TEAM_BUILD
+    ...(isIosPersonalTeamBuild
       ? {}
       : {
           associatedDomains: [

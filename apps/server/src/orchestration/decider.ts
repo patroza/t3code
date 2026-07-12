@@ -324,6 +324,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      const nextWorktreePath =
+        command.worktreePath === null && thread.worktreePath !== null
+          ? thread.worktreePath
+          : command.worktreePath;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -340,7 +344,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(branch !== undefined ? { branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(nextWorktreePath !== undefined ? { worktreePath: nextWorktreePath } : {}),
           updatedAt: occurredAt,
         },
       };
