@@ -8,6 +8,7 @@ import {
   FolderPlusIcon,
   Globe2Icon,
   LoaderIcon,
+  PinIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -1480,6 +1481,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
+  const toggleThreadPinned = useUiStateStore((state) => state.toggleThreadPinned);
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -2589,8 +2591,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
       const threadWorkspacePath =
         thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      const isPinned = useUiStateStore.getState().pinnedThreadKeys.includes(threadKey);
       const clicked = await api.contextMenu.show(
         [
+          { id: "pin", label: isPinned ? "Unpin thread" : "Pin thread" },
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
@@ -2600,6 +2604,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         position,
       );
 
+      if (clicked === "pin") {
+        toggleThreadPinned(threadKey);
+        return;
+      }
       if (clicked === "rename") {
         startThreadRename(threadKey, thread.title);
         return;
@@ -2660,6 +2668,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       memberProjectByScopedKey,
       project.workspaceRoot,
       startThreadRename,
+      toggleThreadPinned,
     ],
   );
 
@@ -3339,6 +3348,7 @@ interface SidebarProjectsContentProps {
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   recentThreads: readonly SidebarRecentThread[];
+  threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -3378,12 +3388,30 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  orderedRecentThreadKeys: readonly string[];
+  threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
 }) {
   const { project, thread } = props.entry;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
+  const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
+  const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
+  const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
+  const removeFromSelection = useThreadSelectionStore((state) => state.removeFromSelection);
   const serverConfigs = useServerConfigs();
+  const runningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
+  const discoveredPorts = useThreadDiscoveredPorts({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
+  const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const environment = useEnvironment(thread.environmentId);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const openPrLink = useOpenPrLink();
   const confirmThreadArchive = useClientSettings<boolean>(
     (settings) => settings.confirmThreadArchive,
@@ -3401,6 +3429,8 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     (settings) => settings.confirmThreadDelete,
   );
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
+  const isPinned = useUiStateStore((state) => state.pinnedThreadKeys.includes(threadKey));
+  const toggleThreadPinned = useUiStateStore((state) => state.toggleThreadPinned);
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -3415,6 +3445,11 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   const isThreadRunning =
     thread.session?.status === "running" && thread.session.activeTurnId != null;
   const threadStatus = resolveThreadStatusPill({ thread: { ...thread, lastVisitedAt } });
+  const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
+  const isRemoteThread =
+    primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
+  const isDesktopLocalThread =
+    environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
   const gitCwd = thread.worktreePath ?? project.workspaceRoot;
   const prStatus = usePrStatusIndicator({
     environmentId: thread.environmentId,
@@ -3481,6 +3516,18 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     [props, thread],
   );
 
+  const handleOpenDiscoveredPort = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      const port = discoveredPorts[0];
+      if (!port) return;
+      event.preventDefault();
+      event.stopPropagation();
+      props.navigateToThread(threadRef);
+      void openDiscoveredPort({ threadRef, port, openPreview });
+    },
+    [discoveredPorts, openPreview, props.navigateToThread, threadRef],
+  );
+
   const commitRename = useCallback(async () => {
     if (renameCommitStartedRef.current) return;
     renameCommitStartedRef.current = true;
@@ -3514,8 +3561,49 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
       const api = readLocalApi();
       if (!api) return;
       void (async () => {
+        const selectedThreadKeys = [...useThreadSelectionStore.getState().selectedThreadKeys];
+        if (selectedThreadKeys.length > 0 && isSelected) {
+          const count = selectedThreadKeys.length;
+          const selectedAction = await api.contextMenu.show(
+            [
+              { id: "mark-unread", label: `Mark unread (${count})` },
+              { id: "delete", label: `Delete (${count})`, destructive: true },
+            ],
+            { x: event.clientX, y: event.clientY },
+          );
+          if (selectedAction === "mark-unread") {
+            for (const selectedThreadKey of selectedThreadKeys) {
+              const selectedThread = props.threadByKey.get(selectedThreadKey);
+              markThreadUnread(selectedThreadKey, selectedThread?.latestTurn?.completedAt);
+            }
+            clearSelection();
+          } else if (selectedAction === "delete") {
+            if (
+              confirmThreadDelete &&
+              !(await api.dialogs.confirm(
+                `Delete ${count} thread${count === 1 ? "" : "s"}?\nThis permanently clears conversation history for these threads.`,
+              ))
+            ) {
+              return;
+            }
+            const deletedThreadKeys = new Set(selectedThreadKeys);
+            for (const selectedThreadKey of selectedThreadKeys) {
+              const selectedThread = props.threadByKey.get(selectedThreadKey);
+              if (!selectedThread) continue;
+              const result = await props.deleteThread(
+                scopeThreadRef(selectedThread.environmentId, selectedThread.id),
+                { deletedThreadKeys },
+              );
+              if (result._tag === "Failure") return;
+            }
+            removeFromSelection(selectedThreadKeys);
+          }
+          return;
+        }
+        if (selectedThreadKeys.length > 0) clearSelection();
         const clicked = await api.contextMenu.show(
           [
+            { id: "pin", label: isPinned ? "Unpin thread" : "Pin thread" },
             { id: "rename", label: "Rename thread" },
             { id: "mark-unread", label: "Mark unread" },
             { id: "copy-path", label: "Copy Path" },
@@ -3524,7 +3612,9 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           ],
           { x: event.clientX, y: event.clientY },
         );
-        if (clicked === "rename") {
+        if (clicked === "pin") {
+          toggleThreadPinned(threadKey);
+        } else if (clicked === "rename") {
           renameCommitStartedRef.current = false;
           setRenamingTitle(thread.title);
           setIsRenaming(true);
@@ -3563,15 +3653,62 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     },
     [
       confirmThreadDelete,
+      clearSelection,
       copyPath,
       copyThreadId,
       gitCwd,
+      isPinned,
+      isSelected,
       markThreadUnread,
       props,
+      removeFromSelection,
       thread,
       threadKey,
       threadRef,
+      toggleThreadPinned,
     ],
+  );
+
+  const handleRowClick = useCallback(
+    (event: React.MouseEvent) => {
+      const isModClick = isMacPlatform(navigator.platform) ? event.metaKey : event.ctrlKey;
+      if (isModClick) {
+        event.preventDefault();
+        toggleThreadSelection(threadKey);
+        return;
+      }
+      if (event.shiftKey) {
+        event.preventDefault();
+        rangeSelectTo(threadKey, props.orderedRecentThreadKeys);
+        return;
+      }
+      if (isTrailingDoubleClick(event.detail)) return;
+      props.navigateToThread(threadRef);
+    },
+    [
+      props.navigateToThread,
+      props.orderedRecentThreadKeys,
+      rangeSelectTo,
+      threadKey,
+      threadRef,
+      toggleThreadSelection,
+    ],
+  );
+
+  const handleRowDoubleClick = useCallback(
+    (event: React.MouseEvent) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if ((event.target as HTMLElement).closest("button, a, input")) return;
+      event.preventDefault();
+      setRenamingTitle(thread.title);
+      setIsRenaming(true);
+      renameCommitStartedRef.current = false;
+      requestAnimationFrame(() => {
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+      });
+    },
+    [thread.title],
   );
 
   return (
@@ -3585,8 +3722,12 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
         size="sm"
         isActive={props.isActive}
         data-testid={`recent-thread-${thread.id}`}
-        className="relative isolate"
-        onClick={() => props.navigateToThread(threadRef)}
+        className={`${resolveThreadRowClassName({
+          isActive: props.isActive,
+          isSelected,
+        })} relative isolate`}
+        onClick={handleRowClick}
+        onDoubleClick={handleRowDoubleClick}
         onContextMenu={handleContextMenu}
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
@@ -3650,6 +3791,44 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {isPinned ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="Unpin thread"
+                    className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/55 hover:bg-accent hover:text-foreground"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      toggleThreadPinned(threadKey);
+                    }}
+                  />
+                }
+              >
+                <PinIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup>Unpin thread</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {discoveredPorts.length > 0 ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={`Open localhost:${discoveredPorts[0]?.port ?? ""}`}
+                    className="inline-flex size-5 items-center justify-center text-emerald-600 dark:text-emerald-400"
+                    onClick={handleOpenDiscoveredPort}
+                  />
+                }
+              >
+                <Globe2Icon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup>Open localhost:{discoveredPorts[0]?.port}</TooltipPopup>
+            </Tooltip>
+          ) : null}
           {props.jumpLabel ? (
             <Tooltip>
               <TooltipTrigger
@@ -3669,6 +3848,22 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             thread={thread}
             {...(thread.worktreePath?.trim() ? { onCreateSession: createThreadInWorktree } : {})}
           />
+          {terminalStatus ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    role="img"
+                    aria-label={terminalStatus.label}
+                    className={`inline-flex size-4 items-center justify-center ${terminalStatus.colorClass}`}
+                  />
+                }
+              >
+                <TerminalIcon className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`} />
+              </TooltipTrigger>
+              <TooltipPopup>{terminalStatus.label}</TooltipPopup>
+            </Tooltip>
+          ) : null}
           {showProviderMarker ? (
             <Tooltip>
               <TooltipTrigger
@@ -3705,6 +3900,21 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             </Tooltip>
           ) : null}
           <div className="relative flex min-w-16 shrink-0 items-center justify-end">
+            {isRemoteThread && !isDesktopLocalThread ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="mr-1 inline-flex items-center justify-center"
+                      aria-label="Remote"
+                    />
+                  }
+                >
+                  <CloudIcon className="size-3 text-muted-foreground/40" />
+                </TooltipTrigger>
+                <TooltipPopup>{environment?.label ?? "Remote"}</TooltipPopup>
+              </Tooltip>
+            ) : null}
             <span
               className={`text-[10px] tabular-nums text-muted-foreground/55 ${
                 !isThreadRunning
@@ -3712,7 +3922,9 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                   : ""
               }`}
             >
-              {formatRelativeTimeLabel(thread.updatedAt)}
+              {formatRelativeTimeLabel(
+                thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
+              )}
             </span>
             {!isThreadRunning ? (
               confirmingArchive ? (
@@ -3767,6 +3979,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
+  threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   if (props.recentThreads.length === 0) return null;
@@ -3775,6 +3988,9 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     isExpanded || !hasOverflowingThreads
       ? props.recentThreads
       : props.recentThreads.slice(0, props.previewCount);
+  const orderedRecentThreadKeys = renderedThreads.map(({ thread }) =>
+    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+  );
 
   return (
     <SidebarGroup className="px-2 pt-2 pb-1">
@@ -3796,6 +4012,8 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
               handleNewThread={props.handleNewThread}
               archiveThread={props.archiveThread}
               deleteThread={props.deleteThread}
+              orderedRecentThreadKeys={orderedRecentThreadKeys}
+              threadByKey={props.threadByKey}
             />
           );
         })}
@@ -3842,6 +4060,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     deleteThread,
     sortedProjects,
     recentThreads,
+    threadByKey,
     navigateToThread,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -3949,6 +4168,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         archiveThread={archiveThread}
         deleteThread={deleteThread}
         threadJumpLabelByKey={threadJumpLabelByKey}
+        threadByKey={threadByKey}
       />
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
@@ -4369,8 +4589,10 @@ export default function Sidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
+  const pinnedThreadKeys = useUiStateStore((state) => state.pinnedThreadKeys);
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
-    return sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
+    const pinnedKeySet = new Set(pinnedThreadKeys);
+    const entries = sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
       const physicalKey =
         projectPhysicalKeyByScopedRef.get(
           scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
@@ -4379,7 +4601,22 @@ export default function Sidebar() {
       const project = sidebarProjectByKey.get(projectKey);
       return project ? [{ thread, project }] : [];
     });
-  }, [physicalToLogicalKey, projectPhysicalKeyByScopedRef, sidebarProjectByKey, visibleThreads]);
+    return [
+      ...entries.filter(({ thread }) =>
+        pinnedKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      ),
+      ...entries.filter(
+        ({ thread }) =>
+          !pinnedKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      ),
+    ];
+  }, [
+    physicalToLogicalKey,
+    pinnedThreadKeys,
+    projectPhysicalKeyByScopedRef,
+    sidebarProjectByKey,
+    visibleThreads,
+  ]);
   const recentThreadKeys = useMemo(
     () =>
       recentThreads
@@ -4713,6 +4950,7 @@ export default function Sidebar() {
             deleteThread={deleteThread}
             sortedProjects={sortedProjects}
             recentThreads={recentThreads}
+            threadByKey={sidebarThreadByKey}
             navigateToThread={navigateToThread}
             expandedThreadListsByProject={expandedThreadListsByProject}
             activeRouteProjectKey={activeRouteProjectKey}
