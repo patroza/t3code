@@ -5,6 +5,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   ContainerIcon,
+  EllipsisVerticalIcon,
   FolderPlusIcon,
   Globe2Icon,
   LoaderIcon,
@@ -3791,6 +3792,21 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={`Actions for ${thread.title}`}
+                  className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/55 opacity-100 hover:bg-accent hover:text-foreground sm:opacity-0 sm:group-hover/recent-thread:opacity-100 sm:focus-visible:opacity-100"
+                  onClick={(event) => handleContextMenu(event)}
+                />
+              }
+            >
+              <EllipsisVerticalIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup>Thread actions</TooltipPopup>
+          </Tooltip>
           {isPinned ? (
             <Tooltip>
               <TooltipTrigger
