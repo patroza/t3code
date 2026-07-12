@@ -427,6 +427,7 @@ function toolIcon(itemType: string | null): string {
 function renderToolCall(tool: ViewToolCall): HTMLElement {
   const wrapper = document.createElement("details");
   wrapper.className = `tool-call ${tool.status}`;
+  wrapper.open = false;
   const summary = document.createElement("summary");
   const icon = document.createElement("span");
   icon.className = "tool-call-icon";
@@ -481,7 +482,9 @@ function renderToolCallGroup(tools: ReadonlyArray<ViewToolCall>): HTMLElement {
   if (tools.length === 1) return renderToolCall(tools[0]!);
   const group = document.createElement("details");
   group.className = "tool-call-group";
-  group.open = tools.some((tool) => tool.status === "running");
+  // Tool output is intentionally opt-in. Live status updates rebuild the
+  // timeline, so never infer expansion from running state or viewport entry.
+  group.open = false;
   const summary = document.createElement("summary");
   const running = tools.filter((tool) => tool.status === "running").length;
   const failed = tools.filter((tool) => tool.status === "failed").length;
