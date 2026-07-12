@@ -1391,7 +1391,15 @@ function ChatMarkdown({
                 }
               }}
               onContextMenu={(event) => {
-                if (!canOpenInPreview || !href) return;
+                if (!href) return;
+                // Only customize context menu for absolute http/https links.
+                // Fragments, relative paths, and other schemes fall back to the native menu.
+                try {
+                  const u = new URL(href);
+                  if (u.protocol !== "http:" && u.protocol !== "https:") return;
+                } catch {
+                  return;
+                }
                 event.preventDefault();
                 event.stopPropagation();
                 const api = readLocalApi();
@@ -1401,8 +1409,13 @@ function ChatMarkdown({
                   try {
                     const clicked = await api.contextMenu.show(
                       [
-                        { id: "open-in-browser", label: "Open in integrated browser" },
+                        ...(canOpenInPreview
+                          ? ([
+                              { id: "open-in-browser", label: "Open in integrated browser" },
+                            ] as const)
+                          : []),
                         { id: "open-external", label: "Open in system browser" },
+                        { id: "copy", label: "Copy link" },
                       ] as const,
                       { x: event.clientX, y: event.clientY },
                     );
@@ -1417,6 +1430,34 @@ function ChatMarkdown({
                     if (clicked === "open-external") {
                       operation = "open-link-external";
                       await api.shell.openExternal(href);
+                      return;
+                    }
+                    if (clicked === "copy") {
+                      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+                        void navigator.clipboard.writeText(href).then(
+                          () => {
+                            toastManager.add({
+                              type: "success",
+                              title: "Link copied",
+                              description: href,
+                            });
+                          },
+                          (cause) => {
+                            reportMarkdownActionFailure(
+                              { operation: "copy-link", target: href },
+                              cause,
+                            );
+                          },
+                        );
+                      } else {
+                        toastManager.add(
+                          stackedThreadToast({
+                            type: "error",
+                            title: "Failed to copy link",
+                            description: "Clipboard API unavailable.",
+                          }),
+                        );
+                      }
                     }
                   } catch (cause) {
                     reportMarkdownActionFailure({ operation, target: href }, cause);
