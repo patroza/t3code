@@ -4,6 +4,7 @@ import type {
   MessageId,
   ModelSelection,
   OrchestrationThreadShell,
+  ProviderDriverKind,
   ProviderInteractionMode,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
@@ -46,6 +47,12 @@ import {
 } from "../../components/ComposerToolbarTrigger";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
+import {
+  hasUsageMarker,
+  resolveDriverUsage,
+  type UsageMarker,
+} from "@t3tools/client-runtime/state/aiUsagePresentation";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -580,6 +587,79 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
+  const showUsageMarker = threadUsage ? hasUsageMarker(threadUsage.marker) : false;
+
+  const usageDotStyle = useMemo(() => {
+    if (!threadUsage) return null;
+    const { fill, outlookAtRisk } = threadUsage.marker;
+    if (fill === "critical") {
+      return { backgroundColor: "#f87171", ring: outlookAtRisk ? "#fbbf24" : null };
+    }
+    if (fill === "warn") {
+      return { backgroundColor: "#fbbf24", ring: outlookAtRisk ? "#fbbf24" : null };
+    }
+    if (outlookAtRisk) {
+      return { backgroundColor: "#a1a1aa", ring: "#fbbf24" };
+    }
+    return null;
+  }, [threadUsage]);
+
+  const currentModelIconNode = useMemo(
+    () => (
+      <View
+        style={{
+          width: 18,
+          height: 18,
+          alignItems: "center",
+          justifyContent: "center",
+          position: "relative",
+        }}
+      >
+        <ProviderIcon provider={currentModelOption?.providerDriver} size={14} />
+        {showUsageMarker && usageDotStyle ? (
+          <View
+            style={{
+              position: "absolute",
+              top: -1,
+              right: -1,
+              width: usageDotStyle.ring ? 7 : 5,
+              height: usageDotStyle.ring ? 7 : 5,
+              borderRadius: 999,
+              backgroundColor: usageDotStyle.ring ? "transparent" : usageDotStyle.backgroundColor,
+              borderWidth: usageDotStyle.ring ? 1 : 0,
+              borderColor: usageDotStyle.ring ?? undefined,
+            }}
+          >
+            <View
+              style={{
+                position: "absolute",
+                top: usageDotStyle.ring ? 1 : 0,
+                left: usageDotStyle.ring ? 1 : 0,
+                right: usageDotStyle.ring ? 1 : 0,
+                bottom: usageDotStyle.ring ? 1 : 0,
+                borderRadius: 999,
+                backgroundColor: usageDotStyle.backgroundColor,
+              }}
+            />
+          </View>
+        ) : null}
+      </View>
+    ),
+    [currentModelOption?.providerDriver, showUsageMarker, usageDotStyle],
+  );
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -822,6 +902,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </View>
           ) : null}
           {!isExpanded ? (
+            <View style={{ width: 18, height: 18, marginRight: 4, marginLeft: 2 }}>
+              {currentModelIconNode}
+            </View>
+          ) : null}
+          {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
               {showStopAction ? (
                 <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
@@ -857,9 +942,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 >
                   <ComposerToolbarTrigger
                     accessibilityLabel="Model"
-                    iconNode={
-                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                    }
+                    iconNode={currentModelIconNode}
                     label={currentModelOption?.label ?? currentModelSelection.model}
                   />
                 </ControlPillMenu>

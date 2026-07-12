@@ -43,6 +43,10 @@
       "types": "./src/state/aiUsage.ts",
       "default": "./src/state/aiUsage.ts"
     },
+    "./state/aiUsagePresentation": {
+      "types": "./src/state/aiUsagePresentation.ts",
+      "default": "./src/state/aiUsagePresentation.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

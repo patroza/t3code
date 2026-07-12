@@ -42,7 +42,7 @@ export function AiUsageStats(props: {
       {item.ok && item.windows.length > 0 ? (
         <div className={cn("flex flex-col", compact ? "gap-0.5" : "gap-1.5")}>
           {item.windows.map((window) => {
-            const resets = formatResetsIn(window.resets_at, props.nowMs);
+            const resets = formatResetsIn(window.resets_at, props.nowMs ?? Date.now());
             const pace = formatPaceNote(window);
             // In compact mode only surface a sub-line when there's a pace
             // warning worth acting on; plain reset times stay in the hover form.
