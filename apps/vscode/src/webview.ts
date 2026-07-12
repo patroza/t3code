@@ -477,6 +477,23 @@ function renderToolCall(tool: ViewToolCall): HTMLElement {
   return wrapper;
 }
 
+function renderToolCallGroup(tools: ReadonlyArray<ViewToolCall>): HTMLElement {
+  if (tools.length === 1) return renderToolCall(tools[0]!);
+  const group = document.createElement("details");
+  group.className = "tool-call-group";
+  group.open = tools.some((tool) => tool.status === "running");
+  const summary = document.createElement("summary");
+  const running = tools.filter((tool) => tool.status === "running").length;
+  const failed = tools.filter((tool) => tool.status === "failed").length;
+  const state = running > 0 ? `${running} running` : failed > 0 ? `${failed} failed` : "Completed";
+  summary.textContent = `${tools.length} tool calls · ${state}`;
+  const body = document.createElement("div");
+  body.className = "tool-call-group-body";
+  body.append(...tools.map(renderToolCall));
+  group.append(summary, body);
+  return group;
+}
+
 function renderResolvedUserInput(input: ViewResolvedUserInput): HTMLElement {
   const wrapper = document.createElement("section");
   wrapper.className = "message user user-input-response";
@@ -751,16 +768,19 @@ function render(next: ViewState): void {
   } else {
     const timeline = [
       ...next.activeThread.messages.map((message) => ({
+        kind: "message" as const,
         createdAt: message.createdAt,
         order: 0,
         element: renderMessage(message),
       })),
       ...next.activeThread.toolCalls.map((tool) => ({
+        kind: "tool" as const,
         createdAt: tool.createdAt,
         order: 1,
-        element: renderToolCall(tool),
+        tool,
       })),
       ...next.activeThread.resolvedUserInputs.map((input) => ({
+        kind: "input" as const,
         createdAt: input.createdAt,
         order: 2,
         element: renderResolvedUserInput(input),
@@ -768,7 +788,21 @@ function render(next: ViewState): void {
     ].toSorted(
       (left, right) => left.createdAt.localeCompare(right.createdAt) || left.order - right.order,
     );
-    messages.append(...timeline.map((item) => item.element));
+    const elements: HTMLElement[] = [];
+    for (let index = 0; index < timeline.length; index += 1) {
+      const item = timeline[index]!;
+      if (item.kind !== "tool") {
+        elements.push(item.element);
+        continue;
+      }
+      const tools = [item.tool];
+      while (timeline[index + 1]?.kind === "tool") {
+        index += 1;
+        tools.push((timeline[index] as Extract<(typeof timeline)[number], { kind: "tool" }>).tool);
+      }
+      elements.push(renderToolCallGroup(tools));
+    }
+    messages.append(...elements);
     if (wasNearBottom) messages.scrollTop = messages.scrollHeight;
   }
 
@@ -1376,14 +1410,47 @@ requiredElement("usage-toggle").addEventListener("click", () => {
   positionUsageDetails();
   usageExpanded = !usageExpanded;
   requiredElement("usage-control").classList.toggle("pinned", usageExpanded);
+  if (usageExpanded) {
+    tasksExpanded = false;
+    requiredElement("tasks-control").classList.remove("pinned");
+  }
 });
 requiredElement("usage-control").addEventListener("pointerenter", positionUsageDetails);
 requiredElement("tasks-toggle").addEventListener("click", () => {
   positionTasksDetails();
   tasksExpanded = !tasksExpanded;
   requiredElement("tasks-control").classList.toggle("pinned", tasksExpanded);
+  if (tasksExpanded) {
+    usageExpanded = false;
+    requiredElement("usage-control").classList.remove("pinned");
+  }
 });
 requiredElement("tasks-control").addEventListener("pointerenter", positionTasksDetails);
+function closeComposerPopovers(): void {
+  usageExpanded = false;
+  tasksExpanded = false;
+  for (const id of ["usage-control", "tasks-control"]) {
+    const control = requiredElement(id);
+    control.classList.remove("pinned");
+    if (control.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+  }
+}
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (
+    requiredElement("usage-control").contains(target) ||
+    requiredElement("tasks-control").contains(target)
+  )
+    return;
+  closeComposerPopovers();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && (usageExpanded || tasksExpanded)) {
+    closeComposerPopovers();
+    event.preventDefault();
+  }
+});
 globalThis.addEventListener("resize", () => {
   positionUsageDetails();
   positionTasksDetails();
