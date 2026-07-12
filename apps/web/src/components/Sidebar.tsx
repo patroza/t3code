@@ -3569,43 +3569,54 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {!isThreadRunning ? (
-            confirmingArchive ? (
-              <button
-                type="button"
-                aria-label={`Confirm archive ${thread.title}`}
-                className="h-5 rounded-md bg-destructive/12 px-2 text-[10px] font-medium text-destructive"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  attemptArchive();
-                }}
-              >
-                Confirm
-              </button>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`Archive ${thread.title}`}
-                      className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/55 opacity-0 hover:bg-accent hover:text-foreground group-hover/recent-thread:opacity-100 focus-visible:opacity-100"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (confirmThreadArchive) setConfirmingArchive(true);
-                        else attemptArchive();
-                      }}
-                    />
-                  }
+          <div className="relative flex min-w-16 shrink-0 items-center justify-end">
+            <span
+              className={`text-[10px] tabular-nums text-muted-foreground/55 ${
+                !isThreadRunning
+                  ? "transition-opacity group-hover/recent-thread:opacity-0 group-focus-within/recent-thread:opacity-0"
+                  : ""
+              }`}
+            >
+              {formatRelativeTimeLabel(thread.updatedAt)}
+            </span>
+            {!isThreadRunning ? (
+              confirmingArchive ? (
+                <button
+                  type="button"
+                  aria-label={`Confirm archive ${thread.title}`}
+                  className="absolute right-0 h-5 rounded-md bg-destructive/12 px-2 text-[10px] font-medium text-destructive"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    attemptArchive();
+                  }}
                 >
-                  <ArchiveIcon className="size-3.5" />
-                </TooltipTrigger>
-                <TooltipPopup>Archive thread</TooltipPopup>
-              </Tooltip>
-            )
-          ) : null}
+                  Confirm
+                </button>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={`Archive ${thread.title}`}
+                        className="absolute right-0 inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/55 opacity-0 hover:bg-accent hover:text-foreground group-hover/recent-thread:opacity-100 focus-visible:opacity-100"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (confirmThreadArchive) setConfirmingArchive(true);
+                          else attemptArchive();
+                        }}
+                      />
+                    }
+                  >
+                    <ArchiveIcon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup>Archive thread</TooltipPopup>
+                </Tooltip>
+              )
+            ) : null}
+          </div>
         </div>
       </SidebarMenuSubButton>
     </SidebarMenuSubItem>
