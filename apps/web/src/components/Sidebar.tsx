@@ -4037,8 +4037,9 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
           <SidebarMenuSubItem className="w-full">
             <SidebarMenuSubButton
               render={<button type="button" />}
+              data-thread-selection-safe
               size="sm"
-              className="text-muted-foreground/60 hover:text-muted-foreground"
+              className="h-6 w-full translate-x-0 justify-start px-2 text-left text-[10px] text-muted-foreground/60 hover:bg-accent hover:text-muted-foreground/80"
               onClick={() => setIsExpanded((current) => !current)}
             >
               <span>{isExpanded ? "Show less" : "Show more"}</span>
