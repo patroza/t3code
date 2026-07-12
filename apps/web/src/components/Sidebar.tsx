@@ -3370,10 +3370,238 @@ const RECENT_PROJECT_BADGE_CLASSES = [
   "bg-cyan-500/12 text-cyan-700 dark:text-cyan-300",
 ] as const;
 
+const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
+  entry: SidebarRecentThread;
+  isActive: boolean;
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
+  handleNewThread: ReturnType<typeof useNewThreadHandler>;
+  archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
+}) {
+  const { project, thread } = props.entry;
+  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+  const threadKey = scopedThreadKey(threadRef);
+  const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
+  const serverConfigs = useServerConfigs();
+  const openPrLink = useOpenPrLink();
+  const confirmThreadArchive = useClientSettings<boolean>(
+    (settings) => settings.confirmThreadArchive,
+  );
+  const hideProviderIcons = useClientSettings<boolean>(
+    (settings) => settings.sidebarHideProviderIcons ?? false,
+  );
+  const revealHeld = useModifierRevealHeld(hideProviderIcons);
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const isThreadRunning =
+    thread.session?.status === "running" && thread.session.activeTurnId != null;
+  const threadStatus = resolveThreadStatusPill({ thread: { ...thread, lastVisitedAt } });
+  const gitCwd = thread.worktreePath ?? project.workspaceRoot;
+  const prStatus = usePrStatusIndicator({
+    environmentId: thread.environmentId,
+    branch: thread.branch,
+    gitCwd,
+  });
+  const threadModelPresentation = useMemo(
+    () =>
+      resolveThreadModelPresentation(
+        thread.modelSelection,
+        serverConfigs.get(thread.environmentId),
+      ),
+    [serverConfigs, thread.environmentId, thread.modelSelection],
+  );
+  const ProviderIcon =
+    getDriverOption(threadModelPresentation.driverKind ?? undefined)?.icon ?? BotIcon;
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      resolveDriverUsage(
+        aiUsageSnapshot,
+        threadModelPresentation.driverKind,
+        thread.modelSelection.model,
+      ),
+    [aiUsageSnapshot, thread.modelSelection.model, threadModelPresentation.driverKind],
+  );
+  const usageDotClass = threadUsage ? usageDotFillClass(threadUsage.marker) : undefined;
+  const usageRingColor = threadUsage ? usageDotRingColor(threadUsage.marker) : undefined;
+  const showProviderIcon = !hideProviderIcons || revealHeld;
+  const showProviderMarker =
+    showProviderIcon || (threadUsage && hasUsageMarker(threadUsage.marker));
+  const badgeColorClass =
+    RECENT_PROJECT_BADGE_CLASSES[
+      resolveSidebarProjectBadgeColorIndex(project.projectKey, RECENT_PROJECT_BADGE_CLASSES.length)
+    ];
+
+  const attemptArchive = useCallback(() => {
+    setConfirmingArchive(false);
+    void props.archiveThread(threadRef).then((result) => {
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to archive thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    });
+  }, [props, threadRef]);
+
+  const createThreadInWorktree = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!thread.worktreePath?.trim()) return;
+      void props.handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
+        ...(thread.branch !== null ? { branch: thread.branch } : {}),
+        worktreePath: thread.worktreePath,
+        envMode: "local",
+      });
+    },
+    [props, thread],
+  );
+
+  return (
+    <SidebarMenuSubItem
+      className="group/recent-thread w-full"
+      data-thread-item
+      onMouseLeave={() => setConfirmingArchive(false)}
+    >
+      <SidebarMenuSubButton
+        render={<div role="button" tabIndex={0} />}
+        size="sm"
+        isActive={props.isActive}
+        data-testid={`recent-thread-${thread.id}`}
+        className="relative isolate"
+        onClick={() => props.navigateToThread(threadRef)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          props.navigateToThread(threadRef);
+        }}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  aria-label={project.displayName}
+                  className={`inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none ${badgeColorClass}`}
+                />
+              }
+            >
+              {resolveSidebarProjectBadgeLabel(project.displayName)}
+            </TooltipTrigger>
+            <TooltipPopup side="right">{project.displayName}</TooltipPopup>
+          </Tooltip>
+          {prStatus ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={prStatus.tooltip}
+                    className={`inline-flex shrink-0 items-center justify-center ${prStatus.colorClass}`}
+                    onClick={(event) => openPrLink(event, prStatus.url)}
+                  />
+                }
+              >
+                <ChangeRequestStatusIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup>{prStatus.tooltip}</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {threadStatus ? <ThreadStatusLabel status={threadStatus} /> : null}
+          <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <ThreadWorktreeIndicator
+            thread={thread}
+            {...(thread.worktreePath?.trim() ? { onCreateSession: createThreadInWorktree } : {})}
+          />
+          {showProviderMarker ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label={threadModelPresentation.tooltip}
+                    className="relative inline-flex size-4 items-center justify-center text-muted-foreground/40"
+                  />
+                }
+              >
+                {showProviderIcon ? <ProviderIcon className="size-3.25 opacity-70" /> : null}
+                {usageDotClass ? (
+                  <span
+                    className={`pointer-events-none absolute -top-0.5 -right-0.5 size-1.5 rounded-full ${usageDotClass}`}
+                    style={{
+                      boxShadow: usageRingColor
+                        ? `0 0 0 1.5px ${usageRingColor}, 0 0 0 3px var(--sidebar, var(--background))`
+                        : "0 0 0 1.5px var(--sidebar, var(--background))",
+                    }}
+                    aria-hidden
+                  />
+                ) : null}
+              </TooltipTrigger>
+              <TooltipPopup>
+                {threadUsage ? (
+                  <div className="flex flex-col gap-1.5 p-1 text-xs">
+                    <span className="font-medium">{threadModelPresentation.tooltip}</span>
+                    <AiUsageStats item={threadUsage.item} />
+                  </div>
+                ) : (
+                  threadModelPresentation.tooltip
+                )}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {!isThreadRunning ? (
+            confirmingArchive ? (
+              <button
+                type="button"
+                aria-label={`Confirm archive ${thread.title}`}
+                className="h-5 rounded-md bg-destructive/12 px-2 text-[10px] font-medium text-destructive"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  attemptArchive();
+                }}
+              >
+                Confirm
+              </button>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`Archive ${thread.title}`}
+                      className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/55 opacity-0 hover:bg-accent hover:text-foreground group-hover/recent-thread:opacity-100 focus-visible:opacity-100"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (confirmThreadArchive) setConfirmingArchive(true);
+                        else attemptArchive();
+                      }}
+                    />
+                  }
+                >
+                  <ArchiveIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipPopup>Archive thread</TooltipPopup>
+              </Tooltip>
+            )
+          ) : null}
+        </div>
+      </SidebarMenuSubButton>
+    </SidebarMenuSubItem>
+  );
+});
+
 const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   recentThreads: readonly SidebarRecentThread[];
   routeThreadKey: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
+  handleNewThread: ReturnType<typeof useNewThreadHandler>;
+  archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
 }) {
   if (props.recentThreads.length === 0) return null;
 
@@ -3382,52 +3610,23 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
       <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
         Recent
       </div>
-      <SidebarMenu>
-        {props.recentThreads.map(({ project, thread }) => {
-          const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-          const threadKey = scopedThreadKey(threadRef);
-          const badgeColorClass =
-            RECENT_PROJECT_BADGE_CLASSES[
-              resolveSidebarProjectBadgeColorIndex(
-                project.projectKey,
-                RECENT_PROJECT_BADGE_CLASSES.length,
-              )
-            ];
+      <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+        {props.recentThreads.map((entry) => {
+          const threadKey = scopedThreadKey(
+            scopeThreadRef(entry.thread.environmentId, entry.thread.id),
+          );
           return (
-            <SidebarMenuItem key={threadKey}>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <SidebarMenuButton
-                      size="sm"
-                      isActive={threadKey === props.routeThreadKey}
-                      className="gap-1.5 px-2 py-1.5"
-                      data-testid={`recent-thread-${thread.id}`}
-                      onClick={() => props.navigateToThread(threadRef)}
-                    />
-                  }
-                >
-                  <span
-                    aria-label={project.displayName}
-                    className={`inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none ${badgeColorClass}`}
-                  >
-                    {resolveSidebarProjectBadgeLabel(project.displayName)}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-left text-xs">{thread.title}</span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground/55">
-                    {formatRelativeTimeLabel(thread.updatedAt)}
-                  </span>
-                </TooltipTrigger>
-                <TooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
-                  <span className="font-medium">{project.displayName}</span>
-                  <br />
-                  {thread.title}
-                </TooltipPopup>
-              </Tooltip>
-            </SidebarMenuItem>
+            <SidebarRecentThreadRow
+              key={threadKey}
+              entry={entry}
+              isActive={threadKey === props.routeThreadKey}
+              navigateToThread={props.navigateToThread}
+              handleNewThread={props.handleNewThread}
+              archiveThread={props.archiveThread}
+            />
           );
         })}
-      </SidebarMenu>
+      </SidebarMenuSub>
     </SidebarGroup>
   );
 });
@@ -3560,6 +3759,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         recentThreads={recentThreads}
         routeThreadKey={routeThreadKey}
         navigateToThread={navigateToThread}
+        handleNewThread={handleNewThread}
+        archiveThread={archiveThread}
       />
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
