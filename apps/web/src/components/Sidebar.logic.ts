@@ -11,6 +11,38 @@ import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
+export function resolveSidebarProjectBadgeLabel(displayName: string): string {
+  const leafName = displayName.split("/").findLast(Boolean) ?? displayName;
+  const normalized = leafName.trim();
+  if (!normalized) return "?";
+
+  const digitMatch = normalized.match(/^([a-zA-Z]+\d+)/);
+  if (digitMatch?.[1]) return digitMatch[1].slice(0, 3).toUpperCase();
+
+  const words = normalized.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (words.length > 1) {
+    return words
+      .slice(0, 3)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase();
+  }
+
+  return normalized[0]?.toUpperCase() ?? "?";
+}
+
+export function resolveSidebarProjectBadgeColorIndex(
+  projectKey: string,
+  colorCount: number,
+): number {
+  if (colorCount <= 0) return 0;
+  let hash = 0;
+  for (const character of projectKey) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash % colorCount;
+}
+
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a

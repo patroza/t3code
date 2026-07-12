@@ -15,6 +15,8 @@ import {
   normalizeWorktreePathForSidebarGroup,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
+  resolveSidebarProjectBadgeColorIndex,
+  resolveSidebarProjectBadgeLabel,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
   resolveSidebarStageBadgeLabel,
@@ -40,6 +42,25 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("sidebar recent project badges", () => {
+  it.each([
+    ["macs-holding/scanner", "S"],
+    ["pingdotgg/t3code", "T3"],
+    ["effect-app/libs", "L"],
+    ["patroza/dotfiles-omarchy", "DO"],
+    ["configurator", "C"],
+  ])("derives a compact label for %s", (displayName, expected) => {
+    expect(resolveSidebarProjectBadgeLabel(displayName)).toBe(expected);
+  });
+
+  it("assigns the same bounded color index for a stable project key", () => {
+    const first = resolveSidebarProjectBadgeColorIndex("repository:t3code", 6);
+    expect(resolveSidebarProjectBadgeColorIndex("repository:t3code", 6)).toBe(first);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(6);
+  });
+});
 
 describe("resolveSidebarStageBadgeLabel", () => {
   it("returns Nightly for nightly primary server versions", () => {

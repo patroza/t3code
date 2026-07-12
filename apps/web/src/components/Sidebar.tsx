@@ -195,6 +195,8 @@ import {
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarProjectBadgeColorIndex,
+  resolveSidebarProjectBadgeLabel,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -3336,6 +3338,8 @@ interface SidebarProjectsContentProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
+  recentThreads: readonly SidebarRecentThread[];
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
   routeThreadKey: string | null;
@@ -3351,6 +3355,82 @@ interface SidebarProjectsContentProps {
   attachProjectListAutoAnimateRef: (node: HTMLElement | null) => void;
   projectsLength: number;
 }
+
+interface SidebarRecentThread {
+  thread: SidebarThreadSummary;
+  project: SidebarProjectSnapshot;
+}
+
+const RECENT_PROJECT_BADGE_CLASSES = [
+  "bg-blue-500/12 text-blue-700 dark:text-blue-300",
+  "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  "bg-violet-500/12 text-violet-700 dark:text-violet-300",
+  "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+  "bg-rose-500/12 text-rose-700 dark:text-rose-300",
+  "bg-cyan-500/12 text-cyan-700 dark:text-cyan-300",
+] as const;
+
+const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
+  recentThreads: readonly SidebarRecentThread[];
+  routeThreadKey: string | null;
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
+}) {
+  if (props.recentThreads.length === 0) return null;
+
+  return (
+    <SidebarGroup className="px-2 pt-2 pb-1">
+      <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+        Recent
+      </div>
+      <SidebarMenu>
+        {props.recentThreads.map(({ project, thread }) => {
+          const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+          const threadKey = scopedThreadKey(threadRef);
+          const badgeColorClass =
+            RECENT_PROJECT_BADGE_CLASSES[
+              resolveSidebarProjectBadgeColorIndex(
+                project.projectKey,
+                RECENT_PROJECT_BADGE_CLASSES.length,
+              )
+            ];
+          return (
+            <SidebarMenuItem key={threadKey}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <SidebarMenuButton
+                      size="sm"
+                      isActive={threadKey === props.routeThreadKey}
+                      className="gap-1.5 px-2 py-1.5"
+                      data-testid={`recent-thread-${thread.id}`}
+                      onClick={() => props.navigateToThread(threadRef)}
+                    />
+                  }
+                >
+                  <span
+                    aria-label={project.displayName}
+                    className={`inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none ${badgeColorClass}`}
+                  >
+                    {resolveSidebarProjectBadgeLabel(project.displayName)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-left text-xs">{thread.title}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground/55">
+                    {formatRelativeTimeLabel(thread.updatedAt)}
+                  </span>
+                </TooltipTrigger>
+                <TooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                  <span className="font-medium">{project.displayName}</span>
+                  <br />
+                  {thread.title}
+                </TooltipPopup>
+              </Tooltip>
+            </SidebarMenuItem>
+          );
+        })}
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+});
 
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
@@ -3377,6 +3457,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     archiveThread,
     deleteThread,
     sortedProjects,
+    recentThreads,
+    navigateToThread,
     expandedThreadListsByProject,
     activeRouteProjectKey,
     routeThreadKey,
@@ -3474,6 +3556,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       ) : null}
       <LocalSecondaryStatus />
+      <SidebarRecentThreads
+        recentThreads={recentThreads}
+        routeThreadKey={routeThreadKey}
+        navigateToThread={navigateToThread}
+      />
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
@@ -3893,6 +3980,25 @@ export default function Sidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
+  const recentThreads = useMemo<SidebarRecentThread[]>(() => {
+    return sortThreads(visibleThreads, "updated_at")
+      .flatMap((thread) => {
+        const physicalKey =
+          projectPhysicalKeyByScopedRef.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+        const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+        const project = sidebarProjectByKey.get(projectKey);
+        return project ? [{ thread, project }] : [];
+      })
+      .slice(0, sidebarThreadPreviewCount);
+  }, [
+    physicalToLogicalKey,
+    projectPhysicalKeyByScopedRef,
+    sidebarProjectByKey,
+    sidebarThreadPreviewCount,
+    visibleThreads,
+  ]);
   const visibleSidebarThreadKeys = useMemo(
     () =>
       sortedProjects.flatMap((project) => {
@@ -4218,6 +4324,8 @@ export default function Sidebar() {
             archiveThread={archiveThread}
             deleteThread={deleteThread}
             sortedProjects={sortedProjects}
+            recentThreads={recentThreads}
+            navigateToThread={navigateToThread}
             expandedThreadListsByProject={expandedThreadListsByProject}
             activeRouteProjectKey={activeRouteProjectKey}
             routeThreadKey={routeThreadKey}
