@@ -3373,6 +3373,7 @@ const RECENT_PROJECT_BADGE_CLASSES = [
 const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   entry: SidebarRecentThread;
   isActive: boolean;
+  jumpLabel: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
@@ -3514,6 +3515,21 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {props.jumpLabel ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label={props.jumpLabel}
+                    className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+                  />
+                }
+              >
+                {props.jumpLabel}
+              </TooltipTrigger>
+              <TooltipPopup>{props.jumpLabel}</TooltipPopup>
+            </Tooltip>
+          ) : null}
           <ThreadWorktreeIndicator
             thread={thread}
             {...(thread.worktreePath?.trim() ? { onCreateSession: createThreadInWorktree } : {})}
@@ -3602,6 +3618,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
+  threadJumpLabelByKey: ReadonlyMap<string, string>;
 }) {
   if (props.recentThreads.length === 0) return null;
 
@@ -3620,6 +3637,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
               key={threadKey}
               entry={entry}
               isActive={threadKey === props.routeThreadKey}
+              jumpLabel={props.threadJumpLabelByKey.get(threadKey) ?? null}
               navigateToThread={props.navigateToThread}
               handleNewThread={props.handleNewThread}
               archiveThread={props.archiveThread}
@@ -3761,6 +3779,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         navigateToThread={navigateToThread}
         handleNewThread={handleNewThread}
         archiveThread={archiveThread}
+        threadJumpLabelByKey={threadJumpLabelByKey}
       />
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
@@ -3826,7 +3845,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         handleNewThread={handleNewThread}
                         archiveThread={archiveThread}
                         deleteThread={deleteThread}
-                        threadJumpLabelByKey={threadJumpLabelByKey}
+                        threadJumpLabelByKey={EMPTY_THREAD_JUMP_LABELS}
                         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                         expandThreadListForProject={expandThreadListForProject}
                         collapseThreadListForProject={collapseThreadListForProject}
@@ -3858,7 +3877,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 handleNewThread={handleNewThread}
                 archiveThread={archiveThread}
                 deleteThread={deleteThread}
-                threadJumpLabelByKey={threadJumpLabelByKey}
+                threadJumpLabelByKey={EMPTY_THREAD_JUMP_LABELS}
                 attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                 expandThreadListForProject={expandThreadListForProject}
                 collapseThreadListForProject={collapseThreadListForProject}
@@ -4200,6 +4219,13 @@ export default function Sidebar() {
     sidebarThreadPreviewCount,
     visibleThreads,
   ]);
+  const recentThreadKeys = useMemo(
+    () =>
+      recentThreads.map(({ thread }) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
+    [recentThreads],
+  );
   const visibleSidebarThreadKeys = useMemo(
     () =>
       sortedProjects.flatMap((project) => {
@@ -4249,7 +4275,7 @@ export default function Sidebar() {
   );
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
-    for (const [visibleThreadIndex, threadKey] of visibleSidebarThreadKeys.entries()) {
+    for (const [visibleThreadIndex, threadKey] of recentThreadKeys.entries()) {
       const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
       if (!jumpCommand) {
         return mapping;
@@ -4258,7 +4284,7 @@ export default function Sidebar() {
     }
 
     return mapping;
-  }, [visibleSidebarThreadKeys]);
+  }, [recentThreadKeys]);
   const threadJumpThreadKeys = useMemo(
     () => [...threadJumpCommandByKey.keys()],
     [threadJumpCommandByKey],
