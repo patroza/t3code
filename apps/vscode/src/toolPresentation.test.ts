@@ -1,4 +1,4 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import { type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { presentToolCalls } from "./toolPresentation.ts";
@@ -91,5 +91,26 @@ describe("presentToolCalls", () => {
     ]);
     expect(tool?.changedFiles).toEqual(["src/one.ts", "src/two.ts"]);
     expect(tool?.preview).toBe("2 changed files");
+  });
+
+  it("settles orphan tool updates when their turn has completed", () => {
+    const orphan = activity({
+      id: "orphan-progress",
+      kind: "tool.updated",
+      turnId: TurnId.make("old-turn"),
+      summary: "Tool updated",
+    });
+    expect(
+      presentToolCalls([orphan], {
+        latestTurn: { turnId: "newer-turn", completedAt: null },
+        session: { status: "running", activeTurnId: "newer-turn" },
+      })[0]?.status,
+    ).toBe("completed");
+    expect(
+      presentToolCalls([orphan], {
+        latestTurn: { turnId: "old-turn", completedAt: null },
+        session: { status: "running", activeTurnId: "old-turn" },
+      })[0]?.status,
+    ).toBe("running");
   });
 });

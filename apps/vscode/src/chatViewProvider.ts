@@ -473,7 +473,10 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       contextWindow: deriveContextWindowUsage(thread.activities),
       pendingInteractions: derivePendingInteractions(thread.activities),
       tasks: presentTasks(thread.activities, thread.latestTurn?.turnId ?? null),
-      toolCalls: presentToolCalls(thread.activities),
+      toolCalls: presentToolCalls(thread.activities, {
+        latestTurn: thread.latestTurn,
+        session: thread.session,
+      }),
       resolvedUserInputs: presentResolvedUserInputs(thread.activities),
       messages: thread.messages.map((message) => ({
         id: message.id,

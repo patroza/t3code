@@ -11,6 +11,17 @@ export interface PresentedToolCall {
   readonly changedFiles: ReadonlyArray<string>;
 }
 
+export interface ToolPresentationContext {
+  readonly latestTurn: null | {
+    readonly turnId: string;
+    readonly completedAt: string | null;
+  };
+  readonly session: null | {
+    readonly status: string;
+    readonly activeTurnId: string | null;
+  };
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -114,7 +125,10 @@ function lifecycleStatus(
   return "running";
 }
 
-function present(activity: OrchestrationThreadActivity): PresentedToolCall | null {
+function present(
+  activity: OrchestrationThreadActivity,
+  context?: ToolPresentationContext,
+): PresentedToolCall | null {
   if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") return null;
   const payload = record(activity.payload) ?? {};
   const command = toolCommand(payload);
@@ -127,12 +141,23 @@ function present(activity: OrchestrationThreadActivity): PresentedToolCall | nul
     rawOutputDetail(payload) ??
     (files.length > 0 ? `${files.length} changed file${files.length === 1 ? "" : "s"}` : null);
   const preview = rawPreview === title ? null : rawPreview;
+  const lifecycle = lifecycleStatus(activity, payload);
+  const turnIsSettled =
+    lifecycle === "running" &&
+    activity.turnId !== null &&
+    context?.latestTurn !== null &&
+    context?.latestTurn !== undefined &&
+    (activity.turnId !== context.latestTurn.turnId ||
+      (context.latestTurn.completedAt !== null &&
+        !(
+          context.session?.status === "running" && context.session.activeTurnId === activity.turnId
+        )));
   return {
     id: activity.id,
     createdAt: activity.createdAt,
     title,
     itemType: text(payload.itemType),
-    status: lifecycleStatus(activity, payload),
+    status: turnIsSettled ? "completed" : lifecycle,
     preview,
     detail,
     changedFiles: files,
@@ -141,6 +166,7 @@ function present(activity: OrchestrationThreadActivity): PresentedToolCall | nul
 
 export function presentToolCalls(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  context?: ToolPresentationContext,
 ): ReadonlyArray<PresentedToolCall> {
   const presented: Array<PresentedToolCall & { readonly collapseKey: string }> = [];
   for (const activity of [...activities].toSorted((left, right) => {
@@ -149,7 +175,7 @@ export function presentToolCalls(
     }
     return left.createdAt.localeCompare(right.createdAt);
   })) {
-    const tool = present(activity);
+    const tool = present(activity, context);
     if (tool === null) continue;
     const payload = record(activity.payload) ?? {};
     const id = toolCallId(payload);
