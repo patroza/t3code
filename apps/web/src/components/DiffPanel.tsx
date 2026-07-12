@@ -286,8 +286,8 @@ export default function DiffPanel({ mode = "inline", composerDraftTarget }: Diff
   const routeThreadKey = threadRefForKey ? scopedThreadKey(threadRefForKey) : "";
   const allDirectoriesExpanded = useUiStateStore((store) =>
     routeThreadKey && selectedTurn
-      ? (store.threadChangedFilesExpandedById[routeThreadKey]?.[selectedTurn.turnId] ?? false)
-      : false,
+      ? (store.threadChangedFilesExpandedById[routeThreadKey]?.[selectedTurn.turnId] ?? true)
+      : true,
   );
   const setThreadChangedFilesExpanded = useUiStateStore((s) => s.setThreadChangedFilesExpanded);
   const latestTurn = orderedTurnDiffSummaries[0];

@@ -172,8 +172,8 @@ function sanitizePersistedThreadChangedFilesExpanded(
 
     const nextTurns: Record<string, boolean> = {};
     for (const [turnId, expanded] of Object.entries(turns)) {
-      if (turnId && typeof expanded === "boolean" && expanded === true) {
-        nextTurns[turnId] = true;
+      if (turnId && typeof expanded === "boolean" && expanded === false) {
+        nextTurns[turnId] = false;
       }
     }
 
@@ -198,7 +198,7 @@ export function persistState(state: UiState): void {
     const threadChangedFilesExpandedById = Object.fromEntries(
       Object.entries(state.threadChangedFilesExpandedById).flatMap(([threadId, turns]) => {
         const nextTurns = Object.fromEntries(
-          Object.entries(turns).filter(([, expanded]) => expanded === true),
+          Object.entries(turns).filter(([, expanded]) => expanded === false),
         );
         return Object.keys(nextTurns).length > 0 ? [[threadId, nextTurns]] : [];
       }),
@@ -281,13 +281,13 @@ export function setThreadChangedFilesExpanded(
   expanded: boolean,
 ): UiState {
   const currentThreadState = state.threadChangedFilesExpandedById[threadId] ?? {};
-  const currentExpanded = currentThreadState[turnId] ?? false;
+  const currentExpanded = currentThreadState[turnId] ?? true;
   if (currentExpanded === expanded) {
     return state;
   }
 
-  if (!expanded) {
-    // Reverting to the default (collapsed). Remove any explicit entry.
+  if (expanded) {
+    // Reverting to the default (expanded). Remove any explicit entry.
     if (!(turnId in currentThreadState)) {
       return state;
     }
@@ -312,14 +312,14 @@ export function setThreadChangedFilesExpanded(
     };
   }
 
-  // Store explicit expansion (non-default).
+  // Store explicit collapse (non-default).
   return {
     ...state,
     threadChangedFilesExpandedById: {
       ...state.threadChangedFilesExpandedById,
       [threadId]: {
         ...currentThreadState,
-        [turnId]: true,
+        [turnId]: false,
       },
     },
   };

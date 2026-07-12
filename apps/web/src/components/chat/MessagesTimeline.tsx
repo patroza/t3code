@@ -1189,9 +1189,9 @@ function WorkGroupToggleTimelineRow({
 
 /**
  * Renders the "CHANGED FILES (N) +A -D" overview header inline in the conversation.
- * Tree of individual files is collapsed by default (local state so it doesn't persist
- * as a "huge" block in history if you expand it temporarily). "View diff" opens the
- * full side panel (like Plan/Tasks).
+ * The tree is hidden by default (local state) to keep chat history compact.
+ * When the user expands the section, directories start expanded by default.
+ * "View diff" opens the full side panel (like Plan/Tasks).
  */
 const AssistantChangedFilesOverview = memo(function AssistantChangedFilesOverview({
   turnSummary,
@@ -1260,7 +1260,7 @@ const AssistantChangedFilesOverview = memo(function AssistantChangedFilesOvervie
             key={`changed-files-tree:${turnSummary.turnId}`}
             turnId={turnSummary.turnId}
             files={checkpointFiles}
-            allDirectoriesExpanded={false}
+            allDirectoriesExpanded={true}
             resolvedTheme={resolvedTheme}
             onOpenTurnDiff={onOpenTurnDiff}
           />

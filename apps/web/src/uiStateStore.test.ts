@@ -116,17 +116,17 @@ describe("uiStateStore pure functions", () => {
     );
   });
 
-  it("stores only expanded changed-file turns (non-default)", () => {
+  it("stores only collapsed changed-file turns (non-default)", () => {
     const threadId = ThreadId.make("thread-1");
-    const expanded = setThreadChangedFilesExpanded(makeUiState(), threadId, "turn-1", true);
+    const collapsed = setThreadChangedFilesExpanded(makeUiState(), threadId, "turn-1", false);
 
-    expect(expanded.threadChangedFilesExpandedById).toEqual({
+    expect(collapsed.threadChangedFilesExpandedById).toEqual({
       [threadId]: {
-        "turn-1": true,
+        "turn-1": false,
       },
     });
     expect(
-      setThreadChangedFilesExpanded(expanded, threadId, "turn-1", false)
+      setThreadChangedFilesExpanded(collapsed, threadId, "turn-1", true)
         .threadChangedFilesExpandedById,
     ).toEqual({});
   });
@@ -157,8 +157,8 @@ describe("parsePersistedState", () => {
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": false,
-          "turn-2": true,
+          "turn-1": true,
+          "turn-2": false,
         },
       },
     });
@@ -174,7 +174,7 @@ describe("parsePersistedState", () => {
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-2": true,
+          "turn-2": false,
         },
       },
     });
@@ -257,8 +257,8 @@ describe("uiStateStore persistence", () => {
       },
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": true,
-          "turn-2": false,
+          "turn-1": false,
+          "turn-2": true,
         },
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
@@ -280,7 +280,7 @@ describe("uiStateStore persistence", () => {
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": true,
+          "turn-1": false,
         },
       },
     });
@@ -288,7 +288,7 @@ describe("uiStateStore persistence", () => {
       ...state,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": true,
+          "turn-1": false,
         },
       },
     });
