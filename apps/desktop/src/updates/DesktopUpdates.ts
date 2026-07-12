@@ -23,6 +23,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
@@ -220,9 +221,6 @@ function getAutoUpdateDisabledReason(args: {
   disabledByEnv: boolean;
   hasUpdateFeedConfig: boolean;
 }): string | null {
-  if (!args.hasUpdateFeedConfig) {
-    return "Automatic updates are not available because no update feed is configured.";
-  }
   if (args.isDevelopment || !args.isPackaged) {
     return "Automatic updates are only available in packaged production builds.";
   }
@@ -230,7 +228,14 @@ function getAutoUpdateDisabledReason(args: {
     return "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.";
   }
   if (args.platform === "linux" && !args.appImage) {
-    return "Automatic updates on Linux require running the AppImage build.";
+    // Directory installs (and other non-AppImage linux) do not use the network
+    // updater at all. We force-enable the update UI so the local on-disk probe
+    // can detect rsync'd builds and surface "Restart to update".
+    // We intentionally skip the feed-config requirement for dir installs.
+    return null;
+  }
+  if (!args.hasUpdateFeedConfig) {
+    return "Automatic updates are not available because no update feed is configured.";
   }
   return null;
 }
@@ -239,12 +244,31 @@ function isArm64HostRunningIntelBuild(runtimeInfo: DesktopRuntimeInfo): boolean 
   return runtimeInfo.hostArch === "arm64" && runtimeInfo.appArch === "x64";
 }
 
+function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (v: string) =>
+    v
+      .split(/[.-]/)
+      .map((p) => parseInt(p, 10))
+      .map((n) => (Number.isFinite(n) ? n : 0));
+  const ca = parse(candidate);
+  const cu = parse(current);
+  const len = Math.max(ca.length, cu.length);
+  for (let i = 0; i < len; i++) {
+    const a = ca[i] ?? 0;
+    const b = cu[i] ?? 0;
+    if (a > b) return true;
+    if (a < b) return false;
+  }
+  return false;
+}
+
 export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const desktopState = yield* DesktopState.DesktopState;
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const electronApp = yield* ElectronApp.ElectronApp;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
@@ -262,6 +286,102 @@ export const make = Effect.gen(function* () {
       environment.defaultDesktopSettings.updateChannel,
     ),
   );
+  const localDirModeRef = yield* Ref.make(false);
+
+  // Local dir-mode build change detection (so "restart to update" works even
+  // when the semver was not bumped for a dir deploy).
+  const readOnDiskCommitHash = (): Effect.Effect<Option.Option<string>> =>
+    fileSystem
+      .readFileString(environment.path.join(environment.appRoot, "package.json"), "utf-8")
+      .pipe(
+        Effect.flatMap((raw) => {
+          try {
+            const parsed = JSON.parse(raw);
+            const h =
+              typeof parsed?.t3codeCommitHash === "string" ? parsed.t3codeCommitHash.trim() : "";
+            return Effect.succeed(
+              /^[0-9a-f]{7,40}$/i.test(h)
+                ? Option.some(h.toLowerCase().slice(0, 12))
+                : Option.none<string>(),
+            );
+          } catch {
+            return Effect.succeed(Option.none<string>());
+          }
+        }),
+        Effect.orElseSucceed(() => Option.none<string>()),
+      );
+
+  const getOnDiskBinaryMtime = (): Effect.Effect<number | null> =>
+    fileSystem.stat(process.execPath).pipe(
+      Effect.map((s) => (s.mtime._tag === "Some" ? s.mtime.value.getTime() : null)),
+      Effect.orElseSucceed(() => null),
+    );
+
+  const probeOnDiskVersion = (): Effect.Effect<string | null> =>
+    Effect.tryPromise({
+      try: () =>
+        new Promise<string>((resolve) => {
+          const CP: typeof import("node:child_process") = require("node:child_process");
+          CP.execFile(process.execPath, ["--version"], { timeout: 7000 }, (err, out) => {
+            if (err) return resolve("");
+            resolve(String(out || "").trim());
+          });
+        }),
+      catch: () => null,
+    }).pipe(Effect.orElseSucceed(() => null));
+
+  const applyLocalDirBuildUpdate = (reason: string) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.get(updateStateRef);
+      if (state.status === "downloading") return;
+
+      const onDiskVersion = yield* probeOnDiskVersion();
+      const runningVersion = state.currentVersion;
+      const versionChanged = !!onDiskVersion && onDiskVersion !== runningVersion;
+
+      if (!versionChanged) {
+        const onDiskC = yield* readOnDiskCommitHash();
+        if (Option.isNone(onDiskC)) return;
+      }
+
+      yield* logUpdaterInfo("different build detected on disk for dir install", {
+        reason,
+        onDiskVersion,
+        runningVersion,
+      });
+
+      const targetVer = onDiskVersion ?? runningVersion;
+      yield* setState(
+        reduceDesktopUpdateStateOnDownloadComplete(
+          { ...state, availableVersion: targetVer },
+          targetVer,
+        ),
+      );
+    });
+
+  const dirBaselineMtimeRef = yield* Ref.make<number | null>(null);
+
+  const startLocalDirProbes = Effect.gen(function* () {
+    const baseline = yield* getOnDiskBinaryMtime();
+    yield* Ref.set(dirBaselineMtimeRef, baseline);
+
+    const tick = Effect.gen(function* () {
+      const state = yield* Ref.get(updateStateRef);
+      const baseM = yield* Ref.get(dirBaselineMtimeRef);
+      const curM = yield* getOnDiskBinaryMtime();
+      const v = yield* probeOnDiskVersion();
+
+      const vChanged = !!v && v !== state.currentVersion;
+      const mChanged = baseM != null && curM != null && curM > baseM + 1000;
+
+      if (vChanged || mChanged) {
+        yield* applyLocalDirBuildUpdate("dir-probe");
+      }
+    });
+
+    yield* Effect.sleep("5 seconds").pipe(Effect.andThen(tick), Effect.forkScoped);
+    yield* Effect.sleep("45 seconds").pipe(Effect.andThen(tick), Effect.forever, Effect.forkScoped);
+  });
 
   const emitState = Ref.get(updateStateRef).pipe(
     Effect.flatMap((state) => electronWindow.sendAll(IpcChannels.UPDATE_STATE_CHANNEL, state)),
@@ -339,9 +459,22 @@ export const make = Effect.gen(function* () {
 
   const shouldEnableAutoUpdates = resolveDisabledReason.pipe(Effect.map(Option.isNone));
 
+  const execBase = process.execPath.split(/[\\/]/).pop() || "";
+  const isDirBinary = execBase === "t3code";
+  const isLinuxDirStyleInstall =
+    environment.platform === "linux" &&
+    environment.isPackaged &&
+    (Option.isNone(config.appImagePath) || isDirBinary);
+
   const checkForUpdates = Effect.fn("desktop.updates.checkForUpdates")(function* (reason: string) {
     yield* Effect.annotateCurrentSpan({ reason });
     if (yield* Ref.get(desktopState.quitting)) return false;
+
+    if (yield* Ref.get(localDirModeRef)) {
+      yield* applyLocalDirBuildUpdate(reason);
+      return true;
+    }
+
     if (!(yield* Ref.get(updaterConfiguredRef))) return false;
     if (yield* Ref.get(updateCheckInFlightRef)) return false;
 
@@ -383,6 +516,7 @@ export const make = Effect.gen(function* () {
   const downloadAvailableUpdate = Effect.gen(function* () {
     const state = yield* Ref.get(updateStateRef);
     if (
+      (yield* Ref.get(localDirModeRef)) ||
       !(yield* Ref.get(updaterConfiguredRef)) ||
       (yield* Ref.get(updateDownloadInFlightRef)) ||
       state.status !== "available"
@@ -446,11 +580,15 @@ export const make = Effect.gen(function* () {
 
   const installDownloadedUpdate = Effect.gen(function* () {
     const state = yield* Ref.get(updateStateRef);
-    if (
-      (yield* Ref.get(desktopState.quitting)) ||
-      !(yield* Ref.get(updaterConfiguredRef)) ||
-      state.status !== "downloaded"
-    ) {
+    const isDirLocal = yield* Ref.get(localDirModeRef);
+
+    if (yield* Ref.get(desktopState.quitting)) {
+      return { accepted: false, completed: false };
+    }
+    if (state.status !== "downloaded") {
+      return { accepted: false, completed: false };
+    }
+    if (!isDirLocal && !(yield* Ref.get(updaterConfiguredRef))) {
       return { accepted: false, completed: false };
     }
 
@@ -472,6 +610,14 @@ export const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
       yield* electronWindow.destroyAll;
+
+      if (isDirLocal) {
+        yield* logUpdaterInfo("relaunching for dir-installed build update");
+        yield* electronApp.relaunch({ execPath: process.execPath, args: process.argv.slice(1) });
+        yield* electronApp.quit;
+        return { accepted: true, completed: false };
+      }
+
       yield* electronUpdater.quitAndInstall({
         isSilent: true,
         isForceRunAfter: true,
@@ -718,6 +864,16 @@ export const make = Effect.gen(function* () {
       if (!enabled) {
         return;
       }
+
+      if (isLinuxDirStyleInstall) {
+        yield* Ref.set(localDirModeRef, true);
+        yield* logUpdaterInfo(
+          "dir install mode: using on-disk build detection (no network updater)",
+        );
+        yield* startLocalDirProbes;
+        return;
+      }
+
       yield* Ref.set(updaterConfiguredRef, true);
 
       yield* electronUpdater.setAutoDownload(false);
@@ -800,7 +956,7 @@ export const make = Effect.gen(function* () {
     }),
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
       yield* Effect.annotateCurrentSpan({ reason });
-      if (!(yield* Ref.get(updaterConfiguredRef))) {
+      if (!(yield* Ref.get(updaterConfiguredRef)) && !(yield* Ref.get(localDirModeRef))) {
         return {
           checked: false,
           state: yield* Ref.get(updateStateRef),

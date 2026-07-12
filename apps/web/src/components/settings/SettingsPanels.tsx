@@ -155,10 +155,12 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
 }
 
 function AboutVersionTitle() {
+  const updateState = useDesktopUpdateState();
+  const version = updateState?.currentVersion ?? APP_VERSION;
   return (
     <span className="inline-flex items-center gap-2">
       <span>Version</span>
-      <code className="text-[11px] font-medium text-muted-foreground">{APP_VERSION}</code>
+      <code className="text-[11px] font-medium text-muted-foreground">{version}</code>
     </span>
   );
 }

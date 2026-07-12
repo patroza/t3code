@@ -16,8 +16,28 @@ DESKTOP_SUBDIR=".local/share/applications"
 
 cd "${ROOT_DIR}"
 
-pnpm run build
-pnpm run dist:desktop:linux:dir
+# Compute a dir-deploy-specific version that includes the short commit and a
+# monotonically increasing .n suffix. This ensures successive deploys produce
+# distinct version strings (even without a formal release bump) so the running
+# desktop can reliably detect "a newer build was just installed in this
+# directory" and offer "Restart to update".
+COMMIT=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+BASE_VERSION=$(node -p 'require("./apps/server/package.json").version' | sed 's/[-+].*//')
+
+N_FILE=".dir-deploy-n"
+if [[ -f "$N_FILE" ]]; then
+  N=$(cat "$N_FILE")
+else
+  N=0
+fi
+N=$((N + 1))
+echo "$N" > "$N_FILE"
+
+DEPLOY_VERSION="${BASE_VERSION}.${N}+${COMMIT}"
+echo "Dir deploy version: ${DEPLOY_VERSION}"
+
+APP_VERSION="$DEPLOY_VERSION" pnpm run build
+T3CODE_DESKTOP_VERSION="$DEPLOY_VERSION" pnpm run dist:desktop:linux:dir
 
 if [[ ! -d "${UNPACKED_DIR}" ]]; then
   echo "No unpacked app found at ${UNPACKED_DIR}" >&2
@@ -66,4 +86,4 @@ EOF"
 install_local
 install_remote "${REMOTE_HOST}"
 
-echo "Done. Restart T3 Code to pick up the new version."
+echo "Done. Deployed ${DEPLOY_VERSION}. Restart T3 Code to pick up the new version."

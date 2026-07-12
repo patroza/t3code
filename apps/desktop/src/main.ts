@@ -10,6 +10,18 @@ import * as Electron from "electron";
 
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+// Support `t3code --version` (and -v) early so directory ("dir") installs can
+// query the version of the *files on disk* at the install location. The deploy
+// scripts rsync new builds into place; a running instance can then detect that
+// a newer version is present without relying on network auto-updates.
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  try {
+    process.stdout.write(Electron.app.getVersion() + "\n");
+  } finally {
+    process.exit(0);
+  }
+}
+
 const hostProcessPlatform = Effect.runSync(HostProcessPlatform);
 
 if (hostProcessPlatform === "linux") {

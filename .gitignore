@@ -28,6 +28,9 @@ squashfs-root/
 .gstack/
 dist-electron/
 .electron-runtime/
+
+# Local dir-deploy version counter (see scripts/build-and-deploy-dir.sh)
+.dir-deploy-n
 node_modules/
 .alchemy/
 *.log
