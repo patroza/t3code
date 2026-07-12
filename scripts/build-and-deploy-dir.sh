@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REMOTE_HOST="${1:-patroza@patricks-b18}"
+REMOTE_HOST="${1:-patroza@100.105.158.115}"
 UNPACKED_DIR="${ROOT_DIR}/release/linux-unpacked"
 
 # No-sudo install: the unpacked app lives under the user's home and the launcher

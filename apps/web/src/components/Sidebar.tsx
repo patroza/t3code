@@ -3614,13 +3614,20 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
 
 const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   recentThreads: readonly SidebarRecentThread[];
+  previewCount: SidebarThreadPreviewCount;
   routeThreadKey: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
   if (props.recentThreads.length === 0) return null;
+  const hasOverflowingThreads = props.recentThreads.length > props.previewCount;
+  const renderedThreads =
+    isExpanded || !hasOverflowingThreads
+      ? props.recentThreads
+      : props.recentThreads.slice(0, props.previewCount);
 
   return (
     <SidebarGroup className="px-2 pt-2 pb-1">
@@ -3628,7 +3635,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
         Recent
       </div>
       <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
-        {props.recentThreads.map((entry) => {
+        {renderedThreads.map((entry) => {
           const threadKey = scopedThreadKey(
             scopeThreadRef(entry.thread.environmentId, entry.thread.id),
           );
@@ -3644,6 +3651,18 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
             />
           );
         })}
+        {hasOverflowingThreads ? (
+          <SidebarMenuSubItem className="w-full">
+            <SidebarMenuSubButton
+              render={<button type="button" />}
+              size="sm"
+              className="text-muted-foreground/60 hover:text-muted-foreground"
+              onClick={() => setIsExpanded((current) => !current)}
+            >
+              <span>{isExpanded ? "Show less" : "Show more"}</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+        ) : null}
       </SidebarMenuSub>
     </SidebarGroup>
   );
@@ -3775,6 +3794,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       <LocalSecondaryStatus />
       <SidebarRecentThreads
         recentThreads={recentThreads}
+        previewCount={threadPreviewCount}
         routeThreadKey={routeThreadKey}
         navigateToThread={navigateToThread}
         handleNewThread={handleNewThread}
@@ -4201,30 +4221,22 @@ export default function Sidebar() {
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
-    return sortThreads(visibleThreads, "updated_at")
-      .flatMap((thread) => {
-        const physicalKey =
-          projectPhysicalKeyByScopedRef.get(
-            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-          ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-        const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-        const project = sidebarProjectByKey.get(projectKey);
-        return project ? [{ thread, project }] : [];
-      })
-      .slice(0, sidebarThreadPreviewCount);
-  }, [
-    physicalToLogicalKey,
-    projectPhysicalKeyByScopedRef,
-    sidebarProjectByKey,
-    sidebarThreadPreviewCount,
-    visibleThreads,
-  ]);
+    return sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
+      const physicalKey =
+        projectPhysicalKeyByScopedRef.get(
+          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+      const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+      const project = sidebarProjectByKey.get(projectKey);
+      return project ? [{ thread, project }] : [];
+    });
+  }, [physicalToLogicalKey, projectPhysicalKeyByScopedRef, sidebarProjectByKey, visibleThreads]);
   const recentThreadKeys = useMemo(
     () =>
-      recentThreads.map(({ thread }) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      ),
-    [recentThreads],
+      recentThreads
+        .slice(0, sidebarThreadPreviewCount)
+        .map(({ thread }) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+    [recentThreads, sidebarThreadPreviewCount],
   );
   const visibleSidebarThreadKeys = useMemo(
     () =>
