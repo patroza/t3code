@@ -153,7 +153,10 @@ export function HostResourceStatus(props: {
 
   return (
     <div
-      className={cn("flex min-w-0 items-center gap-1", props.className)}
+      className={cn(
+        "flex min-w-0 items-center gap-1 [-webkit-app-region:no-drag]",
+        props.className,
+      )}
       onPointerEnter={startLiveRefresh}
       onPointerLeave={stopLiveRefresh}
     >
