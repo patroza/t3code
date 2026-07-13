@@ -314,14 +314,17 @@ export function ThreadWorktreeIndicator({
   onCreateSession?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const worktreePath = thread.worktreePath?.trim();
-  if (!worktreePath) {
+  if (!worktreePath && !onCreateSession) {
     return null;
   }
 
-  const displayPath = formatWorktreePathForDisplay(worktreePath);
-  const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+  const tooltip = worktreePath
+    ? thread.branch
+      ? `Worktree: ${formatWorktreePathForDisplay(worktreePath)} (${thread.branch})`
+      : `Worktree: ${formatWorktreePathForDisplay(worktreePath)}`
+    : thread.branch
+      ? `New worktree from ${thread.branch}`
+      : "New worktree";
 
   return (
     <Tooltip>
@@ -330,7 +333,7 @@ export function ThreadWorktreeIndicator({
           onCreateSession ? (
             <button
               type="button"
-              aria-label="New session on this worktree"
+              aria-label={worktreePath ? "New session on this worktree" : tooltip}
               data-testid={`thread-worktree-new-session-${thread.id}`}
               className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
               onPointerDown={(event) => {

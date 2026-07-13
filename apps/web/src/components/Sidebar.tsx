@@ -3503,16 +3503,24 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     });
   }, [props, threadRef]);
 
-  const createThreadInWorktree = useCallback(
+  const createThreadFromRecent = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
       event.stopPropagation();
-      if (!thread.worktreePath?.trim()) return;
-      void props.handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
-        ...(thread.branch !== null ? { branch: thread.branch } : {}),
-        worktreePath: thread.worktreePath,
-        envMode: "local",
-      });
+      const worktreePath = thread.worktreePath?.trim();
+      void props.handleNewThread(
+        scopeProjectRef(thread.environmentId, thread.projectId),
+        worktreePath
+          ? {
+              ...(thread.branch !== null ? { branch: thread.branch } : {}),
+              worktreePath,
+              envMode: "local",
+            }
+          : {
+              ...(thread.branch !== null ? { branch: thread.branch } : {}),
+              envMode: "worktree",
+            },
+      );
     },
     [props, thread],
   );
@@ -3860,10 +3868,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               <TooltipPopup>{props.jumpLabel}</TooltipPopup>
             </Tooltip>
           ) : null}
-          <ThreadWorktreeIndicator
-            thread={thread}
-            {...(thread.worktreePath?.trim() ? { onCreateSession: createThreadInWorktree } : {})}
-          />
+          <ThreadWorktreeIndicator thread={thread} onCreateSession={createThreadFromRecent} />
           {terminalStatus ? (
             <Tooltip>
               <TooltipTrigger
