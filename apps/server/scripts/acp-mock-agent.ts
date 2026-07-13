@@ -39,6 +39,7 @@ const emitOverlappingXAiPromptCompleteOutOfOrder =
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const omitModeConfigOption = process.env.T3_ACP_OMIT_MODE_CONFIG_OPTION === "1";
 const exitAfterPrompt = process.env.T3_ACP_EXIT_AFTER_PROMPT === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
@@ -95,21 +96,25 @@ process.once("exit", (code) => {
   logExit(`exit:${code}`);
 });
 
+function modeConfigOption(): AcpSchema.SessionConfigOption {
+  return {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    type: "select",
+    currentValue: currentModeId,
+    options: availableModes.map((mode) => ({
+      value: mode.id,
+      name: mode.name,
+      ...(mode.description ? { description: mode.description } : {}),
+    })),
+  };
+}
+
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
-      {
-        id: "mode",
-        name: "Mode",
-        category: "mode",
-        type: "select",
-        currentValue: currentModeId,
-        options: availableModes.map((mode) => ({
-          value: mode.id,
-          name: mode.name,
-          ...(mode.description ? { description: mode.description } : {}),
-        })),
-      },
+      ...(omitModeConfigOption ? [] : [modeConfigOption()]),
       {
         id: "model",
         name: "Model",
@@ -399,6 +404,27 @@ const program = Effect.gen(function* () {
         );
       }
       currentModelId = request.modelId;
+      return {};
+    }),
+  );
+
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.gen(function* () {
+      const nextModeId = request.modeId.trim();
+      if (!nextModeId) {
+        return yield* AcpError.AcpRequestError.invalidParams("modeId is required", {
+          method: "session/set_mode",
+          params: request,
+        });
+      }
+      currentModeId = nextModeId;
+      yield* agent.client.sessionUpdate({
+        sessionId: request.sessionId,
+        update: {
+          sessionUpdate: "current_mode_update",
+          currentModeId,
+        },
+      });
       return {};
     }),
   );

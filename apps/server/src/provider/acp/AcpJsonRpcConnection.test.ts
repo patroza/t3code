@@ -418,6 +418,52 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("uses session/set_mode when the agent has no mode config option", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+
+      yield* runtime.setMode("architect");
+
+      const setModeRequest = requestEvents.find(
+        (event) => event.method === "session/set_mode" && event.status === "succeeded",
+      );
+      expect(setModeRequest?.payload).toMatchObject({
+        sessionId: "mock-session-1",
+        modeId: "architect",
+      });
+      expect(
+        requestEvents.some(
+          (event) =>
+            event.method === "session/set_config_option" &&
+            (event.payload as { configId?: string } | undefined)?.configId === "mode",
+        ),
+      ).toBe(false);
+
+      const modeState = yield* runtime.getModeState;
+      expect(modeState?.currentModeId).toBe("architect");
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("emits low-level ACP protocol logs for raw and decoded messages", () => {
     const protocolEvents: Array<EffectAcpProtocol.AcpProtocolLogEvent> = [];
     return Effect.gen(function* () {
