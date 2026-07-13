@@ -27,6 +27,7 @@ import { readLocalApi } from "~/localApi";
 import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
 import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "~/connection/desktopLocal";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -210,7 +211,9 @@ export const ChatHeader = memo(function ChatHeader({
           environmentId={activeThreadEnvironmentId}
           environmentLabel={activeEnvironment?.label ?? "Active environment"}
           connected={activeEnvironment?.connection.phase === "connected"}
-          showHostname
+          remote={
+            activeEnvironment ? !isLocalConnectionTarget(activeEnvironment.entry.target) : false
+          }
           className="hidden @2xl/header-actions:flex"
         />
       </div>

@@ -1,6 +1,10 @@
-import { getHostResourcePressure } from "@t3tools/client-runtime/state/hostResourcePresentation";
+import {
+  getHostResourcePressure,
+  getHostResourceRatioPressure,
+  type HostResourcePressure,
+} from "@t3tools/client-runtime/state/hostResourcePresentation";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { RefreshCwIcon } from "lucide-react";
+import { CloudIcon, RefreshCwIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { useHostResourceSnapshot } from "../hooks/useHostResourceSnapshot";
@@ -22,10 +26,42 @@ function formatBytes(value: number | null): string {
   return `${scaled.toFixed(index >= 3 ? 1 : 0)} ${units[index]}`;
 }
 
-function pressureClass(pressure: ReturnType<typeof getHostResourcePressure>): string {
+function pressureClass(pressure: HostResourcePressure): string {
   if (pressure === "critical") return "text-destructive";
   if (pressure === "warning") return "text-warning";
   return "text-muted-foreground";
+}
+
+function meterFillClass(pressure: HostResourcePressure): string {
+  if (pressure === "critical") return "bg-destructive";
+  if (pressure === "warning") return "bg-warning";
+  return "bg-muted-foreground";
+}
+
+function ResourceMetric(props: {
+  readonly label: string;
+  readonly value: string;
+  readonly ratio: number | null;
+  readonly description: string;
+}) {
+  const ratio = props.ratio === null ? 0 : Math.min(1, Math.max(0, props.ratio));
+  const pressure = getHostResourceRatioPressure(ratio);
+  return (
+    <span
+      className={cn("inline-flex items-center gap-1", pressureClass(pressure))}
+      aria-label={props.description}
+    >
+      <span className="relative h-2.5 w-1 overflow-hidden rounded-full bg-muted" aria-hidden>
+        <span
+          className={cn("absolute inset-x-0 bottom-0 rounded-full", meterFillClass(pressure))}
+          style={{ height: `${ratio * 100}%` }}
+        />
+      </span>
+      <span>
+        {props.label} {props.value}
+      </span>
+    </span>
+  );
 }
 
 export function HostResourceStatus(props: {
@@ -34,7 +70,7 @@ export function HostResourceStatus(props: {
   readonly connected: boolean;
   readonly showRefresh?: boolean;
   readonly unavailableLabel?: boolean;
-  readonly showHostname?: boolean;
+  readonly remote?: boolean;
   readonly className?: string;
 }) {
   const { data, error, isPending, refresh } = useHostResourceSnapshot(
@@ -67,28 +103,46 @@ export function HostResourceStatus(props: {
     );
   }
 
-  const tone = pressureClass(getHostResourcePressure(data));
   const loadOne = data.loadAverage?.m1 ?? null;
+  const loadRatio = loadOne !== null && data.logicalCores ? loadOne / data.logicalCores : null;
   const summary = (
     <span
       className={cn(
         "inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] tabular-nums",
-        tone,
+        pressureClass(getHostResourcePressure(data)),
       )}
     >
-      {props.showHostname ? (
+      {props.remote ? (
         <>
-          <span className="max-w-24 truncate font-sans">
-            {data.hostname ?? props.environmentLabel}
+          <span
+            aria-label={`Remote host: ${data.hostname ?? props.environmentLabel}`}
+            title={data.hostname ?? props.environmentLabel}
+          >
+            <CloudIcon className="size-3 shrink-0" aria-hidden />
           </span>
           <span aria-hidden>·</span>
         </>
       ) : null}
-      <span>CPU {formatPercent(data.cpuPercent)}</span>
+      <ResourceMetric
+        label="C"
+        value={formatPercent(data.cpuPercent)}
+        ratio={data.cpuPercent === null ? null : data.cpuPercent / 100}
+        description={`CPU ${formatPercent(data.cpuPercent)}`}
+      />
       <span aria-hidden>·</span>
-      <span>MEM {formatPercent(data.memoryUsedPercent)}</span>
+      <ResourceMetric
+        label="M"
+        value={formatPercent(data.memoryUsedPercent)}
+        ratio={data.memoryUsedPercent === null ? null : data.memoryUsedPercent / 100}
+        description={`Memory ${formatPercent(data.memoryUsedPercent)}`}
+      />
       <span aria-hidden>·</span>
-      <span>LOAD {loadOne === null ? "—" : loadOne.toFixed(1)}</span>
+      <ResourceMetric
+        label="L"
+        value={loadOne === null ? "—" : loadOne.toFixed(1)}
+        ratio={loadRatio}
+        description={`Load ${loadOne === null ? "unavailable" : loadOne.toFixed(1)}`}
+      />
     </span>
   );
 

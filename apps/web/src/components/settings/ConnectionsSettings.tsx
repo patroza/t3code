@@ -31,6 +31,7 @@ import {
 } from "@t3tools/contracts";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1431,6 +1432,7 @@ function SavedBackendListRow({
             connected={isConnected}
             showRefresh
             unavailableLabel
+            remote={!isLocalConnectionTarget(environment.entry.target)}
           />
           {versionMismatch ? (
             <p className="flex items-center gap-1 text-warning text-xs">

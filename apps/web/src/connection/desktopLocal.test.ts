@@ -10,6 +10,7 @@ import {
   desktopLocalBackendId,
   desktopLocalConnectionId,
   isDesktopLocalConnectionTarget,
+  isLocalConnectionTarget,
 } from "./desktopLocal";
 
 describe("desktop local connection identity", () => {
@@ -21,6 +22,7 @@ describe("desktop local connection identity", () => {
     });
 
     expect(isDesktopLocalConnectionTarget(target)).toBe(true);
+    expect(isLocalConnectionTarget(target)).toBe(true);
     expect(desktopLocalBackendId(target)).toBe("wsl:Ubuntu");
   });
 
@@ -33,7 +35,18 @@ describe("desktop local connection identity", () => {
     });
 
     expect(isDesktopLocalConnectionTarget(target)).toBe(false);
+    expect(isLocalConnectionTarget(target)).toBe(true);
     expect(desktopLocalBackendId(target)).toBeNull();
+  });
+
+  it("does not classify a saved bearer connection as local", () => {
+    const target = new BearerConnectionTarget({
+      connectionId: "saved:smart",
+      environmentId: EnvironmentId.make("environment-smart"),
+      label: "Smart",
+    });
+
+    expect(isLocalConnectionTarget(target)).toBe(false);
   });
 });
 

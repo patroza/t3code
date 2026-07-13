@@ -963,7 +963,6 @@ export function DiagnosticsSettingsPanel() {
               environmentId={primaryEnvironment.environmentId}
               environmentLabel={primaryEnvironment.label}
               connected={primaryEnvironment.connection.phase === "connected"}
-              showHostname
               showRefresh
               unavailableLabel
             />

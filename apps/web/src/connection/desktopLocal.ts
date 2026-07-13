@@ -32,6 +32,11 @@ export function isDesktopLocalConnectionTarget(
   );
 }
 
+/** Whether a connection target is hosted by the current desktop/web client machine. */
+export function isLocalConnectionTarget(target: ConnectionTarget): boolean {
+  return target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target);
+}
+
 export function desktopLocalBackendId(target: ConnectionTarget): string | null {
   return isDesktopLocalConnectionTarget(target)
     ? target.connectionId.slice(DESKTOP_LOCAL_CONNECTION_ID_PREFIX.length)
