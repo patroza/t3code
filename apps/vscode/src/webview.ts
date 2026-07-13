@@ -358,9 +358,7 @@ function renderMarkdown(text: string): HTMLElement {
 function renderMessage(message: ViewMessage): HTMLElement {
   const wrapper = document.createElement("article");
   wrapper.className = `message ${message.role}`;
-  const role = document.createElement("div");
-  role.className = "role";
-  role.textContent = message.role === "assistant" ? "T3 Code" : message.role;
+  wrapper.setAttribute("aria-label", `${message.role} message`);
   const parsedContext = splitEditorContext(message.text);
   const attachmentOnlyText = parsedContext.text.startsWith(
     "[User attached one or more images without additional text.",
@@ -369,7 +367,7 @@ function renderMessage(message: ViewMessage): HTMLElement {
     attachmentOnlyText && message.attachments.length > 0 ? "" : parsedContext.text,
   );
   if (message.streaming) content.classList.add("streaming");
-  wrapper.append(role, content);
+  wrapper.append(content);
   if (parsedContext.references.length > 0) {
     const references = document.createElement("div");
     references.className = "context-references";
@@ -500,11 +498,7 @@ function renderToolCallGroup(tools: ReadonlyArray<ViewToolCall>): HTMLElement {
 function renderResolvedUserInput(input: ViewResolvedUserInput): HTMLElement {
   const wrapper = document.createElement("section");
   wrapper.className = "message user user-input-response";
-
-  const role = document.createElement("div");
-  role.className = "message-role";
-  role.textContent = "You answered";
-  wrapper.append(role);
+  wrapper.setAttribute("aria-label", "Your answers");
 
   for (const entry of input.answers) {
     const answer = document.createElement("div");

@@ -600,7 +600,6 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .tool-changed-file { position: relative; border: 0; padding: 3px 7px 3px 20px; overflow: hidden; background: transparent; color: var(--vscode-textLink-foreground); font-family: var(--vscode-editor-font-family); font-size: 10px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
     .tool-changed-file::before { content: '±'; position: absolute; left: 6px; color: var(--vscode-descriptionForeground); }
     .tool-changed-file:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-textLink-activeForeground); }
-    .role { color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
     .content { overflow-wrap: anywhere; line-height: 1.55; }
     .markdown-body > :first-child { margin-top: 0; }
     .markdown-body > :last-child { margin-bottom: 0; }
