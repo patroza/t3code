@@ -1342,4 +1342,95 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       yield* Fiber.interrupt(eventsFiber);
     }),
   );
+
+  it.effect("maps plan interaction mode onto session/set_mode and reports mode changes", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-plan-mode-switch");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-plan-mode-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const modeChanged =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "session.mode.changed" }>>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (event.type === "session.mode.changed" && String(event.threadId) === String(threadId)) {
+          return Deferred.succeed(modeChanged, event).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "design a plan",
+        attachments: [],
+        interactionMode: "plan",
+      });
+
+      const modeEvent = yield* Deferred.await(modeChanged);
+      assert.equal(modeEvent.payload.modeId, "plan");
+      assert.equal(modeEvent.payload.interactionMode, "plan");
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const setMode = requests.find((entry) => entry.method === "session/set_mode");
+      assert.isDefined(setMode);
+      assert.equal((setMode?.params as { modeId?: string } | undefined)?.modeId, "plan");
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("captures exit_plan_mode as a proposed plan and denies auto-exit", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-exit-plan-mode");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({
+          T3_ACP_EMIT_EXIT_PLAN_MODE: "1",
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const proposed =
+        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.proposed.completed" }>>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (
+          event.type === "turn.proposed.completed" &&
+          String(event.threadId) === String(threadId)
+        ) {
+          return Deferred.succeed(proposed, event).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "finish the plan",
+        attachments: [],
+        interactionMode: "plan",
+      });
+
+      const proposedEvent = yield* Deferred.await(proposed);
+      assert.include(proposedEvent.payload.planMarkdown, "# Mock Grok Plan");
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
 });

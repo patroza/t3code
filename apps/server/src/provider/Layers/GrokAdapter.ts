@@ -3,6 +3,7 @@ import {
   type GrokSettings,
   EventId,
   type ProviderApprovalDecision,
+  type ProviderInteractionMode,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -60,6 +61,13 @@ import {
   resolveGrokAcpBaseModelId,
 } from "../acp/GrokAcpSupport.ts";
 import {
+  extractGrokPlanMarkdownFromToolWrite,
+  interactionModeFromGrokAcpModeId,
+  isGrokExitPlanModePermission,
+  resolveGrokAcpModeIdForInteractionMode,
+  resolveGrokSessionPlanMarkdownPath,
+} from "../acp/GrokPlanMode.ts";
+import {
   extractXAiAskUserQuestions,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
@@ -111,6 +119,10 @@ interface GrokSessionContext {
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
+  /** Latest plan markdown captured from plan.md writes or session plan file. */
+  latestPlanMarkdown: string | undefined;
+  /** Last interaction mode we reported via session.mode.changed. */
+  lastReportedInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
   /** Turns already interrupted; late prompt RPCs must not resurrect them. */
   interruptedTurnIds: Set<TurnId>;
@@ -202,6 +214,12 @@ function selectAutoApprovedPermissionOption(
     selectPermissionOptionId(request, "acceptForSession") ??
     selectPermissionOptionId(request, "accept")
   );
+}
+
+function selectRejectedPermissionOption(
+  request: EffectAcpSchema.RequestPermissionRequest,
+): string | undefined {
+  return selectPermissionOptionId(request, "decline");
 }
 
 function completedStopReasonFromPromptResponse(
@@ -497,6 +515,121 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         );
       });
 
+    const emitInteractionModeIfChanged = (
+      ctx: GrokSessionContext,
+      modeId: string,
+      options?: {
+        readonly rawPayload?: unknown;
+        readonly method?: string;
+      },
+    ) =>
+      Effect.gen(function* () {
+        const interactionMode = interactionModeFromGrokAcpModeId(modeId);
+        if (!interactionMode || ctx.lastReportedInteractionMode === interactionMode) {
+          return;
+        }
+        ctx.lastReportedInteractionMode = interactionMode;
+        yield* offerRuntimeEvent({
+          type: "session.mode.changed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId: ctx.activeTurnId,
+          payload: {
+            modeId: modeId.trim(),
+            interactionMode,
+          },
+          raw: {
+            source: "acp.jsonrpc",
+            method: options?.method ?? "session/update",
+            payload: options?.rawPayload ?? { modeId },
+          },
+        });
+      });
+
+    const applyRequestedInteractionMode = (input: {
+      readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
+      readonly threadId: ThreadId;
+      readonly interactionMode: ProviderInteractionMode | undefined;
+      readonly ctx?: GrokSessionContext;
+    }) =>
+      Effect.gen(function* () {
+        const modeId = resolveGrokAcpModeIdForInteractionMode(input.interactionMode);
+        if (!modeId) {
+          return;
+        }
+        yield* input.runtime
+          .setMode(modeId)
+          .pipe(
+            Effect.mapError((cause) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_mode", cause),
+            ),
+          );
+        if (input.ctx) {
+          // User-driven mode switches should update UI immediately even if the
+          // agent is slow to emit current_mode_update.
+          yield* emitInteractionModeIfChanged(input.ctx, modeId, {
+            method: "session/set_mode",
+            rawPayload: { modeId, interactionMode: input.interactionMode },
+          });
+        }
+      });
+
+    const resolveLatestPlanMarkdown = (ctx: GrokSessionContext) =>
+      Effect.gen(function* () {
+        if (ctx.latestPlanMarkdown?.trim()) {
+          return ctx.latestPlanMarkdown;
+        }
+        const homeDir = options?.environment?.HOME ?? process.env.HOME;
+        const cwd = ctx.session.cwd;
+        if (!homeDir || !cwd) {
+          return undefined;
+        }
+        const planPath = resolveGrokSessionPlanMarkdownPath({
+          homeDir,
+          cwd,
+          sessionId: ctx.acpSessionId,
+        });
+        const content = yield* fileSystem.readFileString(planPath).pipe(
+          Effect.map((text) => text.trim()),
+          Effect.orElseSucceed(() => ""),
+        );
+        if (content.length === 0) {
+          return undefined;
+        }
+        ctx.latestPlanMarkdown = content;
+        return content;
+      });
+
+    const captureExitPlanModeAsProposedPlan = (
+      ctx: GrokSessionContext | undefined,
+      params: EffectAcpSchema.RequestPermissionRequest,
+    ) =>
+      Effect.gen(function* () {
+        if (!ctx) {
+          return false;
+        }
+        const planMarkdown = yield* resolveLatestPlanMarkdown(ctx);
+        if (!planMarkdown?.trim()) {
+          return false;
+        }
+        const turnId = resolveCallbackTurnId(ctx);
+        yield* offerRuntimeEvent({
+          type: "turn.proposed.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId,
+          payload: { planMarkdown },
+          raw: {
+            source: "acp.jsonrpc",
+            method: "session/request_permission",
+            payload: params,
+          },
+        });
+        return true;
+      });
+
     const requireSession = (
       threadId: ThreadId,
     ): Effect.Effect<GrokSessionContext, ProviderAdapterSessionNotFoundError> => {
@@ -739,6 +872,23 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               mapAcpCallbackFailure(
                 Effect.gen(function* () {
                   yield* logNative(input.threadId, "session/request_permission", params);
+                  const liveCtx = sessions.get(input.threadId);
+                  // Capture exit_plan_mode as a proposed plan and deny auto-exit so
+                  // T3 owns plan approval UX (matches Claude ExitPlanMode handling).
+                  if (isGrokExitPlanModePermission(params)) {
+                    const captured = yield* captureExitPlanModeAsProposedPlan(liveCtx, params);
+                    if (captured) {
+                      const rejectedOptionId = selectRejectedPermissionOption(params);
+                      return {
+                        outcome: rejectedOptionId
+                          ? {
+                              outcome: "selected" as const,
+                              optionId: rejectedOptionId,
+                            }
+                          : ({ outcome: "cancelled" } as const),
+                      };
+                    }
+                  }
                   if (input.runtimeMode === "full-access") {
                     const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
                     if (autoApprovedOptionId !== undefined) {
@@ -846,6 +996,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             pendingUserInputs,
             turns: [],
             lastPlanFingerprint: undefined,
+            latestPlanMarkdown: undefined,
+            lastReportedInteractionMode: undefined,
             activeTurnId: undefined,
             interruptedTurnIds: new Set(),
             promptsInFlight: 0,
@@ -874,6 +1026,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 }
 
                 if (event._tag === "ModeChanged") {
+                  yield* emitInteractionModeIfChanged(ctx, event.modeId, {
+                    method: "session/update",
+                    rawPayload: event,
+                  });
                   return;
                 }
 
@@ -921,7 +1077,19 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       "session/update",
                     );
                     return;
-                  case "ToolCallUpdated":
+                  case "ToolCallUpdated": {
+                    const planMarkdown = extractGrokPlanMarkdownFromToolWrite(
+                      {
+                        title: event.toolCall.title ?? null,
+                        rawInput: event.toolCall.data.rawInput,
+                      },
+                      {
+                        sessionId: ctx.acpSessionId,
+                      },
+                    );
+                    if (planMarkdown) {
+                      ctx.latestPlanMarkdown = planMarkdown;
+                    }
                     yield* offerRuntimeEvent(
                       makeAcpToolCallEvent({
                         stamp,
@@ -933,6 +1101,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       }),
                     );
                     return;
+                  }
                   case "ContentDelta":
                     yield* offerRuntimeEvent(
                       makeAcpContentDeltaEvent({
@@ -1025,6 +1194,12 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 requestedModelId: requestedTurnModelId,
                 mapError: (cause) =>
                   mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
+              });
+              yield* applyRequestedInteractionMode({
+                runtime: ctx.acp,
+                threadId: input.threadId,
+                interactionMode: input.interactionMode,
+                ctx,
               });
 
               const text = input.input?.trim();

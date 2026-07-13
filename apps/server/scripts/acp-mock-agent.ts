@@ -18,6 +18,7 @@ const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
+const emitExitPlanMode = process.env.T3_ACP_EMIT_EXIT_PLAN_MODE === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
@@ -789,6 +790,86 @@ const program = Effect.gen(function* () {
           },
         });
 
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitExitPlanMode) {
+        const toolCallId = "exit-plan-mode-1";
+        const planMarkdown = "# Mock Grok Plan\n\n- capture exit_plan_mode\n";
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "plan-write-1",
+            title: "write",
+            kind: "edit",
+            status: "completed",
+            rawInput: {
+              file_path: `/tmp/mock-session/${requestedSessionId}/plan.md`,
+              content: planMarkdown,
+            },
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: "Plan: Exit",
+            kind: "other",
+            status: "pending",
+            rawInput: { variant: "ExitPlanMode" },
+            _meta: {
+              "x.ai/tool": {
+                name: "exit_plan_mode",
+                kind: "exit_plan",
+              },
+            },
+          },
+        });
+        const permission = yield* agent.client.requestPermission({
+          sessionId: requestedSessionId,
+          toolCall: {
+            toolCallId,
+            title: "Plan: Exit",
+            kind: "other",
+            status: "pending",
+            rawInput: { variant: "ExitPlanMode" },
+            _meta: {
+              "x.ai/tool": {
+                name: "exit_plan_mode",
+                kind: "exit_plan",
+              },
+            },
+          },
+          options: [
+            { optionId: permissionOptionIds.allowOnce, name: "Allow once", kind: "allow_once" },
+            { optionId: permissionOptionIds.rejectOnce, name: "Reject", kind: "reject_once" },
+          ],
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            title: "Plan: Exit",
+            status: "completed",
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text:
+                permission.outcome.outcome === "selected" &&
+                permission.outcome.optionId === permissionOptionIds.rejectOnce
+                  ? "plan captured for approval"
+                  : "plan exit allowed",
+            },
+          },
+        });
         return { stopReason: "end_turn" };
       }
 

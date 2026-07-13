@@ -35,7 +35,7 @@ import { makeGrokAcpRuntime, resolveGrokAcpBaseModelId } from "../acp/GrokAcpSup
 const GROK_PRESENTATION = {
   displayName: "Grok",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
   requiresNewThreadForModelChange: true,
 } as const;
 const PROVIDER = ProviderDriverKind.make("grok");

@@ -1617,6 +1617,21 @@ const make = Effect.gen(function* () {
         });
       }
 
+      // Provider-initiated mode changes (e.g. Grok entering plan mode via
+      // enter_plan_mode / session mode update) sync the thread interaction mode.
+      if (
+        event.type === "session.mode.changed" &&
+        thread.interactionMode !== event.payload.interactionMode
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.interaction-mode.set",
+          commandId: yield* providerCommandId(event, "interaction-mode-set"),
+          threadId: thread.id,
+          interactionMode: event.payload.interactionMode,
+          createdAt: now,
+        });
+      }
+
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
         const checkpointContext = turnId
