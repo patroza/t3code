@@ -180,26 +180,28 @@ export function HostResourceStatus(props: {
       ) : null}
       <Tooltip>
         <TooltipTrigger render={summary} />
-        <TooltipPopup side="bottom" className="max-w-80 p-2 text-xs">
-          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <TooltipPopup side="bottom" className="w-96 max-w-[calc(100vw-1rem)] p-2 text-xs">
+          <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1">
             <span className="text-muted-foreground">Host</span>
-            <span>{data.hostname ?? props.environmentLabel}</span>
+            <span className="whitespace-nowrap">{data.hostname ?? props.environmentLabel}</span>
             <span className="text-muted-foreground">CPU</span>
-            <span>
+            <span className="whitespace-nowrap">
               {formatPercent(data.cpuPercent)} across {data.logicalCores ?? "—"} logical cores
             </span>
             <span className="text-muted-foreground">Memory</span>
-            <span>
+            <span className="whitespace-nowrap">
               {formatBytes(data.memoryUsedBytes)} / {formatBytes(data.memoryTotalBytes)} used
             </span>
             <span className="text-muted-foreground">Load</span>
-            <span>
+            <span className="whitespace-nowrap">
               {data.loadAverage
                 ? `${data.loadAverage.m1.toFixed(2)} / ${data.loadAverage.m5.toFixed(2)} / ${data.loadAverage.m15.toFixed(2)}`
                 : "—"}
             </span>
             <span className="text-muted-foreground">Updated</span>
-            <span>{new Date(data.checkedAt).toLocaleTimeString()}</span>
+            <span className="whitespace-nowrap">
+              {new Date(data.checkedAt).toLocaleTimeString()}
+            </span>
           </div>
         </TooltipPopup>
       </Tooltip>
