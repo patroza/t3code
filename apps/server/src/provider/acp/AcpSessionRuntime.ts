@@ -210,8 +210,13 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly cancel: Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
-     * Selects the active mode through the negotiated `mode` configuration option.
+     * Selects the active session mode.
+     *
+     * Prefers the negotiated `mode` configuration option when present (Cursor-style).
+     * Otherwise uses the standard ACP `session/set_mode` method (Grok-style).
      * This is a no-op when the requested mode is already active.
+     *
+     * @see https://agentclientprotocol.com/protocol/schema#session/set_mode
      * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
      */
     readonly setMode: (
@@ -507,8 +512,23 @@ export const make = (
     ): Effect.Effect<void> => Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(response));
 
     const updateCurrentModeId = (modeId: string): Effect.Effect<void> =>
-      Ref.update(modeStateRef, (current) =>
-        current ? { ...current, currentModeId: modeId } : current,
+      Ref.update(modeStateRef, (current) => applyModeIdToState(current, modeId));
+
+    const setSessionMode = (
+      modeId: string,
+    ): Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError> =>
+      getStartedState.pipe(
+        Effect.flatMap((started) => {
+          const requestPayload = {
+            sessionId: started.sessionId,
+            modeId,
+          } satisfies EffectAcpSchema.SetSessionModeRequest;
+          return runLoggedRequest(
+            "session/set_mode",
+            requestPayload,
+            acp.agent.setSessionMode(requestPayload),
+          );
+        }),
       );
 
     const setConfigOption = (
@@ -836,17 +856,25 @@ export const make = (
         ),
       ),
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
-          Effect.flatMap((modeState) => {
-            if (modeState?.currentModeId === modeId) {
-              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
-            }
-            return setConfigOption("mode", modeId).pipe(
-              Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
-            );
-          }),
-        ),
+        Effect.gen(function* () {
+          const normalizedModeId = modeId.trim();
+          if (!normalizedModeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const modeState = yield* Ref.get(modeStateRef);
+          if (modeState?.currentModeId === normalizedModeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const configOptions = yield* Ref.get(configOptionsRef);
+          const hasModeConfigOption = findSessionConfigOption(configOptions, "mode") !== undefined;
+          if (hasModeConfigOption) {
+            yield* setConfigOption("mode", normalizedModeId);
+          } else {
+            yield* setSessionMode(normalizedModeId);
+          }
+          yield* updateCurrentModeId(normalizedModeId);
+          return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+        }),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(
@@ -921,9 +949,7 @@ const handleSessionUpdate = ({
   Effect.gen(function* () {
     const parsed = parseSessionUpdateEvent(params);
     if (parsed.modeId) {
-      yield* Ref.update(modeStateRef, (current) =>
-        current === undefined ? current : updateModeState(current, parsed.modeId!),
-      );
+      yield* Ref.update(modeStateRef, (current) => applyModeIdToState(current, parsed.modeId!));
     }
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
@@ -979,12 +1005,52 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
   if (!normalized) {
     return modeState;
   }
-  return modeState.availableModes.some((mode) => mode.id === normalized)
-    ? {
-        ...modeState,
-        currentModeId: normalized,
-      }
-    : modeState;
+  if (modeState.availableModes.some((mode) => mode.id === normalized)) {
+    return {
+      ...modeState,
+      currentModeId: normalized,
+    };
+  }
+  // Agents like Grok may omit the initial modes catalog and only emit mode ids
+  // via current_mode_update / session/set_mode. Accept unknown mode ids so the
+  // runtime still tracks the active mode.
+  return {
+    currentModeId: normalized,
+    availableModes: [...modeState.availableModes, { id: normalized, name: normalized }],
+  };
+}
+
+function applyModeIdToState(
+  modeState: AcpSessionModeState | undefined,
+  nextModeId: string,
+): AcpSessionModeState | undefined {
+  const normalized = nextModeId.trim();
+  if (!normalized) {
+    return modeState;
+  }
+  if (modeState === undefined) {
+    return {
+      currentModeId: normalized,
+      availableModes: seedAvailableModes(normalized),
+    };
+  }
+  return updateModeState(modeState, normalized);
+}
+
+function seedAvailableModes(currentModeId: string): ReadonlyArray<{
+  readonly id: string;
+  readonly name: string;
+}> {
+  const defaults = [
+    { id: "plan", name: "Plan" },
+    { id: "default", name: "Default" },
+    { id: "code", name: "Code" },
+    { id: "agent", name: "Agent" },
+  ] as const;
+  if (defaults.some((mode) => mode.id === currentModeId)) {
+    return [...defaults];
+  }
+  return [...defaults, { id: currentModeId, name: currentModeId }];
 }
 
 function shouldEmitToolCallUpdate(
