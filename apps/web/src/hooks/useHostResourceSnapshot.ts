@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { serverEnvironment } from "../state/server";
 import { useEnvironmentQuery } from "../state/query";
 
-const HOST_RESOURCE_POLL_INTERVAL_MS = 30_000;
+const HOST_RESOURCE_POLL_INTERVAL_MS = 10_000;
 
 export function useHostResourceSnapshot(environmentId: EnvironmentId, connected: boolean) {
   const query = useEnvironmentQuery(

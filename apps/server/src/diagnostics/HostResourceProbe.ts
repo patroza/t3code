@@ -13,7 +13,7 @@ export interface CpuTimes {
 }
 
 const CPU_SAMPLE_INTERVAL = "75 millis";
-const SNAPSHOT_TTL = "15 seconds";
+const SNAPSHOT_TTL = "750 millis";
 
 export class HostResourceProbe extends Context.Service<
   HostResourceProbe,

@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/hostResourcePresentation";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { CloudIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { cn } from "~/lib/utils";
 import { useHostResourceSnapshot } from "../hooks/useHostResourceSnapshot";
@@ -43,6 +44,7 @@ function ResourceMetric(props: {
   readonly value: string;
   readonly ratio: number | null;
   readonly description: string;
+  readonly valueWidthClass?: string;
 }) {
   const ratio = props.ratio === null ? 0 : Math.min(1, Math.max(0, props.ratio));
   const pressure = getHostResourceRatioPressure(ratio);
@@ -57,9 +59,8 @@ function ResourceMetric(props: {
           style={{ height: `${ratio * 100}%` }}
         />
       </span>
-      <span>
-        {props.label} {props.value}
-      </span>
+      <span className="w-[1ch]">{props.label}</span>
+      <span className={cn("w-[4ch] text-right", props.valueWidthClass)}>{props.value}</span>
     </span>
   );
 }
@@ -77,6 +78,20 @@ export function HostResourceStatus(props: {
     props.environmentId,
     props.connected,
   );
+  const liveRefreshInterval = useRef<number | null>(null);
+  const stopLiveRefresh = useCallback(() => {
+    if (liveRefreshInterval.current === null) return;
+    window.clearInterval(liveRefreshInterval.current);
+    liveRefreshInterval.current = null;
+  }, []);
+  const startLiveRefresh = useCallback(() => {
+    if (!props.connected || liveRefreshInterval.current !== null) return;
+    refresh();
+    liveRefreshInterval.current = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 1_000);
+  }, [props.connected, refresh]);
+  useEffect(() => stopLiveRefresh, [stopLiveRefresh]);
   if (!props.connected) return null;
 
   if (!data || data.status === "unavailable") {
@@ -112,17 +127,6 @@ export function HostResourceStatus(props: {
         pressureClass(getHostResourcePressure(data)),
       )}
     >
-      {props.remote ? (
-        <>
-          <span
-            aria-label={`Remote host: ${data.hostname ?? props.environmentLabel}`}
-            title={data.hostname ?? props.environmentLabel}
-          >
-            <CloudIcon className="size-3 shrink-0" aria-hidden />
-          </span>
-          <span aria-hidden>·</span>
-        </>
-      ) : null}
       <ResourceMetric
         label="C"
         value={formatPercent(data.cpuPercent)}
@@ -142,12 +146,35 @@ export function HostResourceStatus(props: {
         value={loadOne === null ? "—" : loadOne.toFixed(1)}
         ratio={loadRatio}
         description={`Load ${loadOne === null ? "unavailable" : loadOne.toFixed(1)}`}
+        valueWidthClass="w-[5ch]"
       />
     </span>
   );
 
   return (
-    <div className={cn("flex min-w-0 items-center gap-1", props.className)}>
+    <div
+      className={cn("flex min-w-0 items-center gap-1", props.className)}
+      onPointerEnter={startLiveRefresh}
+      onPointerLeave={stopLiveRefresh}
+    >
+      {props.remote ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                className={cn(
+                  "inline-flex shrink-0 text-muted-foreground",
+                  pressureClass(getHostResourcePressure(data)),
+                )}
+                aria-label={`Remote host: ${data.hostname ?? props.environmentLabel}`}
+              >
+                <CloudIcon className="size-3" aria-hidden />
+              </span>
+            }
+          />
+          <TooltipPopup side="bottom">{data.hostname ?? props.environmentLabel}</TooltipPopup>
+        </Tooltip>
+      ) : null}
       <Tooltip>
         <TooltipTrigger render={summary} />
         <TooltipPopup side="bottom" className="max-w-80 p-2 text-xs">
