@@ -33,6 +33,7 @@ import {
 import { shellEnvironment } from "../../state/shell";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { HostResourceStatus } from "../HostResourceStatus";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -955,6 +956,24 @@ export function DiagnosticsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      {primaryEnvironment ? (
+        <SettingsSection title="Host Resources">
+          <div className="space-y-2 px-4 py-3 sm:px-5">
+            <HostResourceStatus
+              environmentId={primaryEnvironment.environmentId}
+              environmentLabel={primaryEnvironment.label}
+              connected={primaryEnvironment.connection.phase === "connected"}
+              showHostname
+              showRefresh
+              unavailableLabel
+            />
+            <p className="text-xs text-muted-foreground">
+              Advisory system-wide metrics from the host running this T3 server. They do not affect
+              connection or provider readiness.
+            </p>
+          </div>
+        </SettingsSection>
+      ) : null}
       <SettingsSection
         title="Live Processes"
         headerAction={

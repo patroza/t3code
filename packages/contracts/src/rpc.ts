@@ -109,6 +109,7 @@ import {
   PreviewSessionSnapshot,
 } from "./preview.ts";
 import { AiUsageSnapshot } from "./aiUsage.ts";
+import { ServerHostResourceSnapshot } from "./hostResources.ts";
 import {
   PreviewAutomationError,
   PreviewAutomationHost,
@@ -219,6 +220,7 @@ export const WS_METHODS = {
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
+  serverGetHostResourceSnapshot: "server.getHostResourceSnapshot",
   serverSignalProcess: "server.signalProcess",
   serverImportExternalSessions: "server.importExternalSessions",
 
@@ -316,6 +318,15 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
   {
     payload: ServerProcessResourceHistoryInput,
     success: ServerProcessResourceHistoryResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsServerGetHostResourceSnapshotRpc = Rpc.make(
+  WS_METHODS.serverGetHostResourceSnapshot,
+  {
+    payload: Schema.Struct({}),
+    success: ServerHostResourceSnapshot,
     error: EnvironmentAuthorizationError,
   },
 );
@@ -724,6 +735,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
+  WsServerGetHostResourceSnapshotRpc,
   WsServerSignalProcessRpc,
   WsServerImportExternalSessionsRpc,
   WsCloudGetRelayClientStatusRpc,

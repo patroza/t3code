@@ -26,6 +26,7 @@ import { VisualStudioCode } from "../Icons";
 import { readLocalApi } from "~/localApi";
 import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { HostResourceStatus } from "../HostResourceStatus";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -205,6 +206,13 @@ export const ChatHeader = memo(function ChatHeader({
             title="Usage status for current model"
           />
         ) : null}
+        <HostResourceStatus
+          environmentId={activeThreadEnvironmentId}
+          environmentLabel={activeEnvironment?.label ?? "Active environment"}
+          connected={activeEnvironment?.connection.phase === "connected"}
+          showHostname
+          className="hidden @2xl/header-actions:flex"
+        />
       </div>
       <div
         data-chat-header-actions
