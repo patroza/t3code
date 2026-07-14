@@ -28,9 +28,24 @@ interface ThreadDisplayStatus {
     | "needs-wake-up"
     | "connecting"
     | "needs-attention"
+    | "plan-ready"
     | "error"
     | "ready";
   readonly label: string;
+}
+
+interface ViewProposedPlan {
+  readonly id: string;
+  readonly planMarkdown: string;
+  readonly createdAt: string;
+  readonly implementedAt: string | null;
+}
+
+interface ViewActiveProposedPlan {
+  readonly id: string;
+  readonly planMarkdown: string;
+  readonly title: string;
+  readonly createdAt: string;
 }
 
 interface ViewMessage {
@@ -97,6 +112,7 @@ interface ViewState {
     readonly instanceId: string;
     readonly model: string;
     readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+    readonly interactionMode: "default" | "plan";
     readonly status: ThreadDisplayStatus;
     readonly turnStartedAt: string | null;
     readonly contextWindow: null | {
@@ -110,6 +126,9 @@ interface ViewState {
     readonly toolCalls: ReadonlyArray<ViewToolCall>;
     readonly resolvedUserInputs: ReadonlyArray<ViewResolvedUserInput>;
     readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
+    readonly showPlanFollowUp: boolean;
+    readonly activeProposedPlan: ViewActiveProposedPlan | null;
+    readonly proposedPlans: ReadonlyArray<ViewProposedPlan>;
     readonly tasks: null | {
       readonly explanation: string | null;
       readonly createdAt: string;
@@ -166,6 +185,8 @@ const slashCommands = requiredElement<HTMLElement>("slash-commands");
 const send = requiredElement<HTMLButtonElement>("send");
 const pendingAttachments = requiredElement<HTMLElement>("pending-attachments");
 const pendingInteractions = requiredElement<HTMLElement>("pending-interactions");
+const planReady = requiredElement<HTMLElement>("plan-ready");
+const interactionModeSelect = requiredElement<HTMLSelectElement>("interaction-mode");
 const contextButton = requiredElement<HTMLButtonElement>("context");
 const contextLabel = requiredElement<HTMLElement>("context-label");
 const contextWindowMeter = requiredElement<HTMLButtonElement>("context-window");
@@ -180,6 +201,7 @@ const usageDetails = requiredElement<HTMLElement>("usage-details");
 const tasksDetails = requiredElement<HTMLElement>("tasks-details");
 const tasksLabel = requiredElement<HTMLElement>("tasks-label");
 let currentState: ViewState | null = null;
+let composerInteractionMode: "default" | "plan" = "default";
 let draftSelection: null | {
   instanceId: string;
   model: string;
@@ -208,6 +230,8 @@ const COMMANDS = [
   { name: "/new", description: "Start a new synchronized thread" },
   { name: "/threads", description: "Choose a worktree thread" },
   { name: "/model", description: "Choose the active model" },
+  { name: "/plan", description: "Switch to plan mode" },
+  { name: "/default", description: "Switch to build mode" },
   { name: "/context", description: "Include or exclude editor context" },
   { name: "/stop", description: "Stop the active turn" },
 ] as const;
@@ -742,9 +766,14 @@ function render(next: ViewState): void {
     }
   }
   threads.disabled = next.busy;
+  if (next.activeThread !== null) {
+    composerInteractionMode = next.activeThread.interactionMode;
+  }
   renderActiveStatus(next);
+  renderPlanReady(next);
   renderPendingInteractions(next);
   renderTasks(next);
+  renderComposerAction();
 
   messages.replaceChildren();
   if (draftSelection !== null) {
@@ -753,7 +782,8 @@ function render(next: ViewState): void {
     next.activeThread === null ||
     (next.activeThread.messages.length === 0 &&
       next.activeThread.toolCalls.length === 0 &&
-      next.activeThread.resolvedUserInputs.length === 0)
+      next.activeThread.resolvedUserInputs.length === 0 &&
+      next.activeThread.proposedPlans.length === 0)
   ) {
     messages.append(
       emptyMessage(
@@ -781,6 +811,12 @@ function render(next: ViewState): void {
         createdAt: input.createdAt,
         order: 2,
         element: renderResolvedUserInput(input),
+      })),
+      ...next.activeThread.proposedPlans.map((plan) => ({
+        kind: "plan" as const,
+        createdAt: plan.createdAt,
+        order: 1.5,
+        element: renderProposedPlan(plan),
       })),
     ].toSorted(
       (left, right) => left.createdAt.localeCompare(right.createdAt) || left.order - right.order,
@@ -924,6 +960,10 @@ function renderActiveStatus(state: ViewState): void {
     status.textContent = elapsed === null ? "Working…" : `Working for ${elapsed}`;
     return;
   }
+  if (activeStatus.kind === "plan-ready") {
+    status.textContent = "Plan Ready";
+    return;
+  }
   status.textContent = activeStatus.kind === "connecting" ? "Connecting…" : activeStatus.label;
 }
 
@@ -1047,11 +1087,81 @@ function hasComposerInput(): boolean {
   return prompt.value.trim() !== "" || pendingImages.length > 0;
 }
 
+function showPlanFollowUp(): boolean {
+  return draftSelection === null && currentState?.activeThread?.showPlanFollowUp === true;
+}
+
 function renderComposerAction(): void {
-  const stopping = isRunning() && !hasComposerInput();
-  send.textContent = stopping ? "Stop" : "Send";
-  send.title = stopping ? "Stop active turn" : "Send message";
+  const planFollowUp = showPlanFollowUp();
+  const stopping = isRunning() && !hasComposerInput() && !planFollowUp;
+  if (stopping) {
+    send.textContent = "Stop";
+    send.title = "Stop active turn";
+  } else if (planFollowUp) {
+    send.textContent = prompt.value.trim().length > 0 ? "Refine" : "Implement";
+    send.title =
+      prompt.value.trim().length > 0 ? "Send plan feedback" : "Implement the proposed plan";
+  } else {
+    send.textContent = "Send";
+    send.title = "Send message";
+  }
   send.classList.toggle("stop-action", stopping);
+  prompt.placeholder = planFollowUp
+    ? "Add feedback to refine the plan, or leave blank to implement"
+    : "Ask T3 Code…";
+  interactionModeSelect.value = composerInteractionMode;
+}
+
+function renderPlanReady(state: ViewState): void {
+  planReady.replaceChildren();
+  if (!state.activeThread?.showPlanFollowUp || state.activeThread.activeProposedPlan === null) {
+    return;
+  }
+  const badge = document.createElement("span");
+  badge.className = "plan-ready-badge";
+  badge.textContent = "Plan Ready";
+  const title = document.createElement("span");
+  title.className = "plan-ready-title";
+  title.textContent = state.activeThread.activeProposedPlan.title;
+  planReady.append(badge, title);
+}
+
+function stripPlanDisplay(planMarkdown: string): string {
+  const lines = planMarkdown.trimEnd().split(/\r?\n/);
+  const sourceLines = lines[0] && /^\s{0,3}#{1,6}\s+/.test(lines[0]) ? lines.slice(1) : [...lines];
+  while (sourceLines[0]?.trim().length === 0) sourceLines.shift();
+  const firstHeadingMatch = sourceLines[0]?.match(/^\s{0,3}#{1,6}\s+(.+)$/);
+  if (firstHeadingMatch?.[1]?.trim().toLowerCase() === "summary") {
+    sourceLines.shift();
+    while (sourceLines[0]?.trim().length === 0) sourceLines.shift();
+  }
+  return sourceLines.join("\n");
+}
+
+function renderProposedPlan(plan: ViewProposedPlan): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "plan-card";
+  const header = document.createElement("div");
+  header.className = "plan-card-header";
+  const badge = document.createElement("span");
+  badge.className = "plan-card-badge";
+  badge.textContent = "Plan";
+  const title = document.createElement("span");
+  title.className = "plan-card-title";
+  title.textContent =
+    plan.planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim() ?? "Proposed plan";
+  header.append(badge, title);
+  card.append(header, renderMarkdown(stripPlanDisplay(plan.planMarkdown)));
+  return card;
+}
+
+function setComposerInteractionMode(mode: "default" | "plan", persist: boolean): void {
+  composerInteractionMode = mode;
+  interactionModeSelect.value = mode;
+  if (persist && draftSelection === null && currentState?.activeThread !== null) {
+    post({ type: "setInteractionMode", interactionMode: mode });
+  }
+  renderComposerAction();
 }
 
 function uploadImages(): Array<{
@@ -1229,7 +1339,12 @@ function renderModelOptions(state: ViewState): void {
 function submit(): void {
   const slash = prompt.value.trim();
   if (slash.startsWith("/") && executeSlashCommand(slash)) return;
-  if (!hasComposerInput()) return;
+  const planFollowUp = showPlanFollowUp();
+  if (!hasComposerInput() && !planFollowUp) return;
+  if (isRunning() && !hasComposerInput() && !planFollowUp) {
+    post({ type: "stop" });
+    return;
+  }
   const images = uploadImages();
   if (draftSelection !== null) {
     post({
@@ -1239,10 +1354,16 @@ function submit(): void {
       model: draftSelection.model,
       options: draftSelection.options,
       images,
+      interactionMode: composerInteractionMode,
     });
     return;
   }
-  post({ type: "send", text: prompt.value, images });
+  post({
+    type: "send",
+    text: prompt.value,
+    images,
+    interactionMode: composerInteractionMode,
+  });
 }
 
 function beginNewThread(): void {
@@ -1277,6 +1398,12 @@ function executeSlashCommand(value: string): boolean {
     case "/model":
       model.focus();
       model.click();
+      break;
+    case "/plan":
+      setComposerInteractionMode("plan", true);
+      break;
+    case "/default":
+      setComposerInteractionMode("default", true);
       break;
     case "/context":
       post({ type: "toggleContext" });
@@ -1366,6 +1493,13 @@ threads.addEventListener("change", () => {
     draftSelection = null;
     post({ type: "selectThread", threadId: threads.value });
   }
+});
+interactionModeSelect.addEventListener("change", () => {
+  const mode = interactionModeSelect.value === "plan" ? "plan" : "default";
+  setComposerInteractionMode(mode, draftSelection === null);
+});
+prompt.addEventListener("input", () => {
+  renderComposerAction();
 });
 provider.addEventListener("change", () => {
   if (draftSelection === null || currentState === null || provider.value === "") return;

@@ -245,12 +245,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const createThread = async (
     title = "New thread",
     modelSelection?: ModelSelection,
+    interactionMode?: "default" | "plan",
   ): Promise<ThreadId> => {
     await ensureConnected();
     const threadId = await client.createThreadForWorktree({
       worktreePath: worktreePath(),
       title,
       runtimeMode: configuration().runtimeMode,
+      ...(interactionMode === undefined ? {} : { interactionMode }),
       ...(modelSelection === undefined ? {} : { modelSelection }),
     });
     await rememberThread(threadId);

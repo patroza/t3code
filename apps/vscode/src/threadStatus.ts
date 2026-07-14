@@ -1,4 +1,5 @@
 import type { OrchestrationLatestTurnState, OrchestrationSessionStatus } from "@t3tools/contracts";
+import { shouldShowPlanReadyStatus } from "@t3tools/shared/proposedPlan";
 
 export type ThreadDisplayStatusKind =
   | "working"
@@ -6,6 +7,7 @@ export type ThreadDisplayStatusKind =
   | "needs-wake-up"
   | "connecting"
   | "needs-attention"
+  | "plan-ready"
   | "error"
   | "ready";
 
@@ -19,11 +21,22 @@ export interface ThreadStatusSource {
   readonly session: null | { readonly status: OrchestrationSessionStatus };
   readonly hasPendingApprovals?: boolean;
   readonly hasPendingUserInput?: boolean;
+  readonly interactionMode?: string | null;
+  readonly hasActionableProposedPlan?: boolean;
 }
 
 export function resolveThreadDisplayStatus(source: ThreadStatusSource): ThreadDisplayStatus {
   if (source.hasPendingApprovals || source.hasPendingUserInput) {
     return { kind: "needs-attention", label: "Needs attention" };
+  }
+  if (
+    shouldShowPlanReadyStatus({
+      interactionMode: source.interactionMode,
+      hasPendingUserInput: Boolean(source.hasPendingUserInput),
+      hasActionableProposedPlan: Boolean(source.hasActionableProposedPlan),
+    })
+  ) {
+    return { kind: "plan-ready", label: "Plan Ready" };
   }
   if (source.session?.status === "interrupted" || source.latestTurn?.state === "interrupted") {
     return { kind: "needs-wake-up", label: "Needs wake up" };

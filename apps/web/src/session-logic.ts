@@ -620,42 +620,11 @@ export function findSidebarProposedPlan(input: {
   return findLatestProposedPlan(activeThreadPlans, input.latestTurn?.turnId ?? null);
 }
 
-export function hasActionableProposedPlan(
-  proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null,
-): boolean {
-  return proposedPlan !== null && proposedPlan.implementedAt === null;
-}
-
-/**
- * Plan Ready / implement composer should appear as soon as an unimplemented plan
- * exists in plan mode — not only after the agent turn settles. Grok often keeps
- * the session "running" for minutes after exit_plan_mode (especially when it
- * entered plan mid-turn from build mode); waiting on settle hides Implement.
- */
-export function shouldShowPlanFollowUpComposer(input: {
-  readonly interactionMode: string | undefined | null;
-  readonly hasPendingUserInput: boolean;
-  readonly proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null;
-}): boolean {
-  return (
-    !input.hasPendingUserInput &&
-    input.interactionMode === "plan" &&
-    hasActionableProposedPlan(input.proposedPlan)
-  );
-}
-
-/** Sidebar/status pill: plan ready outranks Working when a plan is actionable. */
-export function shouldShowPlanReadyStatus(input: {
-  readonly interactionMode: string | undefined | null;
-  readonly hasPendingUserInput: boolean;
-  readonly hasActionableProposedPlan: boolean;
-}): boolean {
-  return (
-    !input.hasPendingUserInput &&
-    input.interactionMode === "plan" &&
-    input.hasActionableProposedPlan
-  );
-}
+export {
+  hasActionableProposedPlan,
+  shouldShowPlanFollowUpComposer,
+  shouldShowPlanReadyStatus,
+} from "@t3tools/shared/proposedPlan";
 
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,

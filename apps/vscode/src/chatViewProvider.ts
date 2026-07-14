@@ -10,6 +10,11 @@ import type {
 import { ApprovalRequestId, ProviderInstanceId } from "@t3tools/contracts";
 import * as vscode from "vscode";
 
+import {
+  findLatestProposedPlan,
+  resolvePlanFollowUpSubmission,
+  shouldShowPlanFollowUpComposer,
+} from "@t3tools/shared/proposedPlan";
 import { composePrompt, type TextContext } from "./editorContext.ts";
 import { derivePendingInteractions } from "./pendingInteractions.ts";
 import type { T3Client } from "./t3Client.ts";
@@ -23,7 +28,11 @@ interface ChatViewActions {
   readonly worktreePath: () => string;
   readonly ensureConnected: () => Promise<void>;
   readonly restoreThread: () => Promise<ThreadId | undefined>;
-  readonly createThread: (title?: string, modelSelection?: ModelSelection) => Promise<ThreadId>;
+  readonly createThread: (
+    title?: string,
+    modelSelection?: ModelSelection,
+    interactionMode?: "default" | "plan",
+  ) => Promise<ThreadId>;
   readonly selectThread: (threadId: string) => Promise<void>;
   readonly toggleContext: () => Promise<boolean>;
   readonly contextEnabled: () => boolean;
@@ -45,6 +54,7 @@ type WebviewRequest =
       readonly model: string;
       readonly options: ModelSelection["options"];
       readonly images: ReadonlyArray<UploadChatAttachment>;
+      readonly interactionMode?: "default" | "plan";
     }
   | { readonly type: "selectThread"; readonly threadId: string }
   | {
@@ -72,7 +82,9 @@ type WebviewRequest =
       readonly type: "send";
       readonly text: string;
       readonly images: ReadonlyArray<UploadChatAttachment>;
-    };
+      readonly interactionMode?: "default" | "plan";
+    }
+  | { readonly type: "setInteractionMode"; readonly interactionMode: "default" | "plan" };
 
 function hasImageArray(value: object): boolean {
   return (
@@ -174,9 +186,27 @@ function isRequest(value: unknown): value is WebviewRequest {
   if (type === "toggleModelFavorite") {
     return "modelKey" in value && typeof value.modelKey === "string";
   }
-  return (
-    type === "send" && "text" in value && typeof value.text === "string" && hasImageArray(value)
-  );
+  if (type === "setInteractionMode") {
+    return (
+      "interactionMode" in value &&
+      (value.interactionMode === "default" || value.interactionMode === "plan")
+    );
+  }
+  if (type === "send") {
+    if (!("text" in value) || typeof value.text !== "string" || !hasImageArray(value)) {
+      return false;
+    }
+    if (
+      "interactionMode" in value &&
+      value.interactionMode !== undefined &&
+      value.interactionMode !== "default" &&
+      value.interactionMode !== "plan"
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -264,9 +294,11 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
               model: message.model,
               ...(message.options === undefined ? {} : { options: message.options }),
             };
+            const interactionMode = message.interactionMode ?? "default";
             const threadId = await this.actions.createThread(
               authored.slice(0, 80) || "Image",
               modelSelection,
+              interactionMode,
             );
             const editorContext = this.actions.contextEnabled()
               ? this.actions.editorContext()
@@ -275,6 +307,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
               threadId,
               prompt: composePrompt(authored, editorContext === null ? [] : [editorContext]),
               runtimeMode: this.actions.runtimeMode(),
+              interactionMode,
               modelSelection,
               attachments: message.images,
             });
@@ -352,21 +385,76 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           await this.actions.toggleContext();
           this.#publish();
           return;
+        case "setInteractionMode":
+          await this.#run(async () => {
+            if (this.client.activeThread === null) return;
+            await this.client.setInteractionMode(message.interactionMode);
+          });
+          return;
         case "send": {
-          const authored = message.text.trim();
-          if (authored === "" && message.images.length === 0) return;
           await this.#run(async () => {
             await this.actions.ensureConnected();
+            const thread = this.client.activeThread;
+            const pendingUserInput = thread
+              ? derivePendingInteractions(thread.activities).some(
+                  (entry) => entry.kind === "user-input",
+                )
+              : false;
+            const activePlan = thread
+              ? findLatestProposedPlan(
+                  thread.proposedPlans.map((plan) => ({
+                    id: plan.id,
+                    createdAt: plan.createdAt,
+                    updatedAt: plan.updatedAt,
+                    turnId: plan.turnId,
+                    planMarkdown: plan.planMarkdown,
+                    implementedAt: plan.implementedAt,
+                    implementationThreadId: plan.implementationThreadId,
+                  })),
+                  thread.latestTurn?.turnId ?? null,
+                )
+              : null;
+            const showPlanFollowUp = shouldShowPlanFollowUpComposer({
+              interactionMode: message.interactionMode ?? thread?.interactionMode ?? "default",
+              hasPendingUserInput: pendingUserInput,
+              proposedPlan: activePlan,
+            });
+            const followUp =
+              showPlanFollowUp && activePlan
+                ? resolvePlanFollowUpSubmission({
+                    draftText: message.text,
+                    planMarkdown: activePlan.planMarkdown,
+                  })
+                : null;
+            const authored = (followUp?.text ?? message.text).trim();
+            if (authored === "" && message.images.length === 0) return;
+            const requestedMode =
+              followUp?.interactionMode ??
+              message.interactionMode ??
+              thread?.interactionMode ??
+              "default";
             const threadId =
-              this.client.activeThread?.id ??
+              thread?.id ??
               (await this.actions.restoreThread()) ??
-              (await this.actions.createThread(authored.slice(0, 80)));
+              (await this.actions.createThread(authored.slice(0, 80), undefined, requestedMode));
+            if (this.client.activeThread?.id === threadId) {
+              await this.client.setInteractionMode(requestedMode);
+            }
             const context = this.actions.contextEnabled() ? this.actions.editorContext() : null;
             await this.client.sendPrompt({
               threadId,
               prompt: composePrompt(authored, context === null ? [] : [context]),
               runtimeMode: this.actions.runtimeMode(),
+              interactionMode: requestedMode,
               attachments: message.images,
+              ...(followUp?.interactionMode === "default" && activePlan
+                ? {
+                    sourceProposedPlan: {
+                      threadId,
+                      planId: activePlan.id,
+                    },
+                  }
+                : {}),
             });
             await this.#view?.webview.postMessage({ type: "sent" });
           });
@@ -459,19 +547,61 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
 
   #serializeThread(thread: OrchestrationThread | null) {
     if (thread === null) return null;
+    const pendingInteractions = derivePendingInteractions(thread.activities);
+    const hasPendingUserInput = pendingInteractions.some((entry) => entry.kind === "user-input");
+    const proposedPlans = thread.proposedPlans.map((plan) => ({
+      id: plan.id,
+      createdAt: plan.createdAt,
+      updatedAt: plan.updatedAt,
+      turnId: plan.turnId,
+      planMarkdown: plan.planMarkdown,
+      implementedAt: plan.implementedAt,
+      implementationThreadId: plan.implementationThreadId,
+    }));
+    const activeProposedPlan = findLatestProposedPlan(
+      proposedPlans,
+      thread.latestTurn?.turnId ?? null,
+    );
+    const showPlanFollowUp = shouldShowPlanFollowUpComposer({
+      interactionMode: thread.interactionMode,
+      hasPendingUserInput,
+      proposedPlan: activeProposedPlan,
+    });
     return {
       id: thread.id,
       title: thread.title,
       model: thread.modelSelection.model,
       instanceId: thread.modelSelection.instanceId,
       runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
       status: resolveThreadDisplayStatus({
         latestTurn: thread.latestTurn,
         session: thread.session,
+        hasPendingApprovals: pendingInteractions.some((entry) => entry.kind === "approval"),
+        hasPendingUserInput,
+        interactionMode: thread.interactionMode,
+        hasActionableProposedPlan: showPlanFollowUp,
       }),
       turnStartedAt: thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? null,
       contextWindow: deriveContextWindowUsage(thread.activities),
-      pendingInteractions: derivePendingInteractions(thread.activities),
+      pendingInteractions,
+      showPlanFollowUp,
+      activeProposedPlan: activeProposedPlan
+        ? {
+            id: activeProposedPlan.id,
+            planMarkdown: activeProposedPlan.planMarkdown,
+            title:
+              activeProposedPlan.planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim() ??
+              "Proposed plan",
+            createdAt: activeProposedPlan.createdAt,
+          }
+        : null,
+      proposedPlans: proposedPlans.map((plan) => ({
+        id: plan.id,
+        planMarkdown: plan.planMarkdown,
+        createdAt: plan.createdAt,
+        implementedAt: plan.implementedAt,
+      })),
       tasks: presentTasks(thread.activities, thread.latestTurn?.turnId ?? null),
       toolCalls: presentToolCalls(thread.activities, {
         latestTurn: thread.latestTurn,
@@ -634,6 +764,15 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .streaming::after { content: '▋'; animation: blink 1s steps(1) infinite; }
     @keyframes blink { 50% { opacity: 0; } }
     #pending-interactions:empty { display: none; }
+    #plan-ready:empty { display: none; }
+    #plan-ready { margin-bottom: 8px; border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 45%, var(--vscode-editorWidget-border)); border-radius: 7px; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 12%, var(--vscode-sideBar-background)); }
+    .plan-ready-badge { display: inline-block; margin-right: 8px; border-radius: 4px; padding: 1px 6px; background: color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 28%, transparent); color: var(--vscode-foreground); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .plan-ready-title { font-size: 12px; font-weight: 600; }
+    .plan-card { align-self: stretch; min-width: 0; border: 1px solid var(--vscode-editorWidget-border); border-radius: 8px; padding: 10px 12px; background: color-mix(in srgb, var(--vscode-editorWidget-background) 70%, var(--vscode-sideBar-background)); }
+    .plan-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .plan-card-badge { border-radius: 4px; padding: 1px 6px; background: color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 28%, transparent); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .plan-card-title { font-size: 12px; font-weight: 600; }
+    #interaction-mode { max-width: 5.5rem; font-weight: 600; }
     .interaction-card { margin-bottom: 8px; border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWidget-border)); border-radius: 7px; padding: 9px; background: color-mix(in srgb, var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background)) 55%, var(--vscode-sideBar-background)); }
     .interaction-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
     .interaction-detail, .interaction-question { margin: 5px 0 8px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -738,11 +877,12 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     <main id="messages"><div class="empty">Connecting to T3 Code…</div></main>
     <div class="composer">
       <div id="status"></div>
+      <div id="plan-ready"></div>
       <div id="pending-attachments"></div>
       <div id="pending-interactions"></div>
       <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><button id="context-window" hidden><span id="context-window-label"></span></button></div>
       <div class="prompt-wrap"><div id="slash-commands" hidden></div><textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea></div>
-      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="tasks-control" class="tasks-control"><button id="tasks-toggle" title="Thread tasks" aria-label="Thread tasks"><span class="tasks-icon">☑</span><span id="tasks-label">Tasks</span></button><div id="tasks-details" class="tasks-details"></div></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
+      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><select id="interaction-mode" aria-label="Interaction mode"><option value="default">Build</option><option value="plan">Plan</option></select><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="tasks-control" class="tasks-control"><button id="tasks-toggle" title="Thread tasks" aria-label="Thread tasks"><span class="tasks-icon">☑</span><span id="tasks-label">Tasks</span></button><div id="tasks-details" class="tasks-details"></div></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
     </div>
   </div>
   <script nonce="${scriptNonce}" src="${scriptUri}"></script>

@@ -15,6 +15,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadShell,
   type RuntimeMode,
+  type ProviderInteractionMode,
   type ApprovalRequestId,
   type ProviderApprovalDecision,
   type ProviderUserInputAnswers,
@@ -304,6 +305,7 @@ export class T3Client {
     readonly worktreePath: string;
     readonly title: string;
     readonly runtimeMode?: RuntimeMode;
+    readonly interactionMode?: ProviderInteractionMode;
     readonly modelSelection?: ModelSelection;
   }): Promise<ThreadId> {
     const session = this.#requireSession();
@@ -344,7 +346,7 @@ export class T3Client {
       title: input.title,
       modelSelection,
       runtimeMode: input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-      interactionMode: "default",
+      interactionMode: input.interactionMode ?? "default",
       branch: null,
       worktreePath: isProjectRoot ? null : input.worktreePath,
       createdAt,
@@ -361,12 +363,16 @@ export class T3Client {
     readonly threadId: ThreadId;
     readonly prompt: string;
     readonly runtimeMode?: RuntimeMode;
+    readonly interactionMode?: ProviderInteractionMode;
+    readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: string };
     readonly modelSelection?: ModelSelection;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
   }): Promise<void> {
     const thread = this.#activeThread;
     const modelSelection =
       input.modelSelection ?? thread?.modelSelection ?? this.#defaultModelSelection();
+    const interactionMode =
+      input.interactionMode ?? thread?.interactionMode ?? ("default" as const);
     await this.#dispatch({
       type: "thread.turn.start",
       commandId: newCommandId(),
@@ -380,7 +386,24 @@ export class T3Client {
       modelSelection,
       titleSeed: input.prompt.trim().slice(0, 80) || "New thread",
       runtimeMode: input.runtimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-      interactionMode: thread?.interactionMode ?? "default",
+      interactionMode,
+      ...(input.sourceProposedPlan === undefined
+        ? {}
+        : { sourceProposedPlan: input.sourceProposedPlan }),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  async setInteractionMode(interactionMode: ProviderInteractionMode): Promise<void> {
+    const thread = this.#activeThread;
+    if (thread === null)
+      throw new Error("Select a T3 Code thread before changing interaction mode.");
+    if (thread.interactionMode === interactionMode) return;
+    await this.#dispatch({
+      type: "thread.interaction-mode.set",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      interactionMode,
       createdAt: new Date().toISOString(),
     });
   }

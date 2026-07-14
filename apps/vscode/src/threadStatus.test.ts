@@ -29,4 +29,15 @@ describe("resolveThreadDisplayStatus", () => {
       }),
     ).toEqual({ kind: "completed", label: "Completed" });
   });
+
+  it("shows plan ready over working when a plan is actionable", () => {
+    expect(
+      resolveThreadDisplayStatus({
+        latestTurn: { state: "running" },
+        session: { status: "running" },
+        interactionMode: "plan",
+        hasActionableProposedPlan: true,
+      }),
+    ).toEqual({ kind: "plan-ready", label: "Plan Ready" });
+  });
 });

@@ -194,6 +194,10 @@
     "./steerTimeline": {
       "types": "./src/steerTimeline.ts",
       "import": "./src/steerTimeline.ts"
+    },
+    "./proposedPlan": {
+      "types": "./src/proposedPlan.ts",
+      "import": "./src/proposedPlan.ts"
     }
   },
   "scripts": {
