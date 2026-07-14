@@ -1392,7 +1392,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
-  it.effect("captures _x.ai/exit_plan_mode as a proposed plan and holds until implement", () =>
+  it.effect("captures _x.ai/exit_plan_mode as a proposed plan and settles the turn", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-exit-plan-mode");
       const wrapperPath = yield* Effect.promise(() =>
@@ -1403,12 +1403,16 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       const adapter = yield* makeTestAdapter(wrapperPath);
       const proposed =
         yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.proposed.completed" }>>();
+      const turnCompleted = yield* Deferred.make<void>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
-        if (
-          event.type === "turn.proposed.completed" &&
-          String(event.threadId) === String(threadId)
-        ) {
+        if (String(event.threadId) !== String(threadId)) {
+          return Effect.void;
+        }
+        if (event.type === "turn.proposed.completed") {
           return Deferred.succeed(proposed, event).pipe(Effect.ignore);
+        }
+        if (event.type === "turn.completed") {
+          return Deferred.succeed(turnCompleted, undefined).pipe(Effect.ignore);
         }
         return Effect.void;
       }).pipe(Effect.forkChild);
@@ -1419,78 +1423,21 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         cwd: process.cwd(),
         runtimeMode: "full-access",
       });
-      // First turn blocks on the held exit_plan_mode reverse-RPC.
-      const planningTurn = yield* adapter
-        .sendTurn({
-          threadId,
-          input: "finish the plan",
-          attachments: [],
-          interactionMode: "plan",
-        })
-        .pipe(Effect.forkChild);
+      // Capture rejects exit_plan immediately so the prompt can finish and the
+      // turn settles — matching Claude UX (Plan Ready, not stuck Working).
+      yield* adapter.sendTurn({
+        threadId,
+        input: "finish the plan",
+        attachments: [],
+        interactionMode: "plan",
+      });
 
       const proposedEvent = yield* Deferred.await(proposed);
       assert.include(proposedEvent.payload.planMarkdown, "# Mock Grok Plan");
-
-      // Approving via a default-mode follow-up unblocks the held reverse-RPC.
-      const implementTurn = yield* adapter
-        .sendTurn({
-          threadId,
-          input: "PLEASE IMPLEMENT THIS PLAN:\n# Mock Grok Plan\n\n- capture exit_plan_mode\n",
-          attachments: [],
-          interactionMode: "default",
-        })
-        .pipe(Effect.forkChild);
-
-      yield* Fiber.join(planningTurn);
-      yield* Fiber.join(implementTurn);
+      yield* Deferred.await(turnCompleted);
 
       yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
-    }).pipe(TestClock.withLive),
-  );
-
-  it.effect("abandons a held exit_plan_mode approval when the session stops", () =>
-    Effect.gen(function* () {
-      const threadId = ThreadId.make("grok-exit-plan-abandon");
-      const wrapperPath = yield* Effect.promise(() =>
-        makeMockGrokWrapper({
-          T3_ACP_EMIT_EXIT_PLAN_MODE: "1",
-        }),
-      );
-      const adapter = yield* makeTestAdapter(wrapperPath);
-      const proposed =
-        yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "turn.proposed.completed" }>>();
-      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
-        if (
-          event.type === "turn.proposed.completed" &&
-          String(event.threadId) === String(threadId)
-        ) {
-          return Deferred.succeed(proposed, event).pipe(Effect.ignore);
-        }
-        return Effect.void;
-      }).pipe(Effect.forkChild);
-
-      yield* adapter.startSession({
-        threadId,
-        provider: ProviderDriverKind.make("grok"),
-        cwd: process.cwd(),
-        runtimeMode: "full-access",
-      });
-      const planningTurn = yield* adapter
-        .sendTurn({
-          threadId,
-          input: "finish the plan",
-          attachments: [],
-          interactionMode: "plan",
-        })
-        .pipe(Effect.forkChild, Effect.interruptible);
-
-      yield* Deferred.await(proposed);
-      yield* adapter.stopSession(threadId);
-      // Planning turn should fail/settle after session stop abandons the hold.
-      yield* Fiber.interrupt(planningTurn);
-      yield* Fiber.interrupt(eventsFiber);
     }),
   );
 });

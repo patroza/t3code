@@ -73,11 +73,10 @@ import {
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
   makeXAiExitPlanModeAbandonedResponse,
+  makeXAiExitPlanModeRejectedResponse,
   promptResponseHasMissingXAiStopReason,
-  resolveXAiExitPlanModeFromFollowUp,
   XAiAskUserQuestionRequest,
   XAiExitPlanModeRequest,
-  type XAiExitPlanModeResponse,
 } from "../acp/XAiAcpExtension.ts";
 import { type GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -113,10 +112,6 @@ interface PendingUserInput {
   readonly resolution: Deferred.Deferred<PendingUserInputResolution>;
 }
 
-interface PendingExitPlanApproval {
-  readonly resolution: Deferred.Deferred<XAiExitPlanModeResponse>;
-}
-
 interface GrokSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
@@ -126,8 +121,6 @@ interface GrokSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  /** Held `_x.ai/exit_plan_mode` reverse-RPC until implement / refine / abandon. */
-  pendingExitPlanApproval: PendingExitPlanApproval | undefined;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   /** Latest plan markdown captured from plan.md writes or session plan file. */
@@ -165,16 +158,13 @@ function settlePendingUserInputsAsCancelled(
   );
 }
 
-function settlePendingExitPlanApprovalAsAbandoned(
-  pending: PendingExitPlanApproval | undefined,
-): Effect.Effect<void> {
-  if (!pending) {
-    return Effect.void;
-  }
-  return Deferred.succeed(pending.resolution, makeXAiExitPlanModeAbandonedResponse()).pipe(
-    Effect.ignore,
-  );
-}
+/**
+ * Claude-style "capture plan and stop" message for Grok's exit_plan reverse-RPC.
+ * Returning `rejected` keeps plan mode active without starting implementation,
+ * so the turn can settle and T3 can show Plan Ready / implement UX.
+ */
+const GROK_EXIT_PLAN_CAPTURED_FEEDBACK =
+  "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.";
 
 function appendPromptResultToTurn(
   ctx: GrokSessionContext,
@@ -646,20 +636,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         });
       });
 
-    const resolvePendingExitPlanApproval = (
-      ctx: GrokSessionContext,
-      response: XAiExitPlanModeResponse,
-    ) =>
-      Effect.gen(function* () {
-        const pending = ctx.pendingExitPlanApproval;
-        if (!pending) {
-          return false;
-        }
-        ctx.pendingExitPlanApproval = undefined;
-        yield* Deferred.succeed(pending.resolution, response).pipe(Effect.ignore);
-        return true;
-      });
-
     const requireSession = (
       threadId: ThreadId,
     ): Effect.Effect<GrokSessionContext, ProviderAdapterSessionNotFoundError> => {
@@ -678,8 +654,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
-        yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
-        ctx.pendingExitPlanApproval = undefined;
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -714,8 +688,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             // recovery covers the case where we die before ingestion runs.
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
-            yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
-            ctx.pendingExitPlanApproval = undefined;
             if (ctx.notificationFiber) {
               yield* Fiber.interrupt(ctx.notificationFiber);
             }
@@ -737,8 +709,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           }
           yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
           yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
-          yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
-          ctx.pendingExitPlanApproval = undefined;
           if (ctx.notificationFiber) {
             yield* Fiber.interrupt(ctx.notificationFiber);
           }
@@ -906,6 +876,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             );
             // Real Grok intercepts exit_plan_mode, auto-allows the tool permission,
             // then sends this reverse-RPC with planContent for client-side approval.
+            // T3 captures the plan into turn.proposed.completed and immediately
+            // rejects exit (Claude-style) so the turn can settle. Holding the RPC
+            // leaves session.status=running forever, which hides Plan Ready UX.
             yield* Effect.forEach(
               ["x.ai/exit_plan_mode", "_x.ai/exit_plan_mode"] as const,
               (method) =>
@@ -930,16 +903,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                           source: "acp.grok.extension",
                         });
                       }
-                      // Replace any prior held approval (agent re-submitted plan).
-                      if (liveCtx.pendingExitPlanApproval) {
-                        yield* settlePendingExitPlanApprovalAsAbandoned(
-                          liveCtx.pendingExitPlanApproval,
-                        );
-                        liveCtx.pendingExitPlanApproval = undefined;
-                      }
-                      const resolution = yield* Deferred.make<XAiExitPlanModeResponse>();
-                      liveCtx.pendingExitPlanApproval = { resolution };
-                      return yield* Deferred.await(resolution);
+                      return makeXAiExitPlanModeRejectedResponse(GROK_EXIT_PLAN_CAPTURED_FEEDBACK);
                     }),
                   ),
                 ),
@@ -1074,7 +1038,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             notificationFiber: undefined,
             pendingApprovals,
             pendingUserInputs,
-            pendingExitPlanApproval: undefined,
             turns: [],
             lastPlanFingerprint: undefined,
             latestPlanMarkdown: undefined,
@@ -1238,30 +1201,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        // Resolve a held exit_plan_mode approval *before* preparing the next
-        // prompt, and release the thread lock so the in-flight prompt can
-        // settle after the reverse-RPC response is delivered.
-        const releasedHeldExitPlan = yield* withThreadLock(
-          input.threadId,
-          Effect.gen(function* () {
-            const ctx = yield* requireSession(input.threadId);
-            if (!ctx.pendingExitPlanApproval) {
-              return false;
-            }
-            const exitPlanResponse = resolveXAiExitPlanModeFromFollowUp({
-              interactionMode: input.interactionMode,
-              text: input.input,
-            });
-            yield* resolvePendingExitPlanApproval(ctx, exitPlanResponse);
-            return true;
-          }),
-        );
-        if (releasedHeldExitPlan) {
-          // Let the agent process the exit_plan response and complete the
-          // blocked prompt RPC before we open a follow-up prompt.
-          yield* Effect.sleep("25 millis");
-        }
-
         const prepared = yield* withThreadLock(
           input.threadId,
           Effect.gen(function* () {
@@ -1680,8 +1619,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               observed.interruptedTurnId ?? turnId ?? activeTurnId ?? ctx.session.activeTurnId;
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
-            yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
-            ctx.pendingExitPlanApproval = undefined;
             yield* Effect.ignore(
               ctx.acp.cancel.pipe(
                 Effect.mapError((error) =>
