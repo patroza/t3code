@@ -69,10 +69,15 @@ import {
 } from "../acp/GrokPlanMode.ts";
 import {
   extractXAiAskUserQuestions,
+  extractXAiExitPlanModePlanMarkdown,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
+  makeXAiExitPlanModeAbandonedResponse,
   promptResponseHasMissingXAiStopReason,
+  resolveXAiExitPlanModeFromFollowUp,
   XAiAskUserQuestionRequest,
+  XAiExitPlanModeRequest,
+  type XAiExitPlanModeResponse,
 } from "../acp/XAiAcpExtension.ts";
 import { type GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -108,6 +113,10 @@ interface PendingUserInput {
   readonly resolution: Deferred.Deferred<PendingUserInputResolution>;
 }
 
+interface PendingExitPlanApproval {
+  readonly resolution: Deferred.Deferred<XAiExitPlanModeResponse>;
+}
+
 interface GrokSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
@@ -117,6 +126,8 @@ interface GrokSessionContext {
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
+  /** Held `_x.ai/exit_plan_mode` reverse-RPC until implement / refine / abandon. */
+  pendingExitPlanApproval: PendingExitPlanApproval | undefined;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   /** Latest plan markdown captured from plan.md writes or session plan file. */
@@ -151,6 +162,17 @@ function settlePendingUserInputsAsCancelled(
     Array.from(pendingUserInputs.values()),
     (pending) => Deferred.succeed(pending.resolution, { _tag: "cancelled" }).pipe(Effect.ignore),
     { discard: true },
+  );
+}
+
+function settlePendingExitPlanApprovalAsAbandoned(
+  pending: PendingExitPlanApproval | undefined,
+): Effect.Effect<void> {
+  if (!pending) {
+    return Effect.void;
+  }
+  return Deferred.succeed(pending.resolution, makeXAiExitPlanModeAbandonedResponse()).pipe(
+    Effect.ignore,
   );
 }
 
@@ -214,12 +236,6 @@ function selectAutoApprovedPermissionOption(
     selectPermissionOptionId(request, "acceptForSession") ??
     selectPermissionOptionId(request, "accept")
   );
-}
-
-function selectRejectedPermissionOption(
-  request: EffectAcpSchema.RequestPermissionRequest,
-): string | undefined {
-  return selectPermissionOptionId(request, "decline");
 }
 
 function completedStopReasonFromPromptResponse(
@@ -601,32 +617,46 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         return content;
       });
 
-    const captureExitPlanModeAsProposedPlan = (
-      ctx: GrokSessionContext | undefined,
-      params: EffectAcpSchema.RequestPermissionRequest,
-    ) =>
+    const emitProposedPlanCompleted = (input: {
+      readonly ctx: GrokSessionContext;
+      readonly planMarkdown: string;
+      readonly method: string;
+      readonly rawPayload: unknown;
+      readonly source: "acp.grok.extension" | "acp.jsonrpc";
+    }) =>
       Effect.gen(function* () {
-        if (!ctx) {
-          return false;
+        const planMarkdown = input.planMarkdown.trim();
+        if (planMarkdown.length === 0) {
+          return;
         }
-        const planMarkdown = yield* resolveLatestPlanMarkdown(ctx);
-        if (!planMarkdown?.trim()) {
-          return false;
-        }
-        const turnId = resolveCallbackTurnId(ctx);
+        input.ctx.latestPlanMarkdown = planMarkdown;
+        const turnId = resolveCallbackTurnId(input.ctx);
         yield* offerRuntimeEvent({
           type: "turn.proposed.completed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
-          threadId: ctx.threadId,
+          threadId: input.ctx.threadId,
           turnId,
           payload: { planMarkdown },
           raw: {
-            source: "acp.jsonrpc",
-            method: "session/request_permission",
-            payload: params,
+            source: input.source,
+            method: input.method,
+            payload: input.rawPayload,
           },
         });
+      });
+
+    const resolvePendingExitPlanApproval = (
+      ctx: GrokSessionContext,
+      response: XAiExitPlanModeResponse,
+    ) =>
+      Effect.gen(function* () {
+        const pending = ctx.pendingExitPlanApproval;
+        if (!pending) {
+          return false;
+        }
+        ctx.pendingExitPlanApproval = undefined;
+        yield* Deferred.succeed(pending.resolution, response).pipe(Effect.ignore);
         return true;
       });
 
@@ -648,6 +678,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+        yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
+        ctx.pendingExitPlanApproval = undefined;
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -682,6 +714,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             // recovery covers the case where we die before ingestion runs.
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+            yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
+            ctx.pendingExitPlanApproval = undefined;
             if (ctx.notificationFiber) {
               yield* Fiber.interrupt(ctx.notificationFiber);
             }
@@ -703,6 +737,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           }
           yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
           yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+          yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
+          ctx.pendingExitPlanApproval = undefined;
           if (ctx.notificationFiber) {
             yield* Fiber.interrupt(ctx.notificationFiber);
           }
@@ -868,26 +904,70 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 ),
               { discard: true },
             );
+            // Real Grok intercepts exit_plan_mode, auto-allows the tool permission,
+            // then sends this reverse-RPC with planContent for client-side approval.
+            yield* Effect.forEach(
+              ["x.ai/exit_plan_mode", "_x.ai/exit_plan_mode"] as const,
+              (method) =>
+                acp.handleExtRequest(method, XAiExitPlanModeRequest, (params) =>
+                  mapAcpCallbackFailure(
+                    Effect.gen(function* () {
+                      yield* logNative(input.threadId, method, params);
+                      const liveCtx = sessions.get(input.threadId);
+                      if (!liveCtx || liveCtx.stopped) {
+                        return makeXAiExitPlanModeAbandonedResponse();
+                      }
+                      // Prefer planContent on the wire; fall back to plan.md / prior writes.
+                      const fromRequest = extractXAiExitPlanModePlanMarkdown(params);
+                      const planMarkdown =
+                        fromRequest ?? (yield* resolveLatestPlanMarkdown(liveCtx)) ?? "";
+                      if (planMarkdown.trim().length > 0) {
+                        yield* emitProposedPlanCompleted({
+                          ctx: liveCtx,
+                          planMarkdown,
+                          method,
+                          rawPayload: params,
+                          source: "acp.grok.extension",
+                        });
+                      }
+                      // Replace any prior held approval (agent re-submitted plan).
+                      if (liveCtx.pendingExitPlanApproval) {
+                        yield* settlePendingExitPlanApprovalAsAbandoned(
+                          liveCtx.pendingExitPlanApproval,
+                        );
+                        liveCtx.pendingExitPlanApproval = undefined;
+                      }
+                      const resolution = yield* Deferred.make<XAiExitPlanModeResponse>();
+                      liveCtx.pendingExitPlanApproval = { resolution };
+                      return yield* Deferred.await(resolution);
+                    }),
+                  ),
+                ),
+              { discard: true },
+            );
             yield* acp.handleRequestPermission((params) =>
               mapAcpCallbackFailure(
                 Effect.gen(function* () {
                   yield* logNative(input.threadId, "session/request_permission", params);
-                  const liveCtx = sessions.get(input.threadId);
-                  // Capture exit_plan_mode as a proposed plan and deny auto-exit so
-                  // T3 owns plan approval UX (matches Claude ExitPlanMode handling).
+                  // exit_plan_mode permission is always auto-allowed. Real Grok then
+                  // sends `_x.ai/exit_plan_mode` for the actual plan-approval UI.
+                  // Denying here blocks the extension and surfaces "client disconnected".
                   if (isGrokExitPlanModePermission(params)) {
-                    const captured = yield* captureExitPlanModeAsProposedPlan(liveCtx, params);
-                    if (captured) {
-                      const rejectedOptionId = selectRejectedPermissionOption(params);
+                    const liveCtx = sessions.get(input.threadId);
+                    if (liveCtx) {
+                      // Opportunistically cache plan.md content before the ext arrives.
+                      yield* resolveLatestPlanMarkdown(liveCtx);
+                    }
+                    const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
+                    if (autoApprovedOptionId !== undefined) {
                       return {
-                        outcome: rejectedOptionId
-                          ? {
-                              outcome: "selected" as const,
-                              optionId: rejectedOptionId,
-                            }
-                          : ({ outcome: "cancelled" } as const),
+                        outcome: {
+                          outcome: "selected" as const,
+                          optionId: autoApprovedOptionId,
+                        },
                       };
                     }
+                    // No allow option advertised — fall through to normal handling.
                   }
                   if (input.runtimeMode === "full-access") {
                     const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
@@ -994,6 +1074,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             notificationFiber: undefined,
             pendingApprovals,
             pendingUserInputs,
+            pendingExitPlanApproval: undefined,
             turns: [],
             lastPlanFingerprint: undefined,
             latestPlanMarkdown: undefined,
@@ -1157,6 +1238,30 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
     const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
+        // Resolve a held exit_plan_mode approval *before* preparing the next
+        // prompt, and release the thread lock so the in-flight prompt can
+        // settle after the reverse-RPC response is delivered.
+        const releasedHeldExitPlan = yield* withThreadLock(
+          input.threadId,
+          Effect.gen(function* () {
+            const ctx = yield* requireSession(input.threadId);
+            if (!ctx.pendingExitPlanApproval) {
+              return false;
+            }
+            const exitPlanResponse = resolveXAiExitPlanModeFromFollowUp({
+              interactionMode: input.interactionMode,
+              text: input.input,
+            });
+            yield* resolvePendingExitPlanApproval(ctx, exitPlanResponse);
+            return true;
+          }),
+        );
+        if (releasedHeldExitPlan) {
+          // Let the agent process the exit_plan response and complete the
+          // blocked prompt RPC before we open a follow-up prompt.
+          yield* Effect.sleep("25 millis");
+        }
+
         const prepared = yield* withThreadLock(
           input.threadId,
           Effect.gen(function* () {
@@ -1575,6 +1680,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               observed.interruptedTurnId ?? turnId ?? activeTurnId ?? ctx.session.activeTurnId;
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+            yield* settlePendingExitPlanApprovalAsAbandoned(ctx.pendingExitPlanApproval);
+            ctx.pendingExitPlanApproval = undefined;
             yield* Effect.ignore(
               ctx.acp.cancel.pipe(
                 Effect.mapError((error) =>

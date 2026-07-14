@@ -60,6 +60,7 @@ let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
 let promptCount = 0;
+let exitPlanModeEmitted = false;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
 
@@ -793,7 +794,8 @@ const program = Effect.gen(function* () {
         return { stopReason: "end_turn" };
       }
 
-      if (emitExitPlanMode) {
+      if (emitExitPlanMode && !exitPlanModeEmitted) {
+        exitPlanModeEmitted = true;
         const toolCallId = "exit-plan-mode-1";
         const planMarkdown = "# Mock Grok Plan\n\n- capture exit_plan_mode\n";
         yield* agent.client.sessionUpdate({
@@ -827,7 +829,9 @@ const program = Effect.gen(function* () {
             },
           },
         });
-        const permission = yield* agent.client.requestPermission({
+        // Mirror real Grok: auto-allow the tool permission, then reverse-RPC
+        // `_x.ai/exit_plan_mode` with planContent for client-side approval.
+        yield* agent.client.requestPermission({
           sessionId: requestedSessionId,
           toolCall: {
             toolCallId,
@@ -847,6 +851,18 @@ const program = Effect.gen(function* () {
             { optionId: permissionOptionIds.rejectOnce, name: "Reject", kind: "reject_once" },
           ],
         });
+        const exitPlanResult = yield* agent.client.extRequest("_x.ai/exit_plan_mode", {
+          sessionId: requestedSessionId,
+          toolCallId,
+          planContent: planMarkdown,
+        });
+        const outcome =
+          typeof exitPlanResult === "object" &&
+          exitPlanResult !== null &&
+          "outcome" in exitPlanResult &&
+          typeof (exitPlanResult as { outcome?: unknown }).outcome === "string"
+            ? (exitPlanResult as { outcome: string }).outcome
+            : "unknown";
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
@@ -863,10 +879,11 @@ const program = Effect.gen(function* () {
             content: {
               type: "text",
               text:
-                permission.outcome.outcome === "selected" &&
-                permission.outcome.optionId === permissionOptionIds.rejectOnce
-                  ? "plan captured for approval"
-                  : "plan exit allowed",
+                outcome === "approved"
+                  ? "plan approved — implementing"
+                  : outcome === "abandoned"
+                    ? "plan abandoned"
+                    : "plan revision requested",
             },
           },
         });

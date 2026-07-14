@@ -10,10 +10,16 @@ import { describe, expect } from "vite-plus/test";
 
 import {
   extractXAiAskUserQuestions,
+  extractXAiExitPlanModePlanMarkdown,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
+  makeXAiExitPlanModeAbandonedResponse,
+  makeXAiExitPlanModeApprovedResponse,
+  makeXAiExitPlanModeRejectedResponse,
   makeXAiPromptCompletionRuntime,
+  resolveXAiExitPlanModeFromFollowUp,
   XAiAskUserQuestionRequest,
+  XAiExitPlanModeRequest,
 } from "./XAiAcpExtension.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
@@ -273,6 +279,58 @@ describe("XAiAcpExtension", () => {
         "Which files should Grok touch?": ["Tests", "Docs"],
       },
     });
+  });
+
+  it("decodes _x.ai/exit_plan_mode request payloads and extracts plan markdown", () => {
+    const decode = Schema.decodeUnknownSync(XAiExitPlanModeRequest);
+    const flat = decode({
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      planContent: "# Plan\n\n- step\n",
+    });
+    expect(extractXAiExitPlanModePlanMarkdown(flat)).toBe("# Plan\n\n- step\n");
+
+    const wrapped = decode({
+      method: "_x.ai/exit_plan_mode",
+      params: {
+        sessionId: "session-1",
+        toolCallId: "tool-1",
+        planContent: null,
+      },
+    });
+    expect(extractXAiExitPlanModePlanMarkdown(wrapped)).toBeUndefined();
+  });
+
+  it("builds exit_plan_mode response outcomes and maps follow-up turns", () => {
+    expect(makeXAiExitPlanModeApprovedResponse()).toEqual({ outcome: "approved" });
+    expect(makeXAiExitPlanModeApprovedResponse(" ship it ")).toEqual({
+      outcome: "approved",
+      feedback: "ship it",
+    });
+    expect(makeXAiExitPlanModeRejectedResponse("use REST")).toEqual({
+      outcome: "rejected",
+      feedback: "use REST",
+    });
+    expect(makeXAiExitPlanModeAbandonedResponse()).toEqual({ outcome: "abandoned" });
+
+    expect(
+      resolveXAiExitPlanModeFromFollowUp({
+        interactionMode: "default",
+        text: "PLEASE IMPLEMENT THIS PLAN:\n# Plan",
+      }),
+    ).toEqual({ outcome: "approved" });
+    expect(
+      resolveXAiExitPlanModeFromFollowUp({
+        interactionMode: "plan",
+        text: "prefer a smaller approach",
+      }),
+    ).toEqual({ outcome: "rejected", feedback: "prefer a smaller approach" });
+    expect(
+      resolveXAiExitPlanModeFromFollowUp({
+        interactionMode: "plan",
+        text: "  ",
+      }),
+    ).toEqual({ outcome: "abandoned" });
   });
 
   it.effect("resolves a hung standard prompt from xAI prompt completion", () =>
