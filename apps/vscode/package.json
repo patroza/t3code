@@ -1,7 +1,7 @@
 {
   "name": "t3-code",
   "displayName": "T3 Code (patroza build)",
-  "version": "0.0.37",
+  "version": "0.0.38",
   "private": true,
   "description": "Unofficial fork build of T3 Code: a dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
