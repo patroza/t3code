@@ -1,21 +1,42 @@
 {
   "name": "t3-code",
-  "displayName": "T3 Code",
-  "version": "0.0.37",
+  "displayName": "T3 Code (patroza build)",
+  "version": "0.0.38",
   "private": true,
-  "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
+  "description": "Unofficial fork build of T3 Code: a dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
     "AI",
     "Chat",
     "Other"
   ],
-  "publisher": "t3code",
+  "keywords": [
+    "agent",
+    "ai",
+    "chat",
+    "claude",
+    "codex"
+  ],
+  "homepage": "https://github.com/patroza/t3code/tree/main/apps/vscode",
+  "bugs": {
+    "url": "https://github.com/patroza/t3code/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/patroza/t3code.git",
+    "directory": "apps/vscode"
+  },
+  "publisher": "patroza",
   "type": "module",
   "main": "./dist/extension.cjs",
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
     "typecheck": "tsgo --noEmit",
-    "test": "vp test run"
+    "test": "vp test run",
+    "vscode:prepublish": "vp run build",
+    "package": "node scripts/vsce.ts package",
+    "publish:vsce": "node scripts/vsce.ts publish",
+    "publish:ovsx": "ovsx publish --packagePath"
   },
   "dependencies": {
     "@t3tools/client-runtime": "workspace:*",
@@ -27,7 +48,9 @@
   },
   "devDependencies": {
     "@types/vscode": "1.95.0",
+    "@vscode/vsce": "^3.6.0",
     "esbuild": "^0.28.0",
+    "ovsx": "^0.10.1",
     "vite-plus": "catalog:"
   },
   "contributes": {
@@ -143,6 +166,16 @@
         "command": "t3Code.openChat",
         "title": "T3 Code: Open Chat",
         "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.setServerUrl",
+        "title": "T3 Code: Set Server URL",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.openSettings",
+        "title": "T3 Code: Open Settings",
+        "category": "T3 Code"
       }
     ],
     "menus": {
@@ -161,7 +194,7 @@
           "type": "string",
           "scope": "machine",
           "default": "http://127.0.0.1:3773",
-          "description": "Fallback T3 Code server HTTP URL when no local T3 Desktop runtime is advertised. WebSocket and environment endpoints are derived from it."
+          "markdownDescription": "Fallback T3 Code server HTTP URL, used when no local T3 Desktop runtime is advertised beside this extension host. WebSocket and environment endpoints are derived from it.\n\nThe default `http://127.0.0.1:3773` matches a T3 Code server on this machine. Point it at your own host (for example `https://t3.example.com`) to use a remote server, and run **T3 Code: Set Server Bearer Token** if that server requires authentication.\n\nRun **T3 Code: Set Server URL** to change this with validation."
         },
         "t3Code.defaultRuntimeMode": {
           "type": "string",
@@ -170,13 +203,18 @@
             "auto-accept-edits",
             "full-access"
           ],
+          "enumDescriptions": [
+            "Ask before each edit or command.",
+            "Apply edits automatically, but ask before running commands.",
+            "Apply edits and run commands without asking."
+          ],
           "default": "full-access",
-          "description": "Runtime mode for new T3 Code threads."
+          "markdownDescription": "Runtime mode applied to new T3 Code threads. Defaults to `full-access`; choose `approval-required` to review every edit and command before it runs."
         },
         "t3Code.desktopClientSettingsPath": {
           "type": "string",
           "default": "",
-          "description": "Optional path to T3 Desktop's client-settings.json for sharing provider and model favorites. The default auto-detects ~/.t3/userdata or ~/.t3/dev."
+          "markdownDescription": "Optional path to T3 Desktop's `client-settings.json`, used to share provider and model favorites with the desktop app. Leave empty to auto-detect `~/.t3/userdata` or `~/.t3/dev`."
         }
       }
     }
@@ -187,8 +225,10 @@
     "onCommand:t3Code.clearBearerToken",
     "onCommand:t3Code.newThread",
     "onCommand:t3Code.openChat",
+    "onCommand:t3Code.openSettings",
     "onCommand:t3Code.selectThread",
     "onCommand:t3Code.setBearerToken",
+    "onCommand:t3Code.setServerUrl",
     "onCommand:t3Code.showDiagnostics",
     "onCommand:t3Code.toggleEditorContext",
     "onView:t3Code.chatView",
@@ -197,6 +237,7 @@
   "extensionKind": [
     "workspace"
   ],
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.95.0"
   }
