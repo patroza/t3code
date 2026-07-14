@@ -1,0 +1,203 @@
+{
+  "name": "t3-code",
+  "displayName": "T3 Code",
+  "version": "0.0.37",
+  "private": true,
+  "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "publisher": "t3code",
+  "type": "module",
+  "main": "./dist/extension.cjs",
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@t3tools/client-runtime": "workspace:*",
+    "@t3tools/contracts": "workspace:*",
+    "@t3tools/shared": "workspace:*",
+    "dompurify": "^3.2.6",
+    "effect": "catalog:",
+    "marked": "^15.0.12"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.95.0",
+    "esbuild": "^0.28.0",
+    "vite-plus": "catalog:"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "t3CodeViewContainer",
+          "title": "T3 Code",
+          "icon": "media/t3-code.svg",
+          "when": "t3Code.useActivityBar"
+        }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "t3CodeSecondaryViewContainer",
+          "title": "T3 Code",
+          "icon": "media/t3-code.svg",
+          "when": "!t3Code.useActivityBar"
+        }
+      ]
+    },
+    "views": {
+      "t3CodeViewContainer": [
+        {
+          "id": "t3Code.chatView",
+          "type": "webview",
+          "name": "T3 Code",
+          "when": "t3Code.useActivityBar"
+        }
+      ],
+      "t3CodeSecondaryViewContainer": [
+        {
+          "id": "t3Code.chatViewSecondary",
+          "type": "webview",
+          "name": "T3 Code",
+          "when": "!t3Code.useActivityBar"
+        }
+      ]
+    },
+    "chatParticipants": [
+      {
+        "id": "t3-code.chat",
+        "name": "t3",
+        "fullName": "T3 Code",
+        "description": "Work with synchronized Codex, Claude, Cursor, Grok, and OpenCode threads.",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "new",
+            "description": "Create a thread for this worktree"
+          },
+          {
+            "name": "threads",
+            "description": "Choose a thread for this worktree"
+          },
+          {
+            "name": "history",
+            "description": "Show the synchronized thread history"
+          },
+          {
+            "name": "context",
+            "description": "Toggle automatic editor context"
+          },
+          {
+            "name": "stop",
+            "description": "Interrupt the active turn"
+          },
+          {
+            "name": "status",
+            "description": "Show connection and thread status"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "t3Code.newThread",
+        "title": "T3 Code: New Thread for Worktree",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.selectThread",
+        "title": "T3 Code: Select Worktree Thread",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.askSelection",
+        "title": "T3 Code: Ask About Selection",
+        "category": "T3 Code",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "t3Code.toggleEditorContext",
+        "title": "T3 Code: Toggle Automatic Editor Context",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.showDiagnostics",
+        "title": "T3 Code: Show Diagnostics",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.setBearerToken",
+        "title": "T3 Code: Set Server Bearer Token",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.clearBearerToken",
+        "title": "T3 Code: Clear Server Bearer Token",
+        "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.openChat",
+        "title": "T3 Code: Open Chat",
+        "category": "T3 Code"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "t3Code.askSelection",
+          "group": "navigation@90",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "T3 Code",
+      "properties": {
+        "t3Code.serverUrl": {
+          "type": "string",
+          "scope": "machine",
+          "default": "http://127.0.0.1:3773",
+          "description": "Fallback T3 Code server HTTP URL when no local T3 Desktop runtime is advertised. WebSocket and environment endpoints are derived from it."
+        },
+        "t3Code.defaultRuntimeMode": {
+          "type": "string",
+          "enum": [
+            "approval-required",
+            "auto-accept-edits",
+            "full-access"
+          ],
+          "default": "full-access",
+          "description": "Runtime mode for new T3 Code threads."
+        },
+        "t3Code.desktopClientSettingsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to T3 Desktop's client-settings.json for sharing provider and model favorites. The default auto-detects ~/.t3/userdata or ~/.t3/dev."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onChatParticipant:t3-code.chat",
+    "onCommand:t3Code.askSelection",
+    "onCommand:t3Code.clearBearerToken",
+    "onCommand:t3Code.newThread",
+    "onCommand:t3Code.openChat",
+    "onCommand:t3Code.selectThread",
+    "onCommand:t3Code.setBearerToken",
+    "onCommand:t3Code.showDiagnostics",
+    "onCommand:t3Code.toggleEditorContext",
+    "onView:t3Code.chatView",
+    "onView:t3Code.chatViewSecondary"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.95.0"
+  }
+}
