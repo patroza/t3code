@@ -85,6 +85,7 @@ import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { GrokTranscriptResyncLive } from "./externalSessions/GrokTranscriptResync.ts";
+import { OrphanSessionRecoveryLive } from "./orchestration/Layers/OrphanSessionRecovery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -282,9 +283,20 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const OrphanSessionRecoveryLayerLive = OrphanSessionRecoveryLive.pipe(
+  Layer.provide(ProviderLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(GrokTranscriptResyncLive.pipe(Layer.provide(ProviderSessionRuntime.layer))),
+  Layer.provideMerge(OrphanSessionRecoveryLayerLive),
+  Layer.provideMerge(
+    GrokTranscriptResyncLive.pipe(
+      Layer.provide(ProviderSessionRuntime.layer),
+      Layer.provide(OrphanSessionRecoveryLayerLive),
+    ),
+  ),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 

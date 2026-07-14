@@ -12,6 +12,7 @@ import { ThreadId, type OrchestrationCommand } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { OrphanSessionRecovery } from "../orchestration/Services/OrphanSessionRecovery.ts";
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import { GrokTranscriptResync, make } from "./GrokTranscriptResync.ts";
@@ -76,8 +77,11 @@ const testLayer = (input: {
   readonly sessionId: string;
   readonly cwd: string;
   readonly dispatched: Array<OrchestrationCommand>;
-}) =>
-  Layer.effect(GrokTranscriptResync, make).pipe(
+  /** When true, settleIfOrphan claims a zombie and flips status to stopped. */
+  readonly treatRunningAsOrphan?: boolean;
+}) => {
+  let runtimeStatus = input.status;
+  return Layer.effect(GrokTranscriptResync, make).pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProviderSessionRuntimeRepository)({
@@ -89,7 +93,7 @@ const testLayer = (input: {
                 providerInstanceId: null,
                 adapterKey: "grok",
                 runtimeMode: "full-access" as const,
-                status: input.status as never,
+                status: runtimeStatus as never,
                 lastSeenAt: "2026-07-14T00:00:00.000Z",
                 resumeCursor: { sessionId: input.sessionId },
                 runtimePayload: { cwd: input.cwd },
@@ -108,10 +112,28 @@ const testLayer = (input: {
               return { sequence: 1 };
             }),
         }),
+        Layer.mock(OrphanSessionRecovery)({
+          hasLiveProcess: () => Effect.succeed(!(input.treatRunningAsOrphan ?? false)),
+          settleThread: () =>
+            Effect.sync(() => {
+              runtimeStatus = "stopped";
+            }),
+          settleIfOrphan: () =>
+            Effect.sync(() => {
+              if (input.treatRunningAsOrphan) {
+                runtimeStatus = "stopped";
+                return true;
+              }
+              return false;
+            }),
+          settleAllAfterServerRestart: () =>
+            Effect.succeed({ settledSessions: 0, settledRuntimes: 0 }),
+        }),
       ),
     ),
     Layer.provideMerge(NodeServices.layer),
   );
+};
 
 describe("GrokTranscriptResync", () => {
   it.effect("dispatches a resync when grok's log has run ahead of the thread", () => {
@@ -201,6 +223,34 @@ describe("GrokTranscriptResync", () => {
           sessionId: "s-running",
           cwd: "/tmp/t3-resync-running",
           dispatched,
+          treatRunningAsOrphan: false,
+        }),
+      ),
+    );
+  });
+
+  it.effect("settles a zombie running runtime then resyncs from the session log", () => {
+    const dispatched: Array<OrchestrationCommand> = [];
+    return Effect.gen(function* () {
+      const cwd = "/tmp/t3-resync-zombie-running";
+      const dir = writeUpdatesLog("s-zombie", cwd);
+      try {
+        const resync = yield* GrokTranscriptResync;
+        yield* resync.resyncThread(THREAD_ID);
+        assert.equal(dispatched.length, 1);
+        assert.equal(dispatched[0]?.type, "thread.messages.resync");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          status: "running",
+          providerName: "grok",
+          sessionId: "s-zombie",
+          cwd: "/tmp/t3-resync-zombie-running",
+          dispatched,
+          treatRunningAsOrphan: true,
         }),
       ),
     );

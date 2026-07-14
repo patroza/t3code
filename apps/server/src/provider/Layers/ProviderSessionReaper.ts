@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
+import { OrphanSessionRecovery } from "../../orchestration/Services/OrphanSessionRecovery.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
@@ -26,6 +27,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const orphanSessionRecovery = yield* OrphanSessionRecovery;
 
     const inactivityThresholdMs = Math.max(
       1,
@@ -62,6 +64,38 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
         if (thread?.session?.activeTurnId != null) {
+          // Active turns used to be skipped forever, which deadlocked zombies
+          // (process gone, activeTurnId still set). Force-settle when there is
+          // no live provider process.
+          const live = yield* orphanSessionRecovery.hasLiveProcess(binding.threadId);
+          if (!live) {
+            yield* orphanSessionRecovery
+              .settleThread({
+                threadId: binding.threadId,
+                reason: "reaper_orphan_active_turn",
+                status: "interrupted",
+              })
+              .pipe(
+                Effect.tap(() =>
+                  Effect.logInfo("provider.session.reaped", {
+                    threadId: binding.threadId,
+                    provider: binding.provider,
+                    idleDurationMs,
+                    reason: "orphan_active_turn",
+                  }),
+                ),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("provider.session.reaper.orphan-settle-failed", {
+                    threadId: binding.threadId,
+                    provider: binding.provider,
+                    idleDurationMs,
+                    cause,
+                  }),
+                ),
+              );
+            reapedCount += 1;
+            continue;
+          }
           yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
             threadId: binding.threadId,
             activeTurnId: thread.session.activeTurnId,
