@@ -8,6 +8,11 @@ import type {
   UserInputQuestion,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import {
+  compareSteerTimelineSortable,
+  findMidTurnSteerUserIds,
+  splitAssistantTextAtSteers,
+} from "@t3tools/shared/steerTimeline";
 import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTranscript";
 
 import * as Arr from "effect/Array";
@@ -1331,54 +1336,140 @@ export function buildThreadFeed(
   const oldestLoadedMessageCreatedAt =
     options?.loadedMessages !== undefined ? (loadedMessages[0]?.createdAt ?? null) : null;
   const workLogEntries = deriveWorkLogEntries(thread.activities);
-  const entries = Arr.sortWith(
-    [
-      ...loadedMessages.map<RawThreadFeedEntry>((message) => ({
-        type: "message",
-        id: message.id,
-        createdAt: message.createdAt,
-        message,
-      })),
-      ...workLogEntries
-        .filter((entry) => {
-          if (options?.loadedMessages === undefined) {
-            return true;
-          }
-          return (
-            oldestLoadedMessageCreatedAt === null || entry.createdAt >= oldestLoadedMessageCreatedAt
-          );
-        })
-        .map<RawThreadFeedEntry>((entry) => {
-          const summary = workEntryHeading(entry);
-          const detail = workEntryPreview(entry);
-          const fullDetail = buildWorkEntryExpandedBody(entry);
-          return {
-            type: "activity",
+  const rawEntries: Array<RawThreadFeedEntry & { sortRank: number }> = [
+    ...loadedMessages.map((message) => ({
+      type: "message" as const,
+      id: message.id,
+      createdAt: message.createdAt,
+      message,
+      sortRank: 0,
+    })),
+    ...workLogEntries
+      .filter((entry) => {
+        if (options?.loadedMessages === undefined) {
+          return true;
+        }
+        return (
+          oldestLoadedMessageCreatedAt === null || entry.createdAt >= oldestLoadedMessageCreatedAt
+        );
+      })
+      .map((entry) => {
+        const summary = workEntryHeading(entry);
+        const detail = workEntryPreview(entry);
+        const fullDetail = buildWorkEntryExpandedBody(entry);
+        return {
+          type: "activity" as const,
+          id: entry.id,
+          createdAt: entry.createdAt,
+          turnId: entry.turnId,
+          sortRank: 0,
+          activity: {
             id: entry.id,
             createdAt: entry.createdAt,
             turnId: entry.turnId,
-            activity: {
-              id: entry.id,
-              createdAt: entry.createdAt,
-              turnId: entry.turnId,
-              summary,
-              detail,
-              fullDetail,
-              icon: workEntryIcon(entry),
-              copyText: [summary, detail, fullDetail]
-                .filter((value, index, values): value is string => {
-                  return Boolean(value) && values.indexOf(value) === index;
-                })
-                .join("\n"),
-              toolLike: workLogEntryIsToolLike(entry),
-              status: workEntryStatus(entry),
+            summary,
+            detail,
+            fullDetail,
+            icon: workEntryIcon(entry),
+            copyText: [summary, detail, fullDetail]
+              .filter((value, index, values): value is string => {
+                return Boolean(value) && values.indexOf(value) === index;
+              })
+              .join("\n"),
+            toolLike: workLogEntryIsToolLike(entry),
+            status: workEntryStatus(entry),
+          },
+        };
+      }),
+  ];
+
+  const turnIds = new Set<string>();
+  for (const entry of rawEntries) {
+    if (entry.type === "message" && entry.message.turnId !== null) {
+      turnIds.add(String(entry.message.turnId));
+    }
+    if (entry.type === "activity" && entry.turnId !== null) {
+      turnIds.add(String(entry.turnId));
+    }
+  }
+
+  const steersByTurnId = new Map<
+    string,
+    ReadonlyArray<{ readonly id: string; readonly createdAt: string }>
+  >();
+  const steerIdSet = new Set<string>();
+  for (const turnId of turnIds) {
+    const steers = findMidTurnSteerUserIds({
+      items: rawEntries.map((entry) => ({
+        id: entry.id,
+        createdAt: entry.createdAt,
+        isUser: entry.type === "message" && entry.message.role === "user",
+        belongsToActiveTurn:
+          (entry.type === "message" &&
+            entry.message.role !== "user" &&
+            entry.message.turnId !== null &&
+            String(entry.message.turnId) === turnId) ||
+          (entry.type === "activity" && entry.turnId !== null && String(entry.turnId) === turnId),
+      })),
+    });
+    if (steers.length === 0) {
+      continue;
+    }
+    steersByTurnId.set(turnId, steers);
+    for (const steer of steers) {
+      steerIdSet.add(steer.id);
+    }
+  }
+
+  const expanded: Array<RawThreadFeedEntry & { sortRank: number }> = [];
+  for (const entry of rawEntries) {
+    if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.turnId !== null
+    ) {
+      const steers = steersByTurnId.get(String(entry.message.turnId));
+      if (steers !== undefined && steers.length > 0) {
+        const segments = splitAssistantTextAtSteers({
+          assistantMessageId: entry.message.id,
+          assistantCreatedAt: entry.message.createdAt,
+          text: entry.message.text,
+          streaming: entry.message.streaming,
+          steers,
+        });
+        for (const segment of segments) {
+          expanded.push({
+            type: "message",
+            id: segment.segmentId,
+            createdAt: segment.sortAt,
+            sortRank: segment.sortRank,
+            message: {
+              ...entry.message,
+              text: segment.text,
+              streaming: segment.streaming,
+              createdAt: segment.sortAt,
+              updatedAt: segment.streaming ? entry.message.updatedAt : segment.sortAt,
             },
-          };
-        }),
-    ],
-    (s) => new Date(s.createdAt),
-    Order.Date,
-  );
+          });
+        }
+        continue;
+      }
+    }
+
+    expanded.push({
+      ...entry,
+      sortRank: steerIdSet.has(entry.id) ? 1 : entry.sortRank,
+    });
+  }
+
+  const entries = expanded
+    .toSorted((left, right) =>
+      compareSteerTimelineSortable(
+        { id: left.id, sortAt: left.createdAt, sortRank: left.sortRank },
+        { id: right.id, sortAt: right.createdAt, sortRank: right.sortRank },
+      ),
+    )
+    .map(({ sortRank: _sortRank, ...entry }) => entry);
 
   return groupAdjacentActivities(entries);
 }

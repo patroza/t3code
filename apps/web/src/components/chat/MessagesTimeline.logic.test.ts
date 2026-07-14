@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  clearSteerTimelineBoundaryStore,
+  observeSteerTextBoundary,
+} from "@t3tools/shared/steerTimeline";
+import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  interleaveTimelineEntriesForSteeredTurn,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
 } from "./MessagesTimeline.logic";
@@ -1012,78 +1017,128 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
-  it("renders steer user messages above live active-turn output while running", () => {
-    const rows = deriveMessagesTimelineRows({
-      timelineEntries: [
-        {
-          id: "settled-summary-entry",
-          kind: "message",
+  it("interleaves steer user messages between pre-steer and post-steer turn output", () => {
+    clearSteerTimelineBoundaryStore();
+    const boundaryStore = new Map<string, number>();
+    // Observe the assistant text as it existed when the steer arrived.
+    // Production timeline entry ids match message ids (see deriveTimelineEntries).
+    observeSteerTextBoundary(
+      "active-assistant",
+      "steer-user",
+      "Tracing timeline ordering.".length,
+      boundaryStore,
+    );
+
+    const timelineEntries = [
+      {
+        id: "settled-summary",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:00:30Z",
+        message: {
+          id: "settled-summary" as never,
+          role: "assistant" as const,
+          text: "Submit latch fix summary.",
+          turnId: "turn-0" as never,
           createdAt: "2026-01-01T00:00:30Z",
-          message: {
-            id: "settled-summary" as never,
-            role: "assistant",
-            text: "Submit latch fix summary.",
-            turnId: "turn-0" as never,
-            createdAt: "2026-01-01T00:00:30Z",
-            updatedAt: "2026-01-01T00:00:40Z",
-            streaming: false,
-          },
+          updatedAt: "2026-01-01T00:00:40Z",
+          streaming: false,
         },
-        {
-          id: "turn-start-user-entry",
-          kind: "message",
+      },
+      {
+        id: "turn-start-user",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:01:00Z",
+        message: {
+          id: "turn-start-user" as never,
+          role: "user" as const,
+          text: "run my build/deploy script",
+          turnId: null,
           createdAt: "2026-01-01T00:01:00Z",
-          message: {
-            id: "turn-start-user" as never,
-            role: "user",
-            text: "run my build/deploy script",
-            turnId: null,
-            createdAt: "2026-01-01T00:01:00Z",
-            updatedAt: "2026-01-01T00:01:00Z",
-            streaming: false,
-          },
+          updatedAt: "2026-01-01T00:01:00Z",
+          streaming: false,
         },
-        {
-          id: "active-assistant-entry",
-          kind: "message",
+      },
+      {
+        id: "active-assistant",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:01:05Z",
+        message: {
+          id: "active-assistant" as never,
+          role: "assistant" as const,
+          text: "Tracing timeline ordering. Comparing solutions after the steer.",
+          turnId: "turn-1" as never,
           createdAt: "2026-01-01T00:01:05Z",
-          message: {
-            id: "active-assistant" as never,
-            role: "assistant",
-            text: "Tracing timeline ordering in Cursor steer turns.",
-            turnId: "turn-1" as never,
-            createdAt: "2026-01-01T00:01:05Z",
-            updatedAt: "2026-01-01T00:08:00Z",
-            streaming: true,
-          },
+          updatedAt: "2026-01-01T00:09:00Z",
+          streaming: true,
         },
-        {
-          id: "active-work-entry",
-          kind: "work",
+      },
+      {
+        id: "active-work",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:07:00Z",
+        entry: {
+          id: "active-work",
           createdAt: "2026-01-01T00:07:00Z",
-          entry: {
-            id: "active-work",
-            createdAt: "2026-01-01T00:07:00Z",
-            turnId: "turn-1" as never,
-            label: "Searched codebase",
-            tone: "tool" as const,
-          },
+          turnId: "turn-1" as never,
+          label: "Searched codebase",
+          tone: "tool" as const,
         },
-        {
-          id: "steer-user-entry",
-          kind: "message",
+      },
+      {
+        id: "steer-user",
+        kind: "message" as const,
+        createdAt: "2026-01-01T00:08:30Z",
+        message: {
+          id: "steer-user" as never,
+          role: "user" as const,
+          text: "how does our solution compare?",
+          turnId: null,
           createdAt: "2026-01-01T00:08:30Z",
-          message: {
-            id: "steer-user" as never,
-            role: "user",
-            text: "how does our solution compare?",
-            turnId: null,
-            createdAt: "2026-01-01T00:08:30Z",
-            updatedAt: "2026-01-01T00:08:30Z",
-            streaming: false,
-          },
+          updatedAt: "2026-01-01T00:08:30Z",
+          streaming: false,
         },
-      ],
+      },
+      {
+        id: "post-steer-work",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:08:45Z",
+        entry: {
+          id: "post-steer-work",
+          createdAt: "2026-01-01T00:08:45Z",
+          turnId: "turn-1" as never,
+          label: "Compared solutions",
+          tone: "tool" as const,
+        },
+      },
+    ];
+
+    const interleaved = interleaveTimelineEntriesForSteeredTurn(timelineEntries, {
+      boundaryStore,
+    });
+
+    expect(
+      interleaved.map((entry) => ({
+        id: entry.id,
+        text: entry.kind === "message" ? entry.message.text : undefined,
+      })),
+    ).toEqual([
+      { id: "settled-summary", text: "Submit latch fix summary." },
+      { id: "turn-start-user", text: "run my build/deploy script" },
+      { id: "active-assistant::pre", text: "Tracing timeline ordering." },
+      { id: "active-work", text: undefined },
+      { id: "steer-user", text: "how does our solution compare?" },
+      {
+        id: "active-assistant::after::steer-user",
+        text: " Comparing solutions after the steer.",
+      },
+      { id: "post-steer-work", text: undefined },
+    ]);
+
+    clearSteerTimelineBoundaryStore();
+    observeSteerTextBoundary("active-assistant", "steer-user", "Tracing timeline ordering.".length);
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
       latestTurn: {
         turnId: "turn-1" as never,
         state: "running",
@@ -1098,13 +1153,17 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     expect(rows.map((row) => row.id)).toEqual([
-      "settled-summary-entry",
-      "turn-start-user-entry",
-      "steer-user-entry",
-      "active-assistant-entry",
-      "active-work-entry",
+      "settled-summary",
+      "turn-start-user",
+      "active-assistant::pre",
+      "active-work",
+      "steer-user",
+      "active-assistant::after::steer-user",
+      "post-steer-work",
       "working-indicator-row",
     ]);
+
+    clearSteerTimelineBoundaryStore();
   });
 });
 
