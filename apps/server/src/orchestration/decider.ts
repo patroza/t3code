@@ -733,6 +733,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.messages.resync": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: command.threadId,
+          afterMessageId: command.afterMessageId,
+          messages: command.messages,
+          reason: command.reason,
+        },
+      };
+    }
+
     case "thread.activity.append": {
       yield* requireThread({
         readModel,

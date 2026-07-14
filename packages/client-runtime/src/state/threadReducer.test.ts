@@ -697,4 +697,76 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("unchanged");
     });
   });
+
+  describe("thread.messages-resynced", () => {
+    const message = (id: string, text: string, createdAt: string) => ({
+      id: MessageId.make(id),
+      role: "assistant" as const,
+      text,
+      turnId: null,
+      streaming: false,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const threadWith = (ids: ReadonlyArray<string>): OrchestrationThread => ({
+      ...baseThread,
+      messages: ids.map((id) => message(id, `text ${id}`, "2026-04-01T00:00:00.000Z")),
+    });
+    const resync = (
+      thread: OrchestrationThread,
+      afterMessageId: string | null,
+      tail: ReadonlyArray<{ id: string; text: string }>,
+    ) =>
+      applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 10,
+        occurredAt: "2026-04-02T00:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          afterMessageId: afterMessageId === null ? null : MessageId.make(afterMessageId),
+          messages: tail.map((entry) => message(entry.id, entry.text, "2026-04-02T00:00:00.000Z")),
+          reason: "grok-backfill",
+        },
+      } as any);
+
+    it("rewinds to the anchor and replaces only the tail after it", () => {
+      const result = resync(threadWith(["a", "b", "c", "d"]), "b", [
+        { id: "x", text: "new x" },
+        { id: "y", text: "new y" },
+      ]);
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      // a,b kept untouched; c,d replaced by the authoritative tail.
+      expect(result.thread.messages.map((m) => m.id)).toEqual(["a", "b", "x", "y"]);
+      expect(result.thread.messages[0]?.text).toBe("text a");
+      expect(result.thread.messages[2]?.text).toBe("new x");
+    });
+
+    it("replaces the whole transcript when there is no anchor", () => {
+      const result = resync(threadWith(["a", "b"]), null, [{ id: "x", text: "new x" }]);
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.messages.map((m) => m.id)).toEqual(["x"]);
+    });
+
+    it("requires a reload when the anchor is not in the cached transcript", () => {
+      // The client's cache predates the rewind point, so it cannot splice
+      // precisely — it must reload rather than render a wrong transcript.
+      const result = resync(threadWith(["a", "b"]), "unknown-anchor", [{ id: "x", text: "new x" }]);
+      expect(result.kind).toBe("reload-required");
+    });
+
+    it("is idempotent: re-applying the same resync changes nothing", () => {
+      const first = resync(threadWith(["a", "b", "c"]), "b", [{ id: "x", text: "new x" }]);
+      expect(first.kind).toBe("updated");
+      if (first.kind !== "updated") return;
+      const second = resync(first.thread, "b", [{ id: "x", text: "new x" }]);
+      expect(second.kind).toBe("updated");
+      if (second.kind !== "updated") return;
+      expect(second.thread.messages.map((m) => m.id)).toEqual(["a", "b", "x"]);
+    });
+  });
 });
