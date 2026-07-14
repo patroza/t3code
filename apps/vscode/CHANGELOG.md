@@ -12,5 +12,9 @@ Initial marketplace release of the `patroza` fork build.
   and `/status` commands.
 - Realtime thread synchronization with the T3 Code web, desktop, and mobile clients.
 - Editor context, slash commands, images, approvals, tools, and tasks.
-- Connects to a local T3 Desktop runtime when advertised, otherwise falls back to `t3Code.serverUrl`.
-  Remote servers authenticate with a bearer token held in VS Code secret storage.
+- Connects to a local T3 Desktop runtime when advertised, otherwise falls back to `t3Code.serverUrl`
+  (default `http://127.0.0.1:3773`). Remote servers authenticate with a bearer token held in VS Code
+  secret storage.
+- **T3 Code: Set Server URL** sets the server URL from the Command Palette, prefilled with the
+  current value and validated before it is saved. **T3 Code: Open Settings** opens the extension's
+  settings.

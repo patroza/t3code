@@ -15,7 +15,11 @@ import {
   readDesktopBootstrapCredential,
   readDesktopServerUrl,
 } from "./desktopFavorites.ts";
-import { serverCandidates } from "./serverResolution.ts";
+import {
+  DEFAULT_SERVER_URL,
+  serverCandidates,
+  serverUrlValidationMessage,
+} from "./serverResolution.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
 
@@ -124,7 +128,7 @@ function configuration(): {
 } {
   const config = vscode.workspace.getConfiguration("t3Code");
   return {
-    serverUrl: config.get("serverUrl", "http://127.0.0.1:3773"),
+    serverUrl: config.get("serverUrl", DEFAULT_SERVER_URL),
     runtimeMode: config.get<RuntimeMode>("defaultRuntimeMode", "full-access"),
   };
 }
@@ -454,6 +458,30 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("t3Code.clearBearerToken", async () => {
       await context.secrets.delete(BEARER_TOKEN_SECRET);
       void vscode.window.showInformationMessage("T3 Code bearer token cleared.");
+    }),
+    vscode.commands.registerCommand("t3Code.setServerUrl", async () => {
+      const setting = vscode.workspace.getConfiguration("t3Code").inspect<string>("serverUrl");
+      const current = setting?.globalValue ?? setting?.defaultValue ?? DEFAULT_SERVER_URL;
+      const url = await vscode.window.showInputBox({
+        title: "T3 Code Server URL",
+        prompt: `Fallback server used when no local T3 Desktop runtime is advertised. Default: ${DEFAULT_SERVER_URL}`,
+        value: current,
+        ignoreFocusOut: true,
+        validateInput: (value) => serverUrlValidationMessage(value),
+      });
+      if (url === undefined) return;
+      // `serverUrl` is machine-scoped, so Global is the only target that
+      // applies; a workspace write would be ignored and silently do nothing.
+      await vscode.workspace
+        .getConfiguration("t3Code")
+        .update("serverUrl", url.trim(), vscode.ConfigurationTarget.Global);
+      void vscode.window.showInformationMessage(`T3 Code server URL set to ${url.trim()}.`);
+    }),
+    vscode.commands.registerCommand("t3Code.openSettings", async () => {
+      await vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        `@ext:${context.extension.id}`,
+      );
     }),
     { dispose: () => void client.dispose() },
   );

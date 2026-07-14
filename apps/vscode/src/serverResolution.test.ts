@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { serverCandidates } from "./serverResolution.ts";
+import { serverCandidates, serverUrlValidationMessage } from "./serverResolution.ts";
 
 describe("serverCandidates", () => {
   it("prefers the backend advertised by the local desktop runtime", () => {
@@ -20,5 +20,25 @@ describe("serverCandidates", () => {
     expect(serverCandidates(null, "http://remote.example:8080")).toEqual([
       { source: "configured", url: "http://remote.example:8080/" },
     ]);
+  });
+});
+
+describe("serverUrlValidationMessage", () => {
+  it("accepts http and https URLs", () => {
+    expect(serverUrlValidationMessage("http://127.0.0.1:3773")).toBeNull();
+    expect(serverUrlValidationMessage("https://t3.example.com")).toBeNull();
+    expect(serverUrlValidationMessage("  http://127.0.0.1:3773  ")).toBeNull();
+  });
+
+  it("rejects values serverCandidates cannot parse", () => {
+    expect(serverUrlValidationMessage("")).not.toBeNull();
+    expect(serverUrlValidationMessage("   ")).not.toBeNull();
+    expect(serverUrlValidationMessage("127.0.0.1:3773")).not.toBeNull();
+    expect(serverUrlValidationMessage("not a url")).not.toBeNull();
+  });
+
+  it("rejects non-http protocols that would parse but never connect", () => {
+    expect(serverUrlValidationMessage("ws://127.0.0.1:3773")).not.toBeNull();
+    expect(serverUrlValidationMessage("file:///tmp/t3")).not.toBeNull();
   });
 });
