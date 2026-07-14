@@ -2,10 +2,22 @@
 
 ![T3 Code in VS Code](media/screenshot.jpg)
 
+> **Unofficial fork build.** This extension is published as `patroza.t3-code` from
+> [patroza/t3code](https://github.com/patroza/t3code), a fork of
+> [pingdotgg/t3code](https://github.com/pingdotgg/t3code). It is not published or supported by
+> T3 Tools Inc. Report issues against
+> [this fork's tracker](https://github.com/patroza/t3code/issues).
+
 This package exposes T3 Code as a dedicated VS Code secondary-sidebar chat tab, alongside the
 Claude Code, Chat, and Codex tabs. It connects directly to the same T3 Code server used by the web,
 desktop, and mobile clients, so projects, threads, messages, turn state, and assistant streaming
 remain synchronized. It also provides an optional native `@t3` participant inside VS Code Chat.
+
+## Requirements
+
+The extension is a client only — it needs a T3 Code backend to talk to. Either run T3 Desktop on the
+same machine as the extension host, or point `t3Code.serverUrl` at a reachable T3 Code server.
+VS Code 1.95 or newer is required.
 
 ## Development
 
@@ -45,3 +57,41 @@ column. Explicit Chat references such as `#file` and attached selections are alw
 The **T3 Code: Ask About Selection** editor action opens Chat with `@t3` prefilled. Context is sent
 as structured-looking provider context using workspace-relative paths and language-aware Markdown
 fences. T3 Code clients present that envelope as a context reference rather than authored text.
+
+## Releasing
+
+The extension publishes to the `patroza` namespace on both the VS Code Marketplace and Open VSX.
+Extension IDs and versions are shared between the two, so publish the same `.vsix` to each.
+
+Bump `version` in `apps/vscode/package.json` and add a `CHANGELOG.md` entry first, then:
+
+```sh
+pnpm --filter t3-code package                 # -> t3-code-<version>.vsix
+```
+
+`package` runs the `vscode:prepublish` build and bundles `src/` with esbuild, so `--no-dependencies`
+is passed deliberately: nothing from `node_modules` ships, and vsce never has to resolve the
+`workspace:*` dependencies it cannot understand. The `--baseContentUrl` / `--baseImagesUrl` flags
+make the README's relative links resolve against `apps/vscode/` on GitHub, which vsce cannot infer
+for an extension living in a monorepo subdirectory.
+
+Inspect the packaged contents before publishing:
+
+```sh
+pnpm --filter t3-code exec vsce ls --no-dependencies
+```
+
+Publishing needs a token per registry, neither of which is stored in this repo:
+
+- **Marketplace** — an Azure DevOps PAT for the `patroza` publisher, with Marketplace: Manage scope.
+  Pass it as `VSCE_PAT`, or run `vsce login patroza` once.
+- **Open VSX** — an access token for the `patroza` namespace from <https://open-vsx.org/user-settings/tokens>.
+  Pass it as `OVSX_PAT`. The namespace must be created once with `ovsx create-namespace patroza`.
+
+```sh
+VSCE_PAT=... pnpm --filter t3-code publish:vsce
+OVSX_PAT=... pnpm --filter t3-code publish:ovsx t3-code-<version>.vsix
+```
+
+Tag the release as `vscode-v<version>` so extension tags do not collide with the `v*.*.*` tags that
+drive the desktop release workflow.

@@ -8,6 +8,7 @@ apps/*/dist
 infra/*/dist
 .astro
 packages/*/dist
+*.vsix
 .env
 .env.local
 build/

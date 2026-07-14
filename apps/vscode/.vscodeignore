@@ -1,6 +1,9 @@
 .vscode/**
+.vscodeignore
 node_modules/**
 src/**
 tsconfig.json
 vite.config.*
 *.test.*
+*.vsix
+dist/**/*.map

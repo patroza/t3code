@@ -1,21 +1,42 @@
 {
   "name": "t3-code",
-  "displayName": "T3 Code",
+  "displayName": "T3 Code (patroza build)",
   "version": "0.0.37",
   "private": true,
-  "description": "A dedicated VS Code chat client for synchronized T3 Code threads.",
+  "description": "Unofficial fork build of T3 Code: a dedicated VS Code chat client for synchronized T3 Code threads.",
   "categories": [
     "AI",
     "Chat",
     "Other"
   ],
-  "publisher": "t3code",
+  "keywords": [
+    "agent",
+    "ai",
+    "chat",
+    "claude",
+    "codex"
+  ],
+  "homepage": "https://github.com/patroza/t3code/tree/main/apps/vscode",
+  "bugs": {
+    "url": "https://github.com/patroza/t3code/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/patroza/t3code.git",
+    "directory": "apps/vscode"
+  },
+  "publisher": "patroza",
   "type": "module",
   "main": "./dist/extension.cjs",
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
     "typecheck": "tsgo --noEmit",
-    "test": "vp test run"
+    "test": "vp test run",
+    "vscode:prepublish": "vp run build",
+    "package": "vsce package --no-dependencies --baseContentUrl https://github.com/patroza/t3code/blob/main/apps/vscode --baseImagesUrl https://raw.githubusercontent.com/patroza/t3code/main/apps/vscode",
+    "publish:vsce": "vsce publish --no-dependencies --baseContentUrl https://github.com/patroza/t3code/blob/main/apps/vscode --baseImagesUrl https://raw.githubusercontent.com/patroza/t3code/main/apps/vscode",
+    "publish:ovsx": "ovsx publish --packagePath"
   },
   "dependencies": {
     "@t3tools/client-runtime": "workspace:*",
@@ -27,7 +48,9 @@
   },
   "devDependencies": {
     "@types/vscode": "1.95.0",
+    "@vscode/vsce": "^3.6.0",
     "esbuild": "^0.28.0",
+    "ovsx": "^0.10.1",
     "vite-plus": "catalog:"
   },
   "contributes": {
@@ -197,6 +220,7 @@
   "extensionKind": [
     "workspace"
   ],
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.95.0"
   }
