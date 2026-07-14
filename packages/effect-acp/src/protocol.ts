@@ -482,17 +482,30 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         Effect.forever,
       ),
     send: (_clientId, request) =>
-      offerOutgoing(request).pipe(
-        Effect.mapError(
-          (error) =>
-            new RpcClientError.RpcClientError({
-              reason: new RpcClientError.RpcClientDefect({
-                message: "Failed to send ACP protocol message.",
-                cause: error,
-              }),
-            }),
-        ),
-      ),
+      // Effect's RpcClient multiplexes real RPC requests with transport-level
+      // control frames: `Interrupt` (emitted when a request fiber is cancelled),
+      // `Ack` (chunk backpressure), and `Ping`/`Eof` (liveness). Those frames are
+      // an Effect-RPC transport concern with no meaning in ACP, whose wire is
+      // plain JSON-RPC. A spec-compliant agent (e.g. grok) cannot decode them and
+      // rejects the line with "Method not found", which wedges the session:
+      // interrupting an in-flight `session/prompt` (a turn Stop) would otherwise
+      // leak an `Interrupt` frame onto the agent's stdin and brick the thread.
+      // Agent-side cancellation is expressed via the `session/cancel`
+      // notification, so only real ACP messages (`Request`, including id:"" for
+      // notifications) belong on the wire; the control frames are dropped here.
+      request._tag === "Request"
+        ? offerOutgoing(request).pipe(
+            Effect.mapError(
+              (error) =>
+                new RpcClientError.RpcClientError({
+                  reason: new RpcClientError.RpcClientDefect({
+                    message: "Failed to send ACP protocol message.",
+                    cause: error,
+                  }),
+                }),
+            ),
+          )
+        : Effect.void,
     supportsAck: true,
     supportsTransferables: false,
   });
