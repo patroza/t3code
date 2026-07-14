@@ -1,9 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
-import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+
+import { homePath, iso, sql, sqliteExec, sqliteJson, stableUuid } from "./sqlite.ts";
 
 type Provider = "codex" | "claudeAgent" | "opencode";
 export type ImportSessionsProvider = "all" | "codex" | "claude" | "opencode";
@@ -47,16 +48,6 @@ export interface ImportSessionsResult {
   readonly cwd: string;
   readonly messageCount: number;
   readonly status: ImportSessionStatus;
-}
-
-function homePath(value: string): string {
-  return value === "~" || value.startsWith("~/")
-    ? NodePath.join(NodeOS.homedir(), value.slice(value === "~" ? 1 : 2))
-    : value;
-}
-
-function iso(ms: number): string {
-  return new Date(ms).toISOString();
 }
 
 function shortTitle(value: string): string {
@@ -115,35 +106,6 @@ function readOpenCodeExport(sessionId: string): Record<string, unknown> {
     NodeFS.closeSync(output);
     NodeFS.rmSync(tempDir, { recursive: true, force: true });
   }
-}
-
-function stableUuid(kind: string, key: string): string {
-  const bytes = NodeCrypto.createHash("sha256").update(`${kind}:${key}`).digest().subarray(0, 16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function sql(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "NULL";
-  }
-  return `'${String(value).replaceAll("'", "''")}'`;
-}
-
-function sqliteJson(dbPath: string, query: string): Array<Record<string, unknown>> {
-  if (!NodeFS.existsSync(dbPath)) {
-    return [];
-  }
-  const out = NodeChildProcess.execFileSync("sqlite3", ["-json", dbPath, query], {
-    encoding: "utf8",
-  }).trim();
-  return out.length === 0 ? [] : (JSON.parse(out) as Array<Record<string, unknown>>);
-}
-
-function sqliteExec(dbPath: string, script: string): void {
-  NodeChildProcess.execFileSync("sqlite3", [dbPath], { input: script });
 }
 
 function normalizeCwd(value: string | undefined): string | undefined {
