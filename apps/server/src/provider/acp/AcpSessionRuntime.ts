@@ -267,6 +267,13 @@ type AcpStartState =
   | { readonly _tag: "Started"; readonly result: AcpStartedState };
 
 interface AcpAssistantSegmentState {
+  /**
+   * Unique per runtime instance. The segment counter restarts at 0 on every
+   * session start, but `sessionId` survives a resume — so without this the item
+   * ids of a resumed session collide with the ids of its earlier runs, and the
+   * projector concatenates fresh assistant text onto long-dead messages.
+   */
+  readonly runId: string;
   readonly nextSegmentIndex: number;
   readonly activeItemId?: string;
 }
@@ -275,6 +282,13 @@ interface EnsureActiveAssistantSegmentResult {
   readonly itemId: string;
   readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
 }
+
+let runtimeRunCounter = 0;
+/** A token unique to one runtime instance, stable for that instance's lifetime. */
+const nextRuntimeRunId = Effect.map(Clock.currentTimeMillis, (millis) => {
+  runtimeRunCounter += 1;
+  return `${millis.toString(36)}${runtimeRunCounter.toString(36)}`;
+});
 
 export const make = (
   options: AcpSessionRuntimeOptions,
@@ -289,7 +303,15 @@ export const make = (
     const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
-    const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
+    // Scopes assistant item ids to this run, so resuming a session cannot mint
+    // ids that already belong to messages from an earlier run of it. Wall clock
+    // separates runs across process restarts (where a bare counter would reset
+    // and collide); the counter separates runs started within the same tick.
+    const runId = yield* nextRuntimeRunId;
+    const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({
+      runId,
+      nextSegmentIndex: 0,
+    });
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     const promptSerializationSemaphore = yield* Semaphore.make(1);
@@ -978,8 +1000,8 @@ function shouldEmitToolCallUpdate(
   return previous === undefined || previous.title !== next.title || previous.detail !== next.detail;
 }
 
-const assistantItemId = (sessionId: string, segmentIndex: number) =>
-  `assistant:${sessionId}:segment:${segmentIndex}`;
+export const assistantItemId = (sessionId: string, runId: string, segmentIndex: number) =>
+  `assistant:${sessionId}:${runId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   queue,
@@ -996,7 +1018,7 @@ const ensureActiveAssistantSegment = ({
       if (current.activeItemId) {
         return [{ itemId: current.activeItemId }, current] as const;
       }
-      const itemId = assistantItemId(sessionId, current.nextSegmentIndex);
+      const itemId = assistantItemId(sessionId, current.runId, current.nextSegmentIndex);
       return [
         {
           itemId,
@@ -1006,6 +1028,7 @@ const ensureActiveAssistantSegment = ({
           } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
         },
         {
+          runId: current.runId,
           nextSegmentIndex: current.nextSegmentIndex + 1,
           activeItemId: itemId,
         } satisfies AcpAssistantSegmentState,
@@ -1036,6 +1059,7 @@ const closeActiveAssistantSegment = ({
         itemId: current.activeItemId,
       } satisfies AcpParsedSessionEvent,
       {
+        runId: current.runId,
         nextSegmentIndex: current.nextSegmentIndex,
       } satisfies AcpAssistantSegmentState,
     ] as const;
