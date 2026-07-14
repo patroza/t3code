@@ -70,6 +70,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import { GrokTranscriptResync } from "./externalSessions/GrokTranscriptResync.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -257,11 +258,19 @@ function projectSetupScriptCompatibilityDetail(
   }
 }
 
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
+/**
+ * Which events a thread-detail subscriber needs.
+ *
+ * Exported for testing: a client resuming from `afterSequence` only ever sees
+ * what passes this filter, so a thread-detail event missing here is dropped on
+ * the floor and the client's transcript silently rots.
+ */
+export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
     type:
       | "thread.message-sent"
+      | "thread.messages-resynced"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
@@ -271,6 +280,10 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 > {
   return (
     event.type === "thread.message-sent" ||
+    // Without this a resync is written, projected, and then silently dropped on
+    // its way to the client — which resumes from `afterSequence` and so never
+    // re-reads the projection. The transcript would stay stale forever.
+    event.type === "thread.messages-resynced" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
@@ -411,6 +424,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const grokTranscriptResync = yield* GrokTranscriptResync;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -1218,6 +1232,13 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              // Opening a thread is when we find out its provider ran ahead of us
+              // (dropped ACP updates, or the session driven from another client).
+              // Awaited rather than forked: once this returns, any resync is
+              // persisted, so it is picked up by the snapshot read or the
+              // catch-up replay below instead of racing them.
+              yield* grokTranscriptResync.resyncThread(input.threadId);
+
               const isThisThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
