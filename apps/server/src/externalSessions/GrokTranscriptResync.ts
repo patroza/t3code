@@ -28,6 +28,7 @@ import {
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { OrphanSessionRecovery } from "../orchestration/Services/OrphanSessionRecovery.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import {
@@ -66,33 +67,36 @@ export const make = Effect.gen(function* () {
   const messageRepository = yield* ProjectionThreadMessageRepository;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const orphanSessionRecovery = yield* OrphanSessionRecovery;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
   const resyncThread = Effect.fn("GrokTranscriptResync.resyncThread")(function* (
     threadId: ThreadId,
   ) {
-    let runtime = yield* runtimeRepository.getByThreadId({ threadId });
+    const runtime = yield* runtimeRepository.getByThreadId({ threadId });
     if (Option.isNone(runtime) || runtime.value.providerName !== GROK_PROVIDER) {
       return;
     }
-    // A truly live ACP stream is authoritative for the open turn — resyncing
-    // would race partial assistant text. Zombie "running" rows (no process)
-    // must be settled first or resync is permanently skipped.
-    if (runtime.value.status === "running") {
-      const settled = yield* orphanSessionRecovery.settleIfOrphan(
-        threadId,
-        "resync_zombie_running",
-      );
-      if (!settled) {
+
+    // Only skip resync while a *live* process is mid-turn. Grok routinely keeps
+    // a process + `provider_session_runtime.status=running` after the turn
+    // settles (`session.status=ready`) so the next prompt is fast — that idle
+    // hold must NOT block catching up external CLI activity from updates.jsonl.
+    //
+    // Mid-turn with no live process is a zombie: settle it, then resync.
+    const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+      Effect.map(Option.getOrUndefined),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const session = shell?.session ?? null;
+    const midTurn = session?.status === "running" && session.activeTurnId !== null;
+    if (midTurn) {
+      const live = yield* orphanSessionRecovery.hasLiveProcess(threadId);
+      if (live) {
         return;
       }
-      runtime = yield* runtimeRepository.getByThreadId({ threadId });
-      if (Option.isNone(runtime) || runtime.value.providerName !== GROK_PROVIDER) {
-        return;
-      }
-      if (runtime.value.status === "running") {
-        return;
-      }
+      yield* orphanSessionRecovery.settleIfOrphan(threadId, "resync_zombie_running");
     }
+
     const sessionId = readStringField(runtime.value.resumeCursor, "sessionId");
     const cwd = readStringField(runtime.value.runtimePayload, "cwd");
     if (sessionId === null || cwd === null) {

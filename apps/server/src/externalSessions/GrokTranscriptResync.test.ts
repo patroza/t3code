@@ -13,6 +13,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { OrphanSessionRecovery } from "../orchestration/Services/OrphanSessionRecovery.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import { GrokTranscriptResync, make } from "./GrokTranscriptResync.ts";
@@ -77,10 +78,14 @@ const testLayer = (input: {
   readonly sessionId: string;
   readonly cwd: string;
   readonly dispatched: Array<OrchestrationCommand>;
-  /** When true, settleIfOrphan claims a zombie and flips status to stopped. */
+  /** Orchestration session status (defaults to ready — idle between turns). */
+  readonly sessionStatus?: "ready" | "running" | "stopped" | "interrupted";
+  readonly activeTurnId?: string | null;
+  /** Live ACP process present (only blocks resync when also mid-turn). */
+  readonly hasLiveProcess?: boolean;
+  /** When true, settleIfOrphan claims a zombie mid-turn. */
   readonly treatRunningAsOrphan?: boolean;
 }) => {
-  let runtimeStatus = input.status;
   return Layer.effect(GrokTranscriptResync, make).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -93,7 +98,7 @@ const testLayer = (input: {
                 providerInstanceId: null,
                 adapterKey: "grok",
                 runtimeMode: "full-access" as const,
-                status: runtimeStatus as never,
+                status: input.status as never,
                 lastSeenAt: "2026-07-14T00:00:00.000Z",
                 resumeCursor: { sessionId: input.sessionId },
                 runtimePayload: { cwd: input.cwd },
@@ -102,6 +107,38 @@ const testLayer = (input: {
         }),
         Layer.mock(ProjectionThreadMessageRepository)({
           listByThreadId: () => Effect.succeed(existingRows as never),
+        }),
+        Layer.mock(ProjectionSnapshotQuery)({
+          getCommandReadModel: () => Effect.die("unused"),
+          getSnapshot: () => Effect.die("unused"),
+          getShellSnapshot: () => Effect.die("unused"),
+          getArchivedShellSnapshot: () => Effect.die("unused"),
+          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+          getCounts: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getProjectShellById: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.die("unused"),
+          getFullThreadDiffContext: () => Effect.die("unused"),
+          getThreadShellById: () =>
+            Effect.succeed(
+              Option.some({
+                id: THREAD_ID,
+                projectId: "project-1" as never,
+                title: "t",
+                session: {
+                  threadId: THREAD_ID,
+                  status: input.sessionStatus ?? "ready",
+                  providerName: "grok",
+                  runtimeMode: "full-access" as const,
+                  activeTurnId: (input.activeTurnId ?? null) as never,
+                  lastError: null,
+                  updatedAt: "2026-07-14T00:00:00.000Z",
+                },
+              } as never),
+            ),
+          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailSnapshot: () => Effect.die("unused"),
         }),
         Layer.mock(OrchestrationEngineService)({
           readEvents: () => Stream.empty,
@@ -113,19 +150,9 @@ const testLayer = (input: {
             }),
         }),
         Layer.mock(OrphanSessionRecovery)({
-          hasLiveProcess: () => Effect.succeed(!(input.treatRunningAsOrphan ?? false)),
-          settleThread: () =>
-            Effect.sync(() => {
-              runtimeStatus = "stopped";
-            }),
-          settleIfOrphan: () =>
-            Effect.sync(() => {
-              if (input.treatRunningAsOrphan) {
-                runtimeStatus = "stopped";
-                return true;
-              }
-              return false;
-            }),
+          hasLiveProcess: () => Effect.succeed(input.hasLiveProcess ?? false),
+          settleThread: () => Effect.void,
+          settleIfOrphan: () => Effect.succeed(input.treatRunningAsOrphan === true),
           settleAllAfterServerRestart: () =>
             Effect.succeed({ settledSessions: 0, settledRuntimes: 0 }),
         }),
@@ -202,7 +229,7 @@ describe("GrokTranscriptResync", () => {
     },
   );
 
-  it.effect("does not touch a session that is currently running", () => {
+  it.effect("does not resync while a live process is mid-turn", () => {
     const dispatched: Array<OrchestrationCommand> = [];
     return Effect.gen(function* () {
       const cwd = "/tmp/t3-resync-running";
@@ -223,13 +250,46 @@ describe("GrokTranscriptResync", () => {
           sessionId: "s-running",
           cwd: "/tmp/t3-resync-running",
           dispatched,
-          treatRunningAsOrphan: false,
+          sessionStatus: "running",
+          activeTurnId: "turn-live",
+          hasLiveProcess: true,
         }),
       ),
     );
   });
 
-  it.effect("settles a zombie running runtime then resyncs from the session log", () => {
+  it.effect("resyncs when runtime is running but the turn is idle (session ready)", () => {
+    const dispatched: Array<OrchestrationCommand> = [];
+    return Effect.gen(function* () {
+      const cwd = "/tmp/t3-resync-idle-hold";
+      const dir = writeUpdatesLog("s-idle-hold", cwd);
+      try {
+        const resync = yield* GrokTranscriptResync;
+        yield* resync.resyncThread(THREAD_ID);
+        // Grok keeps the process/runtime "running" between turns; external CLI
+        // activity must still be pulled from updates.jsonl on open.
+        assert.equal(dispatched.length, 1);
+        assert.equal(dispatched[0]?.type, "thread.messages.resync");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          status: "running",
+          providerName: "grok",
+          sessionId: "s-idle-hold",
+          cwd: "/tmp/t3-resync-idle-hold",
+          dispatched,
+          sessionStatus: "ready",
+          activeTurnId: null,
+          hasLiveProcess: true,
+        }),
+      ),
+    );
+  });
+
+  it.effect("settles a zombie mid-turn runtime then resyncs from the session log", () => {
     const dispatched: Array<OrchestrationCommand> = [];
     return Effect.gen(function* () {
       const cwd = "/tmp/t3-resync-zombie-running";
@@ -250,6 +310,9 @@ describe("GrokTranscriptResync", () => {
           sessionId: "s-zombie",
           cwd: "/tmp/t3-resync-zombie-running",
           dispatched,
+          sessionStatus: "running",
+          activeTurnId: "turn-zombie",
+          hasLiveProcess: false,
           treatRunningAsOrphan: true,
         }),
       ),

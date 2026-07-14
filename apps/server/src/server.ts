@@ -295,6 +295,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
     GrokTranscriptResyncLive.pipe(
       Layer.provide(ProviderSessionRuntime.layer),
       Layer.provide(OrphanSessionRecoveryLayerLive),
+      Layer.provide(OrchestrationLayerLive),
     ),
   ),
   Layer.provideMerge(OrchestrationLayerLive),
