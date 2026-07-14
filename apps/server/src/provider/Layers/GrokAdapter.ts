@@ -73,6 +73,8 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJ
 
 const PROVIDER = ProviderDriverKind.make("grok");
 const GROK_RESUME_VERSION = 1 as const;
+/** 128 + signal: SIGINT (130) and SIGTERM (143) mean the child was signalled down with us. */
+const SIGNAL_TERMINATION_EXIT_CODES = new Set([130, 143]);
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -527,6 +529,66 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         });
       });
 
+    // Surface an unexpected grok-child exit instead of leaving the thread stuck
+    // in a silent "running" state. Without this the notification stream simply
+    // starves — no error, no completion — and the UI shows a live-looking thread
+    // that never advances. Mirrors CursorAdapter.handleUnexpectedProcessExit.
+    const handleUnexpectedProcessExit = Effect.fn("handleUnexpectedGrokProcessExit")(function* (
+      ctx: GrokSessionContext,
+      exitCode: number | undefined,
+    ) {
+      yield* withThreadLock(
+        ctx.threadId,
+        Effect.gen(function* () {
+          if (ctx.stopped) return;
+          ctx.stopped = true;
+          if (exitCode !== undefined && SIGNAL_TERMINATION_EXIT_CODES.has(exitCode)) {
+            // The child was signalled, not crashed. In practice this only happens
+            // when we are going down with it (systemd SIGTERMs the whole cgroup on
+            // `stop`, reaching grok before our own teardown can mark the session
+            // stopped). Reporting that as a grok failure cries wolf on every
+            // shutdown, so clean up quietly instead.
+            yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+            yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+            if (ctx.notificationFiber) {
+              yield* Fiber.interrupt(ctx.notificationFiber);
+            }
+            sessions.delete(ctx.threadId);
+            yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+            return;
+          }
+          yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+          yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
+          if (ctx.notificationFiber) {
+            yield* Fiber.interrupt(ctx.notificationFiber);
+          }
+          sessions.delete(ctx.threadId);
+          const reason =
+            exitCode === undefined
+              ? "Grok ACP process exited unexpectedly."
+              : `Grok ACP process exited unexpectedly with code ${exitCode}.`;
+          yield* offerRuntimeEvent({
+            type: "runtime.error",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { message: reason, class: "transport_error" },
+          });
+          yield* offerRuntimeEvent({
+            type: "session.exited",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { reason, recoverable: true, exitKind: "error" },
+          });
+          // Publish before closing the scope; this watcher is owned by that scope.
+          yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
+        }),
+      );
+    });
+
     const startSession: GrokAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
@@ -779,6 +841,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             currentModelId: boundModelId,
             stopped: false,
           };
+
+          yield* acp.processExit.pipe(
+            Effect.flatMap((exitCode) => handleUnexpectedProcessExit(ctx, exitCode)),
+            Effect.forkIn(sessionScope),
+          );
 
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
