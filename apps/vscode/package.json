@@ -34,8 +34,8 @@
     "typecheck": "tsgo --noEmit",
     "test": "vp test run",
     "vscode:prepublish": "vp run build",
-    "package": "vsce package --no-dependencies --baseContentUrl https://github.com/patroza/t3code/blob/main/apps/vscode --baseImagesUrl https://raw.githubusercontent.com/patroza/t3code/main/apps/vscode",
-    "publish:vsce": "vsce publish --no-dependencies --baseContentUrl https://github.com/patroza/t3code/blob/main/apps/vscode --baseImagesUrl https://raw.githubusercontent.com/patroza/t3code/main/apps/vscode",
+    "package": "node scripts/vsce.ts package",
+    "publish:vsce": "node scripts/vsce.ts publish",
     "publish:ovsx": "ovsx publish --packagePath"
   },
   "dependencies": {

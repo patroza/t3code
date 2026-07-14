@@ -1,6 +1,7 @@
 .vscode/**
 .vscodeignore
 node_modules/**
+scripts/**
 src/**
 tsconfig.json
 vite.config.*

@@ -98,17 +98,25 @@ fences. T3 Code clients present that envelope as a context reference rather than
 The extension publishes to the `patroza` namespace on both the VS Code Marketplace and Open VSX.
 Extension IDs and versions are shared between the two, so publish the same `.vsix` to each.
 
-Bump `version` in `apps/vscode/package.json` and add a `CHANGELOG.md` entry first, then:
+Bump `version` in `apps/vscode/package.json`, add a `CHANGELOG.md` entry, then commit and **push** —
+packaging pins README links to the current commit and refuses to run if that commit is not on a
+remote branch. Then:
 
 ```sh
 pnpm --filter t3-code package                 # -> t3-code-<version>.vsix
 ```
 
-`package` runs the `vscode:prepublish` build and bundles `src/` with esbuild, so `--no-dependencies`
-is passed deliberately: nothing from `node_modules` ships, and vsce never has to resolve the
-`workspace:*` dependencies it cannot understand. The `--baseContentUrl` / `--baseImagesUrl` flags
-make the README's relative links resolve against `apps/vscode/` on GitHub, which vsce cannot infer
-for an extension living in a monorepo subdirectory.
+Both `package` and `publish:vsce` go through `scripts/vsce.ts`, which runs the `vscode:prepublish`
+build and supplies two sets of flags:
+
+- `--no-dependencies`, because esbuild already bundles `src/`. Nothing from `node_modules` ships,
+  and vsce never has to resolve the `workspace:*` dependencies it cannot understand.
+- `--baseContentUrl` / `--baseImagesUrl` pinned to the current commit, because vsce cannot infer
+  that this extension lives in a monorepo subdirectory and would otherwise rewrite the README's
+  relative links to the repository root. Pinning to the commit rather than `main` keeps each
+  published version's README pointing at the tree it was built from, so the screenshot survives
+  files moving later and works even when a version is published before its commit reaches `main`.
+  A published README cannot be corrected without publishing a new version.
 
 Inspect the packaged contents before publishing:
 
