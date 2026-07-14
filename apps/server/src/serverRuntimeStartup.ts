@@ -40,6 +40,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as OrphanSessionRecovery from "./orchestration/Services/OrphanSessionRecovery.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -315,11 +316,10 @@ export const make = Effect.gen(function* () {
   const keybindings = yield* Keybindings.Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+  const orphanSessionRecovery = yield* OrphanSessionRecovery.OrphanSessionRecovery;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const crypto = yield* Crypto.Crypto;
 
   const commandGate = yield* makeCommandGate;
@@ -373,24 +373,14 @@ export const make = Effect.gen(function* () {
     yield* runStartupPhase(
       "sessions.interrupt-stale",
       Effect.gen(function* () {
-        const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
-        const updatedAt = DateTime.formatIso(yield* DateTime.now);
-        let interruptedCount = 0;
-        for (const thread of snapshot.threads) {
-          const session = interruptSessionAfterServerRestart(thread.session, updatedAt);
-          if (session === null) continue;
-          yield* orchestrationEngine.dispatch({
-            type: "thread.session.set",
-            commandId: CommandId.make(yield* crypto.randomUUIDv4),
-            threadId: thread.id,
-            session,
-            createdAt: updatedAt,
-          });
-          interruptedCount += 1;
-        }
-        if (interruptedCount > 0) {
+        // Full orphan audit: clear shell sessions *and* provider runtimes that
+        // claim to be live. No provider process can have survived the restart,
+        // so leaving them "running" deadlocks resync/reaper behind active turns.
+        const result = yield* orphanSessionRecovery.settleAllAfterServerRestart();
+        if (result.settledSessions > 0 || result.settledRuntimes > 0) {
           yield* Effect.logWarning("interrupted stale provider sessions after server restart", {
-            interruptedCount,
+            interruptedCount: result.settledSessions,
+            settledRuntimes: result.settledRuntimes,
           });
         }
       }),

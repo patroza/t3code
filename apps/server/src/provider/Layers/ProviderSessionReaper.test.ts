@@ -17,6 +17,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { OrphanSessionRecovery } from "../../orchestration/Services/OrphanSessionRecovery.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
@@ -138,6 +139,8 @@ describe("ProviderSessionReaper", () => {
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
+    readonly orphanHasLiveProcess?: boolean;
+    readonly onOrphanSettle?: (threadId: ThreadId) => void;
   }) {
     const stoppedThreadIds = new Set<ThreadId>();
     const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(
@@ -188,6 +191,18 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
+      Layer.provideMerge(
+        Layer.succeed(OrphanSessionRecovery, {
+          hasLiveProcess: () => Effect.succeed(input.orphanHasLiveProcess ?? true),
+          settleThread: (request) =>
+            Effect.sync(() => {
+              input.onOrphanSettle?.(request.threadId);
+            }),
+          settleIfOrphan: () => Effect.succeed(false),
+          settleAllAfterServerRestart: () =>
+            Effect.succeed({ settledSessions: 0, settledRuntimes: 0 }),
+        }),
+      ),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getCommandReadModel: () => Effect.die("unused"),
@@ -268,7 +283,7 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
   });
 
-  it("skips stale sessions when the thread still has an active turn", async () => {
+  it("skips stale sessions when the thread still has an active turn and a live process", async () => {
     const threadId = ThreadId.make("thread-reaper-active-turn");
     const turnId = TurnId.make("turn-reaper-active");
     const now = "2026-01-01T00:00:00.000Z";
@@ -314,6 +329,63 @@ describe("ProviderSessionReaper", () => {
     await Effect.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("force-settles stale sessions with an active turn but no live process", async () => {
+    const threadId = ThreadId.make("thread-reaper-orphan-active-turn");
+    const turnId = TurnId.make("turn-reaper-orphan");
+    const now = "2026-01-01T00:00:00.000Z";
+    const settled: ThreadId[] = [];
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      orphanHasLiveProcess: false,
+      onOrphanSettle: (id) => {
+        settled.push(id);
+      },
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: {
+          opaque: "resume-orphan-active-turn",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await waitFor(() => settled.length === 1);
+
+    expect(settled).toEqual([threadId]);
+    // Harness still tracks stopSession for non-orphan path; orphan path uses recovery.
+    void harness;
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
   });

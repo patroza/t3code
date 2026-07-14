@@ -543,17 +543,28 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           if (ctx.stopped) return;
           ctx.stopped = true;
           if (exitCode !== undefined && SIGNAL_TERMINATION_EXIT_CODES.has(exitCode)) {
-            // The child was signalled, not crashed. In practice this only happens
-            // when we are going down with it (systemd SIGTERMs the whole cgroup on
-            // `stop`, reaching grok before our own teardown can mark the session
-            // stopped). Reporting that as a grok failure cries wolf on every
-            // shutdown, so clean up quietly instead.
+            // The child was signalled (often cgroup SIGTERM on server stop).
+            // Still publish a graceful session.exited so orchestration can settle
+            // the turn/session if this process is still draining; startup orphan
+            // recovery covers the case where we die before ingestion runs.
             yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
             yield* settlePendingUserInputsAsCancelled(ctx.pendingUserInputs);
             if (ctx.notificationFiber) {
               yield* Fiber.interrupt(ctx.notificationFiber);
             }
             sessions.delete(ctx.threadId);
+            yield* offerRuntimeEvent({
+              type: "session.exited",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              ...(ctx.activeTurnId !== null ? { turnId: ctx.activeTurnId } : {}),
+              payload: {
+                reason: "Grok ACP process terminated by signal.",
+                recoverable: true,
+                exitKind: "graceful",
+              },
+            });
             yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
             return;
           }

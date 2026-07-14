@@ -27,6 +27,7 @@ import {
 } from "@t3tools/contracts";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { OrphanSessionRecovery } from "../orchestration/Services/OrphanSessionRecovery.ts";
 import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSessionRuntime.ts";
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import {
@@ -64,19 +65,33 @@ export const make = Effect.gen(function* () {
   const runtimeRepository = yield* ProviderSessionRuntimeRepository;
   const messageRepository = yield* ProjectionThreadMessageRepository;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const orphanSessionRecovery = yield* OrphanSessionRecovery;
 
   const resyncThread = Effect.fn("GrokTranscriptResync.resyncThread")(function* (
     threadId: ThreadId,
   ) {
-    const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+    let runtime = yield* runtimeRepository.getByThreadId({ threadId });
     if (Option.isNone(runtime) || runtime.value.providerName !== GROK_PROVIDER) {
       return;
     }
-    // A running session is streaming over ACP right now; that stream is the
-    // authority. Resyncing mid-turn would race it and could duplicate a message
-    // whose streamed text is still partial.
+    // A truly live ACP stream is authoritative for the open turn — resyncing
+    // would race partial assistant text. Zombie "running" rows (no process)
+    // must be settled first or resync is permanently skipped.
     if (runtime.value.status === "running") {
-      return;
+      const settled = yield* orphanSessionRecovery.settleIfOrphan(
+        threadId,
+        "resync_zombie_running",
+      );
+      if (!settled) {
+        return;
+      }
+      runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      if (Option.isNone(runtime) || runtime.value.providerName !== GROK_PROVIDER) {
+        return;
+      }
+      if (runtime.value.status === "running") {
+        return;
+      }
     }
     const sessionId = readStringField(runtime.value.resumeCursor, "sessionId");
     const cwd = readStringField(runtime.value.runtimePayload, "cwd");
