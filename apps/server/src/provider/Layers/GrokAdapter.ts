@@ -160,11 +160,12 @@ function settlePendingUserInputsAsCancelled(
 
 /**
  * Claude-style "capture plan and stop" message for Grok's exit_plan reverse-RPC.
- * Returning `rejected` keeps plan mode active without starting implementation,
- * so the turn can settle and T3 can show Plan Ready / implement UX.
+ * Returning `rejected` keeps plan mode active without starting implementation.
+ * Wording avoids "revise" / "user wants" phrasing — real Grok maps that to a
+ * revise loop and re-calls exit_plan_mode for minutes.
  */
 const GROK_EXIT_PLAN_CAPTURED_FEEDBACK =
-  "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.";
+  "Plan captured by the client UI. End this turn now without further tool calls. Do not call exit_plan_mode again. Wait for a later user message to refine or implement.";
 
 function appendPromptResultToTurn(
   ctx: GrokSessionContext,
@@ -876,9 +877,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             );
             // Real Grok intercepts exit_plan_mode, auto-allows the tool permission,
             // then sends this reverse-RPC with planContent for client-side approval.
-            // T3 captures the plan into turn.proposed.completed and immediately
-            // rejects exit (Claude-style) so the turn can settle. Holding the RPC
-            // leaves session.status=running forever, which hides Plan Ready UX.
+            // T3 captures the plan and rejects exit (stay in plan mode). Plan Ready
+            // UX no longer waits for turn settle — see shouldShowPlanFollowUpComposer.
             yield* Effect.forEach(
               ["x.ai/exit_plan_mode", "_x.ai/exit_plan_mode"] as const,
               (method) =>

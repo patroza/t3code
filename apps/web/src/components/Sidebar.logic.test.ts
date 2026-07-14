@@ -32,6 +32,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
@@ -834,6 +835,24 @@ describe("resolveThreadStatusPill", () => {
             ...baseThread.session,
             status: "ready",
             activeTurnId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
+  it("shows plan ready over working when a plan is captured mid-turn", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          interactionMode: "plan",
+          latestTurn: makeLatestTurn({ completedAt: null }),
+          session: {
+            ...baseThread.session,
+            status: "running",
+            activeTurnId: TurnId.make("turn-running"),
           },
         },
       }),

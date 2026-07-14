@@ -8,7 +8,7 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
+import { shouldShowPlanReadyStatus } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export function resolveSidebarProjectBadgeLabel(displayName: string): string {
@@ -561,6 +561,23 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  // Plan Ready outranks Working: Grok often stays "running" long after the plan
+  // is captured (agent-entered plan mode). Users need Implement immediately.
+  if (
+    shouldShowPlanReadyStatus({
+      interactionMode: thread.interactionMode,
+      hasPendingUserInput: thread.hasPendingUserInput,
+      hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    })
+  ) {
+    return {
+      label: "Plan Ready",
+      colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: false,
+    };
+  }
+
   if (thread.session?.status === "running") {
     return {
       label: "Working",
@@ -584,20 +601,6 @@ export function resolveThreadStatusPill(input: {
       label: "Wake Required",
       colorClass: "text-orange-600 dark:text-orange-300/90",
       dotClass: "bg-orange-500 dark:bg-orange-300/90",
-      pulse: false,
-    };
-  }
-
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
-    return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
     };
   }
