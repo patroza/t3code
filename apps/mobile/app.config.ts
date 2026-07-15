@@ -31,18 +31,29 @@ const EAS_PROJECT_ID =
   repoEnv.T3CODE_MOBILE_EAS_PROJECT_ID ??
   (EXPO_OWNER === "pingdotgg" ? "d763fcb8-d37c-41ea-a773-b54a0ab4a454" : undefined);
 
-const VARIANT_CONFIG: Record<
-  AppVariant,
-  {
-    readonly appName: string;
-    readonly scheme: string;
-    readonly iosIcon: string;
-    readonly splashIcon: string;
-    readonly iosBundleIdentifier: string;
-    readonly androidPackage: string;
-    readonly relyingParty?: string;
-  }
-> = {
+const DEVELOPMENT_ASSETS = {
+  appIcon: "./assets/splash-icon-dev.png",
+  iosIcon: "./assets/icon-composer-dev.icon",
+  splashIcon: "./assets/splash-icon-dev.png",
+  androidAdaptiveForeground: "./assets/android-icon-dev-foreground.png",
+  androidAdaptiveBackgroundColor: "#00639B",
+  androidMonochromeIcon: "./assets/android-icon-mark.png",
+  androidNotificationIcon: "./assets/android-notification-icon.png",
+  androidNotificationColor: "#00639B",
+} as const;
+
+const RELEASE_ASSETS = {
+  appIcon: "./assets/splash-icon-prod.png",
+  iosIcon: "./assets/icon-composer-prod.icon",
+  splashIcon: "./assets/splash-icon-prod.png",
+  androidAdaptiveForeground: "./assets/android-icon-mark.png",
+  androidAdaptiveBackgroundColor: "#000000",
+  androidMonochromeIcon: "./assets/android-icon-mark.png",
+  androidNotificationIcon: "./assets/android-notification-icon.png",
+  androidNotificationColor: "#FFFFFF",
+} as const;
+
+const VARIANT_CONFIG = {
   development: {
     appName: "T3 Code Dev",
     scheme: "t3code-dev",
@@ -51,6 +62,7 @@ const VARIANT_CONFIG: Record<
     iosBundleIdentifier: `${IOS_BUNDLE_IDENTIFIER}.dev`,
     androidPackage: "com.t3tools.t3code.dev",
     relyingParty: "clerk.t3.codes",
+    assets: DEVELOPMENT_ASSETS,
   },
   preview: {
     appName: "T3 Code Preview",
@@ -60,6 +72,7 @@ const VARIANT_CONFIG: Record<
     iosBundleIdentifier: `${IOS_BUNDLE_IDENTIFIER}.preview`,
     androidPackage: "com.t3tools.t3code.preview",
     relyingParty: "clerk.t3.codes",
+    assets: RELEASE_ASSETS,
   },
   production: {
     appName: "T3 Code",
@@ -69,8 +82,9 @@ const VARIANT_CONFIG: Record<
     iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
     androidPackage: "com.t3tools.t3code",
     relyingParty: "clerk.t3.codes",
+    assets: RELEASE_ASSETS,
   },
-};
+} as const;
 
 function resolveAppVariant(value: string | undefined): AppVariant {
   switch (value) {
@@ -129,7 +143,7 @@ const config: ExpoConfig = {
     policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
   },
   orientation: "portrait",
-  icon: "./assets/icon.png",
+  icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates:
     EAS_PROJECT_ID === undefined
@@ -141,7 +155,7 @@ const config: ExpoConfig = {
           fallbackToCacheTimeout: 0,
         },
   ios: {
-    icon: variant.iosIcon,
+    icon: variant.assets.iosIcon,
     supportsTablet: true,
     bundleIdentifier: variant.iosBundleIdentifier,
     // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
@@ -166,13 +180,12 @@ const config: ExpoConfig = {
     },
   },
   android: {
-    icon: "./assets/icon.png",
+    icon: variant.assets.appIcon,
     package: variant.androidPackage,
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
-      foregroundImage: "./assets/android-icon-foreground.png",
-      backgroundImage: "./assets/android-icon-background.png",
-      monochromeImage: "./assets/android-icon-monochrome.png",
+      backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
+      foregroundImage: variant.assets.androidAdaptiveForeground,
+      monochromeImage: variant.assets.androidMonochromeIcon,
     },
     // Opts into OnBackInvokedCallback-based back dispatch (Android 13+).
     // JS back handling survives it via react-native's Android 16 shim plus
@@ -180,7 +193,7 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: true,
   },
   web: {
-    favicon: "./assets/favicon.png",
+    favicon: variant.assets.appIcon,
   },
   plugins: [
     "expo-asset",
@@ -210,6 +223,14 @@ const config: ExpoConfig = {
     ],
     "expo-secure-store",
     "expo-sqlite",
+    [
+      "expo-notifications",
+      {
+        icon: variant.assets.androidNotificationIcon,
+        color: variant.assets.androidNotificationColor,
+        mode: APP_VARIANT === "development" ? "development" : "production",
+      },
+    ],
     // appleSignIn must be gated here: withoutIosPersonalTeamCapabilities.cjs runs before
     // plugins earlier in this array, so it cannot strip the entitlement Clerk would add.
     ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild }],
@@ -221,8 +242,8 @@ const config: ExpoConfig = {
         // the shortcut items set in src/features/shortcuts.
         androidIcons: {
           shortcut_icon: {
-            foregroundImage: "./assets/android-icon-foreground.png",
-            backgroundColor: "#E6F4FE",
+            foregroundImage: variant.assets.androidAdaptiveForeground,
+            backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
           },
         },
       },
@@ -232,17 +253,18 @@ const config: ExpoConfig = {
       {
         cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
         barcodeScannerEnabled: true,
+        recordAudioAndroid: false,
       },
     ],
     [
       "expo-splash-screen",
       {
-        image: variant.splashIcon,
+        image: variant.assets.splashIcon,
         resizeMode: "contain",
         backgroundColor: "#ffffff",
         imageWidth: 220,
         dark: {
-          image: variant.splashIcon,
+          image: variant.assets.splashIcon,
           backgroundColor: "#0a0a0a",
         },
       },
