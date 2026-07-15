@@ -205,11 +205,13 @@ describe("GrokTranscriptResync", () => {
         const dir = writeUpdatesLog("s-dedup", "/tmp/t3-resync-dedup");
         try {
           const resync = yield* GrokTranscriptResync;
-          // Several clients opening the same thread at once each compute the same
-          // plan before any dispatch lands; command-receipt dedup must collapse
-          // them, which it can only do if the command id is content-derived.
-          yield* resync.resyncThread(THREAD_ID);
-          yield* resync.resyncThread(THREAD_ID);
+          // Several clients opening the same thread at once each pass the
+          // unchanged-log check and compute the same plan before any dispatch
+          // lands. Command-receipt dedup collapses them only if the command id is
+          // derived from the plan's content rather than freshly generated.
+          yield* Effect.all([resync.resyncThread(THREAD_ID), resync.resyncThread(THREAD_ID)], {
+            concurrency: 2,
+          });
           assert.strictEqual(dispatched.length, 2);
           assert.strictEqual(dispatched[0]!.commandId, dispatched[1]!.commandId);
         } finally {
@@ -314,6 +316,37 @@ describe("GrokTranscriptResync", () => {
           activeTurnId: "turn-zombie",
           hasLiveProcess: false,
           treatRunningAsOrphan: true,
+        }),
+      ),
+    );
+  });
+
+  it.effect("re-opening a thread whose log has not changed does no work", () => {
+    const dispatched: Array<OrchestrationCommand> = [];
+    return Effect.gen(function* () {
+      const dir = writeUpdatesLog("s-cache", "/tmp/t3-resync-cache");
+      try {
+        const resync = yield* GrokTranscriptResync;
+        yield* resync.resyncThread(THREAD_ID);
+        assert.strictEqual(dispatched.length, 1, "first open resyncs");
+
+        // Thread opens are frequent and these logs reach hundreds of MB, so an
+        // unchanged log must not be re-read — that cost ~570ms of blocked event
+        // loop per open before this fingerprint check existed.
+        yield* resync.resyncThread(THREAD_ID);
+        yield* resync.resyncThread(THREAD_ID);
+        assert.strictEqual(dispatched.length, 1, "unchanged log must not resync again");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          status: "stopped",
+          providerName: "grok",
+          sessionId: "s-cache",
+          cwd: "/tmp/t3-resync-cache",
+          dispatched,
         }),
       ),
     );

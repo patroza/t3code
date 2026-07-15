@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   planGrokBackfill,
   readGrokDisplayMessages,
+  readGrokDisplayMessagesTail,
   resolveGrokChatHistoryPath,
   type ExistingThreadMessage,
   type GrokDisplayMessage,
@@ -21,8 +22,8 @@ const SESSION_ID = "session-abc";
 const grokMessage = (
   role: "user" | "assistant",
   text: string,
-  lineIndex: number,
-): GrokDisplayMessage => ({ role, text, lineIndex, emittedAtMs: 0 });
+  sourceOffset: number,
+): GrokDisplayMessage => ({ role, text, sourceOffset, emittedAtMs: 0 });
 
 const grok: ReadonlyArray<GrokDisplayMessage> = [
   grokMessage("user", "first question", 2),
@@ -244,6 +245,64 @@ describe("readGrokDisplayMessages", () => {
 
   it("returns nothing for a missing update log rather than throwing", () => {
     assert.deepStrictEqual(readGrokDisplayMessages("/definitely/not/here/updates.jsonl"), []);
+  });
+
+  it("tail read yields byte-identical offsets to a full read", async () => {
+    // The whole point of keying on a byte offset: a windowed read must mint the
+    // same ids as a full read, or the same message would be backfilled twice
+    // under different ids depending on how much of the file we happened to read.
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "grok-tail-test-"));
+    const file = NodePath.join(dir, "updates.jsonl");
+    const records: Array<string> = [];
+    for (let i = 0; i < 40; i += 1) {
+      // Bulk that dwarfs the transcript, like real tool-call traffic.
+      records.push(JSON.stringify(update("tool_call_update", "x".repeat(500), 1700000000 + i)));
+      records.push(JSON.stringify(update("agent_message_chunk", `answer ${i}`, 1700000000 + i)));
+    }
+    NodeFS.writeFileSync(file, records.join("\n"));
+    try {
+      const full = readGrokDisplayMessages(file);
+      const size = NodeFS.statSync(file).size;
+      const tail = await readGrokDisplayMessagesTail(file, Math.floor(size / 4));
+
+      assert.isAbove(tail.length, 0, "tail window should still find messages");
+      assert.isBelow(tail.length, full.length, "a quarter-window should not hold everything");
+      // Every tail message matches the full read exactly, offset included.
+      const fullByOffset = new Map(full.map((m) => [m.sourceOffset, m]));
+      for (const message of tail) {
+        assert.deepStrictEqual(message, fullByOffset.get(message.sourceOffset));
+      }
+      // And the tail is the END of the log.
+      assert.deepStrictEqual(tail.at(-1), full.at(-1));
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reading a window larger than the file equals a full read", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "grok-tail-test-"));
+    const file = NodePath.join(dir, "updates.jsonl");
+    NodeFS.writeFileSync(
+      file,
+      [
+        update("user_message_chunk", "prompt", 1700000000),
+        update("agent_message_chunk", "answer", 1700000001),
+      ]
+        .map((r) => JSON.stringify(r))
+        .join("\n"),
+    );
+    try {
+      assert.deepStrictEqual(
+        await readGrokDisplayMessagesTail(file, 10_000_000),
+        readGrokDisplayMessages(file),
+      );
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns nothing for a missing log rather than throwing (tail)", async () => {
+    assert.deepStrictEqual(await readGrokDisplayMessagesTail("/nope/updates.jsonl", 1024), []);
   });
 });
 

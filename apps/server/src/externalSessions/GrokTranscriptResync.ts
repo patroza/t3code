@@ -12,6 +12,8 @@
  * projection) is what makes it visible: the event flows through the projector
  * and out to every subscriber, so an open thread heals in place.
  */
+import * as NodeFSP from "node:fs/promises";
+
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -33,13 +35,37 @@ import { ProviderSessionRuntimeRepository } from "../persistence/ProviderSession
 import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 import {
   planGrokBackfill,
-  readGrokDisplayMessages,
+  readGrokDisplayMessagesTail,
   resolveGrokChatHistoryPath,
   type ExistingThreadMessage,
+  type GrokDisplayMessage,
 } from "./backfillGrokSession.ts";
 import { stableUuid } from "./sqlite.ts";
 
 const GROK_PROVIDER = "grok";
+
+/**
+ * How much of the tail of `updates.jsonl` to read, widening only if the anchor
+ * is not in the smaller window.
+ *
+ * These logs are overwhelmingly tool-call traffic and grow without bound: a 150MB
+ * log measured here held ~140 transcript messages, i.e. roughly **one message per
+ * MB**. Windows must be sized against that density, not against intuition — on
+ * that file a 512KB tail contained zero messages, while 4MB held 8 (11ms) and
+ * 32MB held 43 (81ms). 4MB therefore covers an in-sync thread, whose anchor is
+ * its newest message.
+ *
+ * We stop at the second window rather than falling back to the whole file: this
+ * runs on thread open, and no UI interaction should pay a multi-hundred-MB read
+ * (that cost ~570ms of blocked event loop). A thread stale beyond the last window
+ * is left to the `backfill-grok` CLI, which is offline and may read everything.
+ */
+const TAIL_WINDOW_BYTES = [4 * 1024 * 1024, 32 * 1024 * 1024] as const;
+
+interface LogFingerprint {
+  readonly mtimeMs: number;
+  readonly size: number;
+}
 
 function readStringField(value: unknown, field: string): string | null {
   if (typeof value !== "object" || value === null) {
@@ -66,6 +92,10 @@ export const make = Effect.gen(function* () {
   const runtimeRepository = yield* ProviderSessionRuntimeRepository;
   const messageRepository = yield* ProjectionThreadMessageRepository;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  // Per-thread fingerprint of the grok log as of the last check, so an unchanged
+  // log costs one stat() instead of a read. In-memory: losing it on restart just
+  // means one extra read per thread.
+  const lastSeenLog = new Map<string, LogFingerprint>();
   const orphanSessionRecovery = yield* OrphanSessionRecovery;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
@@ -103,8 +133,21 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    const grokMessages = readGrokDisplayMessages(resolveGrokChatHistoryPath({ cwd, sessionId }));
-    if (grokMessages.length === 0) {
+    const updatesPath = resolveGrokChatHistoryPath({ cwd, sessionId });
+
+    // Nothing can have been appended since we last looked, so there is nothing to
+    // catch up on. Thread opens are frequent and this is the common case, so it
+    // must cost a stat() rather than a read.
+    const stats = yield* Effect.tryPromise(() => NodeFSP.stat(updatesPath)).pipe(
+      Effect.option,
+      Effect.map(Option.getOrUndefined),
+    );
+    if (!stats) {
+      return;
+    }
+    const fingerprint: LogFingerprint = { mtimeMs: stats.mtimeMs, size: stats.size };
+    const seen = lastSeenLog.get(threadId);
+    if (seen && seen.mtimeMs === fingerprint.mtimeMs && seen.size === fingerprint.size) {
       return;
     }
 
@@ -119,8 +162,32 @@ export const make = Effect.gen(function* () {
         updatedAt: row.updatedAt,
       }));
 
-    const plan = planGrokBackfill({ grokMessages, existingMessages, sessionId });
-    if (plan.error !== undefined || plan.newMessages.length === 0) {
+    // Widen only on a miss: a plan error here means the anchor was not inside the
+    // window, which is indistinguishable from "the anchor is older than what we
+    // read". Anything else (including "nothing new") is a final answer.
+    let plan: ReturnType<typeof planGrokBackfill> | undefined;
+    for (const windowBytes of TAIL_WINDOW_BYTES) {
+      const grokMessages = yield* Effect.tryPromise(() =>
+        readGrokDisplayMessagesTail(updatesPath, windowBytes),
+      ).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<GrokDisplayMessage>));
+      if (grokMessages.length === 0) {
+        continue;
+      }
+      plan = planGrokBackfill({ grokMessages, existingMessages, sessionId });
+      if (plan.error === undefined) {
+        break;
+      }
+      if (windowBytes >= fingerprint.size) {
+        // We already had the whole file; a wider window cannot help.
+        break;
+      }
+    }
+
+    // Record the fingerprint regardless of outcome: re-reading an unchanged file
+    // would reach the same conclusion, including "the anchor is too far back".
+    lastSeenLog.set(threadId, fingerprint);
+
+    if (!plan || plan.error !== undefined || plan.newMessages.length === 0) {
       return;
     }
 

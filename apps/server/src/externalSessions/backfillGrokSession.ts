@@ -17,6 +17,7 @@
 // direct write would be invisible to them forever. It is idempotent — re-running
 // an identical backfill yields the same event id and changes nothing.
 import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -27,8 +28,13 @@ const GROK_PROVIDER = "grok";
 export interface GrokDisplayMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
-  /** 1-based line number in updates.jsonl — the stable identity/order key. */
-  readonly lineIndex: number;
+  /**
+   * Byte offset of the line in updates.jsonl — the stable identity/order key.
+   * A byte offset (not a line number) so it stays identical whether the file was
+   * read whole or from a tail window; a line number would depend on where the
+   * read began and would mint different ids for the same message.
+   */
+  readonly sourceOffset: number;
   /** When grok emitted it (ms). */
   readonly emittedAtMs: number;
 }
@@ -46,7 +52,7 @@ export interface ExistingThreadMessage {
 export interface GrokBackfillMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
-  readonly lineIndex: number;
+  readonly sourceOffset: number;
   readonly messageId: string;
   readonly turnId: string | null;
   readonly attachmentsJson: string;
@@ -107,63 +113,133 @@ export interface RunGrokBackfillOptions {
 const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
 
 /**
- * Parse grok's `updates.jsonl` into ordered, human-displayable messages.
- *
- * This reads the session/update notification log — the same stream T3 ingests
- * live over ACP — and NOT `chat_history.jsonl`. chat_history is grok's LLM
- * context: grok compacts it, rewriting and discarding old turns, so it is not a
- * transcript and cannot be relied on to still hold the messages T3 missed.
- * `updates.jsonl` is append-only, survives compaction, and carries real emit
- * timestamps.
+ * One `updates.jsonl` record -> a transcript message, if it is one.
  *
  * Only `user_message_chunk` and `agent_message_chunk` are transcript content;
  * thoughts, tool calls, plans and hook/compaction bookkeeping are skipped.
+ */
+function parseUpdateLine(line: string, sourceOffset: number): GrokDisplayMessage | undefined {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  let record: Record<string, unknown>;
+  try {
+    record = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const params = record.params;
+  if (typeof params !== "object" || params === null) {
+    return undefined;
+  }
+  const update = (params as Record<string, unknown>).update;
+  if (typeof update !== "object" || update === null) {
+    return undefined;
+  }
+  const kind = (update as Record<string, unknown>).sessionUpdate;
+  const role =
+    kind === "user_message_chunk" ? "user" : kind === "agent_message_chunk" ? "assistant" : null;
+  if (role === null) {
+    return undefined;
+  }
+  const content = (update as Record<string, unknown>).content;
+  const text =
+    typeof content === "object" && content !== null
+      ? (content as Record<string, unknown>).text
+      : undefined;
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return undefined;
+  }
+  // grok stamps unix seconds.
+  const timestamp = record.timestamp;
+  const emittedAtMs = typeof timestamp === "number" ? timestamp * 1000 : Number.NaN;
+  return { role, text, sourceOffset, emittedAtMs };
+}
+
+function collectFromChunk(
+  chunk: string,
+  chunkStartOffset: number,
+): ReadonlyArray<GrokDisplayMessage> {
+  const out: Array<GrokDisplayMessage> = [];
+  let cursor = 0;
+  for (const line of chunk.split("\n")) {
+    const message = parseUpdateLine(line, chunkStartOffset + cursor);
+    if (message) {
+      out.push(message);
+    }
+    cursor += Buffer.byteLength(line, "utf8") + 1;
+  }
+  return out;
+}
+
+/**
+ * Read grok's `updates.jsonl` — the session/update notification log, the same
+ * stream T3 ingests live over ACP, and NOT `chat_history.jsonl`. chat_history is
+ * grok's LLM context: grok compacts it, rewriting and discarding old turns, so
+ * it is not a transcript and cannot be relied on to still hold what T3 missed.
+ * `updates.jsonl` is append-only, survives compaction, and carries real emit
+ * timestamps.
+ *
+ * Reads the whole log: blocking and unbounded — these files reach hundreds of MB,
+ * so this is for offline tooling (the CLI) only. Anything on a request path must
+ * use `readGrokDisplayMessagesTail`.
  */
 export function readGrokDisplayMessages(updatesPath: string): ReadonlyArray<GrokDisplayMessage> {
   if (!NodeFS.existsSync(updatesPath)) {
     return [];
   }
-  const lines = NodeFS.readFileSync(updatesPath, "utf8").split("\n");
-  const out: Array<GrokDisplayMessage> = [];
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) {
-      return;
+  return collectFromChunk(NodeFS.readFileSync(updatesPath, "utf8"), 0);
+}
+
+/**
+ * Read at most the last `maxBytes` of the log, without loading the rest.
+ *
+ * These logs are dominated by tool-call traffic and grow without bound (150MB
+ * observed for ~140 messages), so reading one whole file cost ~570ms of blocked
+ * event loop per call. The transcript tail we actually need sits at the end, so
+ * read backwards from there.
+ *
+ * A window that starts mid-line would yield a truncated record, so the first
+ * partial line is dropped — meaning a caller must tolerate the window missing
+ * older messages (widen, or give up) rather than treat this as the full log.
+ */
+export async function readGrokDisplayMessagesTail(
+  updatesPath: string,
+  maxBytes: number,
+): Promise<ReadonlyArray<GrokDisplayMessage>> {
+  let handle: NodeFSP.FileHandle;
+  try {
+    handle = await NodeFSP.open(updatesPath, "r");
+  } catch {
+    return [];
+  }
+  try {
+    const { size } = await handle.stat();
+    const start = Math.max(0, size - maxBytes);
+    const length = size - start;
+    if (length <= 0) {
+      return [];
     }
-    let record: Record<string, unknown>;
-    try {
-      record = JSON.parse(trimmed) as Record<string, unknown>;
-    } catch {
-      return;
+    const buffer = Buffer.allocUnsafe(length);
+    await handle.read(buffer, 0, length, start);
+    const chunk = buffer.toString("utf8");
+    if (start === 0) {
+      return collectFromChunk(chunk, 0);
     }
-    const params = record.params;
-    if (typeof params !== "object" || params === null) {
-      return;
+    // Drop the (probably partial) first line and resume at the next boundary.
+    const firstBreak = chunk.indexOf("\n");
+    if (firstBreak === -1) {
+      return [];
     }
-    const update = (params as Record<string, unknown>).update;
-    if (typeof update !== "object" || update === null) {
-      return;
-    }
-    const kind = (update as Record<string, unknown>).sessionUpdate;
-    const role =
-      kind === "user_message_chunk" ? "user" : kind === "agent_message_chunk" ? "assistant" : null;
-    if (role === null) {
-      return;
-    }
-    const content = (update as Record<string, unknown>).content;
-    const text =
-      typeof content === "object" && content !== null
-        ? (content as Record<string, unknown>).text
-        : undefined;
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return;
-    }
-    // grok stamps unix seconds.
-    const timestamp = record.timestamp;
-    const emittedAtMs = typeof timestamp === "number" ? timestamp * 1000 : Number.NaN;
-    out.push({ role, text, lineIndex: index + 1, emittedAtMs });
-  });
-  return out;
+    const rest = chunk.slice(firstBreak + 1);
+    return collectFromChunk(
+      rest,
+      start + Buffer.byteLength(chunk.slice(0, firstBreak + 1), "utf8"),
+    );
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -265,7 +341,7 @@ export function planGrokBackfill(input: {
       tail.push({
         role: message.role,
         text: existing.text,
-        lineIndex: message.lineIndex,
+        sourceOffset: message.sourceOffset,
         messageId: existing.messageId,
         turnId: existing.turnId,
         attachmentsJson: existing.attachmentsJson,
@@ -284,8 +360,8 @@ export function planGrokBackfill(input: {
     const entry: GrokBackfillMessage = {
       role: message.role,
       text: message.text,
-      lineIndex: message.lineIndex,
-      messageId: stableUuid("t3-grok-backfill-message", `${sessionId}:${message.lineIndex}`),
+      sourceOffset: message.sourceOffset,
+      messageId: stableUuid("t3-grok-backfill-message", `${sessionId}:${message.sourceOffset}`),
       turnId: null,
       attachmentsJson: "[]",
       createdAt,
@@ -298,7 +374,7 @@ export function planGrokBackfill(input: {
 
   return {
     anchorMessageId,
-    anchorLineIndex: anchorIndex === -1 ? null : grokMessages[anchorIndex]!.lineIndex,
+    anchorLineIndex: anchorIndex === -1 ? null : grokMessages[anchorIndex]!.sourceOffset,
     skippedExisting,
     tail,
     newMessages,
@@ -517,7 +593,7 @@ export function formatGrokBackfillResult(
   const detail = result.newMessages
     .map(
       (message) =>
-        `  + [${message.role}] line ${message.lineIndex} @ ${message.createdAt}  ` +
+        `  + [${message.role}] @${message.sourceOffset} ${message.createdAt}  ` +
         JSON.stringify(normalize(message.text).slice(0, 80)),
     )
     .join("\n");
