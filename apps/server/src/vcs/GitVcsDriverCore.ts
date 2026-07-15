@@ -370,6 +370,30 @@ function isNonRepositoryGitStderr(stderr: string): boolean {
   return stderr.toLowerCase().includes("not a git repository");
 }
 
+/** Longer than any real git error line, short enough to keep logs readable. */
+const GIT_STDERR_LOG_LIMIT = 2000;
+
+/**
+ * Strip credentials from git output so it can be logged.
+ *
+ * git echoes the remote URL it used, and those URLs routinely carry secrets
+ * (`https://x-access-token:TOKEN@github.com/...`), so raw stderr must never
+ * reach a log. Redacts the userinfo component of any URL plus bare tokens that
+ * commonly appear on their own.
+ */
+export function redactGitOutput(stderr: string): string {
+  return (
+    stderr
+      .slice(0, GIT_STDERR_LOG_LIMIT)
+      .replace(/([a-zA-Z][\w+.-]*:\/\/)[^/@\s]*@/g, "$1<redacted>@")
+      .replace(/\b(gh[pousr]_|github_pat_|glpat-)[A-Za-z0-9_-]+/g, "$1<redacted>")
+      // Take the whole value, not just the scheme word: `Authorization: Bearer X`
+      // must not redact `Bearer` and leave `X` behind.
+      .replace(/\b(Authorization)\s*[:=]\s*.*/gi, "$1: <redacted>")
+      .replace(/\b(Bearer|token)\s*[:=]?\s+\S+/gi, "$1 <redacted>")
+  );
+}
+
 interface Trace2Monitor {
   readonly env: NodeJS.ProcessEnv;
   readonly flush: Effect.Effect<void, never>;
@@ -818,14 +842,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         if (options.allowNonZeroExit || result.exitCode === 0) {
           return Effect.succeed(result);
         }
-        return Effect.fail(
-          new GitCommandError({
-            ...gitCommandContext({ operation, cwd, args }),
-            detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
-            ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
-            stdoutLength: result.stdout.length,
-            stderrLength: result.stderr.length,
-          }),
+        // GitCommandError carries only lengths, never git's output — it crosses
+        // the wire to clients, and git echoes remote URLs that can embed
+        // credentials. That makes a failure unexplainable from the UI alone
+        // ("git worktree add failed" and nothing more), so log the reason here,
+        // server-side and redacted, where it is safe to keep.
+        return Effect.logWarning("git command failed", {
+          operation,
+          cwd,
+          args: args.join(" "),
+          exitCode: result.exitCode,
+          stderr: redactGitOutput(result.stderr),
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new GitCommandError({
+                ...gitCommandContext({ operation, cwd, args }),
+                detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
+                ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+                stdoutLength: result.stdout.length,
+                stderrLength: result.stderr.length,
+              }),
+            ),
+          ),
         );
       }),
     );

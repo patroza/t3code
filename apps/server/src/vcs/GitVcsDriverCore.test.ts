@@ -9,7 +9,7 @@ import * as Scope from "effect/Scope";
 
 import { GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import { redactGitOutput, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -806,5 +806,55 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.notEqual(originMain.exitCode, 0);
       }),
     );
+  });
+});
+
+describe("redactGitOutput", () => {
+  // git echoes the remote URL it used, and those URLs routinely carry secrets.
+  // This output gets logged, so a miss here writes a live token to the journal.
+  it("strips credentials embedded in remote URLs", () => {
+    const redacted = redactGitOutput(
+      "fatal: unable to access 'https://x-access-token:ghp_secretvalue123@github.com/o/r.git/': 403",
+    );
+    assert.notInclude(redacted, "ghp_secretvalue123");
+    // The useful part survives.
+    assert.include(redacted, "fatal: unable to access");
+    assert.include(redacted, "github.com/o/r.git");
+    assert.include(redacted, "403");
+  });
+
+  it("strips userinfo for any scheme, not just https", () => {
+    for (const url of [
+      "http://user:pw@example.com/x",
+      "ssh://git:pw@example.com/x",
+      "https://token@example.com/x",
+    ]) {
+      const redacted = redactGitOutput(`fatal: could not read ${url}`);
+      assert.notInclude(redacted, "pw@");
+      assert.notInclude(redacted, "token@");
+      assert.include(redacted, "<redacted>@");
+    }
+  });
+
+  it("strips bare provider tokens", () => {
+    const redacted = redactGitOutput("remote: bad credentials ghp_abc123XYZ and glpat-zzz999");
+    assert.notInclude(redacted, "abc123XYZ");
+    assert.notInclude(redacted, "zzz999");
+  });
+
+  it("strips authorization headers", () => {
+    const redacted = redactGitOutput("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig");
+    assert.notInclude(redacted, "eyJhbGciOiJIUzI1NiJ9.payload.sig");
+  });
+
+  it("leaves ordinary git errors intact", () => {
+    // The point is diagnosability, so a plain error must survive verbatim.
+    const message =
+      "fatal: Needed a single revision\nfatal: a branch named 'x' already exists\nssh: connect to host github.com port 22: Connection timed out";
+    assert.strictEqual(redactGitOutput(message), message);
+  });
+
+  it("caps runaway output", () => {
+    assert.isAtMost(redactGitOutput("x".repeat(50_000)).length, 2000);
   });
 });
