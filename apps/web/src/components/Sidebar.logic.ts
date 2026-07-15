@@ -471,6 +471,19 @@ export function getSidebarThreadIdsToPrewarm<TThreadId>(
   return visibleThreadIds.slice(0, Math.max(0, limit));
 }
 
+/**
+ * Prewarming keeps a live thread-detail subscription per row, so the cache is
+ * paid for in retained history, not just in requests. A coarse pointer reports
+ * no hover, so nothing narrows those rows down to the one the reader is heading
+ * for, and the devices behind it are the ones least able to hold ten threads of
+ * history at once. Prewarm nothing there and let opening a thread fetch it.
+ */
+export function resolveSidebarThreadPrewarmLimit(input: {
+  readonly hasCoarsePointer: boolean;
+}): number {
+  return input.hasCoarsePointer ? 0 : SIDEBAR_THREAD_PREWARM_LIMIT;
+}
+
 export function resolveAdjacentThreadId<T>(input: {
   threadIds: readonly T[];
   currentThreadId: T | null;

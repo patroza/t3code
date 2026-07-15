@@ -191,6 +191,7 @@ import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
 import {
   buildSidebarThreadWorktreeSections,
   getSidebarThreadIdsToPrewarm,
+  resolveSidebarThreadPrewarmLimit,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
@@ -212,7 +213,7 @@ import {
 import { sortThreads } from "../lib/threadSort";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useIsMobile, useMediaQuery } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
@@ -4736,9 +4737,14 @@ export default function Sidebar() {
     ? threadJumpLabelByKey
     : EMPTY_THREAD_JUMP_LABELS;
   const orderedSidebarThreadKeys = visibleSidebarThreadKeys;
+  const hasCoarsePointer = useMediaQuery({ pointer: "coarse" });
   const prewarmedSidebarThreadKeys = useMemo(
-    () => getSidebarThreadIdsToPrewarm(visibleSidebarThreadKeys),
-    [visibleSidebarThreadKeys],
+    () =>
+      getSidebarThreadIdsToPrewarm(
+        visibleSidebarThreadKeys,
+        resolveSidebarThreadPrewarmLimit({ hasCoarsePointer }),
+      ),
+    [hasCoarsePointer, visibleSidebarThreadKeys],
   );
   const prewarmedSidebarThreadRefs = useMemo(
     () =>

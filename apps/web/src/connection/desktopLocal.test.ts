@@ -88,6 +88,16 @@ describe("desktop local topology reads", () => {
     expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [secondary] });
   });
 
+  it("reports whether a bridge backs the reader at all", () => {
+    let bridge: { getLocalEnvironmentBootstraps: () => [] } | undefined = undefined;
+    const reader = createDesktopSecondaryBootstrapsReader(() => bridge);
+
+    expect(reader.hasBridge()).toBe(false);
+
+    bridge = { getLocalEnvironmentBootstraps: () => [] };
+    expect(reader.hasBridge()).toBe(true);
+  });
+
   it("retains the last successful snapshot only until another read succeeds", () => {
     const secondary = {
       id: "wsl:Ubuntu",

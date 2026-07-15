@@ -4,6 +4,8 @@ import {
   createThreadJumpHintVisibilityController,
   formatWorktreeGroupLabel,
   getSidebarThreadIdsToPrewarm,
+  resolveSidebarThreadPrewarmLimit,
+  SIDEBAR_THREAD_PREWARM_LIMIT,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
@@ -218,6 +220,26 @@ describe("getSidebarThreadIdsToPrewarm", () => {
 
   it("returns no thread ids when the limit is zero", () => {
     expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
+  });
+});
+
+describe("resolveSidebarThreadPrewarmLimit", () => {
+  it("prewarms visible rows when the pointer can hover", () => {
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: false })).toBe(
+      SIDEBAR_THREAD_PREWARM_LIMIT,
+    );
+  });
+
+  it("prewarms nothing behind a coarse pointer", () => {
+    // Each prewarmed row holds a live thread-detail subscription, so a touch
+    // client would otherwise retain ten threads of history it never asked for.
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true })).toBe(0);
+    expect(
+      getSidebarThreadIdsToPrewarm(
+        ["t1", "t2"],
+        resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true }),
+      ),
+    ).toEqual([]);
   });
 });
 

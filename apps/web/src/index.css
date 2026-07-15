@@ -891,3 +891,21 @@ label:has(> select#reasoning-effort) select {
 .dark .model-picker-list::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.15);
 }
+
+/* Honour the OS "reduce motion" setting. The looping decorations (skeletons,
+   status pulses, the ultrathink spectrum) never settle, so the compositor keeps
+   producing frames for as long as they are mounted — a sustained GPU cost that
+   phones pay in battery. Hold each animation on a single frame and collapse
+   transitions instead of removing them, so painted state and layout are
+   unchanged and only the motion stops. Left unlayered so it wins over the
+   layered utilities that set these properties. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
