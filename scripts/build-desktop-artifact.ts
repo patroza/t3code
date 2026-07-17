@@ -97,7 +97,10 @@ const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
   },
   linux: {
     cliFlag: "--linux",
-    defaultTarget: "AppImage",
+    // Local dev default: `dir` produces an unpacked app for the no-sudo
+    // home-directory install (fastest startup, rsync-deployable). CI/release
+    // pass `--target AppImage` explicitly, so this default doesn't affect them.
+    defaultTarget: "dir",
     archChoices: ["x64", "arm64"],
   },
   win: {
@@ -564,7 +567,13 @@ interface StagePackageJson {
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
-  readonly author: string;
+  // fpm-based Linux targets (pacman/deb/rpm) require a homepage and an author
+  // email; AppImage never read either, so both were previously omitted.
+  readonly homepage: string;
+  readonly author: {
+    readonly name: string;
+    readonly email: string;
+  };
   readonly main: string;
   readonly build: Record<string, unknown>;
   readonly dependencies: Record<string, unknown>;
@@ -1438,12 +1447,20 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       executableName: "t3code",
       icon: "icons",
       category: "Development",
+      // fpm-based targets (pacman/deb/rpm) require a maintainer; AppImage did not.
+      maintainer: "T3 Tools <support@t3.tools>",
       desktop: {
         entry: {
           StartupWMClass: "t3code",
         },
       },
     };
+    // fpm auto-detects shared-library dependencies and emits Debian-style
+    // package names (e.g. "http-parser") that don't exist on Arch, so pacman
+    // refuses to install. Declare no dependencies — Electron bundles its own
+    // libs and the required system libs (glibc/gtk3/nss) are present on any
+    // desktop Arch install.
+    buildConfig.pacman = { depends: [] };
   }
 
   if (platform === "win") {
@@ -1749,7 +1766,8 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: "T3 Code desktop build",
-    author: "T3 Tools",
+    homepage: "https://t3.tools",
+    author: { name: "T3 Tools", email: "support@t3.tools" },
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
@@ -1893,11 +1911,26 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   for (const entry of stageEntries) {
     const from = path.join(stageDistDir, entry);
     const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
+    if (!stat) continue;
 
     const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
-    copiedArtifacts.push(to);
+    if (stat.type === "File") {
+      yield* fs.copyFile(from, to);
+      copiedArtifacts.push(to);
+    } else if (
+      stat.type === "Directory" &&
+      entry === "linux-unpacked" &&
+      options.target === "dir"
+    ) {
+      // The `dir` target emits an unpacked app directory instead of a single
+      // installer file, so ship it too. This is what the no-sudo home-directory
+      // deploy rsyncs into ~/.local/opt. Other targets also leave a
+      // linux-unpacked intermediate here — skip it for them (target !== "dir")
+      // so we don't copy hundreds of MB alongside their real artifact.
+      yield* fs.remove(to, { recursive: true }).pipe(Effect.ignore);
+      yield* fs.copy(from, to);
+      copiedArtifacts.push(to);
+    }
   }
 
   if (copiedArtifacts.length === 0) {

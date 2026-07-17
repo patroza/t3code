@@ -13,14 +13,22 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useEnvironmentServerConfig } from "../../state/entities";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadStatus } from "./threadPresentation";
+import {
+  hasUsageMarker,
+  resolveDriverUsage,
+} from "@t3tools/client-runtime/state/aiUsagePresentation";
+import type { ProviderDriverKind } from "@t3tools/contracts";
 
 /**
  * Shared presentation for the thread lists: the compact (phone) Home list and
@@ -456,6 +464,26 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     Boolean(part),
   );
 
+  const serverConfig = useEnvironmentServerConfig(thread.environmentId);
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = useMemo(() => {
+    if (!serverConfig) return null;
+    const providerEntry = serverConfig.providers.find(
+      (p) => p.instanceId === thread.modelSelection.instanceId,
+    );
+    if (!providerEntry) return null;
+    return resolveDriverUsage(
+      aiUsageSnapshot,
+      providerEntry.driver as ProviderDriverKind,
+      thread.modelSelection.model,
+    );
+  }, [serverConfig, aiUsageSnapshot, thread.modelSelection]);
+  const showUsageDot = threadUsage ? hasUsageMarker(threadUsage.marker) : false;
+  const providerDriverForIcon = serverConfig
+    ? (serverConfig.providers.find((p) => p.instanceId === thread.modelSelection.instanceId)
+        ?.driver ?? null)
+    : null;
+
   const backgroundColor = compact ? screenColor : drawerColor;
   const effectivePressedBackground = selected ? "rgba(255,255,255,0.16)" : pressedBackgroundColor;
   const effectiveStatus =
@@ -555,9 +583,18 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
             }}
           >
             <View className="flex-row items-center justify-between gap-2">
-              <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
-                {thread.title}
-              </Text>
+              <View className="flex-1 flex-row items-center gap-2 min-w-0">
+                {providerDriverForIcon ? (
+                  <ProviderUsageIcon
+                    provider={providerDriverForIcon}
+                    size={16}
+                    marker={showUsageDot ? (threadUsage?.marker ?? null) : null}
+                  />
+                ) : null}
+                <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
+                  {thread.title}
+                </Text>
+              </View>
               <View className="flex-row items-center gap-2">
                 {statusPill}
                 <Text className="text-base tabular-nums text-foreground-tertiary">{timestamp}</Text>
@@ -601,15 +638,24 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       >
         <View className="gap-[3px]">
           <View className="flex-row items-center justify-between gap-2">
-            <Text
-              className={cn(
-                "flex-1 text-base font-t3-medium",
-                selected ? "text-user-bubble-foreground" : "text-foreground",
-              )}
-              numberOfLines={1}
-            >
-              {thread.title}
-            </Text>
+            <View className="flex-1 flex-row items-center gap-2 min-w-0">
+              {providerDriverForIcon ? (
+                <ProviderUsageIcon
+                  provider={providerDriverForIcon}
+                  size={14}
+                  marker={showUsageDot ? (threadUsage?.marker ?? null) : null}
+                />
+              ) : null}
+              <Text
+                className={cn(
+                  "flex-1 text-base font-t3-medium",
+                  selected ? "text-user-bubble-foreground" : "text-foreground",
+                )}
+                numberOfLines={1}
+              >
+                {thread.title}
+              </Text>
+            </View>
             <View className="flex-row items-center gap-2">
               {statusPill}
               <Text

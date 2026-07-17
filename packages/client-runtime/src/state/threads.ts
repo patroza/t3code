@@ -153,6 +153,25 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
+  // Re-read the thread from the server, replacing whatever we hold. Used when an
+  // event cannot be reconciled against the cached transcript ("reload-required"),
+  // and by the manual reload action. Failures leave the current state in place —
+  // the caller is already in a degraded path and a live subscription may recover.
+  const reloadFromServer = Effect.fn("EnvironmentThreadState.reloadFromServer")(function* () {
+    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+    if (Option.isNone(prepared)) {
+      return;
+    }
+    const fresh = yield* snapshotLoader
+      .load(prepared.value, threadId)
+      .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
+    if (Option.isNone(fresh)) {
+      return;
+    }
+    yield* SubscriptionRef.set(lastSequence, fresh.value.snapshotSequence);
+    yield* setThread(fresh.value.thread);
+  });
+
   const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
     item: OrchestrationThreadStreamItem,
   ) {
@@ -180,6 +199,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       yield* setThread(result.thread);
     } else if (result.kind === "deleted") {
       yield* setDeleted();
+    } else if (result.kind === "reload-required") {
+      yield* reloadFromServer();
     }
   });
 

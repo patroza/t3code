@@ -418,6 +418,52 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("uses session/set_mode when the agent has no mode config option", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      yield* runtime.start();
+
+      yield* runtime.setMode("architect");
+
+      const setModeRequest = requestEvents.find(
+        (event) => event.method === "session/set_mode" && event.status === "succeeded",
+      );
+      expect(setModeRequest?.payload).toMatchObject({
+        sessionId: "mock-session-1",
+        modeId: "architect",
+      });
+      expect(
+        requestEvents.some(
+          (event) =>
+            event.method === "session/set_config_option" &&
+            (event.payload as { configId?: string } | undefined)?.configId === "mode",
+        ),
+      ).toBe(false);
+
+      const modeState = yield* runtime.getModeState;
+      expect(modeState?.currentModeId).toBe("architect");
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("emits low-level ACP protocol logs for raw and decoded messages", () => {
     const protocolEvents: Array<EffectAcpProtocol.AcpProtocolLogEvent> = [];
     return Effect.gen(function* () {
@@ -465,12 +511,16 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
-  it.effect("fails session startup when session/load returns an error", () =>
+  it.effect("falls back to a fresh session when session/load fails", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
-      const error = yield* runtime.start().pipe(Effect.flip);
+      const started = yield* runtime.start();
 
-      expect(error._tag).toBe("AcpRequestError");
+      // session/load fails, but the resume is best-effort: startup recovers via
+      // session/new and yields the mock agent's fresh sessionId. This holds for
+      // any load failure (typed JSON-RPC errors and decode defects alike),
+      // matching how real agents reject a stale resume sessionId.
+      expect(started.sessionId).toBe("mock-session-1");
     }).pipe(
       Effect.provide(
         AcpSessionRuntime.layer({
@@ -479,7 +529,7 @@ describe("AcpSessionRuntime", () => {
             command: mockAgentCommand,
             args: mockAgentArgs,
             env: {
-              T3_ACP_FAIL_LOAD_SESSION: "1",
+              T3_ACP_FAIL_LOAD_SESSION_INVALID_PARAMS: "1",
             },
           },
           cwd: process.cwd(),

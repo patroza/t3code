@@ -79,6 +79,10 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./serverRuntime": {
+      "types": "./src/serverRuntime.ts",
+      "import": "./src/serverRuntime.ts"
+    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"
@@ -179,6 +183,10 @@
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
     },
+    "./userInputTranscript": {
+      "types": "./src/userInputTranscript.ts",
+      "import": "./src/userInputTranscript.ts"
+    },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
       "import": "./src/hostProcess.ts"
@@ -186,6 +194,14 @@
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
+    },
+    "./steerTimeline": {
+      "types": "./src/steerTimeline.ts",
+      "import": "./src/steerTimeline.ts"
+    },
+    "./proposedPlan": {
+      "types": "./src/proposedPlan.ts",
+      "import": "./src/proposedPlan.ts"
     }
   },
   "scripts": {

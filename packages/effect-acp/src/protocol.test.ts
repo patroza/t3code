@@ -134,6 +134,46 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       }),
   );
 
+  it.effect(
+    "drops Effect-RPC transport control frames instead of leaking them to the ACP wire",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, output } = yield* makeInMemoryStdio();
+        const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(),
+        });
+
+        // `Interrupt` is what Effect's RpcClient emits when an in-flight request
+        // fiber is cancelled (a turn Stop, a client reconnect, a superseding
+        // turn, ...). A spec-compliant ACP agent cannot decode it — leaking it
+        // wedges the session — so it must never reach stdout.
+        yield* transport.clientProtocol.send(0, {
+          _tag: "Interrupt",
+          requestId: "4294967299",
+        });
+
+        // A real ACP message (here an id:"" notification) must still be written.
+        yield* transport.clientProtocol.send(0, {
+          _tag: "Request",
+          id: "",
+          tag: "session/cancel",
+          payload: { sessionId: "session-1" },
+          headers: [],
+        });
+
+        // The first — and only — frame on the wire is the real request. Had the
+        // Interrupt leaked, it would have been taken here first.
+        const outbound = yield* Queue.take(output);
+        assert.deepEqual(yield* decodeSessionCancelNotification(outbound), {
+          jsonrpc: "2.0",
+          method: "session/cancel",
+          params: { sessionId: "session-1" },
+        });
+        assert.strictEqual(yield* Queue.size(output), 0);
+      }),
+  );
+
   it.effect("keeps invalid core notification values only in the schema cause", () =>
     Effect.gen(function* () {
       const secret = "acp-core-notification-secret-sentinel";

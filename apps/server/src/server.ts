@@ -39,6 +39,7 @@ import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -80,8 +81,11 @@ import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts"
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { GrokTranscriptResyncLive } from "./externalSessions/GrokTranscriptResync.ts";
+import { OrphanSessionRecoveryLive } from "./orchestration/Layers/OrphanSessionRecovery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -279,8 +283,21 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const OrphanSessionRecoveryLayerLive = OrphanSessionRecoveryLive.pipe(
+  Layer.provide(ProviderLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(OrphanSessionRecoveryLayerLive),
+  Layer.provideMerge(
+    GrokTranscriptResyncLive.pipe(
+      Layer.provide(ProviderSessionRuntime.layer),
+      Layer.provide(OrphanSessionRecoveryLayerLive),
+      Layer.provide(OrchestrationLayerLive),
+    ),
+  ),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
@@ -291,7 +308,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
+  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, AiUsageMonitor.layer)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
@@ -331,6 +348,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(ProcessDiagnostics.layer),
+  Layer.provideMerge(HostResourceProbe.layer),
   Layer.provideMerge(ProcessResourceMonitor.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),

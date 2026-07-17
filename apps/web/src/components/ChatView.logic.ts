@@ -74,6 +74,20 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   );
 }
 
+export function shouldTreatServerThreadAsActive(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasServerThreadDetail: boolean;
+}): boolean {
+  return input.hasServerThreadShell && input.hasServerThreadDetail;
+}
+
+export function shouldRenderServerThreadRoute(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasDraftThread: boolean;
+}): boolean {
+  return input.hasServerThreadShell || input.hasDraftThread;
+}
+
 export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
   threadId: ThreadId;
   turnId?: TurnId;

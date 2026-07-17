@@ -71,7 +71,11 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import {
+  ComposerPrimaryActions,
+  shouldDisableCollapsedComposerSubmitAction,
+  shouldShowComposerInterruptAction,
+} from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
@@ -86,6 +90,7 @@ import {
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
+import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 import { Button } from "../ui/button";
@@ -657,6 +662,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Instance-aware projection of the wire provider list. One entry per
   // configured instance (default built-in + any custom `providerInstances.*`),
   // sorted default-first per driver kind for a stable picker order.
+  const aiUsageSnapshot = useAiUsageSnapshot(environmentId);
   const providerInstanceEntries = useMemo<ReadonlyArray<ProviderInstanceEntry>>(
     () =>
       sortProviderInstanceEntries(
@@ -1134,8 +1140,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
-  const collapsedComposerPrimaryActionDisabled =
-    phase === "running" || isSendBusy || isConnecting || !composerSendState.hasSendableContent;
+  const collapsedComposerPrimaryActionDisabled = shouldDisableCollapsedComposerSubmitAction({
+    isRunning: phase === "running",
+    isSendBusy,
+    isConnecting,
+    hasSendableContent: composerSendState.hasSendableContent,
+  });
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
@@ -2477,6 +2487,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   lockedProvider={lockedProvider}
                   lockedContinuationGroupKey={lockedContinuationGroupKey}
                   instanceEntries={providerInstanceEntries}
+                  usageSnapshot={aiUsageSnapshot}
                   keybindings={keybindings}
                   modelOptionsByInstance={modelOptionsByInstance}
                   terminalOpen={terminalOpen}

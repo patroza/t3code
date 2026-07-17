@@ -1,4 +1,5 @@
 import {
+  type AiUsageSnapshot,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
@@ -10,6 +11,8 @@ import { Button, buttonVariants } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { AiUsageStats } from "./AiUsageStats";
 import { ModelPickerContent } from "./ModelPickerContent";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
@@ -18,6 +21,7 @@ import {
   getTriggerDisplayModelName,
 } from "./providerIconUtils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import { useClientSettings } from "~/hooks/useSettings";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /**
@@ -30,6 +34,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   lockedContinuationGroupKey?: string | null;
   /** Instance entries rendered in the sidebar + used to resolve display name. */
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  /** Latest AI-usage snapshot for status markers + hover stats. */
+  usageSnapshot?: AiUsageSnapshot | null;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   activeProviderIconClassName?: string;
@@ -45,15 +51,25 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
+  const favoriteProviderIds = useClientSettings((settings) => settings.providerFavorites ?? []);
+  const orderedInstanceEntries = useMemo(() => {
+    const favorites = new Set(favoriteProviderIds);
+    return props.instanceEntries
+      .map((entry, index) => ({ entry, index, favorite: favorites.has(entry.instanceId) }))
+      .toSorted(
+        (left, right) => Number(right.favorite) - Number(left.favorite) || left.index - right.index,
+      )
+      .map(({ entry }) => entry);
+  }, [favoriteProviderIds, props.instanceEntries]);
 
   // Resolve the active instance entry by exact routing key. The composer
   // resolves fallbacks before rendering this component; if the selected
   // instance disappears, do not infer a replacement from its driver kind.
   const activeEntry = useMemo(() => {
     return (
-      props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
+      orderedInstanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
     );
-  }, [props.activeInstanceId, props.instanceEntries]);
+  }, [props.activeInstanceId, orderedInstanceEntries]);
 
   const activeInstanceId = props.activeInstanceId;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
@@ -66,10 +82,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     selectedInstanceOptions[0];
   const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
   const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
-  const duplicateDriverCount = props.instanceEntries.filter(
+  const duplicateDriverCount = orderedInstanceEntries.filter(
     (entry) => activeEntry !== null && entry.driverKind === activeEntry.driverKind,
   ).length;
   const showInstanceBadge = Boolean(activeEntry?.accentColor) || duplicateDriverCount > 1;
+  const activeUsage = useMemo(
+    () => resolveDriverUsage(props.usageSnapshot, activeEntry?.driverKind ?? null, props.model),
+    [props.usageSnapshot, activeEntry, props.model],
+  );
 
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
@@ -159,21 +179,45 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         }
       >
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          {activeEntry ? (
-            <ProviderInstanceIcon
-              driverKind={activeEntry.driverKind}
-              displayName={activeEntry.displayName}
-              accentColor={activeEntry.accentColor}
-              showBadge={showInstanceBadge}
-              className={showInstanceBadge ? "size-5" : "size-4"}
-              iconClassName={cn("size-4", props.activeProviderIconClassName)}
-              indicatorBackground="var(--input)"
-              badgeClassName={cn(
-                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
-                "px-0.5 text-[7px]",
-              )}
-            />
-          ) : null}
+          {activeEntry
+            ? (() => {
+                const activeDotClass = activeUsage
+                  ? usageDotFillClass(activeUsage.marker)
+                  : undefined;
+                const activeRingColor = activeUsage
+                  ? usageDotRingColor(activeUsage.marker)
+                  : undefined;
+                const providerIcon = (
+                  <ProviderInstanceIcon
+                    driverKind={activeEntry.driverKind}
+                    displayName={activeEntry.displayName}
+                    accentColor={activeEntry.accentColor}
+                    showBadge={showInstanceBadge}
+                    className={showInstanceBadge ? "size-5" : "size-4"}
+                    iconClassName={cn("size-4", props.activeProviderIconClassName)}
+                    indicatorBackground="var(--input)"
+                    badgeClassName={cn(
+                      "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
+                      "px-0.5 text-[7px]",
+                    )}
+                    {...(activeDotClass ? { statusDotClassName: activeDotClass } : {})}
+                    {...(activeRingColor ? { statusDotRingColor: activeRingColor } : {})}
+                  />
+                );
+                return activeUsage ? (
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                      {providerIcon}
+                    </TooltipTrigger>
+                    <TooltipPopup side="top" className="p-2 text-xs">
+                      <AiUsageStats item={activeUsage.item} />
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  providerIcon
+                );
+              })()
+            : null}
           <Tooltip>
             <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
               {triggerTitle}
@@ -195,7 +239,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           model={props.model}
           lockedProvider={props.lockedProvider}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
-          instanceEntries={props.instanceEntries}
+          instanceEntries={orderedInstanceEntries}
+          usageSnapshot={props.usageSnapshot ?? null}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}
           modelOptionsByInstance={props.modelOptionsByInstance}
           terminalOpen={props.terminalOpen ?? false}

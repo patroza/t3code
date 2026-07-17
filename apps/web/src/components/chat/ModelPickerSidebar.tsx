@@ -1,9 +1,15 @@
-import { type ProviderInstanceId } from "@t3tools/contracts";
+import { type AiUsageSnapshot, type ProviderInstanceId } from "@t3tools/contracts";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SparklesIcon, StarIcon } from "lucide-react";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
+import {
+  resolveDriverUsage,
+  usageDotFillClass,
+  usageDotRingColor,
+  usageRank,
+} from "../../aiUsageState";
 import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
 
 /**
@@ -57,11 +63,33 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
    * instances are never flagged — the user just made them).
    */
   newBadgeInstanceIds?: ReadonlySet<ProviderInstanceId>;
+  /** Latest AI-usage snapshot for status dots + best-to-use-now ordering. */
+  usageSnapshot?: AiUsageSnapshot | null;
+  /** The composer's active instance + model, so its dot reflects the live
+   * sub-provider (e.g. z.ai overriding opencode-go). */
+  activeInstanceId?: ProviderInstanceId;
+  activeModel?: string;
 }) {
   const handleSelect = (instanceId: ProviderInstanceId | "favorites") => {
     props.onSelectInstance(instanceId);
   };
   const showFavorites = props.showFavorites ?? true;
+  // Order the rail best-to-use-now first (the daemon's ranking). Unmapped
+  // providers keep their relative order via the stable sort tie-break. Locked
+  // mode already sorts available-first, so leave that ordering untouched.
+  const usageSnapshot = props.usageSnapshot ?? null;
+  const orderedInstanceEntries = useMemo(() => {
+    if (usageSnapshot === null || !usageSnapshot.available) return props.instanceEntries;
+    return props.instanceEntries
+      .map((entry, index) => ({ entry, index }))
+      .sort((a, b) => {
+        const rankDelta =
+          usageRank(usageSnapshot, a.entry.driverKind, undefined) -
+          usageRank(usageSnapshot, b.entry.driverKind, undefined);
+        return rankDelta !== 0 ? rankDelta : a.index - b.index;
+      })
+      .map(({ entry }) => entry);
+  }, [props.instanceEntries, usageSnapshot]);
   const [hoveredInstanceId, setHoveredInstanceId] = useState<ProviderInstanceId | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement>(null);
   const [selectedIndicatorTop, setSelectedIndicatorTop] = useState<number | null>(null);
@@ -150,8 +178,19 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
           ) : null}
 
           {/* Instance buttons (one per configured instance — built-in + custom) */}
-          {props.instanceEntries.map((entry) => {
+          {orderedInstanceEntries.map((entry) => {
             const isUnavailable = !isProviderInstancePickerReady(entry);
+            // The active instance resolves against its live model so z.ai
+            // overrides opencode-go; others fall back to the driver default.
+            const entryModelSlug =
+              entry.instanceId === props.activeInstanceId ? props.activeModel : undefined;
+            const usageMarker = resolveDriverUsage(
+              usageSnapshot,
+              entry.driverKind,
+              entryModelSlug,
+            )?.marker;
+            const usageDotClass = usageMarker ? usageDotFillClass(usageMarker) : undefined;
+            const usageRingColor = usageMarker ? usageDotRingColor(usageMarker) : undefined;
             const isContextDisabled = props.disabledInstanceIds?.has(entry.instanceId) ?? false;
             const isDisabled = isUnavailable || isContextDisabled;
             const isSelected = props.selectedInstanceId === entry.instanceId;
@@ -212,6 +251,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   {...(entry.accentColor
                     ? { badgeClassName: "h-3 min-w-3 px-0.5 text-[7px]" }
                     : {})}
+                  {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                  {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
                 />
                 {showNewBadge ? (
                   <span className={NEW_BADGE_CLASS} aria-hidden>

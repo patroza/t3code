@@ -1263,6 +1263,47 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("resolveBranchChangeRequest returns PR for a branch that is not checked out", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/sidebar-pr"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 31,
+                title: "Sidebar PR lookup",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/31",
+                baseRefName: "main",
+                headRefName: "feature/sidebar-pr",
+                state: "OPEN",
+                updatedAt: "2026-01-30T10:00:00Z",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const resolved = yield* manager.resolveBranchChangeRequest({
+        cwd: repoDir,
+        refName: "feature/sidebar-pr",
+      });
+      expect(resolved.pr).toEqual({
+        number: 31,
+        title: "Sidebar PR lookup",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/31",
+        baseRef: "main",
+        headRef: "feature/sidebar-pr",
+        state: "open",
+      });
+    }),
+  );
+
   it.effect("status prefers open PR when merged PR has newer updatedAt", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

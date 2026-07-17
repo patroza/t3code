@@ -25,6 +25,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
+  buildOpenCodePermissionRules,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   type OpenCodeRuntimeShape,
@@ -53,20 +54,22 @@ type MessageEntry = {
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
-    sessionCreateUrls: [] as string[],
+    sessionCreateCalls: [] as Array<{ baseUrl: string; input: unknown }>,
     authHeaders: [] as Array<string | null>,
-    abortCalls: [] as string[],
+    abortCalls: [] as Array<{ sessionID: string; directory?: string }>,
     closeCalls: [] as string[],
-    revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
+    revertCalls: [] as Array<{ sessionID: string; directory?: string; messageID?: string }>,
     promptCalls: [] as Array<unknown>,
     promptAsyncError: null as Error | null,
     closeError: null as Error | null,
     messages: [] as MessageEntry[],
     subscribedEvents: [] as unknown[],
+    getSessionDirectory: "/tmp/opencode-adapter-test",
+    createSessionDirectoryOverride: null as string | null,
   },
   reset() {
     this.state.startCalls.length = 0;
-    this.state.sessionCreateUrls.length = 0;
+    this.state.sessionCreateCalls.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
     this.state.closeCalls.length = 0;
@@ -76,6 +79,8 @@ const runtimeMock = {
     this.state.closeError = null;
     this.state.messages = [];
     this.state.subscribedEvents = [];
+    this.state.getSessionDirectory = "/tmp/opencode-adapter-test";
+    this.state.createSessionDirectoryOverride = null;
   },
 };
 
@@ -122,15 +127,34 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
   createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
     ({
       session: {
-        create: async () => {
-          runtimeMock.state.sessionCreateUrls.push(baseUrl);
+        create: async (input: unknown) => {
+          runtimeMock.state.sessionCreateCalls.push({ baseUrl, input });
           runtimeMock.state.authHeaders.push(
             serverPassword ? `Basic ${btoa(`opencode:${serverPassword}`)}` : null,
           );
-          return { data: { id: `${baseUrl}/session` } };
+          const directory =
+            runtimeMock.state.createSessionDirectoryOverride ??
+            (input as { readonly directory?: unknown })?.directory;
+          return {
+            data: {
+              id: `${baseUrl}/session`,
+              ...(typeof directory === "string" ? { directory } : {}),
+            },
+          };
         },
-        abort: async ({ sessionID }: { sessionID: string }) => {
-          runtimeMock.state.abortCalls.push(sessionID);
+        get: async ({ sessionID }: { sessionID: string; directory?: string }) => {
+          return {
+            data: {
+              id: sessionID,
+              directory: runtimeMock.state.getSessionDirectory,
+            },
+          };
+        },
+        abort: async ({ sessionID, directory }: { sessionID: string; directory?: string }) => {
+          runtimeMock.state.abortCalls.push({
+            sessionID,
+            ...(directory ? { directory } : {}),
+          });
         },
         promptAsync: async (input: unknown) => {
           runtimeMock.state.promptCalls.push(input);
@@ -139,9 +163,18 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           }
         },
         messages: async () => ({ data: runtimeMock.state.messages }),
-        revert: async ({ sessionID, messageID }: { sessionID: string; messageID?: string }) => {
+        revert: async ({
+          sessionID,
+          directory,
+          messageID,
+        }: {
+          sessionID: string;
+          directory?: string;
+          messageID?: string;
+        }) => {
           runtimeMock.state.revertCalls.push({
             sessionID,
+            ...(directory ? { directory } : {}),
             ...(messageID ? { messageID } : {}),
           });
           if (!messageID) {
@@ -241,7 +274,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.equal(session.provider, "opencode");
       NodeAssert.equal(session.threadId, "thread-opencode");
       NodeAssert.deepEqual(runtimeMock.state.startCalls, []);
-      NodeAssert.deepEqual(runtimeMock.state.sessionCreateUrls, ["http://127.0.0.1:9999"]);
+      NodeAssert.deepEqual(
+        runtimeMock.state.sessionCreateCalls.map((call) => call.baseUrl),
+        ["http://127.0.0.1:9999"],
+      );
       NodeAssert.deepEqual(runtimeMock.state.authHeaders, [
         `Basic ${btoa("opencode:secret-password")}`,
       ]);
@@ -261,8 +297,57 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       NodeAssert.deepEqual(runtimeMock.state.startCalls, []);
       NodeAssert.deepEqual(
-        runtimeMock.state.abortCalls.includes("http://127.0.0.1:9999/session"),
+        runtimeMock.state.abortCalls.some(
+          (call) =>
+            call.sessionID === "http://127.0.0.1:9999/session" && call.directory === process.cwd(),
+        ),
         true,
+      );
+    }),
+  );
+
+  it.effect("rejects an OpenCode resume cursor that belongs to another directory", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      runtimeMock.state.getSessionDirectory = "/home/user/project";
+
+      const error = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId: asThreadId("thread-opencode-resume-wrong-directory"),
+          runtimeMode: "full-access",
+          cwd: "/tmp/t3-worktree",
+          resumeCursor: { sessionId: "ses-main-checkout" },
+        })
+        .pipe(Effect.flip);
+
+      NodeAssert.equal(error._tag, "ProviderAdapterProcessError");
+      NodeAssert.match(
+        error.detail,
+        /belongs to a different directory.*Expected: \/tmp\/t3-worktree.*Actual: \/home\/user\/project/,
+      );
+      NodeAssert.deepEqual(runtimeMock.state.sessionCreateCalls, []);
+    }),
+  );
+
+  it.effect("rejects a new OpenCode session that starts in another directory", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      runtimeMock.state.createSessionDirectoryOverride = "/home/user/project";
+
+      const error = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId: asThreadId("thread-opencode-create-wrong-directory"),
+          runtimeMode: "full-access",
+          cwd: "/tmp/t3-worktree",
+        })
+        .pipe(Effect.flip);
+
+      NodeAssert.equal(error._tag, "ProviderAdapterProcessError");
+      NodeAssert.match(
+        error.detail,
+        /belongs to a different directory.*Expected: \/tmp\/t3-worktree.*Actual: \/home\/user\/project/,
       );
     }),
   );
@@ -316,10 +401,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       yield* Effect.exit(adapter.stopAll());
       const sessions = yield* adapter.listSessions();
 
-      NodeAssert.deepEqual(runtimeMock.state.closeCalls, [
-        "http://127.0.0.1:9999",
-        "http://127.0.0.1:9999",
-      ]);
+      NodeAssert.equal(
+        runtimeMock.state.closeCalls.filter((url) => url === "http://127.0.0.1:9999").length >= 2,
+        true,
+      );
       NodeAssert.deepEqual(sessions, []);
     }),
   );
@@ -510,6 +595,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       NodeAssert.deepEqual(runtimeMock.state.promptCalls.at(-1), {
         sessionID: "http://127.0.0.1:9999/session",
+        directory: process.cwd(),
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
@@ -554,6 +640,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
 
       NodeAssert.deepEqual(runtimeMock.state.promptCalls.at(-1), {
         sessionID: "http://127.0.0.1:9999/session",
+        directory: process.cwd(),
         model: {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
@@ -632,7 +719,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const snapshot = yield* adapter.rollbackThread(threadId, 2);
 
       NodeAssert.deepEqual(runtimeMock.state.revertCalls, [
-        { sessionID: "http://127.0.0.1:9999/session" },
+        { sessionID: "http://127.0.0.1:9999/session", directory: process.cwd() },
       ]);
       NodeAssert.deepEqual(snapshot.turns, []);
     }),

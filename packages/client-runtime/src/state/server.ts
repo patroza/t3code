@@ -298,6 +298,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
+    hostResourceSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:host-resource-snapshot",
+      tag: WS_METHODS.serverGetHostResourceSnapshot,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -342,6 +346,10 @@ export function createServerEnvironmentAtoms<R, E>(
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
+    }),
+    importExternalSessions: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:import-external-sessions",
+      tag: WS_METHODS.serverImportExternalSessions,
     }),
   };
 }

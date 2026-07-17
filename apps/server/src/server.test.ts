@@ -17,6 +17,7 @@ import {
   MessageId,
   ExternalLauncherCommandNotFoundError,
   type OrchestrationThreadShell,
+  AI_USAGE_UNAVAILABLE,
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -77,8 +78,12 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationListenerCallbackError,
+} from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as GrokTranscriptResync from "./externalSessions/GrokTranscriptResync.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -89,6 +94,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
@@ -111,6 +117,7 @@ import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts"
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as Data from "effect/Data";
 
@@ -585,20 +592,39 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
-          readHistory: (input) =>
-            Effect.succeed({
-              readAt: TEST_EPOCH,
-              windowMs: input.windowMs,
-              bucketMs: input.bucketMs,
-              sampleIntervalMs: 5_000,
-              retainedSampleCount: 0,
-              totalCpuSecondsApprox: 0,
-              buckets: [],
-              topProcesses: [],
-              error: Option.none(),
+        Layer.mergeAll(
+          Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
+            readHistory: (input) =>
+              Effect.succeed({
+                readAt: TEST_EPOCH,
+                windowMs: input.windowMs,
+                bucketMs: input.bucketMs,
+                sampleIntervalMs: 5_000,
+                retainedSampleCount: 0,
+                totalCpuSecondsApprox: 0,
+                buckets: [],
+                topProcesses: [],
+                error: Option.none(),
+              }),
+          }),
+          Layer.mock(HostResourceProbe.HostResourceProbe)({
+            read: Effect.succeed({
+              status: "supported",
+              checkedAt: "1970-01-01T00:00:00.000Z",
+              source: "os",
+              hostname: "test-host",
+              platform: "linux",
+              cpuPercent: 25,
+              memoryUsedPercent: 50,
+              memoryUsedBytes: 4_000,
+              memoryAvailableBytes: 4_000,
+              memoryTotalBytes: 8_000,
+              loadAverage: { m1: 0.5, m5: 0.4, m15: 0.3 },
+              logicalCores: 4,
+              message: null,
             }),
-        }),
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(TraceDiagnostics.TraceDiagnostics)({
@@ -670,15 +696,25 @@ const buildAppUnderTest = (options?: {
             registerTerminalProcesses: () => Effect.void,
             unregisterTerminal: () => Effect.void,
           }),
+          Layer.mock(AiUsageMonitorModule.AiUsageMonitor)({
+            current: () => Effect.succeed(AI_USAGE_UNAVAILABLE),
+            subscribe: () => Effect.void,
+            retain: Effect.void,
+          }),
         ),
       ),
       Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          ...options?.layers?.orchestrationEngine,
-        }),
+        Layer.mergeAll(
+          Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.succeed({ sequence: 0 }),
+            streamDomainEvents: Stream.empty,
+            ...options?.layers?.orchestrationEngine,
+          }),
+          Layer.mock(GrokTranscriptResync.GrokTranscriptResync)({
+            resyncThread: () => Effect.void,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
@@ -6177,6 +6213,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }),
               readEvents: () => Stream.empty,
             },
+            projectionSnapshotQuery: {
+              getThreadShellById: () =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      id: ThreadId.make("thread-bootstrap"),
+                      worktreePath: "/tmp/bootstrap-worktree",
+                    }),
+                  ),
+                ),
+            },
             projectSetupScriptRunner: {
               runForThread,
             },
@@ -6280,6 +6327,84 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("resumes a replayed bootstrap after its thread was already created", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-bootstrap-replay");
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.suspend(() => {
+                dispatchedCommands.push(command);
+                return command.type === "thread.create"
+                  ? Effect.fail(
+                      new OrchestrationCommandInvariantError({
+                        commandType: "thread.create",
+                        detail: `Thread '${threadId}' already exists and cannot be created twice.`,
+                      }),
+                    )
+                  : Effect.succeed({ sequence: dispatchedCommands.length });
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-replay"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-bootstrap-replay"),
+              role: "user",
+              text: "hello after reconnect",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Replay",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 2);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.turn.start"],
+      );
+      assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("records setup-script failures without aborting bootstrap turn start", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
@@ -6320,6 +6445,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: ThreadId.make("thread-bootstrap-setup-failure"),
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,
@@ -6441,6 +6577,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               });
             },
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: ThreadId.make("thread-bootstrap-setup-activity-failure"),
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,

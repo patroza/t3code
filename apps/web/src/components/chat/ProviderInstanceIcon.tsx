@@ -24,6 +24,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   iconClassName?: string;
   badgeClassName?: string;
   statusDotClassName?: string;
+  /** CSS colour for a ring around the status dot (e.g. a pace/outlook warning). */
+  statusDotRingColor?: string;
   indicatorBackground?: string;
 }) {
   const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
@@ -55,7 +57,11 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
             "pointer-events-none absolute -left-0.5 -top-0.5 z-10 size-2 rounded-full",
             props.statusDotClassName,
           )}
-          style={{ boxShadow: `0 0 0 2px ${indicatorBackground}` }}
+          style={{
+            boxShadow: props.statusDotRingColor
+              ? `0 0 0 1.5px ${props.statusDotRingColor}, 0 0 0 3px ${indicatorBackground}`
+              : `0 0 0 2px ${indicatorBackground}`,
+          }}
           aria-hidden
         />
       ) : null}

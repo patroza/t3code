@@ -1,0 +1,117 @@
+name: t3-agentbox
+
+services:
+  t3code:
+    build:
+      context: ../..
+      dockerfile: infra/agentbox/Dockerfile
+      args:
+        T3_AGENT_UID: ${T3_AGENT_UID:-1000}
+        T3_AGENT_GID: ${T3_AGENT_GID:-1000}
+    image: patroza/t3code-agentbox:local
+    init: true
+    restart: unless-stopped
+    hostname: smart-agentbox
+    environment:
+      TZ: ${T3_AGENT_TZ:-Europe/Berlin}
+      T3_AGENT_UID: ${T3_AGENT_UID:-1000}
+      T3_AGENT_GID: ${T3_AGENT_GID:-1000}
+      HOME: /home/patroza
+      T3CODE_HOME: /home/patroza/.t3
+      XDG_CACHE_HOME: /cache/xdg
+      NPM_CONFIG_CACHE: /cache/npm
+      NPM_CONFIG_PREFIX: /home/patroza/.local
+      PNPM_HOME: /cache/pnpm
+      COREPACK_HOME: /cache/corepack
+      DOCKER_HOST: ${T3_AGENT_DOCKER_HOST:-}
+    ports:
+      - "0.0.0.0:${T3_AGENT_HTTP_PORT:-18080}:8080"
+      - "0.0.0.0:${T3_AGENT_SSH_PORT:-2222}:22"
+    volumes:
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/home:/home/patroza
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/projects:/home/patroza/pj
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/state:/home/patroza/.t3
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/cache:/cache
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/cache/apt/archives:/var/cache/apt/archives
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/cache/apt/lists:/var/lib/apt/lists
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/ssh:/run/agent-ssh:ro
+    tmpfs:
+      - /tmp
+      - /run
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - NET_BIND_SERVICE
+      - AUDIT_WRITE
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  opencode:
+    profiles:
+      - opencode
+    image: patroza/t3code-agentbox:local
+    init: true
+    restart: unless-stopped
+    hostname: smart-agentbox-opencode
+    environment:
+      TZ: ${T3_AGENT_TZ:-Europe/Berlin}
+      T3_AGENT_UID: ${T3_AGENT_UID:-1000}
+      T3_AGENT_GID: ${T3_AGENT_GID:-1000}
+      T3_AGENT_SSHD: "0"
+      HOME: /home/patroza
+      XDG_CACHE_HOME: /cache/xdg
+      NPM_CONFIG_CACHE: /cache/npm
+      NPM_CONFIG_PREFIX: /home/patroza/.local
+      PNPM_HOME: /cache/pnpm
+      COREPACK_HOME: /cache/corepack
+      DOCKER_HOST: ${T3_AGENT_DOCKER_HOST:-}
+    ports:
+      - "0.0.0.0:${T3_AGENT_OPENCODE_PORT:-14096}:4096"
+    volumes:
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/home:/home/patroza
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/projects:/home/patroza/pj
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/state:/home/patroza/.t3
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/cache:/cache
+    tmpfs:
+      - /tmp
+      - /run
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - NET_BIND_SERVICE
+      - AUDIT_WRITE
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - bash
+      - -lc
+      - exec opencode serve --hostname 0.0.0.0 --port 4096
+
+  agent-docker:
+    profiles:
+      - docker
+    image: docker:28-dind
+    privileged: true
+    restart: unless-stopped
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - ${T3_AGENT_ROOT:-/srv/t3-agent}/docker:/var/lib/docker
+    expose:
+      - "2375"
+    command:
+      - dockerd
+      - --host=tcp://0.0.0.0:2375
+      - --host=unix:///var/run/docker.sock

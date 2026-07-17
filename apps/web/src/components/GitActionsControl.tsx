@@ -95,6 +95,7 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
+  isPreparingWorktree?: boolean;
 }
 
 interface PendingDefaultBranchAction {
@@ -971,6 +972,7 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadRef,
   draftId,
+  isPreparingWorktree = false,
 }: GitActionsControlProps) {
   const updateThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
@@ -1117,7 +1119,7 @@ export default function GitActionsControl({
     activeDraftThread.worktreePath === null;
 
   useEffect(() => {
-    if (isGitActionRunning || isSelectingWorktreeBase) {
+    if (isGitActionRunning || isSelectingWorktreeBase || isPreparingWorktree) {
       return;
     }
 
@@ -1135,6 +1137,7 @@ export default function GitActionsControl({
     activeDraftThread?.branch,
     gitStatusForActions,
     isGitActionRunning,
+    isPreparingWorktree,
     isSelectingWorktreeBase,
     persistThreadBranchSync,
   ]);

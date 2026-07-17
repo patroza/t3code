@@ -8,8 +8,27 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
-import * as NetService from "@t3tools/shared/Net";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+// Support `t3code --version` (and -v) early so directory ("dir") installs can
+// query the version of the *files on disk* at the install location. The deploy
+// scripts rsync new builds into place; a running instance can then detect that
+// a newer version is present without relying on network auto-updates.
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  try {
+    process.stdout.write(Electron.app.getVersion() + "\n");
+  } finally {
+    process.exit(0);
+  }
+}
+
+const hostProcessPlatform = Effect.runSync(HostProcessPlatform);
+
+if (hostProcessPlatform === "linux") {
+  Electron.app.commandLine.appendSwitch("password-store", "gnome-libsecret");
+}
+
+import * as NetService from "@t3tools/shared/Net";
 import { resolveRemoteT3CliPackageSpec } from "@t3tools/ssh/command";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
@@ -83,7 +102,7 @@ const resolveDesktopSshCliRunner = (
   }
   return {
     packageSpec: resolveRemoteT3CliPackageSpec({
-      appVersion: environment.appVersion,
+      appVersion: serverPackageJson.version,
       updateChannel: settings.updateChannel,
       isDevelopment: environment.isDevelopment,
     }),

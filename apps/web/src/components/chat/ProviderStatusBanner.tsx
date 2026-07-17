@@ -3,7 +3,7 @@ import { memo } from "react";
 import { InfoIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { formatProviderDriverKindLabel } from "../../providerModels";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ErrorDetailText } from "../ui/errorDetailText";
 
 export const ProviderStatusBanner = memo(function ProviderStatusBanner({
   status,
@@ -27,27 +27,24 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
         : `${providerName} provider has limited availability.`));
 
   return (
-    <div className="mx-auto w-fit max-w-[calc(100%-2rem)] pt-3">
+    <div className="mx-auto w-full max-w-3xl px-4 pt-3 sm:px-6">
       <div
         className={cn(
-          "inline-flex items-center gap-3 rounded-xl border px-3.5 py-3 text-card-foreground text-sm",
+          "flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-card-foreground text-sm sm:px-4 sm:py-3.5",
           status.status === "warning"
             ? "border-warning/32 bg-warning/4 [&_svg]:text-warning"
             : "border-destructive/32 bg-destructive/4 text-destructive-foreground [&_svg]:text-destructive",
         )}
         role="alert"
       >
-        <InfoIcon className="size-4 shrink-0" aria-hidden />
-        <div className="flex min-w-0 flex-col gap-1">
+        <InfoIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="font-medium">{title}</div>
-          <Tooltip>
-            <TooltipTrigger
-              render={<div className="line-clamp-3 text-muted-foreground">{message}</div>}
-            />
-            <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
-              {message}
-            </TooltipPopup>
-          </Tooltip>
+          <ErrorDetailText
+            showCopy={status.status === "error"}
+            text={message}
+            textClassName="text-muted-foreground"
+          />
         </div>
       </div>
     </div>

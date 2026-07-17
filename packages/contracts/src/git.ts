@@ -104,6 +104,12 @@ export const VcsStatusInput = Schema.Struct({
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
 
+export const VcsResolveBranchChangeRequestInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsResolveBranchChangeRequestInput = typeof VcsResolveBranchChangeRequestInput.Type;
+
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
@@ -189,7 +195,7 @@ export type VcsInitInput = typeof VcsInitInput.Type;
 
 // RPC Results
 
-const VcsStatusChangeRequest = Schema.Struct({
+export const VcsStatusChangeRequest = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
   url: Schema.String,
@@ -197,6 +203,13 @@ const VcsStatusChangeRequest = Schema.Struct({
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
 });
+export type VcsStatusChangeRequest = typeof VcsStatusChangeRequest.Type;
+
+export const VcsResolveBranchChangeRequestResult = Schema.Struct({
+  sourceControlProvider: Schema.optional(SourceControlProviderInfo),
+  pr: Schema.NullOr(VcsStatusChangeRequest),
+});
+export type VcsResolveBranchChangeRequestResult = typeof VcsResolveBranchChangeRequestResult.Type;
 
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,

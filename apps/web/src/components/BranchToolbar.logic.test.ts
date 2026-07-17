@@ -9,6 +9,7 @@ import {
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
   resolveEnvModeLabel,
+  resolveWorkspaceTarget,
   resolveBranchToolbarValue,
   resolveLockedWorkspaceLabel,
   shouldIncludeBranchPickerItem,
@@ -155,6 +156,29 @@ describe("resolveCurrentWorkspaceLabel", () => {
 
   it("describes the active checkout as a worktree when one is attached", () => {
     expect(resolveCurrentWorkspaceLabel("/repo/.t3/worktrees/feature-a")).toBe("Current worktree");
+  });
+});
+
+describe("resolveWorkspaceTarget", () => {
+  it("distinguishes the main checkout from an inherited worktree", () => {
+    expect(resolveWorkspaceTarget({ effectiveEnvMode: "local", activeWorktreePath: null })).toBe(
+      "local",
+    );
+    expect(
+      resolveWorkspaceTarget({
+        effectiveEnvMode: "local",
+        activeWorktreePath: "/repo/.t3/worktrees/feature-a",
+      }),
+    ).toBe("current-worktree");
+  });
+
+  it("uses the new-worktree target for worktree mode", () => {
+    expect(
+      resolveWorkspaceTarget({
+        effectiveEnvMode: "worktree",
+        activeWorktreePath: "/repo/.t3/worktrees/feature-a",
+      }),
+    ).toBe("worktree");
   });
 });
 

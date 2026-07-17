@@ -19,6 +19,7 @@ const clientSettings: ClientSettings = {
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   favorites: [],
+  providerFavorites: [],
   providerModelPreferences: {},
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
@@ -27,6 +28,7 @@ const clientSettings: ClientSettings = {
   sidebarProjectSortOrder: "manual",
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
+  sidebarHideProviderIcons: false,
   timestampFormat: "24-hour",
   wordWrap: true,
 };

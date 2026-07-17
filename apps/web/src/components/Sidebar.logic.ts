@@ -8,8 +8,40 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
+import { shouldShowPlanReadyStatus } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+
+export function resolveSidebarProjectBadgeLabel(displayName: string): string {
+  const leafName = displayName.split("/").findLast(Boolean) ?? displayName;
+  const normalized = leafName.trim();
+  if (!normalized) return "?";
+
+  const digitMatch = normalized.match(/^([a-zA-Z]+\d+)/);
+  if (digitMatch?.[1]) return digitMatch[1].slice(0, 3).toUpperCase();
+
+  const words = normalized.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (words.length > 1) {
+    return words
+      .slice(0, 3)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase();
+  }
+
+  return normalized[0]?.toUpperCase() ?? "?";
+}
+
+export function resolveSidebarProjectBadgeColorIndex(
+  projectKey: string,
+  colorCount: number,
+): number {
+  if (colorCount <= 0) return 0;
+  let hash = 0;
+  for (const character of projectKey) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash % colorCount;
+}
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -17,6 +49,24 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // nearby thread usually reuses an already-hot subscription.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarThreadWorktreeSection =
+  | {
+      kind: "thread";
+      thread: SidebarThreadSummary;
+      /** Resolved checkout path for PR/git status when this thread is not grouped. */
+      checkoutPath?: string;
+    }
+  | {
+      kind: "worktree";
+      key: string;
+      label: string;
+      branch: string | null;
+      checkoutPath: string;
+      source: "local" | "worktree";
+      worktreePath: string | null;
+      threads: SidebarThreadSummary[];
+    };
+
 type SidebarProject = {
   id: string;
   title: string;
@@ -33,6 +83,7 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Wake Required"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
@@ -42,6 +93,7 @@ export interface ThreadStatusPill {
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,
+  "Wake Required": 4,
   Working: 3,
   Connecting: 3,
   "Plan Ready": 2,
@@ -205,6 +257,26 @@ export function resolveSidebarNewThreadSeedContext(input: {
   envMode: SidebarNewThreadEnvMode;
   startFromOrigin?: boolean;
 } {
+  if (
+    input.activeDraftThread?.projectId === input.projectId &&
+    input.activeDraftThread.worktreePath
+  ) {
+    return {
+      branch: input.activeDraftThread.branch,
+      worktreePath: input.activeDraftThread.worktreePath,
+      envMode: "local",
+      startFromOrigin: input.activeDraftThread.startFromOrigin,
+    };
+  }
+
+  if (input.activeThread?.projectId === input.projectId && input.activeThread.worktreePath) {
+    return {
+      branch: input.activeThread.branch,
+      worktreePath: input.activeThread.worktreePath,
+      envMode: "local",
+    };
+  }
+
   if (input.defaultEnvMode === "worktree") {
     return {
       envMode: "worktree",
@@ -231,6 +303,115 @@ export function resolveSidebarNewThreadSeedContext(input: {
   return {
     envMode: input.defaultEnvMode,
   };
+}
+
+export function normalizeWorktreePathForSidebarGroup(worktreePath: string | null): string | null {
+  const trimmed = worktreePath?.trim() ?? "";
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/u, "");
+  return withoutTrailingSeparators.length > 0 ? withoutTrailingSeparators : trimmed;
+}
+
+export function formatWorktreeGroupLabel(input: {
+  worktreePath: string;
+  branch: string | null;
+  source?: "local" | "worktree";
+}): string {
+  const pathSegments = input.worktreePath.split(/[\\/]/u);
+  const pathLabel = pathSegments.findLast((segment) => segment.length > 0) ?? input.worktreePath;
+  if (input.branch) {
+    return `${input.branch} · ${pathLabel}`;
+  }
+  return input.source === "local" ? `Local checkout · ${pathLabel}` : pathLabel;
+}
+
+function checkoutSectionBucket(
+  thread: SidebarThreadSummary,
+  resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null,
+): {
+  key: string;
+  checkoutPath: string;
+  source: "local" | "worktree";
+  worktreePath: string | null;
+} | null {
+  const worktreePath = normalizeWorktreePathForSidebarGroup(thread.worktreePath);
+  if (worktreePath) {
+    return {
+      key: `${thread.environmentId}:${thread.projectId}:worktree:${worktreePath}`,
+      checkoutPath: worktreePath,
+      source: "worktree",
+      worktreePath,
+    };
+  }
+  const localCheckoutPath = normalizeWorktreePathForSidebarGroup(
+    resolveLocalCheckoutPath?.(thread) ?? null,
+  );
+  if (!localCheckoutPath) {
+    return null;
+  }
+  return {
+    key: `${thread.environmentId}:${thread.projectId}:local:${localCheckoutPath}`,
+    checkoutPath: localCheckoutPath,
+    source: "local",
+    worktreePath: null,
+  };
+}
+
+export function buildSidebarThreadWorktreeSections(
+  threads: readonly SidebarThreadSummary[],
+  options: {
+    readonly resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null;
+  } = {},
+): SidebarThreadWorktreeSection[] {
+  const threadsByWorktreeKey = new Map<string, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    if (!bucket) {
+      continue;
+    }
+    const existing = threadsByWorktreeKey.get(bucket.key);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      threadsByWorktreeKey.set(bucket.key, [thread]);
+    }
+  }
+
+  const emittedWorktreeKeys = new Set<string>();
+  const sections: SidebarThreadWorktreeSection[] = [];
+  for (const thread of threads) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    const groupThreads = bucket ? threadsByWorktreeKey.get(bucket.key) : undefined;
+    if (!bucket || !groupThreads || groupThreads.length < 2) {
+      sections.push({
+        kind: "thread",
+        thread,
+        ...(bucket ? { checkoutPath: bucket.checkoutPath } : {}),
+      });
+      continue;
+    }
+    if (emittedWorktreeKeys.has(bucket.key)) {
+      continue;
+    }
+    emittedWorktreeKeys.add(bucket.key);
+    sections.push({
+      kind: "worktree",
+      key: bucket.key,
+      label: formatWorktreeGroupLabel({
+        worktreePath: bucket.checkoutPath,
+        branch: thread.branch,
+        source: bucket.source,
+      }),
+      branch: thread.branch,
+      checkoutPath: bucket.checkoutPath,
+      source: bucket.source,
+      worktreePath: bucket.worktreePath,
+      threads: groupThreads,
+    });
+  }
+  return sections;
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {
@@ -380,6 +561,23 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  // Plan Ready outranks Working: Grok often stays "running" long after the plan
+  // is captured (agent-entered plan mode). Users need Implement immediately.
+  if (
+    shouldShowPlanReadyStatus({
+      interactionMode: thread.interactionMode,
+      hasPendingUserInput: thread.hasPendingUserInput,
+      hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    })
+  ) {
+    return {
+      label: "Plan Ready",
+      colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: false,
+    };
+  }
+
   if (thread.session?.status === "running") {
     return {
       label: "Working",
@@ -398,16 +596,11 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
+  if (thread.session?.status === "interrupted") {
     return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      label: "Wake Required",
+      colorClass: "text-orange-600 dark:text-orange-300/90",
+      dotClass: "bg-orange-500 dark:bg-orange-300/90",
       pulse: false,
     };
   }

@@ -1371,6 +1371,25 @@ it.layer(
     }),
   );
 
+  it.effect("points the terminal's own $SHELL at the shell that starts", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") return;
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/bin/zsh",
+        env: { SHELL: "/bin/bash" },
+      });
+      yield* manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      // The configured shell wins for the launched process and its own $SHELL,
+      // even though the host login shell ($SHELL) was bash.
+      expect(spawnInput.shell).toBe("/bin/zsh");
+      expect(spawnInput.env.SHELL).toBe("/bin/zsh");
+    }),
+  );
+
   it.effect("bridges PTY callbacks back into Effect-managed event streaming", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager(5, {

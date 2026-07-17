@@ -15,6 +15,7 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import { GrokTranscriptResync } from "../externalSessions/GrokTranscriptResync.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -24,6 +25,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const grokTranscriptResync = yield* GrokTranscriptResync;
 
     return handlers
       .handle(
@@ -59,6 +61,11 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          // Desktop/web cold-load the snapshot over HTTP before the WS
+          // subscribe. Resync here so the gzip HTTP payload already includes
+          // any grok-session-log catch-up (and so afterSequence catch-up is not
+          // the only path that heals dropped ACP updates).
+          yield* grokTranscriptResync.resyncThread(args.params.threadId);
           const snapshot = yield* projectionSnapshotQuery
             .getThreadDetailSnapshot(args.params.threadId)
             .pipe(

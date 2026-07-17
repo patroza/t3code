@@ -244,6 +244,18 @@ describe("isRecoverableThreadResumeError", () => {
     );
   });
 
+  it("matches codex invalid params resume failures", () => {
+    NodeAssert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32602,
+          errorMessage: "Invalid params",
+        }),
+      ),
+      true,
+    );
+  });
+
   it("ignores unrelated missing-resource errors that do not mention threads", () => {
     NodeAssert.equal(
       isRecoverableThreadResumeError(
@@ -297,6 +309,46 @@ describe("openCodexThread", () => {
         requestedModel: "gpt-5.3-codex",
         serviceTier: undefined,
         resumeThreadId: "stale-thread",
+      });
+
+      NodeAssert.equal(opened.thread.id, "fresh-thread");
+      NodeAssert.deepStrictEqual(
+        calls.map((call) => call.method),
+        ["thread/resume", "thread/start"],
+      );
+    }),
+  );
+
+  it.effect("falls back to thread/start when resume returns invalid params", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+      const started = makeThreadOpenResponse("fresh-thread");
+      const client = {
+        request: <M extends "thread/start" | "thread/resume">(
+          method: M,
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          calls.push({ method, payload });
+          if (method === "thread/resume") {
+            return Effect.fail(
+              new CodexErrors.CodexAppServerRequestError({
+                code: -32602,
+                errorMessage: "Invalid params",
+              }),
+            );
+          }
+          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);
+        },
+      };
+
+      const opened = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: "019f3320-ed49-7e52-9a21-057c3b3820ed",
       });
 
       NodeAssert.equal(opened.thread.id, "fresh-thread");

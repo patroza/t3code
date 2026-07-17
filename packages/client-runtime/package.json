@@ -39,6 +39,14 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/ai-usage": {
+      "types": "./src/state/aiUsage.ts",
+      "default": "./src/state/aiUsage.ts"
+    },
+    "./state/aiUsagePresentation": {
+      "types": "./src/state/aiUsagePresentation.ts",
+      "default": "./src/state/aiUsagePresentation.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
@@ -102,6 +110,10 @@
     "./state/server": {
       "types": "./src/state/server.ts",
       "default": "./src/state/server.ts"
+    },
+    "./state/hostResourcePresentation": {
+      "types": "./src/state/hostResourcePresentation.ts",
+      "default": "./src/state/hostResourcePresentation.ts"
     },
     "./state/session": {
       "types": "./src/state/session.ts",

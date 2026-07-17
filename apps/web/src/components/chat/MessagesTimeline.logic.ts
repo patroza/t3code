@@ -1,5 +1,11 @@
 import * as Equal from "effect/Equal";
 import {
+  compareSteerTimelineSortable,
+  findMidTurnSteerUserIds,
+  splitAssistantTextAtSteers,
+  type SteerTimelineBoundaryStore,
+} from "@t3tools/shared/steerTimeline";
+import {
   formatDuration,
   workEntryIndicatesToolNeutralStatus,
   workLogEntryIsToolLike,
@@ -363,6 +369,160 @@ function deriveTurnFolds(input: {
   return foldsByAnchorEntryId;
 }
 
+function timelineEntryBelongsToTurn(entry: TimelineEntry, turnId: TurnId): boolean {
+  if (entry.kind === "work") {
+    return entry.entry.turnId === turnId;
+  }
+  if (entry.kind === "message" && entry.message.role !== "user") {
+    return entry.message.turnId === turnId;
+  }
+  if (entry.kind === "proposed-plan") {
+    return entry.proposedPlan.turnId === turnId;
+  }
+  return false;
+}
+
+function collectTimelineTurnIds(timelineEntries: ReadonlyArray<TimelineEntry>): TurnId[] {
+  const turnIds: TurnId[] = [];
+  const seen = new Set<string>();
+  for (const entry of timelineEntries) {
+    const turnId =
+      entry.kind === "work"
+        ? entry.entry.turnId
+        : entry.kind === "proposed-plan"
+          ? entry.proposedPlan.turnId
+          : entry.kind === "message"
+            ? entry.message.turnId
+            : null;
+    if (turnId == null || seen.has(String(turnId))) {
+      continue;
+    }
+    seen.add(String(turnId));
+    turnIds.push(turnId);
+  }
+  return turnIds;
+}
+
+/**
+ * Cursor/Codex steer while a turn is running reuses the active turn id and
+ * keeps appending assistant deltas to an early message row. Chronological sort
+ * alone parks that whole bubble above later steer user messages; the previous
+ * "move steers above the turn" workaround parked them before *all* turn work.
+ *
+ * Instead, interleave by `createdAt` and split assistant text at client-observed
+ * boundaries so steers sit between pre- and post-steer content (and between
+ * tools that started before/after the steer).
+ */
+export function interleaveTimelineEntriesForSteeredTurn(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  input: {
+    /** When set, only this turn is expanded. When omitted, every turn with steers is. */
+    readonly unsettledTurnId?: TurnId | null;
+    readonly boundaryStore?: SteerTimelineBoundaryStore;
+  } = {},
+): TimelineEntry[] {
+  const turnIds =
+    input.unsettledTurnId !== undefined && input.unsettledTurnId !== null
+      ? [input.unsettledTurnId]
+      : collectTimelineTurnIds(timelineEntries);
+
+  const steersByTurnId = new Map<
+    string,
+    ReadonlyArray<{ readonly id: string; readonly createdAt: string }>
+  >();
+  const steerIdSet = new Set<string>();
+
+  for (const turnId of turnIds) {
+    const steers = findMidTurnSteerUserIds({
+      items: timelineEntries.map((entry) => ({
+        id: entry.id,
+        createdAt: entry.createdAt,
+        isUser: entry.kind === "message" && entry.message.role === "user",
+        belongsToActiveTurn: timelineEntryBelongsToTurn(entry, turnId),
+      })),
+    });
+    if (steers.length === 0) {
+      continue;
+    }
+    steersByTurnId.set(String(turnId), steers);
+    for (const steer of steers) {
+      steerIdSet.add(steer.id);
+    }
+  }
+
+  if (steersByTurnId.size === 0) {
+    return [...timelineEntries].toSorted((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    );
+  }
+
+  const expanded: Array<TimelineEntry & { sortRank: number }> = [];
+
+  for (const entry of timelineEntries) {
+    if (
+      entry.kind === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.turnId !== null
+    ) {
+      const steers = steersByTurnId.get(String(entry.message.turnId));
+      if (steers !== undefined && steers.length > 0) {
+        const segments = splitAssistantTextAtSteers({
+          assistantMessageId: entry.message.id,
+          assistantCreatedAt: entry.message.createdAt,
+          text: entry.message.text,
+          streaming: entry.message.streaming,
+          steers,
+          ...(input.boundaryStore !== undefined ? { boundaryStore: input.boundaryStore } : {}),
+        });
+
+        for (const segment of segments) {
+          expanded.push({
+            id: segment.segmentId,
+            kind: "message",
+            createdAt: segment.sortAt,
+            sortRank: segment.sortRank,
+            message: {
+              ...entry.message,
+              text: segment.text,
+              streaming: segment.streaming,
+              // Segment sort key — keeps fold/duration helpers aligned with display order.
+              createdAt: segment.sortAt,
+              updatedAt: segment.streaming ? entry.message.updatedAt : segment.sortAt,
+            },
+          });
+        }
+        continue;
+      }
+    }
+
+    expanded.push({
+      ...entry,
+      sortRank: steerIdSet.has(entry.id) ? 1 : 0,
+    });
+  }
+
+  return expanded.toSorted((left, right) =>
+    compareSteerTimelineSortable(
+      { id: left.id, sortAt: left.createdAt, sortRank: left.sortRank },
+      { id: right.id, sortAt: right.createdAt, sortRank: right.sortRank },
+    ),
+  );
+}
+
+/** @deprecated Use {@link interleaveTimelineEntriesForSteeredTurn}. */
+export const reorderTimelineEntriesForSteeredTurn = (
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  input: {
+    readonly unsettledTurnId?: TurnId | null;
+    readonly isWorking?: boolean;
+    readonly boundaryStore?: SteerTimelineBoundaryStore;
+  },
+): TimelineEntry[] =>
+  interleaveTimelineEntriesForSteeredTurn(timelineEntries, {
+    ...(input.unsettledTurnId !== undefined ? { unsettledTurnId: input.unsettledTurnId } : {}),
+    ...(input.boundaryStore !== undefined ? { boundaryStore: input.boundaryStore } : {}),
+  });
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestTurn?: TimelineLatestTurn | null;
@@ -375,16 +535,20 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
+  // Always expand steers for every turn that has them (live + settled). The
+  // boundary store freezes pre-steer text on first observation so post-steer
+  // tokens keep rendering after the steer once the turn settles.
+  const displayTimelineEntries = interleaveTimelineEntriesForSteeredTurn(input.timelineEntries);
   const durationStartByMessageId = computeMessageDurationStart(
-    input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+    displayTimelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(displayTimelineEntries);
   const unsettledTurnId = deriveUnsettledTurnId(
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
   const foldsByAnchorEntryId = deriveTurnFolds({
-    timelineEntries: input.timelineEntries,
+    timelineEntries: displayTimelineEntries,
     terminalAssistantMessageIds,
     latestTurn: input.latestTurn ?? null,
     unsettledTurnId,
@@ -398,8 +562,8 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  for (let index = 0; index < input.timelineEntries.length; index += 1) {
-    const timelineEntry = input.timelineEntries[index];
+  for (let index = 0; index < displayTimelineEntries.length; index += 1) {
+    const timelineEntry = displayTimelineEntries[index];
     if (!timelineEntry) {
       continue;
     }
@@ -423,8 +587,8 @@ export function deriveMessagesTimelineRows(input: {
     if (timelineEntry.kind === "work") {
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
-      while (cursor < input.timelineEntries.length) {
-        const nextEntry = input.timelineEntries[cursor];
+      while (cursor < displayTimelineEntries.length) {
+        const nextEntry = displayTimelineEntries[cursor];
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||

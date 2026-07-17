@@ -18,6 +18,8 @@ import {
   findSidebarProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
+  shouldShowPlanFollowUpComposer,
+  shouldShowPlanReadyStatus,
   workEntryIndicatesToolFailure,
   workEntryIndicatesToolNeutralStatus,
   workEntryIndicatesToolSuccess,
@@ -476,6 +478,68 @@ describe("hasActionableProposedPlan", () => {
   });
 });
 
+describe("shouldShowPlanFollowUpComposer", () => {
+  const actionablePlan = {
+    id: "plan-1",
+    turnId: TurnId.make("turn-1"),
+    planMarkdown: "# Plan",
+    implementedAt: null,
+    implementationThreadId: null,
+    createdAt: "2026-02-23T00:00:00.000Z",
+    updatedAt: "2026-02-23T00:00:01.000Z",
+  };
+
+  it("shows Plan Ready while still in plan mode with an actionable plan", () => {
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        proposedPlan: actionablePlan,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not require the turn to be settled (mid-run after exit_plan capture)", () => {
+    // Same gate whether or not a turn is still running — callers no longer pass settle.
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        proposedPlan: actionablePlan,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides when not in plan mode or plan already implemented", () => {
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "default",
+        hasPendingUserInput: false,
+        proposedPlan: actionablePlan,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowPlanFollowUpComposer({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        proposedPlan: { ...actionablePlan, implementedAt: "2026-02-23T00:00:02.000Z" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldShowPlanReadyStatus", () => {
+  it("is true for plan mode with an actionable plan flag", () => {
+    expect(
+      shouldShowPlanReadyStatus({
+        interactionMode: "plan",
+        hasPendingUserInput: false,
+        hasActionableProposedPlan: true,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("findSidebarProposedPlan", () => {
   it("prefers the running turn source proposed plan when available on the same thread", () => {
     expect(
@@ -691,6 +755,34 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("shows submitted structured answers with their question transcript", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "input-requested",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "request-1",
+          questions: [{ id: "goal", header: "Goal", question: "What is the goal?", options: [] }],
+        },
+      }),
+      makeActivity({
+        id: "input-resolved",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.resolved",
+        summary: "User input submitted",
+        payload: { requestId: "request-1", answers: { goal: "Make it sleep" } },
+      }),
+    ];
+
+    const resolved = deriveWorkLogEntries(activities).find(
+      (entry) => entry.id === "input-resolved",
+    );
+    expect(resolved?.detail).toBe("Make it sleep");
+    expect(resolved?.userInputTranscript).toBe("What is the goal?\nMake it sleep");
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

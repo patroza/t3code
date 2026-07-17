@@ -228,7 +228,9 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.isDefined(delta);
       if (delta?.type === "content.delta") {
         assert.equal(delta.payload.delta, "hello from mock");
-        assert.match(String(delta.itemId), /^assistant:mock-session-1:segment:0$/);
+        // The middle segment is a per-run id: it keeps a resumed session from
+        // reusing the item ids of its earlier runs.
+        assert.match(String(delta.itemId), /^assistant:mock-session-1:[^:]+:segment:0$/);
       }
 
       const assistantCompleted = runtimeEvents.find(
@@ -687,7 +689,9 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           if (contentDelta?.type === "content.delta") {
             assert.equal(String(contentDelta.turnId), String(turn.turnId));
             assert.equal(contentDelta.payload.delta, "hello from mock");
-            assert.equal(String(contentDelta.itemId), "assistant:mock-session-1:segment:0");
+            // The middle segment is a per-run id: it keeps a resumed session
+            // from reusing the item ids of its earlier runs.
+            assert.match(String(contentDelta.itemId), /^assistant:mock-session-1:[^:]+:segment:0$/);
           }
         });
 
@@ -1042,6 +1046,44 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.isTrue(approvalResponses.some(isCancelledApprovalResponse));
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("removes the session and emits session.exited when the ACP process dies", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-process-exit");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EXIT_AFTER_PROMPT: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const sessionExited = yield* Deferred.make<ProviderRuntimeEvent>();
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        String(event.threadId) === String(threadId) && event.type === "session.exited"
+          ? Deferred.succeed(sessionExited, event).pipe(Effect.ignore)
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      yield* adapter
+        .sendTurn({ threadId, input: "exit now", attachments: [] })
+        .pipe(Effect.exit, Effect.timeout("5 seconds"));
+      const event = yield* Deferred.await(sessionExited).pipe(Effect.timeout("5 seconds"));
+
+      assert.equal(event.type, "session.exited");
+      if (event.type === "session.exited") {
+        assert.equal(event.payload.exitKind, "error");
+      }
+      assert.equal(yield* adapter.hasSession(threadId), false);
     }),
   );
   it.effect("stopping a session settles pending approval waits", () =>

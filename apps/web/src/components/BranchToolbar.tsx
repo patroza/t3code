@@ -16,10 +16,12 @@ import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   type EnvMode,
   type EnvironmentOption,
+  type WorkspaceTarget,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveEffectiveEnvMode,
   resolveLockedWorkspaceLabel,
+  resolveWorkspaceTarget,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
@@ -41,7 +43,7 @@ interface BranchToolbarProps {
   environmentId: EnvironmentId;
   threadId: ThreadId;
   draftId?: DraftId;
-  onEnvModeChange: (mode: EnvMode) => void;
+  onWorkspaceTargetChange: (target: WorkspaceTarget) => void;
   effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
@@ -61,9 +63,9 @@ interface MobileRunContextSelectorProps {
   availableEnvironments: readonly EnvironmentOption[] | undefined;
   showEnvironmentPicker: boolean;
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
-  effectiveEnvMode: EnvMode;
+  workspaceTarget: WorkspaceTarget;
   activeWorktreePath: string | null;
-  onEnvModeChange: (mode: EnvMode) => void;
+  onWorkspaceTargetChange: (target: WorkspaceTarget) => void;
 }
 
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
@@ -73,25 +75,27 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   availableEnvironments,
   showEnvironmentPicker,
   onEnvironmentChange,
-  effectiveEnvMode,
+  workspaceTarget,
   activeWorktreePath,
-  onEnvModeChange,
+  onWorkspaceTargetChange,
 }: MobileRunContextSelectorProps) {
   const activeEnvironment = useMemo(
     () => availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null,
     [availableEnvironments, environmentId],
   );
   const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
+    workspaceTarget === "worktree"
       ? FolderGit2Icon
-      : activeWorktreePath
+      : workspaceTarget === "current-worktree"
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = envModeLocked
     ? resolveLockedWorkspaceLabel(activeWorktreePath)
-    : effectiveEnvMode === "worktree"
+    : workspaceTarget === "worktree"
       ? resolveEnvModeLabel("worktree")
-      : resolveCurrentWorkspaceLabel(activeWorktreePath);
+      : workspaceTarget === "current-worktree"
+        ? resolveCurrentWorkspaceLabel(activeWorktreePath)
+        : resolveEnvModeLabel("local");
   const isLocked = envLocked || envModeLocked;
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
   const icon = showEnvironmentPicker ? (
@@ -162,21 +166,25 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         <MenuGroup>
           <MenuGroupLabel>Workspace</MenuGroupLabel>
           <MenuRadioGroup
-            value={effectiveEnvMode}
-            onValueChange={(value) => onEnvModeChange(value as EnvMode)}
+            value={workspaceTarget}
+            onValueChange={(value) => onWorkspaceTargetChange(value as WorkspaceTarget)}
           >
             <MenuRadioItem disabled={envModeLocked} value="local">
               <span className="flex min-w-0 items-center gap-1.5">
-                {activeWorktreePath ? (
-                  <FolderGitIcon className="size-3" />
-                ) : (
-                  <FolderIcon className="size-3" />
-                )}
-                <span className="min-w-0 truncate">
-                  {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-                </span>
+                <FolderIcon className="size-3" />
+                <span className="min-w-0 truncate">{resolveEnvModeLabel("local")}</span>
               </span>
             </MenuRadioItem>
+            {activeWorktreePath ? (
+              <MenuRadioItem disabled={envModeLocked} value="current-worktree">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FolderGitIcon className="size-3" />
+                  <span className="min-w-0 truncate">
+                    {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+                  </span>
+                </span>
+              </MenuRadioItem>
+            ) : null}
             <MenuRadioItem disabled={envModeLocked} value="worktree">
               <span className="flex min-w-0 items-center gap-1.5">
                 <FolderGit2Icon className="size-3" />
@@ -194,7 +202,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   environmentId,
   threadId,
   draftId,
-  onEnvModeChange,
+  onWorkspaceTargetChange,
   effectiveEnvModeOverride,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
@@ -229,6 +237,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       hasServerThread: serverThread !== null,
       draftThreadEnvMode: draftThread?.envMode,
     });
+  const workspaceTarget = resolveWorkspaceTarget({ effectiveEnvMode, activeWorktreePath });
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
 
   const showEnvironmentPicker = Boolean(
@@ -248,9 +257,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           availableEnvironments={availableEnvironments}
           showEnvironmentPicker={showEnvironmentPicker}
           onEnvironmentChange={onEnvironmentChange}
-          effectiveEnvMode={effectiveEnvMode}
+          workspaceTarget={workspaceTarget}
           activeWorktreePath={activeWorktreePath}
-          onEnvModeChange={onEnvModeChange}
+          onWorkspaceTargetChange={onWorkspaceTargetChange}
         />
       ) : (
         <div className="flex min-w-0 shrink-0 items-center gap-1">
@@ -267,9 +276,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           )}
           <BranchToolbarEnvModeSelector
             envLocked={envModeLocked}
-            effectiveEnvMode={effectiveEnvMode}
+            workspaceTarget={workspaceTarget}
             activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
+            onWorkspaceTargetChange={onWorkspaceTargetChange}
           />
         </div>
       )}

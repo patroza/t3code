@@ -14,6 +14,8 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveSendEnvMode,
+  shouldRenderServerThreadRoute,
+  shouldTreatServerThreadAsActive,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -348,6 +350,44 @@ describe("shouldWriteThreadErrorToCurrentServerThread", () => {
   });
 });
 
+describe("server thread liveness", () => {
+  it("requires shell and detail before treating a server thread as active", () => {
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: true,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: false,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not keep server routes alive from stale cached detail alone", () => {
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: true,
+        hasDraftThread: false,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   it("does not acknowledge unchanged server state", () => {
     const localDispatch = createLocalDispatchSnapshot(
@@ -452,5 +492,37 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+
+  it("does not acknowledge a queued follow-up while the same turn is still running", () => {
+    const runningTurn = {
+      ...completedTurn,
+      turnId: TurnId.make("turn-2"),
+      state: "running" as const,
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: null,
+    };
+    const runningSession = {
+      ...readySession,
+      status: "running" as const,
+      activeTurnId: runningTurn.turnId,
+      updatedAt: runningTurn.startedAt,
+    };
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: runningTurn, session: runningSession }),
+    );
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestTurn: runningTurn,
+        session: runningSession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import type {
   MessageId,
   ModelSelection,
   OrchestrationThreadShell,
+  ProviderDriverKind,
   ProviderInteractionMode,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
@@ -45,7 +46,12 @@ import {
   ComposerToolbarTrigger,
 } from "../../components/ComposerToolbarTrigger";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
+import {
+  hasUsageMarker,
+  resolveDriverUsage,
+} from "@t3tools/client-runtime/state/aiUsagePresentation";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -580,6 +586,34 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
+  const showUsageMarker = threadUsage ? hasUsageMarker(threadUsage.marker) : false;
+
+  const currentModelIconNode = (
+    <ProviderUsageIcon
+      provider={currentModelOption?.providerDriver}
+      size={14}
+      marker={threadUsage?.marker ?? null}
+    />
+  );
+
+  const currentUsageNote = threadUsage
+    ? (threadUsage.item.windows
+        .map((w) => (typeof w.percent === "number" ? `${w.percent}%` : null))
+        .find(Boolean) ?? null)
+    : null;
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -597,11 +631,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerGroups.map((group) => ({
         id: `provider:${group.providerKey}`,
         title: group.providerLabel,
-        subtitle: group.models.find(
-          (model) =>
-            model.selection.instanceId === currentModelSelection.instanceId &&
-            model.selection.model === currentModelSelection.model,
-        )?.label,
+        subtitle: (() => {
+          const selected = group.models.find(
+            (model) =>
+              model.selection.instanceId === currentModelSelection.instanceId &&
+              model.selection.model === currentModelSelection.model,
+          );
+          if (!selected) return undefined;
+          return currentUsageNote ? `${selected.label} · ${currentUsageNote}` : selected.label;
+        })(),
         subactions: group.models.map((option) => ({
           id: `model:${option.key}`,
           title: option.label,
@@ -822,6 +860,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </View>
           ) : null}
           {!isExpanded ? (
+            <ControlPillMenu
+              actions={modelMenuActions}
+              onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
+            >
+              <View style={{ width: 18, height: 18, marginRight: 4, marginLeft: 2 }}>
+                {currentModelIconNode}
+              </View>
+            </ControlPillMenu>
+          ) : null}
+          {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
               {showStopAction ? (
                 <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
@@ -857,9 +905,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 >
                   <ComposerToolbarTrigger
                     accessibilityLabel="Model"
-                    iconNode={
-                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                    }
+                    iconNode={currentModelIconNode}
                     label={currentModelOption?.label ?? currentModelSelection.model}
                   />
                 </ControlPillMenu>

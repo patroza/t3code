@@ -18,6 +18,7 @@ const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
+const emitExitPlanMode = process.env.T3_ACP_EMIT_EXIT_PLAN_MODE === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
@@ -27,6 +28,7 @@ const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANC
 const omitXAiPromptCompleteStopReason =
   process.env.T3_ACP_OMIT_XAI_PROMPT_COMPLETE_STOP_REASON === "1";
 const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
+const failLoadSessionInvalidParams = process.env.T3_ACP_FAIL_LOAD_SESSION_INVALID_PARAMS === "1";
 const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
 const hangLoadSessionAfterReplay = process.env.T3_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
@@ -38,6 +40,10 @@ const emitOverlappingXAiPromptCompleteOutOfOrder =
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const omitModeConfigOption = process.env.T3_ACP_OMIT_MODE_CONFIG_OPTION === "1";
+const exitAfterPrompt = process.env.T3_ACP_EXIT_AFTER_PROMPT === "1";
+/** Lets a test distinguish a crash from a signalled shutdown (128 + signal). */
+const exitAfterPromptCode = Number(process.env.T3_ACP_EXIT_AFTER_PROMPT_CODE ?? "7");
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
 const permissionOptionIds = {
@@ -54,6 +60,7 @@ let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
 let promptCount = 0;
+let exitPlanModeEmitted = false;
 let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
 
@@ -93,21 +100,25 @@ process.once("exit", (code) => {
   logExit(`exit:${code}`);
 });
 
+function modeConfigOption(): AcpSchema.SessionConfigOption {
+  return {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    type: "select",
+    currentValue: currentModeId,
+    options: availableModes.map((mode) => ({
+      value: mode.id,
+      name: mode.name,
+      ...(mode.description ? { description: mode.description } : {}),
+    })),
+  };
+}
+
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
-      {
-        id: "mode",
-        name: "Mode",
-        category: "mode",
-        type: "select",
-        currentValue: currentModeId,
-        options: availableModes.map((mode) => ({
-          value: mode.id,
-          name: mode.name,
-          ...(mode.description ? { description: mode.description } : {}),
-        })),
-      },
+      ...(omitModeConfigOption ? [] : [modeConfigOption()]),
       {
         id: "model",
         name: "Model",
@@ -346,6 +357,11 @@ const program = Effect.gen(function* () {
       if (failLoadSession) {
         return yield* AcpError.AcpRequestError.internalError("Mock load session failure");
       }
+      if (failLoadSessionInvalidParams) {
+        return yield* AcpError.AcpRequestError.invalidParams(
+          "Mock invalid params for session/load",
+        );
+      }
       if (hangLoadSessionAfterReplay || delayLoadSessionAfterReplay) {
         emitLoadReplayNotifications(requestedSessionId);
         yield* agent.client.sessionUpdate({
@@ -392,6 +408,27 @@ const program = Effect.gen(function* () {
         );
       }
       currentModelId = request.modelId;
+      return {};
+    }),
+  );
+
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.gen(function* () {
+      const nextModeId = request.modeId.trim();
+      if (!nextModeId) {
+        return yield* AcpError.AcpRequestError.invalidParams("modeId is required", {
+          method: "session/set_mode",
+          params: request,
+        });
+      }
+      currentModeId = nextModeId;
+      yield* agent.client.sessionUpdate({
+        sessionId: request.sessionId,
+        update: {
+          sessionUpdate: "current_mode_update",
+          currentModeId,
+        },
+      });
       return {};
     }),
   );
@@ -456,6 +493,9 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
       promptCount += 1;
+      if (exitAfterPrompt) {
+        return yield* Effect.sync(() => process.exit(exitAfterPromptCode));
+      }
 
       if (Number.isFinite(promptDelayMs) && promptDelayMs > 0) {
         yield* Effect.sleep(`${promptDelayMs} millis`);
@@ -751,6 +791,102 @@ const program = Effect.gen(function* () {
           },
         });
 
+        return { stopReason: "end_turn" };
+      }
+
+      if (emitExitPlanMode && !exitPlanModeEmitted) {
+        exitPlanModeEmitted = true;
+        const toolCallId = "exit-plan-mode-1";
+        const planMarkdown = "# Mock Grok Plan\n\n- capture exit_plan_mode\n";
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "plan-write-1",
+            title: "write",
+            kind: "edit",
+            status: "completed",
+            rawInput: {
+              file_path: `/tmp/mock-session/${requestedSessionId}/plan.md`,
+              content: planMarkdown,
+            },
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: "Plan: Exit",
+            kind: "other",
+            status: "pending",
+            rawInput: { variant: "ExitPlanMode" },
+            _meta: {
+              "x.ai/tool": {
+                name: "exit_plan_mode",
+                kind: "exit_plan",
+              },
+            },
+          },
+        });
+        // Mirror real Grok: auto-allow the tool permission, then reverse-RPC
+        // `_x.ai/exit_plan_mode` with planContent for client-side approval.
+        yield* agent.client.requestPermission({
+          sessionId: requestedSessionId,
+          toolCall: {
+            toolCallId,
+            title: "Plan: Exit",
+            kind: "other",
+            status: "pending",
+            rawInput: { variant: "ExitPlanMode" },
+            _meta: {
+              "x.ai/tool": {
+                name: "exit_plan_mode",
+                kind: "exit_plan",
+              },
+            },
+          },
+          options: [
+            { optionId: permissionOptionIds.allowOnce, name: "Allow once", kind: "allow_once" },
+            { optionId: permissionOptionIds.rejectOnce, name: "Reject", kind: "reject_once" },
+          ],
+        });
+        const exitPlanResult = yield* agent.client.extRequest("_x.ai/exit_plan_mode", {
+          sessionId: requestedSessionId,
+          toolCallId,
+          planContent: planMarkdown,
+        });
+        const outcome =
+          typeof exitPlanResult === "object" &&
+          exitPlanResult !== null &&
+          "outcome" in exitPlanResult &&
+          typeof (exitPlanResult as { outcome?: unknown }).outcome === "string"
+            ? (exitPlanResult as { outcome: string }).outcome
+            : "unknown";
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId,
+            title: "Plan: Exit",
+            status: "completed",
+          },
+        });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text:
+                outcome === "approved"
+                  ? "plan approved — implementing"
+                  : outcome === "abandoned"
+                    ? "plan abandoned"
+                    : "plan revision requested",
+            },
+          },
+        });
         return { stopReason: "end_turn" };
       }
 

@@ -21,6 +21,7 @@ import {
 import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
+  ArchiveIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowUpIcon,
@@ -50,6 +51,8 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useClientSettings } from "../hooks/useSettings";
+import { useThreadActions } from "../hooks/useThreadActions";
+import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -455,6 +458,7 @@ function OpenCommandPaletteDialog(props: {
   const { clearOpenIntent, openIntent, setOpen } = props;
   const composerHandleRef = useComposerHandleContext();
   const [query, setQuery] = useState("");
+  const [includeArchived, setIncludeArchived] = useState(false);
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
@@ -590,6 +594,38 @@ function OpenCommandPaletteDialog(props: {
     [projects],
   );
 
+  // Archived threads live in a separate snapshot query and never reach the main
+  // store. When the user opts in, pull them and merge them into the searchable
+  // thread items so search can surface archived threads too.
+  const { unarchiveThread } = useThreadActions();
+  const archiveEnvironmentIds = useMemo(
+    () => [...new Set(projects.map((project) => project.environmentId))],
+    [projects],
+  );
+  const { snapshots: archivedSnapshots } = useArchivedThreadSnapshots(
+    includeArchived ? archiveEnvironmentIds : [],
+  );
+  const archivedThreads = useMemo(
+    () =>
+      archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
+        snapshot.threads.map((thread) => ({ ...thread, environmentId })),
+      ),
+    [archivedSnapshots],
+  );
+  // Include archived-snapshot project titles too — a project whose threads are
+  // all archived may not appear in the main `projects` list.
+  const archivedProjectTitleById = useMemo(() => {
+    const map = new Map<ProjectId, string>(projectTitleById);
+    for (const { snapshot } of archivedSnapshots) {
+      for (const project of snapshot.projects) {
+        if (!map.has(project.id)) {
+          map.set(project.id, project.title);
+        }
+      }
+    }
+    return map;
+  }, [archivedSnapshots, projectTitleById]);
+
   const activeThreadId = activeThread?.id;
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
@@ -715,6 +751,48 @@ function OpenCommandPaletteDialog(props: {
     [activeThreadId, clientSettings.sidebarThreadSortOrder, navigate, projectTitleById, threads],
   );
   const recentThreadItems = allThreadItems.slice(0, RECENT_THREAD_LIMIT);
+
+  // Archived threads, surfaced only when the "Archived" toggle is on. Selecting
+  // one unarchives it (reinstating it into the main list) before navigating.
+  const archivedThreadItems = useMemo(
+    () =>
+      includeArchived
+        ? buildThreadActionItems({
+            threads: archivedThreads,
+            includeArchived: true,
+            ...(activeThreadId ? { activeThreadId } : {}),
+            projectTitleById: archivedProjectTitleById,
+            sortOrder: clientSettings.sidebarThreadSortOrder,
+            icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+            renderTrailingContent: () => (
+              <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
+                <ArchiveIcon className="size-3" />
+                Archived
+              </span>
+            ),
+            runThread: async (thread) => {
+              await unarchiveThread(scopeThreadRef(thread.environmentId, thread.id));
+              await navigate({
+                to: "/$environmentId/$threadId",
+                params: buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id)),
+              });
+            },
+          })
+        : [],
+    [
+      activeThreadId,
+      archivedProjectTitleById,
+      archivedThreads,
+      clientSettings.sidebarThreadSortOrder,
+      includeArchived,
+      navigate,
+      unarchiveThread,
+    ],
+  );
+  const threadSearchItems = useMemo(
+    () => [...allThreadItems, ...archivedThreadItems],
+    [allThreadItems, archivedThreadItems],
+  );
 
   function pushPaletteView(view: CommandPaletteView): void {
     setViewStack((previousViews) => [
@@ -1074,7 +1152,7 @@ function OpenCommandPaletteDialog(props: {
     query: deferredQuery,
     isInSubmenu: currentView !== null,
     projectSearchItems: projectSearchItems,
-    threadSearchItems: allThreadItems,
+    threadSearchItems: threadSearchItems,
   });
 
   const handleAddProjectForEnvironment = useCallback(
@@ -1688,7 +1766,9 @@ function OpenCommandPaletteDialog(props: {
                   ? willCreateProjectPath
                     ? "pe-36"
                     : "pe-16"
-                  : undefined
+                  : !isSubmenu
+                    ? "pe-28"
+                    : undefined
             }
             placeholder={inputPlaceholder}
             wrapperClassName={
@@ -1785,6 +1865,35 @@ function OpenCommandPaletteDialog(props: {
               </TooltipTrigger>
               <TooltipPopup side="top">
                 {submitActionLabel} ({addShortcutLabel})
+              </TooltipPopup>
+            </Tooltip>
+          ) : !isSubmenu ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant={includeArchived ? "default" : "outline"}
+                    size="xs"
+                    tabIndex={-1}
+                    className="absolute inset-e-2.5 top-1/2 gap-1.5 -translate-y-1/2"
+                    aria-label="Include archived threads"
+                    aria-pressed={includeArchived}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                    }}
+                    onClick={() => {
+                      setIncludeArchived((previous) => !previous);
+                    }}
+                  />
+                }
+              >
+                <ArchiveIcon className="size-3.5" />
+                <span>Archived</span>
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {includeArchived
+                  ? "Hide archived threads from search"
+                  : "Include archived threads in search"}
               </TooltipPopup>
             </Tooltip>
           ) : null}

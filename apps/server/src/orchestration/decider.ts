@@ -339,6 +339,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      const nextWorktreePath =
+        command.worktreePath === null && thread.worktreePath !== null
+          ? thread.worktreePath
+          : command.worktreePath;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -355,7 +359,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(branch !== undefined ? { branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(nextWorktreePath !== undefined ? { worktreePath: nextWorktreePath } : {}),
           updatedAt: occurredAt,
         },
       };
@@ -740,6 +744,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    case "thread.messages.resync": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: command.threadId,
+          afterMessageId: command.afterMessageId,
+          messages: command.messages,
+          reason: command.reason,
         },
       };
     }

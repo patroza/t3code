@@ -20,6 +20,39 @@ T3 Connect is optional and disabled in a fresh clone. Public configuration belon
 repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
 [`../../.env.example`](../../.env.example).
 
+To sign a fork with your own Apple Developer account, set
+`T3CODE_MOBILE_IOS_TEAM_ID`, `T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER`,
+`T3CODE_MOBILE_EAS_PROJECT_ID`, and `T3CODE_MOBILE_EXPO_OWNER` in the repository-root
+`.env.local`. Development and preview builds append `.dev` and `.preview` to your bundle
+identifier. Run `eas init` once under your Expo account to create the project ID, then use
+the existing EAS iOS build commands below. EAS can perform the build remotely; a local
+`ios:*` build still requires macOS and Xcode.
+
+### Free Apple Personal Team build
+
+For temporary testing on your own iPhone, a borrowed Mac and a free Apple Account are enough.
+This mode removes capabilities that a Personal Team cannot sign: widgets and Live Activities,
+push notifications, App Groups, associated domains, and EAS updates. Apple expires free
+provisioning profiles after seven days, so the app must then be rebuilt and reinstalled.
+
+On the Mac:
+
+1. Install Xcode, open it once, accept its license, and add your Apple Account under
+   **Xcode → Settings → Accounts**.
+2. Enable **Developer Mode** on the iPhone and connect it to the Mac by USB.
+3. Set `T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER=dev.patroza.t3code` in the repository-root
+   `.env.local`. `T3CODE_MOBILE_IOS_TEAM_ID` is optional; leave it unset to select your
+   Personal Team interactively in Xcode.
+4. From `apps/mobile`, run `vp run config:personal` to confirm that `associatedDomains` and
+   the `expo-widgets` plugin are absent.
+5. Run `vp run ios:personal`. If Xcode requests a team, open `ios/T3Code.xcworkspace`, select
+   the main T3Code target, choose **Signing & Capabilities → Team → your name (Personal
+   Team)**, select your iPhone as the run destination, and press **Run** in Xcode. Do not run
+   the clean prebuild command again after choosing the team, because it regenerates `ios/`.
+
+The personal build uses the development bundle ID `dev.patroza.t3code.dev`, so it remains
+separate from a future production build.
+
 ## Development
 
 Start Metro for the dev client:

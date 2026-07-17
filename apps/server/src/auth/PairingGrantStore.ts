@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import {
   AuthAdministrativeScopes,
   AuthStandardClientScopes,
@@ -5,6 +9,7 @@ import {
   type AuthPairingLink,
   type ServerAuthBootstrapMethod,
 } from "@t3tools/contracts";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -19,6 +24,18 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
+
+function readLocalBootstrapCredential(stateDir: string): string | undefined {
+  try {
+    const credential = NodeFS.readFileSync(
+      NodePath.join(stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE),
+      "utf8",
+    ).trim();
+    return credential.length > 0 ? credential : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
@@ -311,6 +328,19 @@ export const make = Effect.gen(function* () {
       // bearer expires). The seed itself stays inside the desktop
       // process and the rendered page, both of which the user already
       // implicitly trusts.
+      remainingUses: "unbounded",
+    });
+  }
+  const localCredential = readLocalBootstrapCredential(config.stateDir);
+  if (localCredential !== undefined && localCredential !== config.desktopBootstrapToken) {
+    const now = yield* DateTime.now;
+    yield* seedGrant(localCredential, {
+      method: "desktop-bootstrap",
+      scopes: AuthAdministrativeScopes,
+      subject: "local-bootstrap",
+      expiresAt: DateTime.add(now, {
+        milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
+      }),
       remainingUses: "unbounded",
     });
   }

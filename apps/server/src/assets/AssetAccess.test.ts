@@ -66,7 +66,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect("rejects workspace files outside the authorized root", () =>
+  it.effect("serves explicitly linked absolute preview files outside the project root", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -79,24 +79,23 @@ describe("AssetAccess", () => {
       const htmlPath = path.join(outside, "report.html");
       yield* fileSystem.writeFileString(htmlPath, "<p>outside</p>");
 
-      const error = yield* issueAssetUrl({
+      const canonicalHtmlPath = yield* fileSystem.realPath(htmlPath);
+      const result = yield* issueAssetUrl({
         resource: {
           _tag: "workspace-file",
           threadId: ThreadId.make("thread-1"),
           path: htmlPath,
         },
         workspaceRoot: root,
-      }).pipe(Effect.flip);
-      expect(error.message).toBe("Workspace file path must be relative to the project root.");
-      expect(error).toMatchObject({
-        _tag: "AssetWorkspacePathValidationError",
-        resource: {
-          _tag: "workspace-file",
-          threadId: "thread-1",
-          path: htmlPath,
-        },
       });
-      expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+      expect(yield* resolveAsset(token, "report.html")).toEqual({
+        kind: "file",
+        path: canonicalHtmlPath,
+      });
+      expect(yield* resolveAsset(token, "../secret.html")).toBeNull();
     }).pipe(Effect.provide(testLayer)),
   );
 

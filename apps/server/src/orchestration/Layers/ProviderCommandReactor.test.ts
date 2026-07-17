@@ -1635,6 +1635,11 @@ describe("ProviderCommandReactor", () => {
     expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
       threadId: "thread-1",
     });
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "ready" && thread.session.activeTurnId === null;
+    });
   });
 
   it("starts a fresh session when only projected session state exists", async () => {

@@ -144,6 +144,21 @@ describe("browser target resolver", () => {
     ).toBe("http://localhost:5173/app?x=1#top");
   });
 
+  it("maps loopback conversation URLs onto the thread environment host", async () => {
+    readPreparedConnection.mockReturnValue({
+      httpBaseUrl: "http://smart.tailea9537.ts.net:3773",
+    });
+    const { resolveDiscoveredServerUrl } = await import("./browserTargetResolver");
+    expect(
+      resolveDiscoveredServerUrl(
+        EnvironmentId.make("environment-smart"),
+        "http://127.0.0.1:8765/t3code-fork-synara-comparison.html?view=all#matrix",
+      ),
+    ).toBe(
+      "http://smart.tailea9537.ts.net:8765/t3code-fork-synara-comparison.html?view=all#matrix",
+    );
+  });
+
   it("normalizes public URLs without treating them as environment ports", async () => {
     const { resolveDiscoveredServerUrl } = await import("./browserTargetResolver");
     expect(resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "example.com/app")).toBe(

@@ -1,5 +1,4 @@
 import type { StatusTone } from "../../components/StatusPill";
-import type { OrchestrationLatestTurn, OrchestrationSession } from "@t3tools/contracts";
 import { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
 export function threadSortValue(thread: EnvironmentThreadShell): number {
@@ -31,16 +30,6 @@ export const THREAD_STATUS_NEUTRAL_ICON = {
   iconBackground: "rgba(142,142,147,0.22)",
 } as const;
 
-function isLatestTurnSettled(
-  latestTurn: OrchestrationLatestTurn | null,
-  session: OrchestrationSession | null,
-): boolean {
-  if (!latestTurn?.startedAt) return false;
-  if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  return session.status !== "running";
-}
-
 /**
  * Resolves the user-facing status of a thread, in priority order. Returns
  * `null` for quiescent threads so rows stay free of "Idle"-style noise.
@@ -69,6 +58,24 @@ export function resolveThreadStatus(
       textClassName: "text-indigo-700 dark:text-indigo-300",
       iconColor: "#5e5ce6",
       iconBackground: "rgba(94,92,230,0.22)",
+      pulse: false,
+    };
+  }
+
+  // Plan Ready outranks Working (same as web) so implement is obvious once a
+  // plan is captured even if the agent turn has not settled yet.
+  if (
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan &&
+    !thread.hasPendingUserInput
+  ) {
+    return {
+      kind: "plan-ready",
+      label: "Plan Ready",
+      pillClassName: "bg-violet-500/12 dark:bg-violet-500/16",
+      textClassName: "text-violet-700 dark:text-violet-300",
+      iconColor: "#bf5af2",
+      iconBackground: "rgba(191,90,242,0.22)",
       pulse: false,
     };
   }
@@ -105,22 +112,6 @@ export function resolveThreadStatus(
       textClassName: "text-rose-700 dark:text-rose-300",
       iconColor: "#ff453a",
       iconBackground: "rgba(255,69,58,0.22)",
-      pulse: false,
-    };
-  }
-
-  const hasPlanReadyPrompt =
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
-    return {
-      kind: "plan-ready",
-      label: "Plan Ready",
-      pillClassName: "bg-violet-500/12 dark:bg-violet-500/16",
-      textClassName: "text-violet-700 dark:text-violet-300",
-      iconColor: "#bf5af2",
-      iconBackground: "rgba(191,90,242,0.22)",
       pulse: false,
     };
   }

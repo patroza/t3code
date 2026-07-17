@@ -30,6 +30,20 @@ interface ComposerPrimaryActionsProps {
   onImplementPlanInNewThread: () => void;
 }
 
+export const shouldShowComposerInterruptAction = (input: {
+  isRunning: boolean;
+  hasSendableContent: boolean;
+  promptHasText: boolean;
+}): boolean => input.isRunning && !input.hasSendableContent && !input.promptHasText;
+
+export const shouldDisableCollapsedComposerSubmitAction = (input: {
+  isRunning: boolean;
+  isSendBusy: boolean;
+  isConnecting: boolean;
+  hasSendableContent: boolean;
+}): boolean =>
+  input.isRunning || input.isSendBusy || input.isConnecting || !input.hasSendableContent;
+
 export const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
   isLastQuestion: boolean;
@@ -123,7 +137,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
+  if (
+    shouldShowComposerInterruptAction({
+      isRunning,
+      hasSendableContent,
+      promptHasText,
+    })
+  ) {
     return (
       <button
         type="button"

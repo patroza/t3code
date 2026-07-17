@@ -16,6 +16,12 @@ import type {
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
+  /**
+   * The cached transcript cannot be reconciled in place (a resync rewound past
+   * what this client holds). The caller must drop the cached snapshot and reload
+   * the thread rather than keep rendering stale messages.
+   */
+  | { readonly kind: "reload-required" }
   | { readonly kind: "unchanged" };
 
 const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]>(
@@ -406,6 +412,31 @@ export function applyThreadDetailEvent(
     }
 
     // ── Revert ──────────────────────────────────────────────────────
+    case "thread.messages-resynced": {
+      // Rewind to the last known-good message and replace only the tail after
+      // it. Everything before the anchor is untouched, so a resync costs a
+      // splice rather than re-downloading the whole thread.
+      const tail = Arr.fromIterable(event.payload.messages);
+      if (event.payload.afterMessageId === null) {
+        return { kind: "updated", thread: { ...thread, messages: tail } };
+      }
+      const anchorIndex = thread.messages.findIndex(
+        (entry) => entry.id === event.payload.afterMessageId,
+      );
+      if (anchorIndex === -1) {
+        // The anchor predates what we hold (or we never had it), so we cannot
+        // splice precisely. Reload rather than render a wrong transcript.
+        return { kind: "reload-required" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: [...thread.messages.slice(0, anchorIndex + 1), ...tail],
+        },
+      };
+    }
+
     case "thread.reverted": {
       const checkpoints = pipe(
         thread.checkpoints,

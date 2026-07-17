@@ -848,6 +848,58 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.messages-resynced": {
+          // Rebuild the transcript tail from an authoritative external source.
+          // Everything up to and including `afterMessageId` is known-good and is
+          // kept as-is; only what follows is replaced.
+          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const anchorIndex =
+            event.payload.afterMessageId === null
+              ? -1
+              : existingRows.findIndex((row) => row.messageId === event.payload.afterMessageId);
+          if (event.payload.afterMessageId !== null && anchorIndex === -1) {
+            // Anchor is gone (already reverted/pruned): applying the tail would
+            // graft it onto an unknown prefix, so leave the projection alone.
+            yield* Effect.logWarning(
+              "Skipping thread.messages-resynced: anchor message is not in the projection.",
+              {
+                threadId: event.payload.threadId,
+                afterMessageId: event.payload.afterMessageId,
+                reason: event.payload.reason,
+              },
+            );
+            return;
+          }
+          const keptRows = existingRows.slice(0, anchorIndex + 1);
+          const tailRows = event.payload.messages.map(
+            (message) =>
+              ({
+                messageId: message.id,
+                threadId: event.payload.threadId,
+                turnId: message.turnId,
+                role: message.role,
+                text: message.text,
+                ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+                isStreaming: message.streaming,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              }) satisfies ProjectionThreadMessage,
+          );
+          yield* projectionThreadMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            [...keptRows, ...tailRows],
+            projectionThreadMessageRepository.upsert,
+            {
+              concurrency: 1,
+            },
+          ).pipe(Effect.asVoid);
+          return;
+        }
+
         case "thread.reverted": {
           const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
             threadId: event.payload.threadId,

@@ -30,6 +30,8 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
+import { HostResourceStatus } from "../HostResourceStatus";
+import { isLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1424,6 +1426,14 @@ function SavedBackendListRow({
           {metadataBits.length > 0 ? (
             <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
           ) : null}
+          <HostResourceStatus
+            environmentId={environmentId}
+            environmentLabel={environment.label}
+            connected={isConnected}
+            showRefresh
+            unavailableLabel
+            remote={!isLocalConnectionTarget(environment.entry.target)}
+          />
           {versionMismatch ? (
             <p className="flex items-center gap-1 text-warning text-xs">
               <TriangleAlertIcon className="size-3.5 shrink-0" />
