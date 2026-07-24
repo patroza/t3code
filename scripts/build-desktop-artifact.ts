@@ -1482,8 +1482,17 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       desktop: {
         entry: {
           StartupWMClass: "t3code",
+          // Register the external deep-link scheme so xdg-open can launch T3.
+          // electron-builder keeps %U on Exec when MimeType is present.
+          MimeType: "x-scheme-handler/t3code;",
         },
       },
+      protocols: [
+        {
+          name: "T3 Code",
+          schemes: ["t3code"],
+        },
+      ],
     };
   }
 

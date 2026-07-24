@@ -1,3 +1,4 @@
+import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -11,7 +12,7 @@ import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
-import { getDesktopUrl } from "../electron/ElectronProtocol.ts";
+import { buildDesktopThreadNavigationUrl, getDesktopUrl } from "../electron/ElectronProtocol.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
@@ -81,8 +82,23 @@ export class DesktopWindow extends Context.Service<
     readonly flushMainWindowBounds: Effect.Effect<void>;
     readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
     readonly syncAppearance: Effect.Effect<void>;
+    /**
+     * Navigate the main window to the canonical thread route
+     * (`#/$environmentId/$threadId`). Reuses or creates the main window,
+     * preserves backend-readiness/splash behavior, and retains one pending
+     * target when the renderer is not yet navigable (newest wins).
+     */
+    readonly navigateToThread: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+    }) => Effect.Effect<void, DesktopWindowError>;
   }
 >()("@t3tools/desktop/window/DesktopWindow") {}
+
+export type DesktopPendingThreadRoute = {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+};
 
 const { logInfo: logWindowInfo, logWarning: logWindowWarning } =
   makeComponentLogger("desktop-window");
@@ -255,10 +271,56 @@ export const make = Effect.gen(function* () {
   // The transient "Connecting to WSL" splash window, tracked separately so it
   // is never mistaken for the real main window.
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+  // Single pending deep-link route. Newest wins when several arrive during
+  // startup or while the main window is still loading.
+  const pendingThreadRouteRef = yield* Ref.make<Option.Option<DesktopPendingThreadRoute>>(
+    Option.none(),
+  );
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
+
+  const loadThreadRouteOnWindow = (window: Electron.BrowserWindow): void => {
+    if (window.isDestroyed()) {
+      return;
+    }
+    const apply = () => {
+      void runPromise(
+        Effect.gen(function* () {
+          if (window.isDestroyed()) {
+            return;
+          }
+          const pending = yield* Ref.get(pendingThreadRouteRef);
+          if (Option.isNone(pending)) {
+            return;
+          }
+          const url = buildDesktopThreadNavigationUrl({
+            isDevelopment: environment.isDevelopment,
+            environmentId: pending.value.environmentId,
+            threadId: pending.value.threadId,
+          });
+          void window.loadURL(url).catch(() => undefined);
+          // Clear only the route we applied so a newer pending target is kept.
+          yield* Ref.update(pendingThreadRouteRef, (current) => {
+            if (
+              Option.isSome(current) &&
+              current.value.environmentId === pending.value.environmentId &&
+              current.value.threadId === pending.value.threadId
+            ) {
+              return Option.none();
+            }
+            return current;
+          });
+        }),
+      );
+    };
+    if (window.webContents.isLoadingMainFrame()) {
+      window.webContents.once("did-finish-load", apply);
+      return;
+    }
+    apply();
+  };
 
   const dismissConnectingSplash = Effect.gen(function* () {
     const splash = yield* Ref.getAndSet(splashWindowRef, Option.none());
@@ -548,7 +610,37 @@ export const make = Effect.gen(function* () {
       if (window.isDestroyed()) {
         return;
       }
-      void window.loadURL(applicationUrl).catch(() => undefined);
+      void runPromise(
+        Effect.gen(function* () {
+          const pending = yield* Ref.get(pendingThreadRouteRef);
+          const url = Option.isSome(pending)
+            ? buildDesktopThreadNavigationUrl({
+                isDevelopment: environment.isDevelopment,
+                environmentId: pending.value.environmentId,
+                threadId: pending.value.threadId,
+              })
+            : applicationUrl;
+          if (window.isDestroyed()) {
+            return;
+          }
+          void window.loadURL(url).catch(() => undefined);
+          if (Option.isNone(pending)) {
+            return;
+          }
+          // Drop only the route we just loaded. A newer deep link that arrived
+          // after we read pending must stay queued.
+          yield* Ref.update(pendingThreadRouteRef, (current) => {
+            if (
+              Option.isSome(current) &&
+              current.value.environmentId === pending.value.environmentId &&
+              current.value.threadId === pending.value.threadId
+            ) {
+              return Option.none();
+            }
+            return current;
+          });
+        }),
+      );
     };
     const scheduleDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber !== undefined || window.isDestroyed()) {
@@ -792,6 +884,44 @@ export const make = Effect.gen(function* () {
         syncWindowAppearance(window, shouldUseDarkColors, environment.platform),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    navigateToThread: Effect.fn("desktop.window.navigateToThread")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+      });
+      // Newest deep link wins if several arrive before navigation applies.
+      yield* Ref.set(
+        pendingThreadRouteRef,
+        Option.some({
+          environmentId: input.environmentId,
+          threadId: input.threadId,
+        }),
+      );
+
+      const existingWindow = yield* currentMainWindow;
+      if (Option.isSome(existingWindow)) {
+        const window = existingWindow.value;
+        loadThreadRouteOnWindow(window);
+        yield* electronWindow.reveal(window);
+        yield* logWindowInfo("navigated main window to deep-linked thread");
+        return;
+      }
+
+      // No real main window yet. Keep the pending route so createWindow's
+      // initial load uses the thread URL. Create immediately when the backend
+      // is ready; otherwise handleBackendReady / createMainIfBackendReady will
+      // open the window and pick up the pending target.
+      yield* createMainIfBackendReady;
+      const createdWindow = yield* currentMainWindow;
+      if (Option.isSome(createdWindow)) {
+        // createWindow already scheduled the pending URL via loadApplication.
+        yield* electronWindow.reveal(createdWindow.value);
+        yield* logWindowInfo("created main window for deep-linked thread");
+        return;
+      }
+
+      yield* logWindowInfo("queued deep-linked thread until main window is navigable");
+    }),
   });
 });
 
