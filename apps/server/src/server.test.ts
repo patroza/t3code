@@ -36,6 +36,10 @@ import {
   computeDpopJwkThumbprint,
   type DpopPublicJwk,
 } from "@t3tools/shared/dpop";
+import {
+  appendOmegentT3ProductHandshake,
+  OMEGENT_T3_CLIENT_REQUIRED_MESSAGE,
+} from "@t3tools/shared/productFamily";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { assert, it } from "@effect/vitest";
@@ -78,7 +82,10 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationListenerCallbackError,
+} from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as WorktreeLifecycle from "./orchestration/Services/WorktreeLifecycle.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -599,20 +606,39 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
-          readHistory: (input) =>
-            Effect.succeed({
-              readAt: TEST_EPOCH,
-              windowMs: input.windowMs,
-              bucketMs: input.bucketMs,
-              sampleIntervalMs: 5_000,
-              retainedSampleCount: 0,
-              totalCpuSecondsApprox: 0,
-              buckets: [],
-              topProcesses: [],
-              error: Option.none(),
+        Layer.mergeAll(
+          Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
+            readHistory: (input) =>
+              Effect.succeed({
+                readAt: TEST_EPOCH,
+                windowMs: input.windowMs,
+                bucketMs: input.bucketMs,
+                sampleIntervalMs: 5_000,
+                retainedSampleCount: 0,
+                totalCpuSecondsApprox: 0,
+                buckets: [],
+                topProcesses: [],
+                error: Option.none(),
+              }),
+          }),
+          Layer.mock(HostResourceProbe.HostResourceProbe)({
+            read: Effect.succeed({
+              status: "supported",
+              checkedAt: "1970-01-01T00:00:00.000Z",
+              source: "os",
+              hostname: "test-host",
+              platform: "linux",
+              cpuPercent: 25,
+              memoryUsedPercent: 50,
+              memoryUsedBytes: 4_000,
+              memoryAvailableBytes: 4_000,
+              memoryTotalBytes: 8_000,
+              loadAverage: { m1: 0.5, m5: 0.4, m15: 0.3 },
+              logicalCores: 4,
+              message: null,
             }),
-        }),
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(TraceDiagnostics.TraceDiagnostics)({
@@ -684,16 +710,26 @@ const buildAppUnderTest = (options?: {
             registerTerminalProcesses: () => Effect.void,
             unregisterTerminal: () => Effect.void,
           }),
+          Layer.mock(AiUsageMonitorModule.AiUsageMonitor)({
+            current: () => Effect.succeed(AI_USAGE_UNAVAILABLE),
+            subscribe: () => Effect.void,
+            retain: Effect.void,
+          }),
         ),
       ),
       Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          latestSequence: Effect.succeed(0),
-          ...options?.layers?.orchestrationEngine,
-        }),
+        Layer.mergeAll(
+          Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.succeed({ sequence: 0 }),
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+            ...options?.layers?.orchestrationEngine,
+          }),
+          Layer.mock(GrokTranscriptResync.GrokTranscriptResync)({
+            resyncThread: () => Effect.void,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mergeAll(
@@ -880,6 +916,15 @@ const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) =>
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
   const next = new URL(url, "http://localhost");
   next.hash = `cookie=${encodeURIComponent(sessionCookieHeader)}`;
+  return isAbsoluteUrl ? next.toString() : `${next.pathname}${next.search}${next.hash}`;
+};
+
+const appendWsSearchParams = (url: string, params: Record<string, string>) => {
+  const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
+  const next = new URL(url, "http://localhost");
+  for (const [key, value] of Object.entries(params)) {
+    next.searchParams.set(key, value);
+  }
   return isAbsoluteUrl ? next.toString() : `${next.pathname}${next.search}${next.hash}`;
 };
 
@@ -1241,17 +1286,19 @@ const crossOriginClientOrigin = "http://remote-client.test:3773";
 
 const getWsServerUrl = (
   pathname = "",
-  options?: { authenticated?: boolean; credential?: string },
+  options?: { authenticated?: boolean; credential?: string; productHandshake?: boolean },
 ) =>
   Effect.gen(function* () {
     const server = yield* HttpServer.HttpServer;
     const address = server.address as HttpServer.TcpAddress;
     const baseUrl = `ws://127.0.0.1:${address.port}${pathname}`;
+    const withProduct =
+      options?.productHandshake === false ? baseUrl : appendOmegentT3ProductHandshake(baseUrl);
     if (options?.authenticated === false) {
-      return baseUrl;
+      return withProduct;
     }
     return appendSessionCookieToWsUrl(
-      baseUrl,
+      withProduct,
       yield* getAuthenticatedSessionCookieHeader(options?.credential),
     );
   });
@@ -3155,7 +3202,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(overbroadPairingBody.requiredScope, "orchestration:read");
       assert.equal(pairingResponse.status, 200);
       assert.equal(wsTicketResponse.status, 200);
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+      const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+        wsTicket: wsTicketBody.ticket,
+      });
       const rpcError = yield* Effect.flip(
         Effect.scoped(withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({}))),
       );
@@ -3786,7 +3835,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const { cookie } = yield* bootstrapBrowserSession();
         assert.isDefined(cookie);
         const sessionToken = extractSessionTokenFromSetCookie(cookie ?? "");
-        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?token=${encodeURIComponent(sessionToken)}`;
+        const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+          token: sessionToken,
+        });
 
         const error = yield* Effect.flip(
           Effect.scoped(withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({}))),
@@ -3814,7 +3865,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const wsTicketBody = yield* responseJsonEffect<{
           readonly ticket: string;
         }>(wsTicketResponse);
-        const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(wsTicketBody.ticket)}`;
+        const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+          wsTicket: wsTicketBody.ticket,
+        });
 
         const response = yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
@@ -7003,6 +7056,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }),
               readEvents: () => Stream.empty,
             },
+            projectionSnapshotQuery: {
+              getThreadShellById: (threadId) =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      id: threadId,
+                      worktreePath: "/tmp/bootstrap-worktree",
+                    }),
+                  ),
+                ),
+            },
             projectSetupScriptRunner: {
               runForThread,
             },
@@ -7156,6 +7220,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             readEvents: () => Stream.empty,
           },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/reuse-worktree",
+                  }),
+                ),
+              ),
+          },
         },
       });
 
@@ -7270,6 +7345,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
             readEvents: () => Stream.empty,
           },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/reuse-worktree",
+                  }),
+                ),
+              ),
+          },
         },
       });
 
@@ -7366,6 +7452,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,
@@ -7487,6 +7584,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               });
             },
             readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,

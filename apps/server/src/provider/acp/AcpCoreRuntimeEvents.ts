@@ -8,9 +8,11 @@ import {
   type ProviderRuntimeEvent,
   type RuntimeRequestId,
   type ThreadId,
+  type ThreadTokenUsageSnapshot,
   type ToolLifecycleItemType,
   type TurnId,
 } from "@t3tools/contracts";
+import type * as EffectAcpSchema from "effect-acp/schema";
 
 import type { AcpPermissionRequest, AcpPlanUpdate, AcpToolCallState } from "./AcpRuntimeModel.ts";
 
@@ -238,5 +240,101 @@ export function makeAcpContentDeltaEvent(input: {
       method: "session/update",
       payload: input.rawPayload,
     },
+  };
+}
+
+function nonNegativeInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.round(value);
+}
+
+/**
+ * Map ACP prompt-turn `Usage` (PromptResponse.usage / end-turn strawman) to T3's
+ * thread token snapshot. Prefer this for per-turn in/out stats.
+ */
+export function normalizeAcpPromptUsage(
+  usage: EffectAcpSchema.Usage | null | undefined,
+): ThreadTokenUsageSnapshot | undefined {
+  if (usage === null || usage === undefined) {
+    return undefined;
+  }
+
+  const inputTokens = nonNegativeInt(usage.inputTokens);
+  const outputTokens = nonNegativeInt(usage.outputTokens);
+  const thoughtTokens = nonNegativeInt(usage.thoughtTokens ?? undefined);
+  const cachedReadTokens = nonNegativeInt(usage.cachedReadTokens ?? undefined);
+  const totalTokens = nonNegativeInt(usage.totalTokens);
+
+  const usedTokens =
+    totalTokens !== undefined && totalTokens > 0
+      ? totalTokens
+      : (inputTokens ?? 0) + (outputTokens ?? 0) + (thoughtTokens ?? 0);
+
+  if (usedTokens <= 0) {
+    return undefined;
+  }
+
+  return {
+    usedTokens,
+    lastUsedTokens: usedTokens,
+    ...(inputTokens !== undefined ? { inputTokens, lastInputTokens: inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens, lastOutputTokens: outputTokens } : {}),
+    ...(thoughtTokens !== undefined
+      ? { reasoningOutputTokens: thoughtTokens, lastReasoningOutputTokens: thoughtTokens }
+      : {}),
+    ...(cachedReadTokens !== undefined
+      ? { cachedInputTokens: cachedReadTokens, lastCachedInputTokens: cachedReadTokens }
+      : {}),
+  };
+}
+
+/**
+ * Map ACP `sessionUpdate: "usage_update"` (context window used/size) to a token snapshot.
+ * Does not include per-turn in/out — only context fill.
+ */
+export function normalizeAcpUsageUpdate(input: {
+  readonly used: number;
+  readonly size: number;
+}): ThreadTokenUsageSnapshot | undefined {
+  const usedTokens = nonNegativeInt(input.used);
+  const maxTokens = nonNegativeInt(input.size);
+  if (usedTokens === undefined || usedTokens <= 0) {
+    return undefined;
+  }
+  return {
+    usedTokens,
+    ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
+  };
+}
+
+export function makeAcpTokenUsageUpdatedEvent(input: {
+  readonly stamp: AcpEventStamp;
+  readonly provider: ProviderDriverKind;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | undefined;
+  readonly usage: ThreadTokenUsageSnapshot;
+  readonly method?: string;
+  readonly rawPayload?: unknown;
+}): ProviderRuntimeEvent {
+  return {
+    type: "thread.token-usage.updated",
+    ...input.stamp,
+    provider: input.provider,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    payload: {
+      usage: input.usage,
+    },
+    ...(input.rawPayload === undefined
+      ? {}
+      : {
+          raw: {
+            source: "acp.jsonrpc" as const,
+            method: input.method ?? "session/update",
+            payload: input.rawPayload,
+          },
+        }),
   };
 }

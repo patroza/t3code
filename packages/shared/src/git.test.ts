@@ -162,4 +162,47 @@ describe("applyGitStatusStreamEvent", () => {
       pr: null,
     });
   });
+
+  it("preserves a known remote/PR when a snapshot arrives with remote:null", () => {
+    const current: VcsStatusResult = {
+      isRepo: true,
+      hasPrimaryRemote: true,
+      isDefaultRef: false,
+      refName: "feature/demo",
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+      hasUpstream: true,
+      aheadCount: 0,
+      behindCount: 0,
+      pr: {
+        number: 7,
+        title: "Demo",
+        state: "open",
+        headRef: "feature/demo",
+        baseRef: "main",
+        url: "https://github.com/acme/widgets/pull/7",
+        hasFailingChecks: true,
+      },
+    };
+
+    const next = applyGitStatusStreamEvent(current, {
+      _tag: "snapshot",
+      local: {
+        isRepo: true,
+        hasPrimaryRemote: true,
+        isDefaultRef: false,
+        refName: "feature/demo",
+        hasWorkingTreeChanges: true,
+        workingTree: {
+          files: [{ path: "src/demo.ts", insertions: 1, deletions: 0 }],
+          insertions: 1,
+          deletions: 0,
+        },
+      },
+      remote: null,
+    });
+
+    expect(next.pr).toEqual(current.pr);
+    expect(next.hasWorkingTreeChanges).toBe(true);
+  });
 });
