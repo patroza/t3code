@@ -24,6 +24,22 @@ export function getDesktopUrl(isDevelopment: boolean): string {
   return `${getDesktopOrigin(isDevelopment)}/`;
 }
 
+/**
+ * Builds the desktop renderer URL for a canonical thread route.
+ *
+ * The Electron client uses hash history, so the path is carried after `#/`.
+ */
+export function buildDesktopThreadNavigationUrl(input: {
+  readonly isDevelopment: boolean;
+  readonly environmentId: string;
+  readonly threadId: string;
+}): string {
+  const origin = getDesktopOrigin(input.isDevelopment);
+  const environmentSegment = encodeURIComponent(input.environmentId);
+  const threadSegment = encodeURIComponent(input.threadId);
+  return `${origin}/#/${environmentSegment}/${threadSegment}`;
+}
+
 export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
   "ElectronProtocolRegistrationError",
   {
