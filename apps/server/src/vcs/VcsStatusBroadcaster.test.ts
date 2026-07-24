@@ -339,7 +339,7 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(testLayer));
   });
 
-  it.effect("streams a local snapshot first and remote updates later", () => {
+  it.effect("streams local status first and remote updates later", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
       currentRemoteStatus: baseRemoteStatus,
@@ -351,11 +351,12 @@ describe("VcsStatusBroadcaster", () => {
 
     return Effect.gen(function* () {
       const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      const localDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
       const remoteUpdatedDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
       yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) => {
-        if (event._tag === "snapshot") {
-          return Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore);
+        // Cold start: localUpdated only (never a snapshot with fabricated remote/pr:null).
+        if (event._tag === "localUpdated") {
+          return Deferred.succeed(localDeferred, event).pipe(Effect.ignore);
         }
         if (event._tag === "remoteUpdated") {
           return Deferred.succeed(remoteUpdatedDeferred, event).pipe(Effect.ignore);
@@ -363,14 +364,13 @@ describe("VcsStatusBroadcaster", () => {
         return Effect.void;
       }).pipe(Effect.forkScoped);
 
-      const snapshot = yield* Deferred.await(snapshotDeferred);
+      const localEvent = yield* Deferred.await(localDeferred);
       yield* broadcaster.refreshStatus("/repo");
       const remoteUpdated = yield* Deferred.await(remoteUpdatedDeferred);
 
-      assert.deepStrictEqual(snapshot, {
-        _tag: "snapshot",
+      assert.deepStrictEqual(localEvent, {
+        _tag: "localUpdated",
         local: baseLocalStatus,
-        remote: null,
       } satisfies VcsStatusStreamEvent);
       assert.deepStrictEqual(remoteUpdated, {
         _tag: "remoteUpdated",
@@ -393,7 +393,7 @@ describe("VcsStatusBroadcaster", () => {
     return Effect.gen(function* () {
       const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const scope = yield* Scope.make();
-      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      const localDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
       const remoteUpdatedDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
       yield* Stream.runForEach(
         broadcaster.streamStatus(
@@ -401,8 +401,8 @@ describe("VcsStatusBroadcaster", () => {
           { automaticRemoteRefreshInterval: Effect.succeed(Duration.zero) },
         ),
         (event) => {
-          if (event._tag === "snapshot") {
-            return Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore);
+          if (event._tag === "localUpdated") {
+            return Deferred.succeed(localDeferred, event).pipe(Effect.ignore);
           }
           if (event._tag === "remoteUpdated") {
             return Deferred.succeed(remoteUpdatedDeferred, event).pipe(Effect.ignore);
@@ -411,13 +411,12 @@ describe("VcsStatusBroadcaster", () => {
         },
       ).pipe(Effect.forkIn(scope));
 
-      const snapshot = yield* Deferred.await(snapshotDeferred);
+      const localEvent = yield* Deferred.await(localDeferred);
       const remoteUpdated = yield* Deferred.await(remoteUpdatedDeferred);
 
-      assert.deepStrictEqual(snapshot, {
-        _tag: "snapshot",
+      assert.deepStrictEqual(localEvent, {
+        _tag: "localUpdated",
         local: baseLocalStatus,
-        remote: null,
       } satisfies VcsStatusStreamEvent);
       assert.deepStrictEqual(remoteUpdated, {
         _tag: "remoteUpdated",
@@ -590,8 +589,9 @@ describe("VcsStatusBroadcaster", () => {
 
       yield* TestClock.adjust(Duration.seconds(1));
       yield* Effect.yieldNow;
+      // Poller re-reads remote via TTL; it does not force-invalidate every tick.
       assert.equal(state.remoteStatusCalls, 2);
-      assert.equal(state.remoteInvalidationCalls, 1);
+      assert.equal(state.remoteInvalidationCalls, 0);
 
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
@@ -696,23 +696,24 @@ describe("VcsStatusBroadcaster", () => {
       remoteStartedDeferred = remoteStarted;
 
       const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-      const firstSnapshot = yield* Deferred.make<VcsStatusStreamEvent>();
-      const secondSnapshot = yield* Deferred.make<VcsStatusStreamEvent>();
+      const firstLocal = yield* Deferred.make<VcsStatusStreamEvent>();
+      const secondLocal = yield* Deferred.make<VcsStatusStreamEvent>();
       const firstScope = yield* Scope.make();
       const secondScope = yield* Scope.make();
+      // Cold stream emits localUpdated first (remote still loading).
       yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) =>
-        event._tag === "snapshot"
-          ? Deferred.succeed(firstSnapshot, event).pipe(Effect.ignore)
+        event._tag === "localUpdated"
+          ? Deferred.succeed(firstLocal, event).pipe(Effect.ignore)
           : Effect.void,
       ).pipe(Effect.forkIn(firstScope));
       yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) =>
-        event._tag === "snapshot"
-          ? Deferred.succeed(secondSnapshot, event).pipe(Effect.ignore)
+        event._tag === "localUpdated"
+          ? Deferred.succeed(secondLocal, event).pipe(Effect.ignore)
           : Effect.void,
       ).pipe(Effect.forkIn(secondScope));
 
-      yield* Deferred.await(firstSnapshot);
-      yield* Deferred.await(secondSnapshot);
+      yield* Deferred.await(firstLocal);
+      yield* Deferred.await(secondLocal);
       yield* Deferred.await(remoteStarted);
 
       assert.equal(state.remoteStatusCalls, 1);

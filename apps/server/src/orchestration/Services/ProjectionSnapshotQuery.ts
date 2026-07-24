@@ -9,6 +9,8 @@
 import type {
   CheckpointRef,
   OrchestrationCheckpointSummary,
+  OrchestrationGetThreadActivitiesInput,
+  OrchestrationGetThreadActivitiesResult,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,

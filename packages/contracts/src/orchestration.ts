@@ -25,6 +25,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   getTurnDiff: "orchestration.getTurnDiff",
+  getThreadActivities: "orchestration.getThreadActivities",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
@@ -373,6 +374,10 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   activities: Schema.Array(OrchestrationThreadActivity),
+  // The detail snapshot windows `activities` to the most recent page; this is
+  // true when older activities exist beyond the window and can be lazy-loaded
+  // via the getThreadActivities RPC. Absent on lightweight (shell) threads.
+  hasMoreActivities: Schema.optional(Schema.Boolean),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });
@@ -863,6 +868,24 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Rebuild a thread's transcript tail from an authoritative external source.
+ *
+ * Server-internal: raised when T3 notices a provider's own session log has run
+ * ahead of the thread (the ACP stream dropped updates, or the session was driven
+ * from another client). See ThreadMessagesResyncedPayload for the rewind
+ * semantics.
+ */
+const ThreadMessagesResyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.messages.resync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -871,6 +894,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadMessagesResyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -902,6 +926,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
   "thread.reverted",
+  "thread.messages-resynced",
   "thread.session-stop-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -1079,6 +1104,28 @@ export const ThreadRevertedPayload = Schema.Struct({
   turnCount: NonNegativeInt,
 });
 
+/**
+ * A thread's transcript was rebuilt from an authoritative external source (e.g.
+ * a grok session backfill after the ACP stream dropped updates).
+ *
+ * Out-of-band writes straight to the projection are invisible to clients: a
+ * warm-cache client resumes from `afterSequence` and only ever receives events
+ * past that cursor. This event is what makes such a rebuild observable — it
+ * lands past every client's cursor, so the existing catch-up replay delivers it.
+ *
+ * It carries a rewind point rather than a whole snapshot: everything up to and
+ * including `afterMessageId` is known-good and untouched; only the tail after it
+ * is replaced by `messages`. `afterMessageId: null` replaces the whole
+ * transcript. A client that does not hold `afterMessageId` cannot rewind
+ * precisely and must reload the thread instead.
+ */
+export const ThreadMessagesResyncedPayload = Schema.Struct({
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
+});
+
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   createdAt: IsoDateTime,
@@ -1239,6 +1286,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.messages-resynced"),
+    payload: ThreadMessagesResyncedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.session-stop-requested"),
     payload: ThreadSessionStopRequestedPayload,
   }),
@@ -1356,6 +1408,37 @@ export type OrchestrationGetTurnDiffInput = typeof OrchestrationGetTurnDiffInput
 export const OrchestrationGetTurnDiffResult = ThreadTurnDiff;
 export type OrchestrationGetTurnDiffResult = typeof OrchestrationGetTurnDiffResult.Type;
 
+/**
+ * Cursor-paginated load of a thread's OLDER activities (lazy-load / infinite
+ * scroll). Sequenced activity uses `beforeSequence`, the `sequence` of the
+ * oldest activity the client currently holds. Legacy unsequenced activity uses
+ * the `(beforeCreatedAt, beforeActivityId)` pair from the oldest loaded
+ * activity. The server returns the page of activities immediately older than the
+ * cursor (chronological ascending) plus whether any remain beyond that.
+ */
+export const OrchestrationGetThreadActivitiesInput = Schema.Union([
+  Schema.Struct({
+    threadId: ThreadId,
+    beforeSequence: NonNegativeInt,
+    limit: Schema.optional(NonNegativeInt),
+  }),
+  Schema.Struct({
+    threadId: ThreadId,
+    beforeCreatedAt: IsoDateTime,
+    beforeActivityId: EventId,
+    limit: Schema.optional(NonNegativeInt),
+  }),
+]);
+export type OrchestrationGetThreadActivitiesInput =
+  typeof OrchestrationGetThreadActivitiesInput.Type;
+
+export const OrchestrationGetThreadActivitiesResult = Schema.Struct({
+  activities: Schema.Array(OrchestrationThreadActivity),
+  hasMore: Schema.Boolean,
+});
+export type OrchestrationGetThreadActivitiesResult =
+  typeof OrchestrationGetThreadActivitiesResult.Type;
+
 export const OrchestrationGetFullThreadDiffInput = Schema.Struct({
   threadId: ThreadId,
   toTurnCount: NonNegativeInt,
@@ -1382,6 +1465,10 @@ export const OrchestrationRpcSchemas = {
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
     output: OrchestrationGetTurnDiffResult,
+  },
+  getThreadActivities: {
+    input: OrchestrationGetThreadActivitiesInput,
+    output: OrchestrationGetThreadActivitiesResult,
   },
   getFullThreadDiff: {
     input: OrchestrationGetFullThreadDiffInput,
@@ -1438,6 +1525,14 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
 
 export class OrchestrationGetTurnDiffError extends Schema.TaggedErrorClass<OrchestrationGetTurnDiffError>()(
   "OrchestrationGetTurnDiffError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationGetThreadActivitiesError extends Schema.TaggedErrorClass<OrchestrationGetThreadActivitiesError>()(
+  "OrchestrationGetThreadActivitiesError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),

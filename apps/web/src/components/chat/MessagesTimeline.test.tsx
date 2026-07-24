@@ -194,6 +194,7 @@ function buildProps() {
     onAnchorReady: () => {},
     onAnchorSizeChanged: () => {},
     contentInsetEndAdjustment: 0,
+    maintainScrollAtEnd: true,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
   };
@@ -424,7 +425,22 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-footer="true"');
   });
 
-  it("does not render collapse controls for short user messages", () => {
+  it("disables end maintenance after the user scrolls away", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        maintainScrollAtEnd={false}
+        timelineEntries={[buildUserTimelineEntry("Earlier prompt.")]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+    expect(markup).toContain('data-maintain-visible-content-position="object"');
+  });
+
+  it("does not render collapse controls for short user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -654,5 +670,38 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("lucide-x");
     expect(markup).toContain('aria-label="Tool call failed"');
+  });
+
+  it("offers a 'Load older history' control when older activity remains", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hi")]}
+        hasMoreOlder
+      />,
+    );
+    expect(markup).toContain("Load older history");
+  });
+
+  it("shows a loading indicator while older history is being fetched", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hi")]}
+        hasMoreOlder
+        loadingOlder
+      />,
+    );
+    expect(markup).toContain("Loading older history");
+  });
+
+  it("renders no older-history control when none remains", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry("Hi")]} />,
+    );
+    expect(markup).not.toContain("older history");
   });
 });
