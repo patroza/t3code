@@ -25,6 +25,7 @@
 
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -87,6 +88,8 @@ export interface DesktopBackendStartConfig {
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
+  /** Connect to this already-running backend without owning or terminating its process. */
+  readonly reuseExisting?: boolean;
   // Present for a WSL run after the configured/default distro has been
   // resolved to the concrete distro passed to wsl.exe.
   readonly runningDistro?: string;
@@ -144,7 +147,10 @@ class BackendProcessSpawnError extends Schema.TaggedErrorClass<BackendProcessSpa
   }
 }
 
-type BackendProcessError = BackendProcessBootstrapEncodeError | BackendProcessSpawnError;
+type BackendProcessError =
+  | BackendProcessBootstrapEncodeError
+  | BackendProcessSpawnError
+  | BackendTimeoutError;
 
 interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly readinessTimeout?: Duration.Duration;
@@ -329,6 +335,26 @@ const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   options: RunBackendProcessOptions,
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  if (options.reuseExisting) {
+    yield* waitForHttpReady(
+      options.httpBaseUrl,
+      options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
+    );
+    yield* options.onReady?.() ?? Effect.void;
+    // We don't own the reused backend process, so there's no child exit to
+    // await — park until the run scope closes (stop()/quit). Using a
+    // scope-finalizer-completed Deferred instead of `Effect.never` lets
+    // `closeRun` unblock this fiber; `Effect.never` would leave it parked
+    // forever, deadlocking shutdown and orphaning the windowless app.
+    const released = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(released, undefined));
+    yield* Deferred.await(released);
+    return {
+      code: Option.none(),
+      reason: "reused backend released",
+      result: Result.succeed(ChildProcessSpawner.ExitCode(0)),
+    };
+  }
   const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
     Effect.mapError(
       (cause) => new BackendProcessBootstrapEncodeError({ entryPath: options.entryPath, cause }),
