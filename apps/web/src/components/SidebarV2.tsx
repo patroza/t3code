@@ -499,11 +499,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const pr = resolveThreadPr({
-    threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
-    hasDedicatedWorktree: thread.worktreePath !== null,
-  });
+  const pr = resolveThreadPr(thread.branch, gitStatus.data ?? null);
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,

@@ -32,6 +32,11 @@ export function isDesktopLocalConnectionTarget(
   );
 }
 
+/** Whether a connection target is hosted by the current desktop/web client machine. */
+export function isLocalConnectionTarget(target: ConnectionTarget): boolean {
+  return target._tag === "PrimaryConnectionTarget" || isDesktopLocalConnectionTarget(target);
+}
+
 export function desktopLocalBackendId(target: ConnectionTarget): string | null {
   return isDesktopLocalConnectionTarget(target)
     ? target.connectionId.slice(DESKTOP_LOCAL_CONNECTION_ID_PREFIX.length)
@@ -49,6 +54,7 @@ export type DesktopSecondaryBootstrapsRead =
     };
 
 export interface DesktopSecondaryBootstrapsReader {
+  readonly hasBridge: () => boolean;
   readonly readResult: () => DesktopSecondaryBootstrapsRead;
   readonly readSnapshot: () => ReadonlyArray<DesktopEnvironmentBootstrap>;
 }
@@ -81,6 +87,7 @@ export function createDesktopSecondaryBootstrapsReader(
   };
 
   return {
+    hasBridge: () => resolveBridge() !== undefined,
     readResult,
     readSnapshot: () => {
       const result = readResult();
@@ -92,6 +99,16 @@ export function createDesktopSecondaryBootstrapsReader(
 const desktopSecondaryBootstrapsReader = createDesktopSecondaryBootstrapsReader(
   () => window.desktopBridge,
 );
+
+/**
+ * Whether this renderer has a desktop bridge at all. The preload exposes it
+ * before any renderer script runs, so a missing bridge is permanent for the
+ * page: browsers (web and mobile) never gain one, and their topology can only
+ * ever read empty. Consumers use this to skip work that cannot produce a result.
+ */
+export function hasDesktopBridge(): boolean {
+  return desktopSecondaryBootstrapsReader.hasBridge();
+}
 
 /** Read the topology while preserving failures for platform cache policy. */
 export function readDesktopSecondaryBootstrapsResult(): DesktopSecondaryBootstrapsRead {

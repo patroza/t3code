@@ -14,9 +14,42 @@ import {
 import type { SidebarThreadSummary, Thread } from "../types";
 import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
+import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
+import { shouldShowPlanReadyStatus } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import type { SnoozePreset } from "./Sidebar.snooze";
+
+export function resolveSidebarProjectBadgeLabel(displayName: string): string {
+  const leafName = displayName.split("/").findLast(Boolean) ?? displayName;
+  const normalized = leafName.trim();
+  if (!normalized) return "?";
+
+  const digitMatch = normalized.match(/^([a-zA-Z]+\d+)/);
+  if (digitMatch?.[1]) return digitMatch[1].slice(0, 3).toUpperCase();
+
+  const words = normalized.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (words.length > 1) {
+    return words
+      .slice(0, 3)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase();
+  }
+
+  return normalized[0]?.toUpperCase() ?? "?";
+}
+
+export function resolveSidebarProjectBadgeColorIndex(
+  projectKey: string,
+  colorCount: number,
+): number {
+  if (colorCount <= 0) return 0;
+  let hash = 0;
+  for (const character of projectKey) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+  return hash % colorCount;
+}
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -186,6 +219,7 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Wake Required"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
@@ -195,6 +229,7 @@ export interface ThreadStatusPill {
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 5,
   "Awaiting Input": 4,
+  "Wake Required": 4,
   Working: 3,
   Connecting: 3,
   "Plan Ready": 2,
@@ -378,6 +413,191 @@ export function isTrailingDoubleClick(detail: number): boolean {
   return detail > 1;
 }
 
+export function resolveSidebarNewThreadEnvMode(input: {
+  requestedEnvMode?: SidebarNewThreadEnvMode;
+  defaultEnvMode: SidebarNewThreadEnvMode;
+}): SidebarNewThreadEnvMode {
+  return input.requestedEnvMode ?? input.defaultEnvMode;
+}
+
+export function resolveSidebarNewThreadSeedContext(input: {
+  projectId: string;
+  defaultEnvMode: SidebarNewThreadEnvMode;
+  activeThread?: {
+    projectId: string;
+    branch: string | null;
+    worktreePath: string | null;
+  } | null;
+  activeDraftThread?: {
+    projectId: string;
+    branch: string | null;
+    worktreePath: string | null;
+    envMode: SidebarNewThreadEnvMode;
+    startFromOrigin: boolean;
+  } | null;
+}): {
+  branch?: string | null;
+  worktreePath?: string | null;
+  envMode: SidebarNewThreadEnvMode;
+  startFromOrigin?: boolean;
+} {
+  if (
+    input.activeDraftThread?.projectId === input.projectId &&
+    input.activeDraftThread.worktreePath
+  ) {
+    return {
+      branch: input.activeDraftThread.branch,
+      worktreePath: input.activeDraftThread.worktreePath,
+      envMode: "local",
+      startFromOrigin: input.activeDraftThread.startFromOrigin,
+    };
+  }
+
+  if (input.activeThread?.projectId === input.projectId && input.activeThread.worktreePath) {
+    return {
+      branch: input.activeThread.branch,
+      worktreePath: input.activeThread.worktreePath,
+      envMode: "local",
+    };
+  }
+
+  if (input.defaultEnvMode === "worktree") {
+    return {
+      envMode: "worktree",
+    };
+  }
+
+  if (input.activeDraftThread?.projectId === input.projectId) {
+    return {
+      branch: input.activeDraftThread.branch,
+      worktreePath: input.activeDraftThread.worktreePath,
+      envMode: input.activeDraftThread.envMode,
+      startFromOrigin: input.activeDraftThread.startFromOrigin,
+    };
+  }
+
+  if (input.activeThread?.projectId === input.projectId) {
+    return {
+      branch: input.activeThread.branch,
+      worktreePath: input.activeThread.worktreePath,
+      envMode: input.activeThread.worktreePath ? "worktree" : "local",
+    };
+  }
+
+  return {
+    envMode: input.defaultEnvMode,
+  };
+}
+
+export function normalizeWorktreePathForSidebarGroup(worktreePath: string | null): string | null {
+  const trimmed = worktreePath?.trim() ?? "";
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/u, "");
+  return withoutTrailingSeparators.length > 0 ? withoutTrailingSeparators : trimmed;
+}
+
+export function formatWorktreeGroupLabel(input: {
+  worktreePath: string;
+  branch: string | null;
+  source?: "local" | "worktree";
+}): string {
+  const pathSegments = input.worktreePath.split(/[\\/]/u);
+  const pathLabel = pathSegments.findLast((segment) => segment.length > 0) ?? input.worktreePath;
+  if (input.branch) {
+    return `${input.branch} · ${pathLabel}`;
+  }
+  return input.source === "local" ? `Local checkout · ${pathLabel}` : pathLabel;
+}
+
+function checkoutSectionBucket(
+  thread: SidebarThreadSummary,
+  resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null,
+): {
+  key: string;
+  checkoutPath: string;
+  source: "local" | "worktree";
+  worktreePath: string | null;
+} | null {
+  const worktreePath = normalizeWorktreePathForSidebarGroup(thread.worktreePath);
+  if (worktreePath) {
+    return {
+      key: `${thread.environmentId}:${thread.projectId}:worktree:${worktreePath}`,
+      checkoutPath: worktreePath,
+      source: "worktree",
+      worktreePath,
+    };
+  }
+  const localCheckoutPath = normalizeWorktreePathForSidebarGroup(
+    resolveLocalCheckoutPath?.(thread) ?? null,
+  );
+  if (!localCheckoutPath) {
+    return null;
+  }
+  return {
+    key: `${thread.environmentId}:${thread.projectId}:local:${localCheckoutPath}`,
+    checkoutPath: localCheckoutPath,
+    source: "local",
+    worktreePath: null,
+  };
+}
+
+export function buildSidebarThreadWorktreeSections(
+  threads: readonly SidebarThreadSummary[],
+  options: {
+    readonly resolveLocalCheckoutPath?: (thread: SidebarThreadSummary) => string | null;
+  } = {},
+): SidebarThreadWorktreeSection[] {
+  const threadsByWorktreeKey = new Map<string, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    if (!bucket) {
+      continue;
+    }
+    const existing = threadsByWorktreeKey.get(bucket.key);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      threadsByWorktreeKey.set(bucket.key, [thread]);
+    }
+  }
+
+  const emittedWorktreeKeys = new Set<string>();
+  const sections: SidebarThreadWorktreeSection[] = [];
+  for (const thread of threads) {
+    const bucket = checkoutSectionBucket(thread, options.resolveLocalCheckoutPath);
+    const groupThreads = bucket ? threadsByWorktreeKey.get(bucket.key) : undefined;
+    if (!bucket || !groupThreads || groupThreads.length < 2) {
+      sections.push({
+        kind: "thread",
+        thread,
+        ...(bucket ? { checkoutPath: bucket.checkoutPath } : {}),
+      });
+      continue;
+    }
+    if (emittedWorktreeKeys.has(bucket.key)) {
+      continue;
+    }
+    emittedWorktreeKeys.add(bucket.key);
+    sections.push({
+      kind: "worktree",
+      key: bucket.key,
+      label: formatWorktreeGroupLabel({
+        worktreePath: bucket.checkoutPath,
+        branch: thread.branch,
+        source: bucket.source,
+      }),
+      branch: thread.branch,
+      checkoutPath: bucket.checkoutPath,
+      source: bucket.source,
+      worktreePath: bucket.worktreePath,
+      threads: groupThreads,
+    });
+  }
+  return sections;
+}
+
 export function orderItemsByPreferredIds<TItem, TId>(input: {
   items: readonly TItem[];
   preferredIds: readonly TId[];
@@ -433,6 +653,19 @@ export function getSidebarThreadIdsToPrewarm<TThreadId>(
   limit = SIDEBAR_THREAD_PREWARM_LIMIT,
 ): TThreadId[] {
   return visibleThreadIds.slice(0, Math.max(0, limit));
+}
+
+/**
+ * Prewarming keeps a live thread-detail subscription per row, so the cache is
+ * paid for in retained history, not just in requests. A coarse pointer reports
+ * no hover, so nothing narrows those rows down to the one the reader is heading
+ * for, and the devices behind it are the ones least able to hold ten threads of
+ * history at once. Prewarm nothing there and let opening a thread fetch it.
+ */
+export function resolveSidebarThreadPrewarmLimit(input: {
+  readonly hasCoarsePointer: boolean;
+}): number {
+  return input.hasCoarsePointer ? 0 : SIDEBAR_THREAD_PREWARM_LIMIT;
 }
 
 export function resolveAdjacentThreadId<T>(input: {
@@ -744,6 +977,23 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
+  // Plan Ready outranks Working: Grok often stays "running" long after the plan
+  // is captured (agent-entered plan mode). Users need Implement immediately.
+  if (
+    shouldShowPlanReadyStatus({
+      interactionMode: thread.interactionMode,
+      hasPendingUserInput: thread.hasPendingUserInput,
+      hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    })
+  ) {
+    return {
+      label: "Plan Ready",
+      colorClass: "text-violet-600 dark:text-violet-300/90",
+      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      pulse: false,
+    };
+  }
+
   if (thread.session?.status === "running") {
     return {
       label: "Working",
@@ -762,16 +1012,18 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
+  if (
+    sessionNeedsWakeUp({
+      sessionStatus: thread.session?.status ?? null,
+      activeTurnId: thread.session?.activeTurnId ?? null,
+      latestTurnState: thread.latestTurn?.state ?? null,
+      latestTurnCompletedAt: thread.latestTurn?.completedAt ?? null,
+    })
+  ) {
     return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
+      label: "Wake Required",
+      colorClass: "text-orange-600 dark:text-orange-300/90",
+      dotClass: "bg-orange-500 dark:bg-orange-300/90",
       pulse: false,
     };
   }

@@ -17,6 +17,7 @@ concurrency:
 jobs:
   deploy_relay:
     name: Deploy production relay
+    if: github.repository == 'pingdotgg/t3code'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:

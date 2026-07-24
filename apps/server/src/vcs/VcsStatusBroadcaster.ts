@@ -353,9 +353,12 @@ export const make = Effect.gen(function* () {
 
   const refreshRemoteStatus = Effect.fn("VcsStatusBroadcaster.refreshRemoteStatus")(function* (
     cwd: string,
-    options?: { readonly refreshUpstream?: boolean },
+    options?: { readonly refreshUpstream?: boolean; readonly forceInvalidate?: boolean },
   ) {
-    if (options?.refreshUpstream !== false) {
+    // Automatic poller ticks rely on GitManager's remote status TTL rather than
+    // wiping the cache every interval (which re-spawns gh for every worktree).
+    // Manual refreshStatus still force-invalidates.
+    if (options?.forceInvalidate) {
       yield* workflow.invalidateRemoteStatus(cwd);
     }
     const remote = yield* workflow.remoteStatus({ cwd }, options);
@@ -529,12 +532,23 @@ export const make = Effect.gen(function* () {
 
         const release = releaseRemotePoller(cwd).pipe(Effect.ignore, Effect.asVoid);
 
+        // When remote is not cached yet, emit localUpdated only — never a snapshot that
+        // fabricates remote defaults (pr:null). Downstream clients treat that fake null
+        // PR as "no PR" and thrash badges (Discord ▫️⇄❌🔀 on every rehydrate).
+        const initialEvent =
+          initialRemote !== null
+            ? ({
+                _tag: "snapshot" as const,
+                local: initialLocal,
+                remote: initialRemote,
+              } as const)
+            : ({
+                _tag: "localUpdated" as const,
+                local: initialLocal,
+              } as const);
+
         return Stream.concat(
-          Stream.make({
-            _tag: "snapshot" as const,
-            local: initialLocal,
-            remote: initialRemote,
-          }),
+          Stream.make(initialEvent),
           Stream.fromSubscription(subscription).pipe(
             Stream.filter((event) => event.cwd === cwd),
             Stream.map((event) => event.event),
