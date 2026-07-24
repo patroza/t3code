@@ -44,10 +44,9 @@ describe("resolveJiraBrowseBaseUrl", () => {
 
 describe("extractJiraIssueKeys", () => {
   it("extracts bare keys in first-seen order without duplicates", () => {
-    expect(extractJiraIssueKeys("Please look at PROJ-367 then PROJ-400 and PROJ-367 again")).toEqual([
-      "PROJ-367",
-      "PROJ-400",
-    ]);
+    expect(
+      extractJiraIssueKeys("Please look at PROJ-367 then PROJ-400 and PROJ-367 again"),
+    ).toEqual(["PROJ-367", "PROJ-400"]);
   });
 
   it("extracts keys from browse URLs and selectedIssue params", () => {
