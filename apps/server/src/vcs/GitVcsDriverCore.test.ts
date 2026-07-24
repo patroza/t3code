@@ -19,6 +19,7 @@ import {
 import {
   isCommitSigningFailureStderr,
   makeGitVcsDriverCore,
+  redactGitOutput,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -838,6 +839,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         );
         yield* fileSystem.chmod(signerPath, 0o755);
         yield* git(cwd, ["config", "commit.gpgSign", "true"]);
+        yield* git(cwd, ["config", "gpg.format", "openpgp"]);
         yield* git(cwd, ["config", "gpg.program", signerPath]);
         yield* writeTextFile(cwd, "signed.txt", "sign me\n");
         yield* git(cwd, ["add", "signed.txt"]);
