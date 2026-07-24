@@ -1,7 +1,9 @@
 import {
   type ClaudeSettings,
+  DEFAULT_MODEL_BY_PROVIDER,
   type ModelCapabilities,
   type ModelSelection,
+  ProviderDriverKind,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -47,6 +49,7 @@ const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabili
   optionDescriptors: [],
 });
 
+const PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
@@ -307,7 +310,11 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
       ],
     }),
   },
-];
+].toSorted(
+  (left, right) =>
+    Number(right.slug === DEFAULT_MODEL_BY_PROVIDER[PROVIDER]) -
+    Number(left.slug === DEFAULT_MODEL_BY_PROVIDER[PROVIDER]),
+);
 
 function supportsClaudeOpus5(version: string | null | undefined): boolean {
   return version ? compareSemverVersions(version, MINIMUM_CLAUDE_OPUS_5_VERSION) >= 0 : false;

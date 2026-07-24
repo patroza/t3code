@@ -1,7 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -40,9 +39,23 @@ function formatConfigOptionValue(value: string | boolean): string {
   return JSON.stringify(value);
 }
 
+/**
+ * Short, single-line summary of a session/load failure cause for diagnostics.
+ * Covers typed ACP errors and decode defects alike — some agents reject an
+ * unknown resume sessionId by throwing during response decoding rather than
+ * returning a clean JSON-RPC error, which surfaces as a defect.
+ */
+const summarizeSessionLoadFailure = (cause: Cause.Cause<EffectAcpErrors.AcpError>): string =>
+  Cause.pretty(cause).split("\n")[0]?.trim().slice(0, 200) ?? "unknown";
+
 export interface AcpSessionEventStreamBarrier {
   readonly _tag: "EventStreamBarrier";
   readonly acknowledge: Deferred.Deferred<void>;
+}
+
+export interface AcpSessionPromptOptions {
+  /** Deliver the prompt while a turn is still running instead of queueing behind it. */
+  readonly steer?: boolean;
 }
 
 export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
@@ -180,6 +193,8 @@ export class AcpSessionRuntime extends Context.Service<
      * Concurrent calls share the same in-flight startup and a failed startup may be retried.
      */
     readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
+    /** Resolves when the spawned ACP child exits. Process status read failures map to `undefined`. */
+    readonly processExit: Effect.Effect<number | undefined>;
     /** Stream of parsed ACP session events emitted after startup. */
     readonly getEvents: () => Stream.Stream<AcpSessionRuntimeEvent, never>;
     /** Waits until the current event consumer has processed every queued event. */
@@ -190,10 +205,16 @@ export class AcpSessionRuntime extends Context.Service<
     readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
     /**
      * Sends a prompt turn to the active session.
+     *
+     * Prompts are serialized: a prompt waits for the preceding turn to settle
+     * before it reaches the agent. `steer: true` opts out of that wait so the
+     * prompt is delivered while a turn is still running — only meaningful for
+     * agents that accept mid-turn prompts (see `makeXAiPromptCompletionRuntime`).
      * @see https://agentclientprotocol.com/protocol/schema#session/prompt
      */
     readonly prompt: (
       payload: Omit<EffectAcpSchema.PromptRequest, "sessionId">,
+      options?: AcpSessionPromptOptions,
     ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
     /**
      * Sends a real ACP `session/cancel` notification for the active session.
@@ -201,8 +222,13 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly cancel: Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
-     * Selects the active mode through the negotiated `mode` configuration option.
+     * Selects the active session mode.
+     *
+     * Prefers the negotiated `mode` configuration option when present (Cursor-style).
+     * Otherwise uses the standard ACP `session/set_mode` method (Grok-style).
      * This is a no-op when the requested mode is already active.
+     *
+     * @see https://agentclientprotocol.com/protocol/schema#session/set_mode
      * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
      */
     readonly setMode: (
@@ -258,6 +284,13 @@ type AcpStartState =
   | { readonly _tag: "Started"; readonly result: AcpStartedState };
 
 interface AcpAssistantSegmentState {
+  /**
+   * Unique per runtime instance. The segment counter restarts at 0 on every
+   * session start, but `sessionId` survives a resume — so without this the item
+   * ids of a resumed session collide with the ids of its earlier runs, and the
+   * projector concatenates fresh assistant text onto long-dead messages.
+   */
+  readonly runId: string;
   readonly nextSegmentIndex: number;
   readonly activeItemId?: string;
 }
@@ -267,36 +300,43 @@ interface EnsureActiveAssistantSegmentResult {
   readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
 }
 
+let runtimeRunCounter = 0;
+/** A token unique to one runtime instance, stable for that instance's lifetime. */
+const nextRuntimeRunId = Effect.map(Clock.currentTimeMillis, (millis) => {
+  runtimeRunCounter += 1;
+  return `${millis.toString(36)}${runtimeRunCounter.toString(36)}`;
+});
+
 export const make = (
   options: AcpSessionRuntimeOptions,
 ): Effect.Effect<
   AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
 > =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
-    const assistantItemRuntimeId = yield* crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new EffectAcpErrors.AcpTransportError({
-            detail: "Failed to generate an ACP assistant item runtime identifier.",
-            cause,
-          }),
-      ),
-    );
-    const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
+    // Scopes assistant item ids to this run, so resuming a session cannot mint
+    // ids that already belong to messages from an earlier run of it. Wall clock
+    // separates runs across process restarts (where a bare counter would reset
+    // and collide); the counter separates runs started within the same tick.
+    const runId = yield* nextRuntimeRunId;
+    const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({
+      runId,
+      nextSegmentIndex: 0,
+    });
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     const promptSerializationSemaphore = yield* Semaphore.make(1);
-    const activePromptFiberRef = yield* Ref.make<
-      Option.Option<Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>>
-    >(Option.none());
+    // A steering prompt runs alongside the turn it interrupts, so more than one
+    // prompt fiber can be in flight; `cancel` has to reach all of them.
+    const activePromptFibersRef = yield* Ref.make<
+      ReadonlyArray<Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>>
+    >([]);
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
@@ -400,7 +440,6 @@ export const make = (
           modeStateRef,
           toolCallsRef,
           assistantSegmentRef,
-          assistantItemRuntimeId,
           params: notification,
         });
       }),
@@ -488,8 +527,23 @@ export const make = (
     ): Effect.Effect<void> => Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(response));
 
     const updateCurrentModeId = (modeId: string): Effect.Effect<void> =>
-      Ref.update(modeStateRef, (current) =>
-        current ? { ...current, currentModeId: modeId } : current,
+      Ref.update(modeStateRef, (current) => applyModeIdToState(current, modeId));
+
+    const setSessionMode = (
+      modeId: string,
+    ): Effect.Effect<EffectAcpSchema.SetSessionModeResponse, EffectAcpErrors.AcpError> =>
+      getStartedState.pipe(
+        Effect.flatMap((started) => {
+          const requestPayload = {
+            sessionId: started.sessionId,
+            modeId,
+          } satisfies EffectAcpSchema.SetSessionModeRequest;
+          return runLoggedRequest(
+            "session/set_mode",
+            requestPayload,
+            acp.agent.setSessionMode(requestPayload),
+          );
+        }),
       );
 
     const setConfigOption = (
@@ -558,9 +612,29 @@ export const make = (
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
+
+      const createSession = (): Effect.Effect<
+        {
+          readonly sessionId: string;
+          readonly result: EffectAcpSchema.NewSessionResponse;
+        },
+        EffectAcpErrors.AcpError
+      > => {
+        const createPayload = {
+          cwd: options.cwd,
+          mcpServers: options.mcpServers ?? [],
+        } satisfies EffectAcpSchema.NewSessionRequest;
+        return runLoggedRequest(
+          "session/new",
+          createPayload,
+          acp.agent.createSession(createPayload),
+        ).pipe(Effect.map((created) => ({ sessionId: created.sessionId, result: created })));
+      };
+
       if (options.resumeSessionId) {
+        const resumeSessionId = options.resumeSessionId;
         const loadPayload = {
-          sessionId: options.resumeSessionId,
+          sessionId: resumeSessionId,
           cwd: options.cwd,
           mcpServers: options.mcpServers ?? [],
         } satisfies EffectAcpSchema.LoadSessionRequest;
@@ -571,18 +645,17 @@ export const make = (
           options.sessionLoadReplayIdleGap ?? defaultSessionLoadReplayIdleGap,
         );
 
-        yield* Ref.set(
-          sessionLoadGateRef,
-          Option.some({
-            active: true,
-            lastActivityAtMillis: undefined,
-            idleGap: sessionLoadReplayIdleGap,
-            initializeResult,
-          }),
-        );
+        const loaded = yield* Effect.gen(function* () {
+          yield* Ref.set(
+            sessionLoadGateRef,
+            Option.some({
+              active: true,
+              lastActivityAtMillis: undefined,
+              idleGap: sessionLoadReplayIdleGap,
+              initializeResult,
+            }),
+          );
 
-        sessionId = options.resumeSessionId;
-        sessionSetupResult = yield* Effect.gen(function* () {
           yield* logRequest({
             method: "session/load",
             payload: loadPayload,
@@ -592,7 +665,7 @@ export const make = (
           const idleFiber = yield* waitForSessionLoadReplayIdle({
             gateRef: sessionLoadGateRef,
           }).pipe(Effect.forkIn(runtimeScope));
-          const loaded = yield* Effect.raceFirst(
+          const loadResult = yield* Effect.raceFirst(
             acp.agent.loadSession(loadPayload),
             Fiber.join(idleFiber),
           ).pipe(
@@ -630,20 +703,40 @@ export const make = (
             ),
           );
 
-          return loaded;
-        }).pipe(Effect.ensuring(Ref.set(sessionLoadGateRef, Option.none())));
-      } else {
-        const createPayload = {
-          cwd: options.cwd,
-          mcpServers: options.mcpServers ?? [],
-        } satisfies EffectAcpSchema.NewSessionRequest;
-        const created = yield* runLoggedRequest(
-          "session/new",
-          createPayload,
-          acp.agent.createSession(createPayload),
+          return { sessionId: resumeSessionId, result: loadResult };
+        }).pipe(
+          Effect.ensuring(Ref.set(sessionLoadGateRef, Option.none())),
+          Effect.sandbox,
+          // `session/load` is a best-effort resume of the agent's in-memory
+          // context. If it fails for ANY reason — the agent rejected the stale
+          // sessionId (some agents throw a decode defect rather than returning a
+          // clean JSON-RPC error), a protocol mismatch, or a transport blip —
+          // recover with a fresh session instead of bricking the thread on every
+          // turn. The transcript stays intact in the orchestration store; only
+          // the agent's working context is lost. Genuine infrastructure failures
+          // (dead process, bad cwd) resurface when `createSession` fails too.
+          Effect.matchEffect({
+            onFailure: (cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning(
+                  "ACP session/load failed to resume the persisted sessionId; starting a fresh session.",
+                  {
+                    resumeSessionId,
+                    failure: summarizeSessionLoadFailure(cause),
+                  },
+                );
+                return yield* createSession();
+              }),
+            onSuccess: Effect.succeed,
+          }),
         );
+
+        sessionId = loaded.sessionId;
+        sessionSetupResult = loaded.result;
+      } else {
+        const created = yield* createSession();
         sessionId = created.sessionId;
-        sessionSetupResult = created;
+        sessionSetupResult = created.result;
       }
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
@@ -707,6 +800,10 @@ export const make = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
+      processExit: child.exitCode.pipe(
+        Effect.map(Number),
+        Effect.catchCause(() => Effect.void.pipe(Effect.as(undefined))),
+      ),
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents: Effect.gen(function* () {
         const acknowledge = yield* Deferred.make<void>();
@@ -718,55 +815,63 @@ export const make = (
       }),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
-      prompt: (payload) =>
-        promptSerializationSemaphore.withPermit(
-          Effect.gen(function* () {
-            const started = yield* getStartedState;
-            yield* closeActiveAssistantSegment({
-              queue: eventQueue,
-              assistantSegmentRef,
-            });
-            const requestPayload = {
-              sessionId: started.sessionId,
-              ...payload,
-            } satisfies EffectAcpSchema.PromptRequest;
-            const cancelledResponse = {
-              stopReason: "cancelled",
-            } satisfies EffectAcpSchema.PromptResponse;
-            const promptRpcFiber = yield* runLoggedRequest(
-              "session/prompt",
-              requestPayload,
-              acp.agent.prompt(requestPayload),
-            ).pipe(Effect.forkIn(runtimeScope));
-            yield* Ref.set(activePromptFiberRef, Option.some(promptRpcFiber));
-            return yield* Fiber.join(promptRpcFiber).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.succeed(cancelledResponse)
-                  : Effect.failCause(cause),
-              ),
-              Effect.ensuring(
-                Effect.gen(function* () {
-                  yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
-                  yield* Ref.set(activePromptFiberRef, Option.none());
-                }),
-              ),
-              Effect.tap(() =>
-                closeActiveAssistantSegment({
-                  queue: eventQueue,
-                  assistantSegmentRef,
-                }),
-              ),
-            );
-          }),
-        ),
+      prompt: (payload, options) => {
+        const sendPrompt = Effect.gen(function* () {
+          const started = yield* getStartedState;
+          yield* closeActiveAssistantSegment({
+            queue: eventQueue,
+            assistantSegmentRef,
+          });
+          const requestPayload = {
+            sessionId: started.sessionId,
+            ...payload,
+          } satisfies EffectAcpSchema.PromptRequest;
+          const cancelledResponse = {
+            stopReason: "cancelled",
+          } satisfies EffectAcpSchema.PromptResponse;
+          const promptRpcFiber = yield* runLoggedRequest(
+            "session/prompt",
+            requestPayload,
+            acp.agent.prompt(requestPayload),
+          ).pipe(Effect.forkIn(runtimeScope));
+          yield* Ref.update(activePromptFibersRef, (fibers) => [...fibers, promptRpcFiber]);
+          return yield* Fiber.join(promptRpcFiber).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.succeed(cancelledResponse)
+                : Effect.failCause(cause),
+            ),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
+                yield* Ref.update(activePromptFibersRef, (fibers) =>
+                  fibers.filter((fiber) => fiber !== promptRpcFiber),
+                );
+              }),
+            ),
+            Effect.tap(() =>
+              closeActiveAssistantSegment({
+                queue: eventQueue,
+                assistantSegmentRef,
+              }),
+            ),
+          );
+        });
+        // A steer must reach the agent while the turn it interrupts still runs,
+        // so it deliberately skips the serialization permit.
+        return options?.steer === true
+          ? sendPrompt
+          : promptSerializationSemaphore.withPermit(sendPrompt);
+      },
       cancel: getStartedState.pipe(
         Effect.flatMap((started) =>
           Effect.gen(function* () {
-            const activePromptFiber = yield* Ref.get(activePromptFiberRef);
-            if (Option.isSome(activePromptFiber)) {
-              yield* Fiber.interrupt(activePromptFiber.value).pipe(Effect.ignore);
-            }
+            const activePromptFibers = yield* Ref.get(activePromptFibersRef);
+            yield* Effect.forEach(
+              activePromptFibers,
+              (fiber) => Fiber.interrupt(fiber).pipe(Effect.ignore),
+              { concurrency: "unbounded", discard: true },
+            );
             yield* acp.agent
               .cancel({ sessionId: started.sessionId })
               .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
@@ -774,17 +879,25 @@ export const make = (
         ),
       ),
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
-          Effect.flatMap((modeState) => {
-            if (modeState?.currentModeId === modeId) {
-              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
-            }
-            return setConfigOption("mode", modeId).pipe(
-              Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
-            );
-          }),
-        ),
+        Effect.gen(function* () {
+          const normalizedModeId = modeId.trim();
+          if (!normalizedModeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const modeState = yield* Ref.get(modeStateRef);
+          if (modeState?.currentModeId === normalizedModeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const configOptions = yield* Ref.get(configOptionsRef);
+          const hasModeConfigOption = findSessionConfigOption(configOptions, "mode") !== undefined;
+          if (hasModeConfigOption) {
+            yield* setConfigOption("mode", normalizedModeId);
+          } else {
+            yield* setSessionMode(normalizedModeId);
+          }
+          yield* updateCurrentModeId(normalizedModeId);
+          return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+        }),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(
@@ -816,7 +929,7 @@ export const layer = (
 ): Layer.Layer<
   AcpSessionRuntime,
   EffectAcpErrors.AcpError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+  ChildProcessSpawner.ChildProcessSpawner
 > => Layer.effect(AcpSessionRuntime, make(options));
 
 function sessionConfigOptionsFromSetup(
@@ -848,22 +961,18 @@ const handleSessionUpdate = ({
   modeStateRef,
   toolCallsRef,
   assistantSegmentRef,
-  assistantItemRuntimeId,
   params,
 }: {
   readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
   readonly modeStateRef: Ref.Ref<AcpSessionModeState | undefined>;
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
-  readonly assistantItemRuntimeId: string;
   readonly params: EffectAcpSchema.SessionNotification;
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
     const parsed = parseSessionUpdateEvent(params);
     if (parsed.modeId) {
-      yield* Ref.update(modeStateRef, (current) =>
-        current === undefined ? current : updateModeState(current, parsed.modeId!),
-      );
+      yield* Ref.update(modeStateRef, (current) => applyModeIdToState(current, parsed.modeId!));
     }
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
@@ -903,7 +1012,6 @@ const handleSessionUpdate = ({
           queue,
           assistantSegmentRef,
           sessionId: params.sessionId,
-          assistantItemRuntimeId,
         });
         yield* Queue.offer(queue, {
           ...event,
@@ -920,12 +1028,52 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
   if (!normalized) {
     return modeState;
   }
-  return modeState.availableModes.some((mode) => mode.id === normalized)
-    ? {
-        ...modeState,
-        currentModeId: normalized,
-      }
-    : modeState;
+  if (modeState.availableModes.some((mode) => mode.id === normalized)) {
+    return {
+      ...modeState,
+      currentModeId: normalized,
+    };
+  }
+  // Agents like Grok may omit the initial modes catalog and only emit mode ids
+  // via current_mode_update / session/set_mode. Accept unknown mode ids so the
+  // runtime still tracks the active mode.
+  return {
+    currentModeId: normalized,
+    availableModes: [...modeState.availableModes, { id: normalized, name: normalized }],
+  };
+}
+
+function applyModeIdToState(
+  modeState: AcpSessionModeState | undefined,
+  nextModeId: string,
+): AcpSessionModeState | undefined {
+  const normalized = nextModeId.trim();
+  if (!normalized) {
+    return modeState;
+  }
+  if (modeState === undefined) {
+    return {
+      currentModeId: normalized,
+      availableModes: seedAvailableModes(normalized),
+    };
+  }
+  return updateModeState(modeState, normalized);
+}
+
+function seedAvailableModes(currentModeId: string): ReadonlyArray<{
+  readonly id: string;
+  readonly name: string;
+}> {
+  const defaults = [
+    { id: "plan", name: "Plan" },
+    { id: "default", name: "Default" },
+    { id: "code", name: "Code" },
+    { id: "agent", name: "Agent" },
+  ] as const;
+  if (defaults.some((mode) => mode.id === currentModeId)) {
+    return [...defaults];
+  }
+  return [...defaults, { id: currentModeId, name: currentModeId }];
 }
 
 function shouldEmitToolCallUpdate(
@@ -941,19 +1089,17 @@ function shouldEmitToolCallUpdate(
   return previous === undefined || previous.title !== next.title || previous.detail !== next.detail;
 }
 
-const assistantItemId = (sessionId: string, runtimeId: string, segmentIndex: number) =>
-  `assistant:${sessionId}:runtime:${runtimeId}:segment:${segmentIndex}`;
+export const assistantItemId = (sessionId: string, runId: string, segmentIndex: number) =>
+  `assistant:${sessionId}:${runId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   queue,
   assistantSegmentRef,
   sessionId,
-  assistantItemRuntimeId,
 }: {
   readonly queue: Queue.Queue<AcpSessionRuntimeEvent>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly sessionId: string;
-  readonly assistantItemRuntimeId: string;
 }) =>
   Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
     assistantSegmentRef,
@@ -961,7 +1107,7 @@ const ensureActiveAssistantSegment = ({
       if (current.activeItemId) {
         return [{ itemId: current.activeItemId }, current] as const;
       }
-      const itemId = assistantItemId(sessionId, assistantItemRuntimeId, current.nextSegmentIndex);
+      const itemId = assistantItemId(sessionId, current.runId, current.nextSegmentIndex);
       return [
         {
           itemId,
@@ -971,6 +1117,7 @@ const ensureActiveAssistantSegment = ({
           } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
         },
         {
+          runId: current.runId,
           nextSegmentIndex: current.nextSegmentIndex + 1,
           activeItemId: itemId,
         } satisfies AcpAssistantSegmentState,
@@ -1001,6 +1148,7 @@ const closeActiveAssistantSegment = ({
         itemId: current.activeItemId,
       } satisfies AcpParsedSessionEvent,
       {
+        runId: current.runId,
         nextSegmentIndex: current.nextSegmentIndex,
       } satisfies AcpAssistantSegmentState,
     ] as const;
