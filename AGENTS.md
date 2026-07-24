@@ -7,6 +7,10 @@ branches.
 
 - Before the documented one-time cutover, implementation PRs continue to target `main`.
 - After cutover, `main` is an upstream mirror. Never merge private product work into it.
+- Update `main` only through the `Rebase fork PR stack` workflow. Do not use GitHub's **Sync fork**
+  button, open a PR into `main`, or push it manually. The scheduled/manual workflow uses the
+  repository-scoped `FORK_STACK_DEPLOY_KEY` to bypass `main` protection, preserve the exact upstream
+  commit SHA, and atomically rebuild `fork/tim`, `fork/changes`, and `fork/integration`.
 - `fork/tim` contains only selected Tim Smart integrations above upstream. The permanent
   `fork/changes` PR is based on `fork/tim`, contains only our private layer, remains open, and is the
   GitHub/T3 default branch.
@@ -28,6 +32,9 @@ branches.
 ### Automatic integration and deployment
 
 - Opening or updating a PR runs CI but does not deploy.
+- The stack workflow runs every six hours and may be dispatched manually to mirror
+  `pingdotgg/t3code:main`. Its deploy key is the only automation bypass for protected `main`; agents
+  must never print, replace, or reuse that credential outside this workflow.
 - Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
   the provenance layers, rebuilds `fork/integration`, and dispatches CI for its exact SHA.
 - Successful `fork/integration` CI hands the exact tested SHA to the private operations repository.
