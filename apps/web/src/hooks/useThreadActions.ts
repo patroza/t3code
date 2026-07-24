@@ -1,9 +1,15 @@
 import {
   parseScopedThreadKey,
+  scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { runArchiveWithWorktreeCleanup } from "@t3tools/client-runtime/state/worktreeCleanup";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -94,6 +100,44 @@ export class ThreadSnoozeBlockedError extends Schema.TaggedErrorClass<ThreadSnoo
   }
 }
 
+/**
+ * Deletes threads one at a time, growing `deletedThreadKeys` only as
+ * deletions actually land — never seeded with the whole batch: orphaned-
+ * worktree detection must only discount threads that are really gone, or the
+ * first delete would treat still-alive batch mates as deleted and remove a
+ * worktree they still point at. Stops at, and returns, the first failure.
+ */
+export async function deleteThreadTargetsSequentially<
+  TResult extends { readonly _tag: "Success" | "Failure" },
+>(
+  targets: readonly ScopedThreadRef[],
+  deleteTarget: (
+    target: ScopedThreadRef,
+    opts: { deletedThreadKeys: ReadonlySet<string> },
+  ) => Promise<TResult>,
+): Promise<Extract<TResult, { readonly _tag: "Failure" }> | null> {
+  const deletedThreadKeys = new Set<string>();
+  for (const target of targets) {
+    const result = await deleteTarget(target, { deletedThreadKeys });
+    if (result._tag === "Failure") {
+      return result as Extract<TResult, { readonly _tag: "Failure" }>;
+    }
+    deletedThreadKeys.add(scopedThreadKey(target));
+  }
+  return null;
+}
+
+export function getWorktreeRemovalAction({
+  canRemoveWorktree,
+  confirmWorktreeRemoval,
+}: {
+  canRemoveWorktree: boolean;
+  confirmWorktreeRemoval: boolean;
+}): "skip" | "confirm" | "remove" {
+  if (!canRemoveWorktree) return "skip";
+  return confirmWorktreeRemoval ? "confirm" : "remove";
+}
+
 export function useThreadActions() {
   const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const archiveThreadMutation = useAtomCommand(threadEnvironment.archive, {
@@ -117,8 +161,17 @@ export function useThreadActions() {
   const unsnoozeThreadMutation = useAtomCommand(threadEnvironment.unsnooze, {
     reportFailure: false,
   });
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
+    reportFailure: false,
+  });
+  const previewWorktreeCleanup = useAtomCommand(vcsEnvironment.previewWorktreeCleanup, {
+    reportFailure: false,
+  });
+  const cleanupThreadWorktree = useAtomCommand(vcsEnvironment.cleanupThreadWorktree, {
     reportFailure: false,
   });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
@@ -126,6 +179,7 @@ export function useThreadActions() {
   });
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const confirmThreadDelete = useClientSettings((settings) => settings.confirmThreadDelete);
+  const confirmWorktreeRemoval = useClientSettings((settings) => settings.confirmWorktreeRemoval);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
@@ -175,10 +229,83 @@ export function useThreadActions() {
       const shouldNavigateToDraft =
         currentRouteThreadRef?.threadId === threadRef.threadId &&
         currentRouteThreadRef.environmentId === threadRef.environmentId;
-      const archiveResult = await archiveThreadMutation({
-        environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId },
+      const localApi = readLocalApi();
+      const outcome = await runArchiveWithWorktreeCleanup({
+        // Server-authoritative preview: only prompt when archiving the final
+        // active thread that references a worktree. A preview failure (old
+        // server, transient error) degrades to a plain archive.
+        previewCandidate: async () => {
+          const previewResult = await previewWorktreeCleanup({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          return previewResult._tag === "Success" ? previewResult.value.candidate : null;
+        },
+        removalPolicy: confirmWorktreeRemoval ? "confirm" : "remove",
+        confirmRemoval: localApi
+          ? async ({ displayWorktreePath }) => {
+              const confirmationResult = await settlePromise(() =>
+                localApi.dialogs.confirm(
+                  [
+                    "This thread is the last active one linked to this worktree:",
+                    displayWorktreePath,
+                    "",
+                    "Remove the worktree too? The branch is kept.",
+                  ].join("\n"),
+                ),
+              );
+              if (confirmationResult._tag === "Failure") {
+                return { kind: "aborted", result: confirmationResult } as const;
+              }
+              return confirmationResult.value
+                ? ({ kind: "confirmed" } as const)
+                : ({ kind: "declined" } as const);
+            }
+          : null,
+        archive: () =>
+          archiveThreadMutation({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          }),
+        isArchiveSuccess: (result) => result._tag === "Success",
+        cleanup: async () => {
+          const cleanupResult = await cleanupThreadWorktree({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          if (cleanupResult._tag === "Failure") {
+            const error = squashAtomCommandFailure(cleanupResult);
+            return {
+              kind: "failed",
+              message: error instanceof Error ? error.message : "Unknown error removing worktree.",
+            } as const;
+          }
+          return { kind: "done", status: cleanupResult.value.status } as const;
+        },
+        // Cleanup problems are nonfatal: the archive itself succeeded.
+        onCleanupFailed: (displayWorktreePath, message) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Thread archived, but worktree removal failed",
+              description: `Could not remove ${displayWorktreePath}. ${message}`,
+            }),
+          );
+        },
+        onCleanupRetained: (displayWorktreePath) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Worktree kept",
+              description: `${displayWorktreePath} is still used by another active thread.`,
+            }),
+          );
+        },
       });
+      if (outcome.kind === "aborted") {
+        return outcome.result;
+      }
+      const archiveResult = outcome.result;
       if (archiveResult._tag === "Failure") {
         return archiveResult;
       }
@@ -197,7 +324,14 @@ export function useThreadActions() {
 
       return archiveResult;
     },
-    [archiveThreadMutation, getCurrentRouteThreadRef, resolveThreadTarget],
+    [
+      archiveThreadMutation,
+      cleanupThreadWorktree,
+      confirmWorktreeRemoval,
+      getCurrentRouteThreadRef,
+      previewWorktreeCleanup,
+      resolveThreadTarget,
+    ],
   );
 
   const unarchiveThread = useCallback(
@@ -259,8 +393,12 @@ export function useThreadActions() {
         : null;
       const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== null;
       const localApi = readLocalApi();
-      let shouldDeleteWorktree = false;
-      if (canDeleteWorktree && localApi) {
+      const worktreeRemovalAction = getWorktreeRemovalAction({
+        canRemoveWorktree: canDeleteWorktree,
+        confirmWorktreeRemoval,
+      });
+      let shouldDeleteWorktree = worktreeRemovalAction === "remove";
+      if (worktreeRemovalAction === "confirm" && localApi) {
         const confirmationResult = await settlePromise(() =>
           localApi.dialogs.confirm(
             [
@@ -401,6 +539,7 @@ export function useThreadActions() {
       clearProjectDraftThreadById,
       clearTerminalUiState,
       closeTerminal,
+      confirmWorktreeRemoval,
       deleteThreadMutation,
       getCurrentRouteThreadRef,
       refreshVcsStatus,
@@ -527,6 +666,41 @@ export function useThreadActions() {
     [unsnoozeThreadMutation],
   );
 
+  // Shared rename commit: trims, warns on an empty title, and reports
+  // failures. Returns true when the title is committed (or was unchanged) so
+  // dialog-style callers know they can close.
+  const renameThread = useCallback(
+    async (target: ScopedThreadRef, title: string, originalTitle: string): Promise<boolean> => {
+      const trimmed = title.trim();
+      if (trimmed.length === 0) {
+        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        return false;
+      }
+      if (trimmed === originalTitle) {
+        return true;
+      }
+      const result = await updateThreadMetadata({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, title: trimmed },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to rename thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return false;
+      }
+      return true;
+    },
+    [updateThreadMetadata],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -555,12 +729,51 @@ export function useThreadActions() {
     [confirmThreadDelete, deleteThread, resolveThreadTarget],
   );
 
+  const confirmAndDeleteThreads = useCallback(
+    async (targets: readonly ScopedThreadRef[]) => {
+      const [firstTarget] = targets;
+      if (firstTarget === undefined) {
+        return AsyncResult.success(undefined);
+      }
+      if (targets.length === 1) {
+        return confirmAndDeleteThread(firstTarget);
+      }
+
+      const localApi = readLocalApi();
+      if (confirmThreadDelete && localApi) {
+        const confirmationResult = await settlePromise(() =>
+          localApi.dialogs.confirm(
+            [
+              `Delete ${targets.length} threads?`,
+              "This permanently clears conversation history for these threads.",
+            ].join("\n"),
+          ),
+        );
+        if (confirmationResult._tag === "Failure") {
+          return confirmationResult;
+        }
+        if (!confirmationResult.value) {
+          return AsyncResult.success(undefined);
+        }
+      }
+
+      const failure = await deleteThreadTargetsSequentially(targets, deleteThread);
+      if (failure) {
+        return failure;
+      }
+      return AsyncResult.success(undefined);
+    },
+    [confirmAndDeleteThread, confirmThreadDelete, deleteThread],
+  );
+
   return useMemo(
     () => ({
       archiveThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
+      confirmAndDeleteThreads,
+      renameThread,
       settleThread,
       unsettleThread,
       snoozeThread,
@@ -569,7 +782,9 @@ export function useThreadActions() {
     [
       archiveThread,
       confirmAndDeleteThread,
+      confirmAndDeleteThreads,
       deleteThread,
+      renameThread,
       settleThread,
       snoozeThread,
       unarchiveThread,

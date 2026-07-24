@@ -106,8 +106,10 @@ describe("CheckpointDiffQuery.layer", () => {
                 });
               }),
             getThreadShellById: () => Effect.succeed(Option.none()),
+            getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -199,8 +201,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
             getFullThreadDiffContext: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeed(Option.none()),
+            getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -282,8 +286,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
             getFullThreadDiffContext: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeed(Option.none()),
+            getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -350,8 +356,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
             getFullThreadDiffContext: () => Effect.die("unused"),
             getThreadShellById: () => Effect.succeed(Option.none()),
+            getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -403,8 +411,10 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadCheckpointContext: () => Effect.succeed(Option.none()),
             getFullThreadDiffContext: () => Effect.succeed(Option.none()),
             getThreadShellById: () => Effect.succeed(Option.none()),
+            getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
