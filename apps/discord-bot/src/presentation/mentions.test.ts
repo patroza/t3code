@@ -23,7 +23,9 @@ import {
 describe("parseTopicShortName", () => {
   it("extracts short names from channel topics", () => {
     expect(parseTopicShortName("t3-example-project")).toBe("example-project");
-    expect(parseTopicShortName("Project channel t3-example-project please")).toBe("example-project");
+    expect(parseTopicShortName("Project channel t3-example-project please")).toBe(
+      "example-project",
+    );
     expect(parseTopicShortName("T3-Example-Project")).toBe("example-project");
     expect(parseTopicShortName("no alias here")).toBeNull();
   });
