@@ -38,6 +38,8 @@ import {
   VcsStatusInput,
   VcsStatusResult,
   VcsStatusStreamEvent,
+  VcsResolveBranchChangeRequestInput,
+  VcsResolveBranchChangeRequestResult,
   WorktreeCleanupInput,
   WorktreeCleanupPreviewInput,
   WorktreeCleanupPreviewResult,

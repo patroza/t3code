@@ -613,6 +613,7 @@ const configureFailingCommitSigner = Effect.fn("configureFailingCommitSigner")(f
     { mode: 0o755 },
   );
   yield* runGit(repoDir, ["config", "commit.gpgSign", "true"]);
+  yield* runGit(repoDir, ["config", "gpg.format", "openpgp"]);
   yield* runGit(repoDir, ["config", "gpg.program", signerPath]);
 });
 
