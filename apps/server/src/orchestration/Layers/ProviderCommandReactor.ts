@@ -9,6 +9,7 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  type ProviderInteractionMode,
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
@@ -16,6 +17,8 @@ import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shar
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -26,12 +29,29 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
+import {
+  increment,
+  orchestrationEventsProcessedTotal,
+  providerTurnRecoveriesTotal,
+} from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
+import {
+  readPersistedProviderCwd,
+  readPersistedProviderInteractionMode,
+  readPersistedProviderModelSelection,
+  readProviderRestartRecoveryCandidate,
+  type ProviderRestartRecoveryCandidate,
+} from "../../provider/ProviderRestartRecovery.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import {
+  ProviderSessionDirectory,
+  type ProviderRuntimeBindingWithMetadata,
+} from "../../provider/Services/ProviderSessionDirectory.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -87,6 +107,10 @@ const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
+const STARTUP_RECOVERY_CONCURRENCY = 4;
+
+export const RESTART_RECOVERY_CONTINUATION_INSTRUCTION =
+  "The server restarted while you were working. Inspect the conversation and current workspace state, verify which side effects from the interrupted turn already happened, and continue the unfinished work safely. Do not repeat completed work or assume an earlier tool call failed merely because its response is absent.";
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -190,7 +214,9 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
@@ -204,6 +230,9 @@ const make = Effect.gen(function* () {
     timeToLive: HANDLED_TURN_START_KEY_TTL,
     lookup: () => Effect.succeed(true),
   });
+  const startupReconciliationDone = yield* Deferred.make<void>();
+  const recoveredThreadIds = new Set<ThreadId>();
+  const interruptedRecoveryThreadIds = new Set<ThreadId>();
 
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
@@ -218,6 +247,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly kind:
       | "provider.turn.start.failed"
+      | "provider.turn.recovery.failed"
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
@@ -998,32 +1028,351 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
+    // Session stops are resolved through an archived-inclusive context query:
+    // the archive flow dispatches the stop after the thread disappears from
+    // the active-only shell/detail queries, so resolving through those would
+    // silently leak the provider session.
+    const context = yield* projectionSnapshotQuery
+      .getSessionStopContextById(event.payload.threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    if (!context) {
       return;
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+    if (context.session && context.session.status !== "stopped") {
+      yield* providerService.stopSession({ threadId: context.threadId });
     }
 
     yield* setThreadSession({
-      threadId: thread.id,
+      threadId: context.threadId,
       session: {
-        threadId: thread.id,
+        threadId: context.threadId,
         status: "stopped",
-        providerName: thread.session?.providerName ?? null,
-        ...(thread.session?.providerInstanceId !== undefined
-          ? { providerInstanceId: thread.session.providerInstanceId }
+        providerName: context.session?.providerName ?? null,
+        ...(context.session?.providerInstanceId !== undefined
+          ? { providerInstanceId: context.session.providerInstanceId }
           : {}),
-        runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        runtimeMode: context.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
-        lastError: thread.session?.lastError ?? null,
+        lastError: context.session?.lastError ?? null,
         updatedAt: now,
       },
       createdAt: now,
     });
+  });
+
+  const setRecoveryFailureState = Effect.fn("setRecoveryFailureState")(function* (input: {
+    readonly binding: ProviderRuntimeBindingWithMetadata;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThread(input.binding.threadId);
+    if (!thread) return;
+    yield* setThreadSession({
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: "error",
+        providerName: input.binding.provider,
+        ...(input.binding.providerInstanceId !== undefined
+          ? { providerInstanceId: input.binding.providerInstanceId }
+          : {}),
+        runtimeMode: input.binding.runtimeMode ?? thread.runtimeMode,
+        activeTurnId: null,
+        lastError: input.detail,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  const recoverInterruptedTurn = Effect.fn("recoverInterruptedTurn")(function* (input: {
+    readonly binding: ProviderRuntimeBindingWithMetadata;
+    readonly candidate: ProviderRestartRecoveryCandidate;
+  }) {
+    const { binding, candidate } = input;
+    if (recoveredThreadIds.has(binding.threadId)) {
+      yield* increment(providerTurnRecoveriesTotal, {
+        outcome: "skipped",
+        reason: "duplicate-in-boot",
+        provider: binding.provider,
+      });
+      return;
+    }
+    recoveredThreadIds.add(binding.threadId);
+
+    const thread = yield* resolveThread(binding.threadId);
+    if (!thread) {
+      yield* Effect.logInfo("provider turn restart recovery skipped", {
+        threadId: binding.threadId,
+        provider: binding.provider,
+        reason: "thread-missing-archived-or-deleted",
+      });
+      yield* increment(providerTurnRecoveriesTotal, {
+        outcome: "skipped",
+        reason: "inactive-thread",
+        provider: binding.provider,
+      });
+      return;
+    }
+
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const projectedTurns = yield* projectionTurnRepository.listByThreadId({
+      threadId: binding.threadId,
+    });
+    const projectedCandidateTurn =
+      candidate.interruptedProviderTurnId === null
+        ? undefined
+        : projectedTurns.find((turn) => turn.turnId === candidate.interruptedProviderTurnId);
+    const latestProjectedTurn = projectedTurns.findLast((turn) => turn.turnId !== null);
+    const projectedRecoveryTurn = projectedCandidateTurn ?? latestProjectedTurn;
+    if (projectedRecoveryTurn?.state === "completed" || projectedRecoveryTurn?.state === "error") {
+      yield* providerSessionDirectory
+        .upsert({
+          threadId: binding.threadId,
+          provider: binding.provider,
+          ...(binding.providerInstanceId !== undefined
+            ? { providerInstanceId: binding.providerInstanceId }
+            : {}),
+          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+          status: "stopped",
+          runtimePayload: {
+            activeTurnId: null,
+            restartRecovery: null,
+            lastRuntimeEvent: "provider.restartRecovery.skipped",
+            lastRuntimeEventAt: createdAt,
+          },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("stale provider restart recovery intent was not cleared", {
+              threadId: binding.threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      yield* Effect.logInfo("provider turn restart recovery skipped", {
+        threadId: binding.threadId,
+        provider: binding.provider,
+        reason: "projected-turn-settled",
+        projectedTurnId: projectedRecoveryTurn.turnId,
+        projectedTurnState: projectedRecoveryTurn.state,
+      });
+      yield* increment(providerTurnRecoveriesTotal, {
+        outcome: "skipped",
+        reason: "projected-turn-settled",
+        provider: binding.provider,
+      });
+      return;
+    }
+    interruptedRecoveryThreadIds.add(thread.id);
+
+    const recover = Effect.gen(function* () {
+      const runtimeMode = binding.runtimeMode ?? thread.runtimeMode;
+      // This lifecycle transition settles the concrete old projection row as
+      // interrupted before validation or replacement work can proceed.
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "interrupted",
+          providerName: binding.provider,
+          ...(binding.providerInstanceId !== undefined
+            ? { providerInstanceId: binding.providerInstanceId }
+            : {}),
+          runtimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
+
+      const providerInstanceId = binding.providerInstanceId;
+      if (providerInstanceId === undefined) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Persisted provider binding for thread '${binding.threadId}' has no provider instance id.`,
+        });
+      }
+      if (binding.resumeCursor === null || binding.resumeCursor === undefined) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Cannot recover thread '${binding.threadId}' because no provider resume cursor is persisted.`,
+        });
+      }
+
+      const instanceInfo = yield* providerService.getInstanceInfo(providerInstanceId);
+      if (!instanceInfo.enabled) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Provider instance '${providerInstanceId}' is disabled in T3 Code settings.`,
+        });
+      }
+      if (instanceInfo.driverKind !== binding.provider) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Persisted provider instance '${providerInstanceId}' now uses driver '${instanceInfo.driverKind}', not '${binding.provider}'.`,
+        });
+      }
+
+      const persistedModelSelection = readPersistedProviderModelSelection(binding.runtimePayload);
+      const modelSelection = persistedModelSelection ?? thread.modelSelection;
+      if (modelSelection.instanceId !== providerInstanceId) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Persisted model selection references provider instance '${modelSelection.instanceId}', but the recoverable session belongs to '${providerInstanceId}'.`,
+        });
+      }
+      const interactionMode: ProviderInteractionMode =
+        readPersistedProviderInteractionMode(binding.runtimePayload) ?? thread.interactionMode;
+      const project = yield* resolveProject(thread.projectId);
+      const cwd =
+        readPersistedProviderCwd(binding.runtimePayload) ??
+        resolveThreadWorkspaceCwd({ thread, projects: project ? [project] : [] });
+
+      const session = yield* providerService.startSession(thread.id, {
+        threadId: thread.id,
+        provider: binding.provider,
+        providerInstanceId,
+        ...(cwd !== undefined ? { cwd } : {}),
+        modelSelection,
+        resumeCursor: binding.resumeCursor,
+        runtimeMode,
+      });
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: mapProviderSessionStatusToOrchestrationStatus(session.status),
+          providerName: session.provider,
+          providerInstanceId,
+          runtimeMode,
+          activeTurnId: null,
+          lastError: session.lastError ?? null,
+          updatedAt: session.updatedAt,
+        },
+        createdAt,
+      });
+
+      const replacement = yield* providerService.sendTurn({
+        threadId: thread.id,
+        input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+        attachments: [],
+        modelSelection,
+        interactionMode,
+      });
+
+      // ProviderService clears this in the accepted sendTurn transaction. The
+      // explicit write keeps the reconciliation invariant local and obvious.
+      yield* providerSessionDirectory.upsert({
+        threadId: thread.id,
+        provider: binding.provider,
+        providerInstanceId,
+        runtimeMode,
+        status: "running",
+        ...(replacement.resumeCursor !== undefined
+          ? { resumeCursor: replacement.resumeCursor }
+          : {}),
+        runtimePayload: {
+          activeTurnId: replacement.turnId,
+          modelSelection,
+          interactionMode,
+          restartRecovery: null,
+          lastRuntimeEvent: "provider.restartRecovery.accepted",
+          lastRuntimeEventAt: DateTime.formatIso(yield* DateTime.now),
+        },
+      });
+
+      yield* Effect.logInfo("provider turn restart recovery accepted", {
+        threadId: thread.id,
+        provider: binding.provider,
+        providerInstanceId,
+        interruptedProviderTurnId: candidate.interruptedProviderTurnId,
+        replacementProviderTurnId: replacement.turnId,
+        recoverySource: candidate.source,
+      });
+      yield* increment(providerTurnRecoveriesTotal, {
+        outcome: "continued",
+        source: candidate.source,
+        provider: binding.provider,
+      });
+    });
+
+    yield* recover.pipe(
+      Effect.catchCause((cause) => {
+        const detail = formatFailureDetail(cause);
+        const persistFailureState =
+          binding.providerInstanceId === undefined
+            ? Effect.void
+            : providerSessionDirectory
+                .upsert({
+                  threadId: binding.threadId,
+                  provider: binding.provider,
+                  providerInstanceId: binding.providerInstanceId,
+                  ...(binding.runtimeMode !== undefined
+                    ? { runtimeMode: binding.runtimeMode }
+                    : {}),
+                  status: "error",
+                  runtimePayload: {
+                    activeTurnId: null,
+                    lastError: detail,
+                    lastRuntimeEvent: "provider.restartRecovery.failed",
+                    lastRuntimeEventAt: createdAt,
+                  },
+                })
+                .pipe(
+                  Effect.catchCause((persistenceCause) =>
+                    Effect.logWarning("provider restart recovery failure state was not persisted", {
+                      threadId: binding.threadId,
+                      cause: Cause.pretty(persistenceCause),
+                    }),
+                  ),
+                );
+        return persistFailureState.pipe(
+          Effect.andThen(setRecoveryFailureState({ binding, detail, createdAt })),
+          Effect.andThen(
+            appendProviderFailureActivity({
+              threadId: binding.threadId,
+              kind: "provider.turn.recovery.failed",
+              summary: "Provider turn recovery failed",
+              detail,
+              turnId: thread.latestTurn?.turnId ?? null,
+              createdAt,
+            }),
+          ),
+          Effect.andThen(
+            Effect.logWarning("provider turn restart recovery failed", {
+              threadId: binding.threadId,
+              provider: binding.provider,
+              providerInstanceId: binding.providerInstanceId,
+              recoverySource: candidate.source,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.andThen(
+            increment(providerTurnRecoveriesTotal, {
+              outcome: "failed",
+              source: candidate.source,
+              provider: binding.provider,
+            }),
+          ),
+          Effect.catchCause((reportingCause) =>
+            Effect.logWarning("provider turn restart recovery failure reporting failed", {
+              threadId: binding.threadId,
+              cause: Cause.pretty(reportingCause),
+              originalCause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      }),
+    );
   });
 
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
@@ -1084,6 +1433,135 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
+  const reconcileStartup = Effect.fn("reconcileStartup")(function* () {
+    const bindings = yield* providerSessionDirectory.listBindings().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider restart recovery failed to list persisted bindings", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as([] as ReadonlyArray<ProviderRuntimeBindingWithMetadata>)),
+      ),
+    );
+    const recoveryCandidates = bindings.flatMap((binding) => {
+      const candidate = readProviderRestartRecoveryCandidate({
+        runtimePayload: binding.runtimePayload,
+        status: binding.status,
+        lastSeenAt: binding.lastSeenAt,
+      });
+      return candidate === undefined ? [] : [{ binding, candidate }];
+    });
+    const pendingTurnStarts = yield* projectionTurnRepository.listPendingTurnStarts().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider restart recovery failed to list pending turn starts", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as([])),
+      ),
+    );
+
+    yield* Effect.logInfo("provider restart reconciliation candidates loaded", {
+      interruptedTurnCandidates: recoveryCandidates.length,
+      pendingTurnStartCandidates: pendingTurnStarts.length,
+    });
+    if (recoveryCandidates.length > 0) {
+      yield* increment(
+        providerTurnRecoveriesTotal,
+        { outcome: "candidate", recoveryKind: "interrupted-turn" },
+        recoveryCandidates.length,
+      );
+    }
+
+    yield* Effect.forEach(recoveryCandidates, recoverInterruptedTurn, {
+      concurrency: STARTUP_RECOVERY_CONCURRENCY,
+      discard: true,
+    });
+
+    const pendingWithoutInterruptedRecovery = pendingTurnStarts.filter(
+      (pending) => !interruptedRecoveryThreadIds.has(pending.threadId),
+    );
+    if (pendingWithoutInterruptedRecovery.length === 0) return;
+
+    const persistedEvents = yield* Stream.runCollect(
+      orchestrationEngine.readEvents(0, Number.MAX_SAFE_INTEGER),
+    ).pipe(
+      Effect.map((events) => Array.from(events)),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider restart recovery failed to read persisted turn starts", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as([] as ReadonlyArray<OrchestrationEvent>)),
+      ),
+    );
+    const turnStartEventsByPendingKey = new Map<
+      string,
+      Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>
+    >();
+    for (const event of persistedEvents) {
+      if (event.type !== "thread.turn-start-requested") continue;
+      turnStartEventsByPendingKey.set(
+        `${event.payload.threadId}\u0000${event.payload.messageId}\u0000${event.payload.createdAt}`,
+        event,
+      );
+    }
+
+    yield* Effect.forEach(
+      pendingWithoutInterruptedRecovery,
+      (pending) =>
+        Effect.gen(function* () {
+          const thread = yield* resolveThread(pending.threadId);
+          if (!thread) {
+            yield* Effect.logInfo("pending provider turn start reconciliation skipped", {
+              threadId: pending.threadId,
+              messageId: pending.messageId,
+              reason: "thread-missing-archived-or-deleted",
+            });
+            yield* increment(providerTurnRecoveriesTotal, {
+              outcome: "skipped",
+              recoveryKind: "pending-start",
+              reason: "inactive-thread",
+            });
+            return;
+          }
+          const event = turnStartEventsByPendingKey.get(
+            `${pending.threadId}\u0000${pending.messageId}\u0000${pending.requestedAt}`,
+          );
+          if (event === undefined) {
+            yield* appendProviderFailureActivity({
+              threadId: pending.threadId,
+              kind: "provider.turn.start.failed",
+              summary: "Provider turn start recovery failed",
+              detail: `Persisted turn start event for user message '${pending.messageId}' could not be found.`,
+              turnId: null,
+              createdAt: DateTime.formatIso(yield* DateTime.now),
+            });
+            yield* increment(providerTurnRecoveriesTotal, {
+              outcome: "failed",
+              recoveryKind: "pending-start",
+              reason: "event-missing",
+            });
+            return;
+          }
+
+          yield* worker.enqueue(event);
+          yield* Effect.logInfo("pending provider turn start replay enqueued", {
+            threadId: pending.threadId,
+            messageId: pending.messageId,
+            eventId: event.eventId,
+          });
+          yield* increment(providerTurnRecoveriesTotal, {
+            outcome: "replayed",
+            recoveryKind: "pending-start",
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("pending provider turn start reconciliation failed", {
+              threadId: pending.threadId,
+              messageId: pending.messageId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      { concurrency: STARTUP_RECOVERY_CONCURRENCY, discard: true },
+    );
+  });
+
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
@@ -1101,12 +1579,23 @@ const make = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
     );
+    yield* reconcileStartup().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider restart reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.ensuring(Deferred.succeed(startupReconciliationDone, undefined).pipe(Effect.ignore)),
+      Effect.forkScoped,
+    );
   });
 
   return {
     start,
-    drain: worker.drain,
+    drain: Deferred.await(startupReconciliationDone).pipe(Effect.andThen(worker.drain)),
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

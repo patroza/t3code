@@ -22,7 +22,7 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, vi } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -156,6 +156,8 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly resolveEnvironment?: ClaudeAdapterLiveOptions["resolveEnvironment"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -167,6 +169,8 @@ function makeHarness(config?: {
 
   const adapterOptions: ClaudeAdapterLiveOptions = {
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
+    ...(config?.environment ? { environment: config.environment } : {}),
+    ...(config?.resolveEnvironment ? { resolveEnvironment: config.resolveEnvironment } : {}),
     createQuery: (input) => {
       createInput = input;
       return query;
@@ -268,6 +272,42 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("passes the resolved environment to the SDK after applying Claude invariants", () => {
+    const claudeConfigDir = "/tmp/t3-claude-direnv-home";
+    const resolveEnvironment = vi.fn((_input: { readonly cwd: string }) =>
+      Effect.succeed({
+        PATH: process.env.PATH,
+        PROVIDER_VALUE: "from-direnv",
+        CLAUDE_CONFIG_DIR: "/tmp/direnv-must-not-win",
+      }),
+    );
+    const harness = makeHarness({
+      claudeConfig: { homePath: claudeConfigDir },
+      environment: { PATH: process.env.PATH, PROVIDER_VALUE: "configured" },
+      resolveEnvironment,
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: ThreadId.make("thread-claude-direnv"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.env, {
+        PATH: process.env.PATH,
+        PROVIDER_VALUE: "from-direnv",
+        CLAUDE_CONFIG_DIR: claudeConfigDir,
+      });
+      assert.equal(harness.getLastCreateQueryInput()?.options.cwd, process.cwd());
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

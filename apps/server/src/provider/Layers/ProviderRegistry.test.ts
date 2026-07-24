@@ -33,6 +33,7 @@ import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
 import {
@@ -301,24 +302,545 @@ function makeMutableServerSettingsService(
   });
 }
 
-it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), TestHttpClientLive))(
-  "ProviderRegistry",
-  (it) => {
-    describe("checkCodexProviderStatus", () => {
-      it.effect("uses the app-server account and model list for provider status", () =>
-        Effect.gen(function* () {
-          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
-            Effect.succeed(
-              makeCodexProbeSnapshot({
-                skills: [
-                  {
-                    name: "github:gh-fix-ci",
-                    path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
-                    enabled: true,
-                    displayName: "CI Debug",
-                    shortDescription: "Debug failing GitHub Actions checks",
-                  },
-                ],
+const TestLayer = Layer.mergeAll(
+  NodeServices.layer,
+  ServerSettingsModule.layerTest(),
+  TestHttpClientLive,
+  DirenvEnvironment.layerNoop,
+);
+
+it.layer(TestLayer)("ProviderRegistry", (it) => {
+  describe("checkCodexProviderStatus", () => {
+    it.effect("uses the app-server account and model list for provider status", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              skills: [
+                {
+                  name: "github:gh-fix-ci",
+                  path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
+                  enabled: true,
+                  displayName: "CI Debug",
+                  shortDescription: "Debug failing GitHub Actions checks",
+                },
+              ],
+            }),
+          ),
+        );
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.installed, true);
+        assert.strictEqual(status.version, "1.0.0");
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.type, "chatgpt");
+        assert.strictEqual(status.auth.label, "ChatGPT Pro 20x Subscription");
+        assert.strictEqual(status.auth.email, "test@example.com");
+        assert.deepStrictEqual(status.models, [
+          {
+            slug: "gpt-live-codex",
+            name: "GPT Live Codex",
+            isCustom: false,
+            capabilities: codexModelCapabilities,
+          },
+        ]);
+        assert.deepStrictEqual(status.skills, [
+          {
+            name: "github:gh-fix-ci",
+            path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
+            enabled: true,
+            displayName: "CI Debug",
+            shortDescription: "Debug failing GitHub Actions checks",
+          },
+        ]);
+      }),
+    );
+
+    it.effect("passes configured launch args to the Codex provider probe", () =>
+      Effect.gen(function* () {
+        let observedLaunchArgs: string | undefined;
+        const settings = decodeCodexSettings({ launchArgs: "--strict-config --enable foo" });
+
+        const status = yield* checkCodexProviderStatus(settings, (input) => {
+          observedLaunchArgs = input.launchArgs;
+          return Effect.succeed(makeCodexProbeSnapshot());
+        });
+
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(observedLaunchArgs, "--strict-config --enable foo");
+      }),
+    );
+
+    it.effect("returns unauthenticated when app-server requires OpenAI auth", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              account: {
+                account: null,
+                requiresOpenaiAuth: true,
+              },
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.auth.status, "unauthenticated");
+        assert.strictEqual(
+          status.message,
+          "Codex CLI is not authenticated. Run `codex login` and try again.",
+        );
+      }),
+    );
+
+    it.effect("returns ready with unknown auth when app-server does not require OpenAI auth", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              account: {
+                account: null,
+                requiresOpenaiAuth: false,
+              },
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.auth.status, "unknown");
+      }),
+    );
+
+    it.effect("returns an api key label for codex api key auth", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              account: {
+                account: { type: "apiKey" },
+                requiresOpenaiAuth: false,
+              },
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.type, "apiKey");
+        assert.strictEqual(status.auth.label, "OpenAI API Key");
+      }),
+    );
+
+    it.effect("returns an Amazon Bedrock label for codex Bedrock auth", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              account: {
+                account: { type: "amazonBedrock" },
+                requiresOpenaiAuth: false,
+              },
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.type, "amazonBedrock");
+        assert.strictEqual(status.auth.label, "Amazon Bedrock");
+      }),
+    );
+
+    it.effect("returns unavailable when codex is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.fail(
+            new CodexErrors.CodexAppServerSpawnError({
+              command: "codex app-server",
+              cause: new Error("spawn codex ENOENT"),
+            }),
+          ),
+        );
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.installed, false);
+        assert.strictEqual(status.auth.status, "unknown");
+        assert.strictEqual(status.message, "Codex CLI (`codex`) is not installed or not on PATH.");
+      }),
+    );
+
+    it.effect("closes the app-server probe scope when provider status times out", () =>
+      Effect.gen(function* () {
+        const killCalls = yield* Ref.make(0);
+        const statusFiber = yield* checkCodexProviderStatus(defaultCodexSettings).pipe(
+          Effect.provide(hangingScopedSpawnerLayer(killCalls)),
+          Effect.forkChild,
+        );
+
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("11 seconds");
+        yield* Effect.yieldNow;
+
+        const status = yield* Fiber.join(statusFiber);
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(
+          status.message,
+          "Timed out while checking Codex app-server provider status.",
+        );
+        assert.strictEqual(yield* Ref.get(killCalls), 1);
+      }),
+    );
+  });
+
+  describe("ProviderRegistryLive", () => {
+    it("treats equal provider snapshots as unchanged", () => {
+      const providers = [
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-03-25T00:00:00.000Z",
+          version: "1.0.0",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        },
+        {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          status: "warning",
+          enabled: true,
+          installed: true,
+          auth: { status: "unknown" },
+          checkedAt: "2026-03-25T00:00:00.000Z",
+          version: "1.0.0",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        },
+      ] as const satisfies ReadonlyArray<ServerProvider>;
+
+      assert.strictEqual(haveProvidersChanged(providers, [...providers]), false);
+    });
+
+    it("preserves previously discovered provider models when a refresh returns none", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("cursor"),
+        driver: ProviderDriverKind.make("cursor"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-04-14T00:00:00.000Z",
+        version: "2026.04.09-f2b0fcd",
+        models: [
+          {
+            slug: "claude-opus-4-6",
+            name: "Opus 4.6",
+            isCustom: false,
+            capabilities: createModelCapabilities({
+              optionDescriptors: [
+                selectDescriptor("reasoning", "Reasoning", [
+                  { id: "high", label: "High", isDefault: true },
+                ]),
+                booleanDescriptor("fastMode", "Fast Mode"),
+                booleanDescriptor("thinking", "Thinking"),
+              ],
+            }),
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshedProvider = {
+        ...previousProvider,
+        checkedAt: "2026-04-14T00:01:00.000Z",
+        models: [],
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+        ...previousProvider.models,
+      ]);
+    });
+
+    it("drops stale OpenCode models missing from a successful refresh", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("opencode"),
+        driver: ProviderDriverKind.make("opencode"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-07-17T00:00:00.000Z",
+        version: "1.0.0",
+        models: [
+          {
+            slug: "github/gpt-5",
+            name: "GPT-5",
+            subProvider: "GitHub",
+            isCustom: false,
+            capabilities: null,
+          },
+          {
+            slug: "removed-plugin/model",
+            name: "Removed Plugin Model",
+            subProvider: "Removed Plugin",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshedProvider = {
+        ...previousProvider,
+        checkedAt: "2026-07-17T00:01:00.000Z",
+        models: [
+          {
+            slug: "github/gpt-5",
+            name: "GPT-5",
+            subProvider: "GitHub",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+        ...refreshedProvider.models,
+      ]);
+    });
+
+    it("retains stale OpenCode models when a refresh fails", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("opencode"),
+        driver: ProviderDriverKind.make("opencode"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-07-17T00:00:00.000Z",
+        version: "1.0.0",
+        models: [
+          {
+            slug: "github/gpt-5",
+            name: "GPT-5",
+            subProvider: "GitHub",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshedProvider = {
+        ...previousProvider,
+        status: "error",
+        auth: { status: "unknown" },
+        checkedAt: "2026-07-17T00:01:00.000Z",
+        models: [],
+        message: "Failed to refresh OpenCode models.",
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+        ...previousProvider.models,
+      ]);
+    });
+
+    it("classifies pending, logout, uninstall, and reconnect OpenCode inventories", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("opencode"),
+        driver: ProviderDriverKind.make("opencode"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-07-17T00:00:00.000Z",
+        version: "1.0.0",
+        models: [
+          {
+            slug: "github/gpt-5",
+            name: "GPT-5",
+            subProvider: "GitHub",
+            isCustom: false,
+            capabilities: null,
+          },
+          {
+            slug: "removed-plugin/model",
+            name: "Removed Plugin Model",
+            subProvider: "Removed Plugin",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const pendingProvider = {
+        ...previousProvider,
+        status: "warning",
+        installed: false,
+        auth: { status: "unknown" },
+        checkedAt: "2026-07-17T00:01:00.000Z",
+        version: null,
+        models: [],
+        message: "OpenCode provider status has not been checked in this session yet.",
+      } satisfies ServerProvider;
+      const loggedOutProvider = {
+        ...previousProvider,
+        status: "warning",
+        auth: { status: "unknown" },
+        checkedAt: "2026-07-17T00:02:00.000Z",
+        models: [],
+        message: "OpenCode is available, but it did not report any connected upstream providers.",
+      } satisfies ServerProvider;
+      const missingProvider = {
+        ...previousProvider,
+        status: "error",
+        installed: false,
+        auth: { status: "unknown" },
+        checkedAt: "2026-07-17T00:03:00.000Z",
+        version: null,
+        models: [],
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      } satisfies ServerProvider;
+      const authoritativeProvider = {
+        ...previousProvider,
+        checkedAt: "2026-07-17T00:04:00.000Z",
+        models: [previousProvider.models[0]!],
+      } satisfies ServerProvider;
+      const failedProvider = {
+        ...authoritativeProvider,
+        status: "error",
+        auth: { status: "unknown" },
+        checkedAt: "2026-07-17T00:05:00.000Z",
+        models: [],
+        message: "Failed to refresh OpenCode models.",
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, pendingProvider).models, [
+        ...previousProvider.models,
+      ]);
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, loggedOutProvider).models, []);
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, missingProvider).models, []);
+
+      const afterRemoval = mergeProviderSnapshot(previousProvider, authoritativeProvider);
+      const afterFailure = mergeProviderSnapshot(afterRemoval, failedProvider);
+
+      assert.deepStrictEqual(afterFailure.models, [authoritativeProvider.models[0]!]);
+    });
+
+    it("fills missing capabilities from the previous provider snapshot", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("cursor"),
+        driver: ProviderDriverKind.make("cursor"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-04-14T00:00:00.000Z",
+        version: "2026.04.09-f2b0fcd",
+        models: [
+          {
+            slug: "claude-opus-4-6",
+            name: "Opus 4.6",
+            isCustom: false,
+            capabilities: createModelCapabilities({
+              optionDescriptors: [
+                selectDescriptor("reasoning", "Reasoning", [
+                  { id: "high", label: "High", isDefault: true },
+                ]),
+                booleanDescriptor("fastMode", "Fast Mode"),
+                booleanDescriptor("thinking", "Thinking"),
+              ],
+            }),
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshedProvider = {
+        ...previousProvider,
+        checkedAt: "2026-04-14T00:01:00.000Z",
+        models: [
+          {
+            slug: "claude-opus-4-6",
+            name: "Opus 4.6",
+            isCustom: false,
+            capabilities: createModelCapabilities({
+              optionDescriptors: [],
+            }),
+          },
+        ],
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+        ...previousProvider.models,
+      ]);
+    });
+
+    it.effect("does not run provider probes during layer construction", () =>
+      Effect.gen(function* () {
+        const codexDriver = ProviderDriverKind.make("codex");
+        const codexInstanceId = ProviderInstanceId.make("codex");
+        const initialProvider = {
+          instanceId: codexInstanceId,
+          driver: codexDriver,
+          status: "warning",
+          enabled: true,
+          installed: false,
+          auth: { status: "unknown" },
+          checkedAt: "2026-06-10T00:00:00.000Z",
+          version: null,
+          message: "Checking Codex provider status.",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshCalls = yield* Ref.make(0);
+        const instance = {
+          instanceId: codexInstanceId,
+          driverKind: codexDriver,
+          continuationIdentity: {
+            driverKind: codexDriver,
+            continuationKey: "codex:instance:codex",
+          },
+          displayName: undefined,
+          enabled: true,
+          snapshot: {
+            maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+              provider: codexDriver,
+              packageName: null,
+            }),
+            getSnapshot: Effect.succeed(initialProvider),
+            refresh: Ref.update(refreshCalls, (count) => count + 1).pipe(
+              Effect.andThen(Effect.never),
+            ),
+            streamChanges: Stream.empty,
+          },
+          adapter: {} as ProviderInstance["adapter"],
+          textGeneration: {} as ProviderInstance["textGeneration"],
+        } satisfies ProviderInstance;
+        const instanceRegistryLayer = Layer.succeed(
+          ProviderInstanceRegistry.ProviderInstanceRegistry,
+          {
+            getInstance: (instanceId) =>
+              Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+            listInstances: Effect.succeed([instance]),
+            listUnavailable: Effect.succeed([]),
+            streamChanges: Stream.empty,
+            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+          },
+        );
+        const scope = yield* Scope.make();
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+        const runtimeServices = yield* Layer.build(
+          ProviderRegistryLive.pipe(
+            Layer.provideMerge(instanceRegistryLayer),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-background-refresh-",
               }),
             ),
           );

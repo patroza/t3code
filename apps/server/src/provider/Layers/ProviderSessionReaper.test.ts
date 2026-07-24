@@ -203,6 +203,7 @@ describe("ProviderSessionReaper", () => {
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
+          getSessionStopContextById: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: (threadId) =>
             Effect.succeed(
@@ -212,6 +213,8 @@ describe("ProviderSessionReaper", () => {
             ),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
+          getThreadActivitiesPage: () => Effect.die("unused"),
+          getThreadLifecycleById: () => Effect.die("unused"),
         }),
       ),
       Layer.provideMerge(NodeServices.layer),
