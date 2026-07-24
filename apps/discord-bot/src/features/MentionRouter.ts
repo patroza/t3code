@@ -108,18 +108,31 @@ export function createHandledDiscordMessageTracker(limit = MAX_HANDLED_MESSAGE_I
   const handled = new Set<string>();
   const insertionOrder: string[] = [];
 
+  const record = (messageId: string): boolean => {
+    if (handled.has(messageId)) return false;
+    handled.add(messageId);
+    insertionOrder.push(messageId);
+    while (insertionOrder.length > limit) {
+      const oldest = insertionOrder.shift();
+      if (oldest !== undefined) handled.delete(oldest);
+    }
+    return true;
+  };
+
   return {
     has(messageId: string) {
       return handled.has(messageId);
     },
+    /** Record that a message id was handled (idempotent). */
     mark(messageId: string) {
-      if (handled.has(messageId)) return;
-      handled.add(messageId);
-      insertionOrder.push(messageId);
-      while (insertionOrder.length > limit) {
-        const oldest = insertionOrder.shift();
-        if (oldest !== undefined) handled.delete(oldest);
-      }
+      record(messageId);
+    },
+    /**
+     * Atomically claim a Discord message id for routing.
+     * Returns false when another create/update path already claimed it.
+     */
+    claim(messageId: string) {
+      return record(messageId);
     },
   };
 }
@@ -1655,8 +1668,11 @@ const make = (botConfig: DiscordBotConfig) =>
 
     const handleInboundMessage = (rawEvent: GatewayMessageEvent, source: "create" | "update") =>
       Effect.gen(function* () {
-        if (source === "update" && handledMessageIds.has(rawEvent.id)) {
-          yield* Effect.logInfo("Ignoring already-handled Discord message update", {
+        // Cheap pre-filter: never re-enter routing for a message we already claimed.
+        // (CREATE and UPDATE share this tracker so edits cannot start a second turn.)
+        if (handledMessageIds.has(rawEvent.id)) {
+          yield* Effect.logInfo("Ignoring already-handled Discord message", {
+            source,
             channelId: rawEvent.channel_id,
             messageId: rawEvent.id,
           });
@@ -1800,10 +1816,20 @@ const make = (botConfig: DiscordBotConfig) =>
         const inThread = isThreadChannel(channel.type);
         if (automaticThreadMessage && !inThread) return;
 
+        // Claim before image download / turn start. Late marking let MESSAGE_UPDATE race
+        // MESSAGE_CREATE and double-run prompts (especially noticeable on short edits).
+        if (!handledMessageIds.claim(event.id)) {
+          yield* Effect.logInfo("Ignoring concurrent Discord message routing race", {
+            source,
+            channelId: event.channel_id,
+            messageId: event.id,
+          });
+          return;
+        }
+
         const body = mentioned ? stripBotMention(content, botUserId, botRoleId) : content.trim();
         const threadTalkCommand = mentioned ? parseThreadTalkCommand(body) : null;
         if (threadTalkCommand !== null) {
-          handledMessageIds.mark(event.id);
           if (!inThread) {
             yield* rest.createMessage(event.channel_id, {
               content: "Thread-talk can only be configured inside a linked Discord thread.",
@@ -1846,7 +1872,6 @@ const make = (botConfig: DiscordBotConfig) =>
         if (automaticThreadMessage && unmentionedLink !== null) {
           const threadShell = yield* t3.getThreadShell(unmentionedLink.t3ThreadId);
           if (hasInterruptibleTurn(threadShell)) {
-            handledMessageIds.mark(event.id);
             yield* rest.createMessage(event.channel_id, {
               content:
                 "Omegent is already working, so this message was not submitted. Wait for the current turn to finish, or mention `@Omegent stop`.",
@@ -1914,7 +1939,6 @@ const make = (botConfig: DiscordBotConfig) =>
                 ? ATTACHMENT_ONLY_PROMPT
                 : "";
         if (intent.kind === "prompt" && prompt.length === 0) {
-          handledMessageIds.mark(event.id);
           yield* rest.createMessage(event.channel_id, {
             content:
               content.length === 0
@@ -1933,7 +1957,6 @@ const make = (botConfig: DiscordBotConfig) =>
             })
           : prompt;
         const flagsWithPrompt = { ...flags, prompt: effectivePrompt };
-        handledMessageIds.mark(event.id);
 
         if (inThread) {
           const topicLookup = yield* resolveProjectTopic(channel);
