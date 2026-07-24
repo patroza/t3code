@@ -124,6 +124,11 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import {
+  isValidOmegentT3ProductHandshake,
+  OMEGENT_T3_CLIENT_REQUIRED_MESSAGE,
+  parseProductHandshakeFromSearchParams,
+} from "@t3tools/shared/productFamily";
 import { deriveLocalBranchNameFromRemoteRef } from "@t3tools/shared/git";
 
 const ORCHESTRATION_SUBSCRIPTION_REPLAY_LIMIT = 1_000;
