@@ -1,6 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -19,6 +23,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import { readLiveExistingBackend } from "./DesktopExistingBackend.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -169,6 +174,25 @@ const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
 interface SharedBootstrapInput {
   readonly bootstrapToken: string;
   readonly observabilitySettings: BackendObservabilitySettings;
+}
+
+function readLocalBootstrapCredential(path: string): string | undefined {
+  try {
+    const token = NodeFS.readFileSync(path, "utf8").trim();
+    return token.length > 0 ? token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function installLocalBootstrapCredential(path: string, token: string): string {
+  NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+  try {
+    NodeFS.writeFileSync(path, `${token}\n`, { mode: 0o600, flag: "wx" });
+    return token;
+  } catch {
+    return NodeFS.readFileSync(path, "utf8").trim();
+  }
 }
 
 interface WslPreflightSuccess {
@@ -335,6 +359,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    const existingBackend = readLiveExistingBackend(environment.stateDir);
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -361,9 +386,12 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       extendEnv: true,
       bootstrap,
       bootstrapDelivery: "fd3",
-      httpBaseUrl: backendExposure.httpBaseUrl,
+      httpBaseUrl: existingBackend
+        ? new URL(existingBackend.httpBaseUrl)
+        : backendExposure.httpBaseUrl,
       captureOutput: true,
       preflightFailure: Option.none(),
+      ...(existingBackend ? { reuseExisting: true } : {}),
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
 );
@@ -574,12 +602,17 @@ export const make = Effect.gen(function* () {
     Option.match(current, {
       onSome: (token) => Effect.succeed([token, current] as const),
       onNone: () =>
-        crypto.randomBytes(24).pipe(
-          Effect.map((bytes) => {
-            const token = Encoding.encodeHex(bytes);
-            return [token, Option.some(token)] as const;
-          }),
-        ),
+        Effect.gen(function* () {
+          const credentialPath = NodePath.join(
+            environment.stateDir,
+            LOCAL_BOOTSTRAP_CREDENTIAL_FILE,
+          );
+          const persisted = readLocalBootstrapCredential(credentialPath);
+          if (persisted !== undefined) return [persisted, Option.some(persisted)] as const;
+          const token = Encoding.encodeHex(yield* crypto.randomBytes(24));
+          const installed = installLocalBootstrapCredential(credentialPath, token);
+          return [installed, Option.some(installed)] as const;
+        }),
     }),
   );
 
