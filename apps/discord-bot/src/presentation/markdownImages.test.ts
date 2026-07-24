@@ -123,7 +123,7 @@ describe("resolveImagePathOnDisk", () => {
     const prev = process.cwd();
     try {
       process.chdir(root);
-      expect(resolveImagePathOnDisk("images/2.png")).toBe(cwdFile);
+      expect(resolveImagePathOnDisk("images/2.png")).toBe(NodeFS.realpathSync(cwdFile));
     } finally {
       process.chdir(prev);
     }
