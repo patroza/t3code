@@ -96,6 +96,9 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  providerFavorites: Schema.Array(ProviderInstanceId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   openWithEntries: OpenWithEntries.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   preferredOpenWith: Schema.NullOr(OpenWithEntryRef).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -675,6 +678,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  providerFavorites: Schema.optionalKey(Schema.Array(ProviderInstanceId)),
   openWithEntries: Schema.optionalKey(OpenWithEntries),
   preferredOpenWith: Schema.optionalKey(Schema.NullOr(OpenWithEntryRef)),
   providerModelPreferences: Schema.optionalKey(
