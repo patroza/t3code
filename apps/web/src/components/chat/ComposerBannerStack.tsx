@@ -4,6 +4,7 @@ import { XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
+import { ErrorDetailText } from "../ui/errorDetailText";
 
 const DISMISS_TRANSITION_MS = 220;
 const frontExitStyle = {
@@ -174,12 +175,24 @@ function ComposerBannerStackAlert({
   return (
     <Alert
       variant={item.variant}
-      className={cn("alert-glass rounded-[22px]", item.className)}
+      className={cn(
+        "alert-glass rounded-[22px]",
+        item.className,
+        item.variant === "error" ? "[&>div]:items-start" : undefined,
+      )}
       data-variant={item.variant}
     >
       {item.icon}
       <AlertTitle>{item.title}</AlertTitle>
-      {item.description ? <AlertDescription>{item.description}</AlertDescription> : null}
+      {item.description ? (
+        item.variant === "error" && typeof item.description === "string" ? (
+          <AlertDescription>
+            <ErrorDetailText text={item.description} />
+          </AlertDescription>
+        ) : (
+          <AlertDescription>{item.description}</AlertDescription>
+        )
+      ) : null}
       {item.actions || item.onDismiss ? (
         <AlertAction
           className={cn(

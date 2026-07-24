@@ -1,5 +1,5 @@
 /**
- * CursorAdapterLive — Cursor CLI (`agent acp`) via ACP.
+ * Shared adapter for ACP-backed CLI providers.
  *
  * @module CursorAdapterLive
  */
@@ -24,6 +24,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -57,7 +58,10 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTokenUsageUpdatedEvent,
   makeAcpToolCallEvent,
+  normalizeAcpPromptUsage,
+  normalizeAcpUsageUpdate,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import {
   type AcpSessionMode,
@@ -65,7 +69,11 @@ import {
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
-import { applyCursorAcpModelSelection, makeCursorAcpRuntime } from "../acp/CursorAcpSupport.ts";
+import {
+  applyCursorAcpModelSelection,
+  makeCursorAcpRuntime,
+  type CursorAcpRuntimeInput,
+} from "../acp/CursorAcpSupport.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -80,7 +88,6 @@ import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
-const PROVIDER = ProviderDriverKind.make("cursor");
 const CURSOR_RESUME_VERSION = 1 as const;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -91,7 +98,43 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   return Exit.isSuccess(result) ? result.value : undefined;
 }
 
-export interface CursorAdapterLiveOptions {
+interface AcpCliAdapterSettings {
+  readonly binaryPath: string;
+}
+
+type AcpRuntimeInput = Omit<CursorAcpRuntimeInput, "cursorSettings">;
+
+interface AcpModelSelectionErrorContext {
+  readonly cause: EffectAcpErrors.AcpError;
+  readonly step: "set-config-option" | "set-model";
+  readonly configId?: string;
+}
+
+export interface AcpCliAdapterDefinition<Settings extends AcpCliAdapterSettings> {
+  readonly provider: ProviderDriverKind;
+  readonly providerName: string;
+  readonly defaultInstanceId: ProviderInstanceId;
+  readonly makeRuntime: (
+    settings: Settings,
+    input: AcpRuntimeInput,
+  ) => Effect.Effect<
+    AcpSessionRuntime.AcpSessionRuntime["Service"],
+    EffectAcpErrors.AcpError,
+    Crypto.Crypto | Scope.Scope
+  >;
+  readonly applyModelSelection: <E>(input: {
+    readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
+    readonly model: string | null | undefined;
+    readonly selections: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+    readonly mapError: (context: AcpModelSelectionErrorContext) => E;
+  }) => Effect.Effect<void, E>;
+  readonly resolveModelId: (model: string | null | undefined) => string;
+  readonly registerCursorExtensions?: boolean;
+  /** Wait for agents that deliver final session updates after `session/prompt` resolves. */
+  readonly turnCompletionSettleDelay?: Duration.Input;
+}
+
+export interface AcpCliAdapterOptions<Settings extends AcpCliAdapterSettings> {
   readonly environment?: NodeJS.ProcessEnv;
   readonly resolveEnvironment?: DirenvEnvironment["Service"]["resolve"];
   readonly nativeEventLogPath?: string;
@@ -112,7 +155,16 @@ export interface CursorAdapterLiveOptions {
    * swap `binaryPath` to a mock ACP wrapper — pass a resolver that reads
    * the latest snapshot so the closure isn't stale.
    */
-  readonly resolveSettings?: Effect.Effect<CursorSettings>;
+  readonly resolveSettings?: Effect.Effect<Settings>;
+}
+
+export interface CursorAdapterLiveOptions extends AcpCliAdapterOptions<CursorSettings> {}
+
+export function settleAcpTurnCompletion(
+  runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "drainEvents">,
+  delay: Duration.Input,
+): Effect.Effect<void> {
+  return Effect.sleep(delay).pipe(Effect.andThen(runtime.drainEvents));
 }
 
 interface PendingApproval {
@@ -257,6 +309,7 @@ function applyRequestedSessionConfiguration<E>(input: {
         readonly options?: ReadonlyArray<ProviderOptionSelection> | null | undefined;
       }
     | undefined;
+  readonly applyModelSelection: AcpCliAdapterDefinition<AcpCliAdapterSettings>["applyModelSelection"];
   readonly mapError: (context: {
     readonly cause: import("effect-acp/errors").AcpError;
     readonly method: "session/set_config_option" | "session/set_mode";
@@ -264,7 +317,7 @@ function applyRequestedSessionConfiguration<E>(input: {
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
     if (input.modelSelection) {
-      yield* applyCursorAcpModelSelection({
+      yield* input.applyModelSelection({
         runtime: input.runtime,
         model: input.modelSelection.model,
         selections: input.modelSelection.options,
@@ -312,12 +365,14 @@ function selectAutoApprovedPermissionOption(
   return undefined;
 }
 
-export function makeCursorAdapter(
-  cursorSettings: CursorSettings,
-  options?: CursorAdapterLiveOptions,
+export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
+  initialSettings: Settings,
+  definition: AcpCliAdapterDefinition<Settings>,
+  options?: AcpCliAdapterOptions<Settings>,
 ) {
   return Effect.gen(function* () {
-    const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("cursor");
+    const PROVIDER = definition.provider;
+    const boundInstanceId = options?.instanceId ?? definition.defaultInstanceId;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -345,7 +400,7 @@ export function makeCursorAdapter(
           new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "crypto/randomUUIDv4",
-            detail: "Failed to generate Cursor runtime identifier.",
+            detail: `Failed to generate ${definition.providerName} runtime identifier.`,
             cause,
           }),
       ),
@@ -357,7 +412,7 @@ export function makeCursorAdapter(
         Effect.mapError(
           (cause) =>
             new EffectAcpErrors.AcpTransportError({
-              detail: "Failed to process Cursor ACP extension event.",
+              detail: `Failed to process ${definition.providerName} ACP extension event.`,
               cause,
             }),
         ),
@@ -478,6 +533,45 @@ export function makeCursorAdapter(
         });
       });
 
+    const handleUnexpectedProcessExit = Effect.fn("handleUnexpectedAcpProcessExit")(function* (
+      ctx: CursorSessionContext,
+      exitCode: number | undefined,
+    ) {
+      yield* withThreadLock(
+        ctx.threadId,
+        Effect.gen(function* () {
+          if (ctx.stopped) return;
+          ctx.stopped = true;
+          yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
+          yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+          sessions.delete(ctx.threadId);
+          const reason =
+            exitCode === undefined
+              ? `${definition.providerName} ACP process exited unexpectedly.`
+              : `${definition.providerName} ACP process exited unexpectedly with code ${exitCode}.`;
+          yield* offerRuntimeEvent({
+            type: "runtime.error",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { message: reason, class: "transport_error" },
+          });
+          yield* offerRuntimeEvent({
+            type: "session.exited",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: ctx.activeTurnId,
+            payload: { reason, recoverable: true, exitKind: "error" },
+          });
+          // Events must be published before closing the scope because this
+          // watcher is itself owned by the session scope.
+          yield* Scope.close(ctx.scope, Exit.void);
+        }),
+      );
+    });
+
     const startSession: CursorAdapterShape["startSession"] = (input) =>
       withThreadLock(
         input.threadId,
@@ -536,9 +630,9 @@ export function makeCursorAdapter(
           // snapshot from `ServerSettingsService` so that mid-suite
           // `updateSettings({ providers: { cursor: { binaryPath } } })` calls
           // actually take effect when the next session spawns.
-          const effectiveCursorSettings = options?.resolveSettings
+          const effectiveSettings = options?.resolveSettings
             ? yield* options.resolveSettings
-            : cursorSettings;
+            : initialSettings;
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* makeCursorAcpRuntime({
@@ -598,80 +692,109 @@ export function makeCursorAdapter(
                     ...(yield* makeEventStamp()),
                     provider: PROVIDER,
                     threadId: input.threadId,
-                    turnId: ctx?.activeTurnId,
-                    requestId: runtimeRequestId,
-                    payload: { questions: extractAskQuestions(params) },
-                    raw: {
-                      source: "acp.cursor.extension",
-                      method: "cursor/ask_question",
-                      payload: params,
-                    },
-                  });
-                  const resolved = yield* Deferred.await(answers);
-                  pendingUserInputs.delete(requestId);
-                  yield* offerRuntimeEvent({
-                    type: "user-input.resolved",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId: ctx?.activeTurnId,
-                    requestId: runtimeRequestId,
-                    payload: { answers: resolved },
-                  });
-                  return { answers: resolved };
-                }),
+                    detail: cause.message,
+                    cause,
+                  }),
               ),
             );
-            yield* acp.handleExtRequest("cursor/create_plan", CursorCreatePlanRequest, (params) =>
-              mapExtensionFailure(
-                Effect.gen(function* () {
-                  yield* logNative(
-                    input.threadId,
-                    "cursor/create_plan",
-                    params,
-                    "acp.cursor.extension",
-                  );
-                  yield* offerRuntimeEvent({
-                    type: "turn.proposed.completed",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId: ctx?.activeTurnId,
-                    payload: { planMarkdown: extractPlanMarkdown(params) },
-                    raw: {
-                      source: "acp.cursor.extension",
-                      method: "cursor/create_plan",
-                      payload: params,
-                    },
-                  });
-                  return { accepted: true } as const;
-                }),
-              ),
-            );
-            yield* acp.handleExtNotification(
-              "cursor/update_todos",
-              CursorUpdateTodosRequest,
-              (params) =>
+          const started = yield* Effect.gen(function* () {
+            if (definition.registerCursorExtensions) {
+              yield* acp.handleExtRequest(
+                "cursor/ask_question",
+                CursorAskQuestionRequest,
+                (params) =>
+                  mapExtensionFailure(
+                    Effect.gen(function* () {
+                      yield* logNative(
+                        input.threadId,
+                        "cursor/ask_question",
+                        params,
+                        "acp.cursor.extension",
+                      );
+                      const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
+                      const runtimeRequestId = RuntimeRequestId.make(requestId);
+                      const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+                      pendingUserInputs.set(requestId, { answers });
+                      yield* offerRuntimeEvent({
+                        type: "user-input.requested",
+                        ...(yield* makeEventStamp()),
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        turnId: ctx?.activeTurnId,
+                        requestId: runtimeRequestId,
+                        payload: { questions: extractAskQuestions(params) },
+                        raw: {
+                          source: "acp.cursor.extension",
+                          method: "cursor/ask_question",
+                          payload: params,
+                        },
+                      });
+                      const resolved = yield* Deferred.await(answers);
+                      pendingUserInputs.delete(requestId);
+                      yield* offerRuntimeEvent({
+                        type: "user-input.resolved",
+                        ...(yield* makeEventStamp()),
+                        provider: PROVIDER,
+                        threadId: input.threadId,
+                        turnId: ctx?.activeTurnId,
+                        requestId: runtimeRequestId,
+                        payload: { answers: resolved },
+                      });
+                      return { answers: resolved };
+                    }),
+                  ),
+              );
+              yield* acp.handleExtRequest("cursor/create_plan", CursorCreatePlanRequest, (params) =>
                 mapExtensionFailure(
                   Effect.gen(function* () {
                     yield* logNative(
                       input.threadId,
-                      "cursor/update_todos",
+                      "cursor/create_plan",
                       params,
                       "acp.cursor.extension",
                     );
-                    if (ctx) {
-                      yield* emitPlanUpdate(
-                        ctx,
-                        extractTodosAsPlan(params),
-                        params,
-                        "acp.cursor.extension",
-                        "cursor/update_todos",
-                      );
-                    }
+                    yield* offerRuntimeEvent({
+                      type: "turn.proposed.completed",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      turnId: ctx?.activeTurnId,
+                      payload: { planMarkdown: extractPlanMarkdown(params) },
+                      raw: {
+                        source: "acp.cursor.extension",
+                        method: "cursor/create_plan",
+                        payload: params,
+                      },
+                    });
+                    return { accepted: true } as const;
                   }),
                 ),
-            );
+              );
+              yield* acp.handleExtNotification(
+                "cursor/update_todos",
+                CursorUpdateTodosRequest,
+                (params) =>
+                  mapExtensionFailure(
+                    Effect.gen(function* () {
+                      yield* logNative(
+                        input.threadId,
+                        "cursor/update_todos",
+                        params,
+                        "acp.cursor.extension",
+                      );
+                      if (ctx) {
+                        yield* emitPlanUpdate(
+                          ctx,
+                          extractTodosAsPlan(params),
+                          params,
+                          "acp.cursor.extension",
+                          "cursor/update_todos",
+                        );
+                      }
+                    }),
+                  ),
+              );
+            }
             yield* acp.handleRequestPermission((params) =>
               mapExtensionFailure(
                 Effect.gen(function* () {
@@ -754,7 +877,8 @@ export function makeCursorAdapter(
             runtime: acp,
             runtimeMode: input.runtimeMode,
             interactionMode: undefined,
-            modelSelection: cursorModelSelection,
+            modelSelection: providerModelSelection,
+            applyModelSelection: definition.applyModelSelection,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -766,7 +890,7 @@ export function makeCursorAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: cursorModelSelection?.model,
+            model: providerModelSelection?.model,
             threadId: input.threadId,
             resumeCursor: {
               schemaVersion: CURSOR_RESUME_VERSION,
@@ -790,6 +914,11 @@ export function makeCursorAdapter(
             promptsInFlight: 0,
             stopped: false,
           };
+
+          yield* acp.processExit.pipe(
+            Effect.flatMap((exitCode) => handleUnexpectedProcessExit(ctx, exitCode)),
+            Effect.forkIn(sessionScope),
+          );
 
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
@@ -876,12 +1005,43 @@ export function makeCursorAdapter(
                       }),
                     );
                     return;
+                  case "UsageUpdated": {
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    const usage = normalizeAcpUsageUpdate({
+                      used: event.used,
+                      size: event.size,
+                    });
+                    if (usage !== undefined) {
+                      yield* offerRuntimeEvent(
+                        makeAcpTokenUsageUpdatedEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId: ctx.activeTurnId,
+                          usage,
+                          method: "session/update",
+                          rawPayload: event.rawPayload,
+                        }),
+                      );
+                    }
+                    return;
+                  }
                 }
               }),
             ),
           ).pipe(
             Effect.catch((cause) =>
-              Effect.logError("Failed to process Cursor runtime notification.", { cause }),
+              Effect.logError(
+                `Failed to process ${definition.providerName} runtime notification.`,
+                {
+                  cause,
+                },
+              ),
             ),
             Effect.forkChild,
           );
@@ -902,7 +1062,7 @@ export function makeCursorAdapter(
             ...(yield* makeEventStamp()),
             provider: PROVIDER,
             threadId: input.threadId,
-            payload: { state: "ready", reason: "Cursor ACP session ready" },
+            payload: { state: "ready", reason: `${definition.providerName} ACP session ready` },
           });
           yield* offerRuntimeEvent({
             type: "thread.started",
@@ -933,7 +1093,7 @@ export function makeCursorAdapter(
           const turnModelSelection =
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const model = turnModelSelection?.model ?? ctx.session.model;
-          const resolvedModel = resolveCursorAcpBaseModelId(model);
+          const resolvedModel = definition.resolveModelId(model);
           yield* applyRequestedSessionConfiguration({
             runtime: ctx.acp,
             runtimeMode: ctx.session.runtimeMode,
@@ -945,6 +1105,7 @@ export function makeCursorAdapter(
                     model,
                     options: turnModelSelection?.options,
                   },
+            applyModelSelection: definition.applyModelSelection,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -1036,10 +1197,35 @@ export function makeCursorAdapter(
             model: resolvedModel,
           };
 
+          // Some agents resolve `session/prompt` before their final session updates arrive.
+          // Keep the turn running through the provider-specific settlement window, then
+          // drain every queued update before publishing completion.
+          if (result.stopReason !== "cancelled") {
+            if (definition.turnCompletionSettleDelay !== undefined) {
+              yield* settleAcpTurnCompletion(ctx.acp, definition.turnCompletionSettleDelay);
+            } else {
+              yield* ctx.acp.drainEvents;
+            }
+          }
+
           // Only the last remaining prompt settles the turn — a steer-
           // superseded prompt resolving (usually cancelled) while another is
           // in flight or pending must leave the merged turn running.
           if (ctx.promptsInFlight === 1) {
+            const promptUsage = normalizeAcpPromptUsage(result.usage);
+            if (promptUsage !== undefined) {
+              yield* offerRuntimeEvent(
+                makeAcpTokenUsageUpdatedEvent({
+                  stamp: yield* makeEventStamp(),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId,
+                  usage: promptUsage,
+                  method: "session/prompt",
+                  rawPayload: result,
+                }),
+              );
+            }
             yield* offerRuntimeEvent({
               type: "turn.completed",
               ...(yield* makeEventStamp()),
@@ -1049,6 +1235,9 @@ export function makeCursorAdapter(
               payload: {
                 state: result.stopReason === "cancelled" ? "cancelled" : "completed",
                 stopReason: result.stopReason ?? null,
+                ...(result.usage !== undefined && result.usage !== null
+                  ? { usage: result.usage }
+                  : {}),
               },
             });
           }
@@ -1110,7 +1299,9 @@ export function makeCursorAdapter(
         if (!pending) {
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
-            method: "cursor/ask_question",
+            method: definition.registerCursorExtensions
+              ? "cursor/ask_question"
+              : "session/request_permission",
             detail: `Unknown pending user-input request: ${requestId}`,
           });
         }
@@ -1162,7 +1353,9 @@ export function makeCursorAdapter(
     yield* Effect.addFinalizer(() =>
       Effect.forEach(sessions.values(), stopSessionInternal, { discard: true }).pipe(
         Effect.catch((cause) =>
-          Effect.logError("Failed to emit Cursor session shutdown event.", { cause }),
+          Effect.logError(`Failed to emit ${definition.providerName} session shutdown event.`, {
+            cause,
+          }),
         ),
         Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
@@ -1188,4 +1381,24 @@ export function makeCursorAdapter(
       streamEvents,
     } satisfies CursorAdapterShape;
   });
+}
+
+export function makeCursorAdapter(
+  cursorSettings: CursorSettings,
+  options?: CursorAdapterLiveOptions,
+) {
+  return makeAcpCliAdapter(
+    cursorSettings,
+    {
+      provider: ProviderDriverKind.make("cursor"),
+      providerName: "Cursor",
+      defaultInstanceId: ProviderInstanceId.make("cursor"),
+      makeRuntime: (settings, input) =>
+        makeCursorAcpRuntime({ ...input, cursorSettings: settings }),
+      applyModelSelection: applyCursorAcpModelSelection,
+      resolveModelId: resolveCursorAcpBaseModelId,
+      registerCursorExtensions: true,
+    },
+    options,
+  );
 }

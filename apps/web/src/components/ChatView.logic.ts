@@ -97,6 +97,36 @@ export function buildLocalDraftThread(
   };
 }
 
+/**
+ * The error to show for a server thread.
+ *
+ * Dismissing cannot be expressed by clearing the local error: the banner falls
+ * back to `session.lastError`, so `localError ?? serverError` resolves right
+ * back to the server's message and anything server-sourced (e.g. "Selected
+ * model is at capacity") can never be dismissed.
+ *
+ * A dismissal therefore records *which* message was dismissed, and only
+ * suppresses that one — a different server error still surfaces, rather than the
+ * thread latching quiet forever.
+ */
+export function resolveServerThreadError(input: {
+  /** An error set by this client (send failure, etc). */
+  readonly localError: string | null | undefined;
+  /** `session.lastError` from the server. */
+  readonly serverError: string | null | undefined;
+  /** The server message the user dismissed, if any. */
+  readonly dismissedServerError: string | null | undefined;
+}): string | null {
+  if (input.localError !== null && input.localError !== undefined) {
+    return input.localError;
+  }
+  const serverError = input.serverError ?? null;
+  if (serverError === null) {
+    return null;
+  }
+  return serverError === input.dismissedServerError ? null : serverError;
+}
+
 export function shouldWriteThreadErrorToCurrentServerThread(input: {
   serverThread:
     | {
@@ -114,6 +144,20 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
     input.serverThread.environmentId === input.routeThreadRef.environmentId &&
     input.serverThread.id === input.targetThreadId,
   );
+}
+
+export function shouldTreatServerThreadAsActive(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasServerThreadDetail: boolean;
+}): boolean {
+  return input.hasServerThreadShell && input.hasServerThreadDetail;
+}
+
+export function shouldRenderServerThreadRoute(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasDraftThread: boolean;
+}): boolean {
+  return input.hasServerThreadShell || input.hasDraftThread;
 }
 
 export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {

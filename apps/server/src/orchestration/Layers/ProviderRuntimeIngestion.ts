@@ -238,10 +238,45 @@ function assistantSegmentBaseKeyFromEvent(event: ProviderRuntimeEvent): string {
   return String(event.itemId ?? event.turnId ?? event.eventId);
 }
 
+/**
+ * Mint a stable assistant message id for an ACP/provider segment.
+ *
+ * ACP adapters (Grok/Cursor) already use item ids of the form
+ * `assistant:<session>:<run>:segment:<n>`. Prefix only when the base key is not
+ * already an assistant id so delta + completion paths stay aligned and we never
+ * fork `assistant:assistant:…` twins for the same segment.
+ */
 function assistantSegmentMessageId(baseKey: string, segmentIndex: number): MessageId {
+  const normalizedBase = baseKey.startsWith("assistant:") ? baseKey : `assistant:${baseKey}`;
   return MessageId.make(
-    segmentIndex === 0 ? `assistant:${baseKey}` : `assistant:${baseKey}:segment:${segmentIndex}`,
+    segmentIndex === 0 ? normalizedBase : `${normalizedBase}:segment:${segmentIndex}`,
   );
+}
+
+function assistantCompletionMessageId(event: ProviderRuntimeEvent): MessageId {
+  return assistantSegmentMessageId(assistantSegmentBaseKeyFromEvent(event), 0);
+}
+
+function normalizeAssistantText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function findLastAssistantMessageForTurn(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  turnId: TurnId,
+  excludeMessageId?: MessageId,
+): OrchestrationMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant" || message.turnId !== turnId) {
+      continue;
+    }
+    if (excludeMessageId !== undefined && message.id === excludeMessageId) {
+      continue;
+    }
+    return message;
+  }
+  return undefined;
 }
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
@@ -1034,6 +1069,13 @@ const make = Effect.gen(function* () {
     finalDeltaCommandTag: string;
     fallbackText?: string;
     hasProjectedMessage?: boolean;
+    /** Already-projected text for this message id (streaming path). */
+    projectedText?: string;
+    /**
+     * Prior assistant messages for this turn (excluding `messageId`). Used to
+     * drop consecutive identical Grok-style status segments.
+     */
+    previousAssistantMessages?: ReadonlyArray<OrchestrationMessage>;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -1042,10 +1084,56 @@ const make = Effect.gen(function* () {
           ? bufferedText
           : (input.fallbackText?.trim().length ?? 0) > 0
             ? input.fallbackText!
-            : "";
+            : (input.projectedText ?? "");
       const hasRenderableText = hasRenderableAssistantText(text);
 
-      if (hasRenderableText) {
+      // Drop consecutive identical assistant segments in a turn (Grok multi-step
+      // ACP can re-open a bubble with the same status text after tools).
+      if (hasRenderableText && input.previousAssistantMessages) {
+        const previous = input.previousAssistantMessages.at(-1);
+        if (
+          previous &&
+          previous.role === "assistant" &&
+          !previous.streaming &&
+          normalizeAssistantText(previous.text) === normalizeAssistantText(text)
+        ) {
+          yield* clearAssistantMessageState(input.messageId);
+          if (input.turnId) {
+            yield* forgetAssistantMessageId(input.threadId, input.turnId, input.messageId);
+          }
+          // Twin was already streamed into the projection under a new id — still
+          // complete it so the row settles, then the timeline collapses identical
+          // consecutive assistants. For buffered twins we never projected.
+          if (input.hasProjectedMessage) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.message.assistant.complete",
+              commandId: yield* providerCommandId(input.event, input.commandTag),
+              threadId: input.threadId,
+              messageId: input.messageId,
+              ...(input.turnId ? { turnId: input.turnId } : {}),
+              createdAt: input.createdAt,
+            });
+          }
+          return;
+        }
+      }
+
+      if (hasRenderableText && bufferedText.length > 0) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
+          threadId: input.threadId,
+          messageId: input.messageId,
+          delta: text,
+          ...(input.turnId ? { turnId: input.turnId } : {}),
+          createdAt: input.createdAt,
+        });
+      } else if (
+        hasRenderableText &&
+        bufferedText.length === 0 &&
+        (input.projectedText?.length ?? 0) === 0 &&
+        (input.fallbackText?.trim().length ?? 0) > 0
+      ) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
           commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
@@ -1591,9 +1679,7 @@ const make = Effect.gen(function* () {
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
-              messageId: MessageId.make(
-                `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-              ),
+              messageId: assistantCompletionMessageId(event),
               fallbackText: event.payload.detail,
             }
           : undefined;
@@ -1634,6 +1720,15 @@ const make = Effect.gen(function* () {
             yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
           }
 
+          const previousAssistantMessages = turnId
+            ? messages.filter(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.turnId === turnId &&
+                  message.id !== assistantMessageId,
+              )
+            : [];
+
           yield* finalizeAssistantMessage({
             event,
             threadId: thread.id,
@@ -1643,6 +1738,10 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete",
             finalDeltaCommandTag: "assistant-delta-finalize",
             hasProjectedMessage: existingAssistantMessage !== undefined,
+            previousAssistantMessages,
+            ...(existingAssistantMessage?.text
+              ? { projectedText: existingAssistantMessage.text }
+              : {}),
             ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
               ? { fallbackText: assistantCompletion.fallbackText }
               : {}),
@@ -1756,6 +1855,21 @@ const make = Effect.gen(function* () {
             });
           }
         }
+      }
+
+      // Provider-initiated mode changes (e.g. Grok entering plan mode via
+      // enter_plan_mode / session mode update) sync the thread interaction mode.
+      if (
+        event.type === "session.mode.changed" &&
+        thread.interactionMode !== event.payload.interactionMode
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.interaction-mode.set",
+          commandId: yield* providerCommandId(event, "interaction-mode-set"),
+          threadId: thread.id,
+          interactionMode: event.payload.interactionMode,
+          createdAt: now,
+        });
       }
 
       if (event.type === "turn.diff.updated") {

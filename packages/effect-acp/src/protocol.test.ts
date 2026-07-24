@@ -54,6 +54,9 @@ const encoder = new TextEncoder();
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
 );
+const stdinDrainingPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
+  path.join(import.meta.dirname, "../test/fixtures/stdin-draining-peer.ts"),
+);
 const mockPeerArgs = (path: string) => [path];
 
 const makeHandle = (env?: Record<string, string>) =>
@@ -68,6 +71,39 @@ const makeHandle = (env?: Record<string, string>) =>
   });
 
 it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
+  it.effect("closes child stdin before awaiting process shutdown", () =>
+    Effect.gen(function* () {
+      const exitCode = yield* Ref.make<number | null>(null);
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(process.execPath, [yield* stdinDrainingPeerPath], {
+              forceKillAfter: "100 millis",
+            }),
+          );
+          yield* Effect.addFinalizer(() =>
+            handle.exitCode.pipe(
+              Effect.flatMap((code) => Ref.set(exitCode, code)),
+              Effect.timeoutOrElse({
+                duration: "1 second",
+                orElse: () => Ref.set(exitCode, -1),
+              }),
+              Effect.catch(() => Ref.set(exitCode, -2)),
+            ),
+          );
+          yield* AcpProtocol.makeAcpPatchedProtocol({
+            stdio: makeChildStdio(handle),
+            serverRequestMethods: new Set(),
+          });
+        }),
+      );
+
+      assert.equal(yield* Ref.get(exitCode), 0);
+    }),
+  );
+
   it.effect(
     "emits exact JSON-RPC notifications and decodes inbound session/update and elicitation completion",
     () =>
@@ -132,6 +168,46 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         const [update, completion] = yield* Deferred.await(notifications);
         assert.equal(update?._tag, "SessionUpdate");
         assert.equal(completion?._tag, "ElicitationComplete");
+      }),
+  );
+
+  it.effect(
+    "drops Effect-RPC transport control frames instead of leaking them to the ACP wire",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, output } = yield* makeInMemoryStdio();
+        const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+          stdio,
+          serverRequestMethods: new Set(),
+        });
+
+        // `Interrupt` is what Effect's RpcClient emits when an in-flight request
+        // fiber is cancelled (a turn Stop, a client reconnect, a superseding
+        // turn, ...). A spec-compliant ACP agent cannot decode it — leaking it
+        // wedges the session — so it must never reach stdout.
+        yield* transport.clientProtocol.send(0, {
+          _tag: "Interrupt",
+          requestId: "4294967299",
+        });
+
+        // A real ACP message (here an id:"" notification) must still be written.
+        yield* transport.clientProtocol.send(0, {
+          _tag: "Request",
+          id: "",
+          tag: "session/cancel",
+          payload: { sessionId: "session-1" },
+          headers: [],
+        });
+
+        // The first — and only — frame on the wire is the real request. Had the
+        // Interrupt leaked, it would have been taken here first.
+        const outbound = yield* Queue.take(output);
+        assert.deepEqual(yield* decodeSessionCancelNotification(outbound), {
+          jsonrpc: "2.0",
+          method: "session/cancel",
+          params: { sessionId: "session-1" },
+        });
+        assert.strictEqual(yield* Queue.size(output), 0);
       }),
   );
 
