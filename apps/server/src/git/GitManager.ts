@@ -27,6 +27,8 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   VcsStatusResult,
+  VcsResolveBranchChangeRequestInput,
+  VcsResolveBranchChangeRequestResult,
   ModelSelection,
   type SourceControlWritingStyleSettings,
 } from "@t3tools/contracts";
@@ -93,6 +95,9 @@ export class GitManager extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    readonly resolveBranchChangeRequest: (
+      input: VcsResolveBranchChangeRequestInput,
+    ) => Effect.Effect<VcsResolveBranchChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -107,7 +112,14 @@ const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
+/** Local status is cheap; keep a short TTL for burst coalescing. */
 const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
+/**
+ * Remote status (PR list/view/checks via `gh`) is expensive. Coalesce concurrent
+ * subscribers and near-interval polls so we don't re-mint tokens and re-hit the API
+ * for every bridge/UI client on the same worktree.
+ */
+const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(25);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 const PR_LOOKUP_CACHE_TTL = Duration.minutes(2);
 const PR_LOOKUP_FAILURE_TTL = Duration.seconds(20);
@@ -131,6 +143,7 @@ interface OpenPrInfo {
 interface PullRequestInfo extends OpenPrInfo, PullRequestHeadRemoteInfo {
   state: "open" | "closed" | "merged";
   updatedAt: Option.Option<DateTime.Utc>;
+  hasFailingChecks?: boolean;
 }
 
 const pullRequestUpdatedAtDescOrder: Order.Order<PullRequestInfo> = Order.mapInput(
@@ -145,6 +158,7 @@ interface ResolvedPullRequest {
   baseBranch: string;
   headBranch: string;
   state: "open" | "closed" | "merged";
+  hasFailingChecks?: boolean;
 }
 
 interface PullRequestHeadRemoteInfo {
@@ -373,6 +387,9 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
     ...(summary.headRepositoryOwnerLogin !== undefined
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
+    ...(summary.hasFailingChecks !== undefined
+      ? { hasFailingChecks: summary.hasFailingChecks }
+      : {}),
   };
 }
 
@@ -517,6 +534,7 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  hasFailingChecks?: boolean;
 } {
   return {
     number: pr.number,
@@ -525,6 +543,7 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(pr.hasFailingChecks !== undefined ? { hasFailingChecks: pr.hasFailingChecks } : {}),
   };
 }
 
@@ -541,6 +560,7 @@ function toResolvedPullRequest(pr: {
   baseRefName: string;
   headRefName: string;
   state?: "open" | "closed" | "merged";
+  hasFailingChecks?: boolean | undefined;
 }): ResolvedPullRequest {
   return {
     number: pr.number,
@@ -549,6 +569,7 @@ function toResolvedPullRequest(pr: {
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
     state: pr.state ?? "open",
+    ...(pr.hasFailingChecks !== undefined ? { hasFailingChecks: pr.hasFailingChecks } : {}),
   };
 }
 
@@ -1049,7 +1070,7 @@ export const make = Effect.gen(function* () {
   });
   const remoteStatusResultCache = yield* Cache.makeWith((cwd: string) => readRemoteStatus(cwd), {
     capacity: STATUS_RESULT_CACHE_CAPACITY,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? STATUS_RESULT_CACHE_TTL : Duration.zero),
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? REMOTE_STATUS_RESULT_CACHE_TTL : Duration.zero),
   });
   const invalidateRemoteStatusResultCache = (cwd: string) =>
     normalizeStatusCacheKey(cwd).pipe(
@@ -1238,6 +1259,54 @@ export const make = Effect.gen(function* () {
     }
     return parsed[0] ?? null;
   });
+  const findLatestPrByHeadSelectorDirect = Effect.fn("findLatestPrByHeadSelectorDirect")(function* (
+    cwd: string,
+    branch: string,
+  ) {
+    const pullRequests = yield* (yield* sourceControlProvider(cwd)).listChangeRequests({
+      cwd,
+      headSelector: branch,
+      state: "all",
+      limit: 20,
+    });
+
+    const parsed = Arr.sort(
+      pullRequests
+        .map(toPullRequestInfo)
+        .filter((pullRequest) => pullRequest.headRefName === branch),
+      pullRequestUpdatedAtDescOrder,
+    );
+    const latestOpenPr = parsed.find((pr) => pr.state === "open");
+    if (latestOpenPr) {
+      return latestOpenPr;
+    }
+    return parsed[0] ?? null;
+  });
+
+  const hydrateOpenPrChecks = Effect.fn("hydrateOpenPrChecks")(function* (
+    cwd: string,
+    pullRequest: PullRequestInfo | null,
+  ) {
+    if (pullRequest === null || pullRequest.state !== "open") {
+      return pullRequest;
+    }
+
+    return yield* (yield* sourceControlProvider(cwd))
+      .getChangeRequest({
+        cwd,
+        reference: String(pullRequest.number),
+      })
+      .pipe(
+        Effect.map((changeRequest) => ({
+          ...pullRequest,
+          ...(changeRequest.hasFailingChecks !== undefined
+            ? { hasFailingChecks: changeRequest.hasFailingChecks }
+            : {}),
+        })),
+        Effect.orElseSucceed(() => pullRequest),
+      );
+  });
+
   const buildCompletionToast = Effect.fn("buildCompletionToast")(function* (
     cwd: string,
     result: Pick<GitRunStackedActionResult, "action" | "branch" | "commit" | "push" | "pr">,
@@ -1752,6 +1821,42 @@ export const make = Effect.gen(function* () {
     return { pullRequest };
   });
 
+  const resolveBranchChangeRequest: GitManager["Service"]["resolveBranchChangeRequest"] = Effect.fn(
+    "resolveBranchChangeRequest",
+  )(function* (input) {
+    const details = yield* gitCore
+      .statusDetailsLocal(input.cwd)
+      .pipe(
+        Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(nonRepositoryStatusDetails)),
+      );
+    if (!details.isRepo) {
+      return { pr: null };
+    }
+
+    const upstreamRef = yield* readConfigValueNullable(input.cwd, `branch.${input.refName}.merge`);
+    const hostingProvider = yield* resolveHostingProvider(input.cwd, input.refName);
+    const latestPr = yield* resolveBranchHeadContext(input.cwd, {
+      branch: input.refName,
+      upstreamRef,
+    }).pipe(
+      Effect.flatMap((headContext) => findLatestPrForHeadContext(input.cwd, headContext)),
+      Effect.orElseSucceed(() => null),
+    );
+    const fallbackPr =
+      latestPr === null && hostingProvider?.kind === "github"
+        ? yield* findLatestPrByHeadSelectorDirect(input.cwd, input.refName).pipe(
+            Effect.orElseSucceed(() => null),
+          )
+        : null;
+    const resolvedPr = yield* hydrateOpenPrChecks(input.cwd, latestPr ?? fallbackPr);
+    const pr = resolvedPr ? toStatusPr(resolvedPr) : null;
+
+    return {
+      pr,
+      ...(hostingProvider ? { sourceControlProvider: hostingProvider } : {}),
+    };
+  });
+
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
   )(function* (input) {
@@ -2180,6 +2285,7 @@ export const make = Effect.gen(function* () {
     invalidateRemoteStatus,
     invalidateStatus,
     resolvePullRequest,
+    resolveBranchChangeRequest,
     preparePullRequestThread,
     runStackedAction,
   });

@@ -305,6 +305,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       return messageId;
     }
 
+    // Rejoin the physical live edge before the outgoing-row anchor is
+    // applied. Enabling end maintenance alone is ineffective when the list
+    // was scrolled into older history.
+    listRef.current?.scrollToEnd({ animated: false });
     setAnchorMessageId(messageId);
     composerEditorRef.current?.blur();
     return messageId;
