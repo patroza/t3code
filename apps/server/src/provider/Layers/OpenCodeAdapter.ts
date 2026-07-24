@@ -17,7 +17,6 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -528,10 +527,7 @@ export function makeOpenCodeAdapter(
     const serverConfig = yield* ServerConfig;
     const openCodeRuntime = yield* OpenCodeRuntime;
     const crypto = yield* Crypto.Crypto;
-    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const sameDirectory = (left: string, right: string) =>
-      isSameOpenCodeDirectory(fileSystem, path, left, right);
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -1192,8 +1188,18 @@ export function makeOpenCodeAdapter(
                 threadId: input.threadId,
                 cwd: directory,
                 environment: options?.environment ?? process.env,
-              });
-        const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+        const resumeSessionId = readOpenCodeResumeSessionId(input.resumeCursor);
         const existing = sessions.get(input.threadId);
         if (existing) {
           yield* stopOpenCodeContext(existing);

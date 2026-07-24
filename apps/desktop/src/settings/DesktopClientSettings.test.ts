@@ -20,7 +20,7 @@ const clientSettings: ClientSettings = {
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   favorites: [],
-  glassOpacity: 80,
+  providerFavorites: [],
   openWithEntries: [
     {
       id: OpenWithEntryId.make("terminal"),
