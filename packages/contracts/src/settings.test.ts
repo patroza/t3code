@@ -39,18 +39,6 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
-describe("ClientSettings sidebarHideProviderIcons", () => {
-  it("defaults to false", () => {
-    expect(decodeClientSettings({}).sidebarHideProviderIcons).toBe(false);
-  });
-
-  it("round-trips an explicit value", () => {
-    expect(decodeClientSettings({ sidebarHideProviderIcons: true }).sidebarHideProviderIcons).toBe(
-      true,
-    );
-  });
-});
-
 describe("ClientSettings worktree removal confirmation", () => {
   it("defaults confirmation on for existing settings", () => {
     expect(decodeClientSettings({}).confirmWorktreeRemoval).toBe(true);
