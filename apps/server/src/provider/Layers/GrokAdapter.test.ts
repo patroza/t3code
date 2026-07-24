@@ -446,9 +446,11 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
-      const contentDelta = yield* Deferred.make<void>();
+      const trailingContentDelta = yield* Deferred.make<void>();
       const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        event.type === "content.delta" ? Deferred.succeed(contentDelta, undefined) : Effect.void,
+        event.type === "content.delta" && event.payload.delta === "mock"
+          ? Deferred.succeed(trailingContentDelta, undefined)
+          : Effect.void,
       ).pipe(Effect.forkChild);
 
       yield* adapter.startSession({
@@ -467,10 +469,9 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         })
         .pipe(Effect.forkChild);
 
-      yield* Deferred.await(contentDelta);
-      for (let yieldAttempt = 0; yieldAttempt < 6; yieldAttempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      // The mock emits this trailing chunk after the xAI prompt-complete
+      // notification, so it is a deterministic boundary for "prompt success".
+      yield* Deferred.await(trailingContentDelta);
       yield* Fiber.interrupt(sendTurnFiber);
       for (let yieldAttempt = 0; yieldAttempt < 4; yieldAttempt += 1) {
         yield* Effect.yieldNow;
