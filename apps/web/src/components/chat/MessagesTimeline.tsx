@@ -107,6 +107,7 @@ import {
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import { localizeZaiResetTime } from "../../providerErrorText";
 import {
   buildReviewCommentRenderablePatch,
   formatReviewCommentFence,
@@ -180,9 +181,14 @@ interface MessagesTimelineProps {
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
   contentInsetEndAdjustment: number;
+  maintainScrollAtEnd: boolean;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
+  /** Older history beyond the live activity window can be lazy-loaded. */
+  hasMoreOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   topFadeEnabled?: boolean;
 }
 
@@ -215,9 +221,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onAnchorReady,
   onAnchorSizeChanged,
   contentInsetEndAdjustment,
+  maintainScrollAtEnd,
   onIsAtEndChange,
   onManualNavigation,
   hideEmptyPlaceholder = false,
+  hasMoreOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
   topFadeEnabled = false,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
@@ -361,6 +371,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (isAtEnd !== undefined) {
       onIsAtEndChange(isAtEnd);
     }
+    // Reaching the top lazy-loads older history; maintainVisibleContentPosition
+    // (set on the list) keeps the viewport anchored when rows prepend.
+    if (state?.isAtStart && hasMoreOlder && !loadingOlder) {
+      onLoadOlder?.();
+    }
     if (!state || minimapItems.length === 0) {
       return;
     }
@@ -383,7 +398,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       strip.dataset.inView = inView ? "true" : "false";
     }
-  }, [listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
+  }, [
+    listRef,
+    minimapItems,
+    minimapStripMap,
+    onIsAtEndChange,
+    hasMoreOlder,
+    loadingOlder,
+    onLoadOlder,
+  ]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(handleScroll);
@@ -414,6 +437,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       observer.disconnect();
     };
   }, [timelineViewportElement, rows.length]);
+
+  const listHeader = useMemo(() => {
+    if (loadingOlder) {
+      return (
+        <div className="flex items-center justify-center py-2 text-xs text-muted-foreground">
+          Loading older history…
+        </div>
+      );
+    }
+    if (hasMoreOlder) {
+      return (
+        <button
+          type="button"
+          onClick={onLoadOlder}
+          className="flex w-full cursor-pointer items-center justify-center py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Load older history
+        </button>
+      );
+    }
+    return topFadeEnabled ? TIMELINE_LIST_FADE_HEADER : TIMELINE_LIST_HEADER;
+  }, [loadingOlder, hasMoreOlder, onLoadOlder, topFadeEnabled]);
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
@@ -467,7 +512,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [],
   );
 
-  if (rows.length === 0 && !isWorking) {
+  // Only short-circuit to the empty state when there is genuinely nothing to
+  // fetch: the window can derive zero VISIBLE rows (e.g. only tool-neutral work
+  // entries) while older history still exists — the list must render then so
+  // its "Load older history" header stays reachable.
+  if (rows.length === 0 && !isWorking && !hasMoreOlder && !loadingOlder) {
     if (hideEmptyPlaceholder) {
       return null;
     }
@@ -495,7 +544,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
             maintainScrollAtEnd={
-              anchoredEndSpace
+              anchoredEndSpace || !maintainScrollAtEnd
                 ? false
                 : {
                     animated: false,
@@ -515,7 +564,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
               topFadeEnabled && "chat-timeline-scroll-fade",
             )}
-            ListHeaderComponent={topFadeEnabled ? TIMELINE_LIST_FADE_HEADER : TIMELINE_LIST_HEADER}
+            ListHeaderComponent={listHeader}
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
           <TimelineMinimap
@@ -1029,7 +1078,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
-        <AssistantChangedFilesSection
+        <AssistantChangedFilesOverview
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}
           resolvedTheme={ctx.resolvedTheme}
@@ -1233,9 +1282,13 @@ function WorkGroupToggleTimelineRow({
   );
 }
 
-/** Subscribes directly to the UI state store for expand/collapse state,
- *  so toggling re-renders only this component — not the entire list. */
-const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection({
+/**
+ * Renders the "CHANGED FILES (N) +A -D" overview header inline in the conversation.
+ * The tree is hidden by default (local state) to keep chat history compact.
+ * When the user expands the section, directories start expanded by default.
+ * "View diff" opens the full side panel (like Plan/Tasks).
+ */
+const AssistantChangedFilesOverview = memo(function AssistantChangedFilesOverview({
   turnSummary,
   routeThreadKey,
   resolvedTheme,
@@ -1862,6 +1915,12 @@ function buildToolCallExpandedBody(
   if (workEntry.detail?.trim()) {
     blocks.push(workEntry.detail.trim());
   }
+  if (
+    workEntry.userInputTranscript?.trim() &&
+    workEntry.userInputTranscript.trim() !== workEntry.detail?.trim()
+  ) {
+    blocks.push(workEntry.userInputTranscript.trim());
+  }
   const changedFiles = workEntry.changedFiles ?? [];
   if (changedFiles.length > 0) {
     blocks.push(
@@ -1931,8 +1990,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry, workspaceRoot);
+  // Localize provider error timestamps (z.ai reports reset times in UTC+8) on
+  // the actually-rendered `heading`/`preview` values. Applied exactly once here
+  // so the conversion is not run twice (which would shift the time again).
+  const heading = localizeZaiResetTime(toolWorkEntryHeading(workEntry));
+  const rawPreviewText = workEntryPreview(workEntry, workspaceRoot);
+  const rawPreview = rawPreviewText === null ? null : localizeZaiResetTime(rawPreviewText);
   const preview =
     rawPreview &&
     normalizeCompactToolLabel(rawPreview).toLowerCase() ===
@@ -1940,7 +2003,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
+  const expandedBodyRaw = buildToolCallExpandedBody(workEntry, workspaceRoot);
+  const expandedBody = expandedBodyRaw === null ? null : localizeZaiResetTime(expandedBodyRaw);
   const canExpand = expandedBody !== null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =

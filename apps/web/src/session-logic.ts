@@ -12,6 +12,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTranscript";
 
 import type {
   ChatMessage,
@@ -51,6 +52,12 @@ export const PROVIDER_OPTIONS: Array<{
     available: true,
     pickerSidebarBadge: "new",
   },
+  {
+    value: ProviderDriverKind.make("kimi"),
+    label: "Kimi Code",
+    available: true,
+    pickerSidebarBadge: "new",
+  },
 ];
 
 export type WorkLogToolLifecycleStatus =
@@ -78,6 +85,7 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
+  userInputTranscript?: string;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -356,7 +364,7 @@ export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderActivities(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -462,7 +470,7 @@ export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderActivities(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -511,7 +519,7 @@ export function deriveActivePlanState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActivePlanState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderActivities(activities);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
   // Prefer plan from the current turn; fall back to the most recent plan from any turn
   // so that TodoWrite tasks persist across follow-up messages.
@@ -618,16 +626,19 @@ export function findSidebarProposedPlan(input: {
   return findLatestProposedPlan(activeThreadPlans, input.latestTurn?.turnId ?? null);
 }
 
-export function hasActionableProposedPlan(
-  proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null,
-): boolean {
-  return proposedPlan !== null && proposedPlan.implementedAt === null;
-}
+export {
+  hasActionableProposedPlan,
+  shouldShowPlanFollowUpComposer,
+  shouldShowPlanReadyStatus,
+} from "@t3tools/shared/proposedPlan";
 
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderActivities(activities);
+  const resolvedUserInputs = new Map(
+    deriveResolvedUserInputTranscripts(activities).map((entry) => [entry.activityId, entry]),
+  );
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -635,7 +646,13 @@ export function deriveWorkLogEntries(
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    const resolvedUserInput = resolvedUserInputs.get(activity.id);
+    if (resolvedUserInput) {
+      entry.detail = resolvedUserInput.preview;
+      entry.userInputTranscript = resolvedUserInput.detail;
+    }
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
     const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
@@ -1294,6 +1311,35 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   const seen = new Set<string>();
   collectChangedFiles(asRecord(payload?.data), changedFiles, seen, 0);
   return changedFiles;
+}
+
+// Several independent derivations (work log, pending approvals, pending user
+// inputs, active plan) order the same activities array per render. The reducer
+// appends in order, so the input is almost always already sorted — detect that
+// in O(n) and share the result per array identity instead of copying and
+// re-sorting the whole history in each derivation.
+const orderedActivitiesCache = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  ReadonlyArray<OrchestrationThreadActivity>
+>();
+
+function orderActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const cached = orderedActivitiesCache.get(activities);
+  if (cached) {
+    return cached;
+  }
+  let isSorted = true;
+  for (let index = 1; index < activities.length; index += 1) {
+    if (compareActivitiesByOrder(activities[index - 1]!, activities[index]!) > 0) {
+      isSorted = false;
+      break;
+    }
+  }
+  const ordered = isSorted ? activities : [...activities].toSorted(compareActivitiesByOrder);
+  orderedActivitiesCache.set(activities, ordered);
+  return ordered;
 }
 
 function compareActivitiesByOrder(

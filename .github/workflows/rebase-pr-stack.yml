@@ -1,0 +1,54 @@
+name: Rebase fork PR stack
+
+on:
+  push:
+    branches:
+      - fork/tim
+      - fork/changes
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fork-pr-stack
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: write
+
+jobs:
+  rebase:
+    name: Rebase and dispatch integration CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout canonical fork changes
+        uses: actions/checkout@v6
+        with:
+          ref: fork/changes
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Configure authenticated Git pushes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh auth setup-git
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/pingdotgg/t3code.git
+
+      - name: Rebase and atomically update stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/rebase-pr-stack.ts sync --push
+
+      - name: Dispatch integration CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref fork/integration

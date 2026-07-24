@@ -57,6 +57,8 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetSnapshotError,
+  OrchestrationGetThreadActivitiesError,
+  OrchestrationGetThreadActivitiesInput,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsError,
@@ -111,6 +113,8 @@ import {
   PreviewResizeInput,
   PreviewSessionSnapshot,
 } from "./preview.ts";
+import { AiUsageSnapshot } from "./aiUsage.ts";
+import { ServerHostResourceSnapshot } from "./hostResources.ts";
 import {
   PreviewAutomationError,
   PreviewAutomationHost,
@@ -136,6 +140,9 @@ import {
   ServerProcessResourceHistoryResult,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
+  ServerExternalSessionImportError,
+  ServerImportExternalSessionsInput,
+  ServerImportExternalSessionsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
@@ -173,6 +180,7 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
+  vcsResolveBranchChangeRequest: "vcs.resolveBranchChangeRequest",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsPreviewWorktreeCleanup: "vcs.previewWorktreeCleanup",
@@ -224,7 +232,9 @@ export const WS_METHODS = {
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
+  serverGetHostResourceSnapshot: "server.getHostResourceSnapshot",
   serverSignalProcess: "server.signalProcess",
+  serverImportExternalSessions: "server.importExternalSessions",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -241,6 +251,7 @@ export const WS_METHODS = {
   subscribeTerminalMetadata: "subscribeTerminalMetadata",
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
+  subscribeAiUsage: "subscribeAiUsage",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
@@ -335,10 +346,25 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
   },
 );
 
+export const WsServerGetHostResourceSnapshotRpc = Rpc.make(
+  WS_METHODS.serverGetHostResourceSnapshot,
+  {
+    payload: Schema.Struct({}),
+    success: ServerHostResourceSnapshot,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsServerImportExternalSessionsRpc = Rpc.make(WS_METHODS.serverImportExternalSessions, {
+  payload: ServerImportExternalSessionsInput,
+  success: ServerImportExternalSessionsResult,
+  error: Schema.Union([ServerExternalSessionImportError, EnvironmentAuthorizationError]),
 });
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
@@ -462,6 +488,15 @@ export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   success: VcsListRefsResult,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
+
+export const WsVcsResolveBranchChangeRequestRpc = Rpc.make(
+  WS_METHODS.vcsResolveBranchChangeRequest,
+  {
+    payload: VcsResolveBranchChangeRequestInput,
+    success: VcsResolveBranchChangeRequestResult,
+    error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  },
+);
 
 export const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
   payload: VcsCreateWorktreeInput,
@@ -626,6 +661,13 @@ export const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(
   },
 );
 
+export const WsSubscribeAiUsageRpc = Rpc.make(WS_METHODS.subscribeAiUsage, {
+  payload: Schema.Struct({}),
+  success: AiUsageSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.dispatchCommand,
   {
@@ -640,6 +682,15 @@ export const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.g
   success: OrchestrationRpcSchemas.getTurnDiff.output,
   error: Schema.Union([OrchestrationGetTurnDiffError, EnvironmentAuthorizationError]),
 });
+
+export const WsOrchestrationGetThreadActivitiesRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getThreadActivities,
+  {
+    payload: OrchestrationGetThreadActivitiesInput,
+    success: OrchestrationRpcSchemas.getThreadActivities.output,
+    error: Schema.Union([OrchestrationGetThreadActivitiesError, EnvironmentAuthorizationError]),
+  },
+);
 
 export const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getFullThreadDiff,
@@ -731,7 +782,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
+  WsServerGetHostResourceSnapshotRpc,
   WsServerSignalProcessRpc,
+  WsServerImportExternalSessionsRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,
@@ -751,6 +804,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
+  WsVcsResolveBranchChangeRequestRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
   WsVcsPreviewWorktreeCleanupRpc,
@@ -780,11 +834,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
+  WsSubscribeAiUsageRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetTurnDiffRpc,
+  WsOrchestrationGetThreadActivitiesRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,
