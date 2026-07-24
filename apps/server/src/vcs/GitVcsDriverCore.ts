@@ -721,8 +721,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             ),
           );
 
-        const onStdoutLine = input.progress?.onStdoutLine;
-        const onStderrLine = input.progress?.onStderrLine;
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [
             collectOutput(
@@ -730,18 +728,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               child.stdout,
               maxOutputBytes,
               appendTruncationMarker,
-              onStdoutLine
-                ? (line) => trace2Monitor.flush.pipe(Effect.andThen(onStdoutLine(line)))
-                : undefined,
+              input.progress?.onStdoutLine,
             ),
             collectOutput(
               commandInput,
               child.stderr,
               maxOutputBytes,
               appendTruncationMarker,
-              onStderrLine
-                ? (line) => trace2Monitor.flush.pipe(Effect.andThen(onStderrLine(line)))
-                : undefined,
+              input.progress?.onStderrLine,
             ),
             child.exitCode.pipe(
               Effect.mapError(
