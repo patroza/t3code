@@ -31,7 +31,6 @@ import {
   PlusIcon,
   SearchIcon,
   ServerIcon,
-  SquareKanbanIcon,
   SquarePenIcon,
   Trash2Icon,
   Undo2Icon,
@@ -47,7 +46,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useLocation, useParams, useRouter } from "@tanstack/react-router";
+import { useParams, useRouter } from "@tanstack/react-router";
 
 import {
   isAtomCommandInterrupted,
@@ -2102,13 +2101,6 @@ export default function SidebarV2() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
-      if (command === "board.open") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (isMobile) setOpenMobile(false);
-        void router.navigate({ to: "/board" });
-        return;
-      }
       const navigateToThreadKey = (targetThreadKey: string | null) => {
         if (!targetThreadKey) return false;
         const targetThread = threadByKey.get(targetThreadKey);
@@ -2136,14 +2128,11 @@ export default function SidebarV2() {
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [
-    isMobile,
     keybindings,
     navigateToThread,
     orderedThreadKeys,
     routeTerminalOpen,
     routeThreadKey,
-    router,
-    setOpenMobile,
     threadByKey,
   ]);
 
@@ -2185,20 +2174,12 @@ export default function SidebarV2() {
     openCommandPalette({ open: "new-thread-in" });
   }, [isMobile, newThreadContext, projectGroups.length, setOpenMobile]);
 
-  const pathname = useLocation({ select: (l) => l.pathname });
-  const isBoardActive = pathname === "/board";
-  const handleBoardClick = useCallback(() => {
-    if (isMobile) setOpenMobile(false);
-    void router.navigate({ to: "/board" });
-  }, [isMobile, router, setOpenMobile]);
-
   const commandPaletteShortcutLabel = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
   // Same resolution as v1: prefer the local-thread binding, fall back to
   // chat.new, no platform gating — web users have working shortcuts too.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
-  const boardShortcutLabel = shortcutLabelForCommand(keybindings, "board.open");
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -2225,31 +2206,6 @@ export default function SidebarV2() {
                   </Kbd>
                 ) : null}
               </CommandDialogTrigger>
-            </div>
-            <div className="shrink-0">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <SidebarMenuButton
-                      size="sm"
-                      type="button"
-                      className={cn(
-                        "relative size-8 justify-center rounded-md border-0 bg-transparent p-0 text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
-                        isBoardActive && "bg-sidebar-row-hover text-sidebar-foreground",
-                      )}
-                      onClick={handleBoardClick}
-                      aria-label="Board"
-                      aria-current={isBoardActive ? "page" : undefined}
-                      data-testid="sidebar-board-link"
-                    />
-                  }
-                >
-                  <SquareKanbanIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-                </TooltipTrigger>
-                <TooltipPopup side="right">
-                  {boardShortcutLabel ? `Board (${boardShortcutLabel})` : "Board"}
-                </TooltipPopup>
-              </Tooltip>
             </div>
             <div className="shrink-0">
               <Tooltip>
