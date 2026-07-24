@@ -640,6 +640,94 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.activities[0]?.id).toBe("activity-0");
       }
     });
+
+    // An in-order append keeps the sorted invariant without re-sorting the
+    // history. These cover the cases that invariant does not hold for, where
+    // the reducer still has to fall back to a full filter/append/sort.
+    it("orders an activity that arrives behind the history", () => {
+      const existingActivities = [0, 1, 3].map((sequence) => ({
+        id: EventId.make(`activity-${sequence}`),
+        tone: "tool" as const,
+        kind: "command",
+        summary: `Ran command ${sequence}`,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        sequence,
+        createdAt: "2026-04-01T11:00:00.000Z",
+      }));
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: existingActivities },
+        {
+          ...baseEventFields,
+          sequence: 14,
+          occurredAt: "2026-04-01T11:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("activity-2"),
+              tone: "tool",
+              kind: "command",
+              summary: "Ran command 2",
+              payload: {},
+              turnId: TurnId.make("turn-1"),
+              sequence: 2,
+              createdAt: "2026-04-01T11:00:00.000Z",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities.map((activity) => activity.sequence)).toEqual([0, 1, 2, 3]);
+      }
+    });
+
+    it("replaces a redelivered activity instead of duplicating it", () => {
+      const existingActivities = [0, 1].map((sequence) => ({
+        id: EventId.make(`activity-${sequence}`),
+        tone: "tool" as const,
+        kind: "command",
+        summary: `Ran command ${sequence}`,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        sequence,
+        createdAt: "2026-04-01T11:00:00.000Z",
+      }));
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: existingActivities },
+        {
+          ...baseEventFields,
+          sequence: 15,
+          occurredAt: "2026-04-01T11:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("activity-1"),
+              tone: "tool",
+              kind: "command",
+              summary: "Ran command 1 (resent)",
+              payload: {},
+              turnId: TurnId.make("turn-1"),
+              sequence: 1,
+              createdAt: "2026-04-01T11:00:00.000Z",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities).toHaveLength(2);
+        expect(result.thread.activities[1]?.summary).toBe("Ran command 1 (resent)");
+      }
+    });
   });
 
   describe("thread.turn-diff-completed", () => {
@@ -769,6 +857,78 @@ describe("applyThreadDetailEvent", () => {
         },
       } as any);
       expect(result.kind).toBe("unchanged");
+    });
+  });
+
+  describe("thread.messages-resynced", () => {
+    const message = (id: string, text: string, createdAt: string) => ({
+      id: MessageId.make(id),
+      role: "assistant" as const,
+      text,
+      turnId: null,
+      streaming: false,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const threadWith = (ids: ReadonlyArray<string>): OrchestrationThread => ({
+      ...baseThread,
+      messages: ids.map((id) => message(id, `text ${id}`, "2026-04-01T00:00:00.000Z")),
+    });
+    const resync = (
+      thread: OrchestrationThread,
+      afterMessageId: string | null,
+      tail: ReadonlyArray<{ id: string; text: string }>,
+    ) =>
+      applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 10,
+        occurredAt: "2026-04-02T00:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          afterMessageId: afterMessageId === null ? null : MessageId.make(afterMessageId),
+          messages: tail.map((entry) => message(entry.id, entry.text, "2026-04-02T00:00:00.000Z")),
+          reason: "grok-backfill",
+        },
+      } as any);
+
+    it("rewinds to the anchor and replaces only the tail after it", () => {
+      const result = resync(threadWith(["a", "b", "c", "d"]), "b", [
+        { id: "x", text: "new x" },
+        { id: "y", text: "new y" },
+      ]);
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      // a,b kept untouched; c,d replaced by the authoritative tail.
+      expect(result.thread.messages.map((m) => m.id)).toEqual(["a", "b", "x", "y"]);
+      expect(result.thread.messages[0]?.text).toBe("text a");
+      expect(result.thread.messages[2]?.text).toBe("new x");
+    });
+
+    it("replaces the whole transcript when there is no anchor", () => {
+      const result = resync(threadWith(["a", "b"]), null, [{ id: "x", text: "new x" }]);
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.messages.map((m) => m.id)).toEqual(["x"]);
+    });
+
+    it("requires a reload when the anchor is not in the cached transcript", () => {
+      // The client's cache predates the rewind point, so it cannot splice
+      // precisely — it must reload rather than render a wrong transcript.
+      const result = resync(threadWith(["a", "b"]), "unknown-anchor", [{ id: "x", text: "new x" }]);
+      expect(result.kind).toBe("reload-required");
+    });
+
+    it("is idempotent: re-applying the same resync changes nothing", () => {
+      const first = resync(threadWith(["a", "b", "c"]), "b", [{ id: "x", text: "new x" }]);
+      expect(first.kind).toBe("updated");
+      if (first.kind !== "updated") return;
+      const second = resync(first.thread, "b", [{ id: "x", text: "new x" }]);
+      expect(second.kind).toBe("updated");
+      if (second.kind !== "updated") return;
+      expect(second.thread.messages.map((m) => m.id)).toEqual(["a", "b", "x"]);
     });
   });
 
