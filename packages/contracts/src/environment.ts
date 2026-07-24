@@ -78,6 +78,16 @@ export const RepositoryIdentityLocator = Schema.Struct({
 });
 export type RepositoryIdentityLocator = typeof RepositoryIdentityLocator.Type;
 
+export const RepositoryIdentityRemote = Schema.Struct({
+  remoteName: TrimmedNonEmptyString,
+  remoteUrl: TrimmedNonEmptyString,
+  canonicalKey: TrimmedNonEmptyString,
+  provider: Schema.optionalKey(TrimmedNonEmptyString),
+  owner: Schema.optionalKey(TrimmedNonEmptyString),
+  name: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type RepositoryIdentityRemote = typeof RepositoryIdentityRemote.Type;
+
 export const RepositoryIdentity = Schema.Struct({
   canonicalKey: TrimmedNonEmptyString,
   locator: RepositoryIdentityLocator,
@@ -86,6 +96,10 @@ export const RepositoryIdentity = Schema.Struct({
   provider: Schema.optionalKey(TrimmedNonEmptyString),
   owner: Schema.optionalKey(TrimmedNonEmptyString),
   name: Schema.optionalKey(TrimmedNonEmptyString),
+  // Every configured remote, including the primary one the fields above describe.
+  // A fork answers to more than one repository, so identity matching cannot rely
+  // on the single primary remote alone.
+  remotes: Schema.optionalKey(Schema.Array(RepositoryIdentityRemote)),
 });
 export type RepositoryIdentity = typeof RepositoryIdentity.Type;
 

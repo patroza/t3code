@@ -9,9 +9,25 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { OrchestrationThread, OrchestrationThreadActivity } from "@t3tools/contracts";
 
-import { applyThreadDetailEvent } from "./threadReducer.ts";
+import {
+  applyThreadDetailEvent,
+  liveWindowOldestActivityId,
+  oldestActivityByChronology,
+} from "./threadReducer.ts";
+
+const activity = (id: string, createdAt: string, sequence?: number): OrchestrationThreadActivity =>
+  ({
+    id,
+    tone: "tool",
+    kind: "command",
+    summary: id,
+    payload: {},
+    turnId: TurnId.make("turn-1"),
+    createdAt,
+    ...(sequence !== undefined ? { sequence } : {}),
+  }) as unknown as OrchestrationThreadActivity;
 
 const baseEventFields = {
   eventId: EventId.make("event-1"),
@@ -624,6 +640,94 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.activities[0]?.id).toBe("activity-0");
       }
     });
+
+    // An in-order append keeps the sorted invariant without re-sorting the
+    // history. These cover the cases that invariant does not hold for, where
+    // the reducer still has to fall back to a full filter/append/sort.
+    it("orders an activity that arrives behind the history", () => {
+      const existingActivities = [0, 1, 3].map((sequence) => ({
+        id: EventId.make(`activity-${sequence}`),
+        tone: "tool" as const,
+        kind: "command",
+        summary: `Ran command ${sequence}`,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        sequence,
+        createdAt: "2026-04-01T11:00:00.000Z",
+      }));
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: existingActivities },
+        {
+          ...baseEventFields,
+          sequence: 14,
+          occurredAt: "2026-04-01T11:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("activity-2"),
+              tone: "tool",
+              kind: "command",
+              summary: "Ran command 2",
+              payload: {},
+              turnId: TurnId.make("turn-1"),
+              sequence: 2,
+              createdAt: "2026-04-01T11:00:00.000Z",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities.map((activity) => activity.sequence)).toEqual([0, 1, 2, 3]);
+      }
+    });
+
+    it("replaces a redelivered activity instead of duplicating it", () => {
+      const existingActivities = [0, 1].map((sequence) => ({
+        id: EventId.make(`activity-${sequence}`),
+        tone: "tool" as const,
+        kind: "command",
+        summary: `Ran command ${sequence}`,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        sequence,
+        createdAt: "2026-04-01T11:00:00.000Z",
+      }));
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: existingActivities },
+        {
+          ...baseEventFields,
+          sequence: 15,
+          occurredAt: "2026-04-01T11:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("activity-1"),
+              tone: "tool",
+              kind: "command",
+              summary: "Ran command 1 (resent)",
+              payload: {},
+              turnId: TurnId.make("turn-1"),
+              sequence: 1,
+              createdAt: "2026-04-01T11:00:00.000Z",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities).toHaveLength(2);
+        expect(result.thread.activities[1]?.summary).toBe("Ran command 1 (resent)");
+      }
+    });
   });
 
   describe("thread.turn-diff-completed", () => {
@@ -753,6 +857,135 @@ describe("applyThreadDetailEvent", () => {
         },
       } as any);
       expect(result.kind).toBe("unchanged");
+    });
+  });
+
+  describe("thread.messages-resynced", () => {
+    const message = (id: string, text: string, createdAt: string) => ({
+      id: MessageId.make(id),
+      role: "assistant" as const,
+      text,
+      turnId: null,
+      streaming: false,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    const threadWith = (ids: ReadonlyArray<string>): OrchestrationThread => ({
+      ...baseThread,
+      messages: ids.map((id) => message(id, `text ${id}`, "2026-04-01T00:00:00.000Z")),
+    });
+    const resync = (
+      thread: OrchestrationThread,
+      afterMessageId: string | null,
+      tail: ReadonlyArray<{ id: string; text: string }>,
+    ) =>
+      applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 10,
+        occurredAt: "2026-04-02T00:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          afterMessageId: afterMessageId === null ? null : MessageId.make(afterMessageId),
+          messages: tail.map((entry) => message(entry.id, entry.text, "2026-04-02T00:00:00.000Z")),
+          reason: "grok-backfill",
+        },
+      } as any);
+
+    it("rewinds to the anchor and replaces only the tail after it", () => {
+      const result = resync(threadWith(["a", "b", "c", "d"]), "b", [
+        { id: "x", text: "new x" },
+        { id: "y", text: "new y" },
+      ]);
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      // a,b kept untouched; c,d replaced by the authoritative tail.
+      expect(result.thread.messages.map((m) => m.id)).toEqual(["a", "b", "x", "y"]);
+      expect(result.thread.messages[0]?.text).toBe("text a");
+      expect(result.thread.messages[2]?.text).toBe("new x");
+    });
+
+    it("replaces the whole transcript when there is no anchor", () => {
+      const result = resync(threadWith(["a", "b"]), null, [{ id: "x", text: "new x" }]);
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.messages.map((m) => m.id)).toEqual(["x"]);
+    });
+
+    it("requires a reload when the anchor is not in the cached transcript", () => {
+      // The client's cache predates the rewind point, so it cannot splice
+      // precisely — it must reload rather than render a wrong transcript.
+      const result = resync(threadWith(["a", "b"]), "unknown-anchor", [{ id: "x", text: "new x" }]);
+      expect(result.kind).toBe("reload-required");
+    });
+
+    it("is idempotent: re-applying the same resync changes nothing", () => {
+      const first = resync(threadWith(["a", "b", "c"]), "b", [{ id: "x", text: "new x" }]);
+      expect(first.kind).toBe("updated");
+      if (first.kind !== "updated") return;
+      const second = resync(first.thread, "b", [{ id: "x", text: "new x" }]);
+      expect(second.kind).toBe("updated");
+      if (second.kind !== "updated") return;
+      expect(second.thread.messages.map((m) => m.id)).toEqual(["a", "b", "x"]);
+    });
+  });
+
+  describe("liveWindowOldestActivityId", () => {
+    it("returns null for an empty window", () => {
+      expect(liveWindowOldestActivityId([])).toBeNull();
+    });
+
+    it("returns the chronologically-oldest id regardless of array position", () => {
+      // Reducer order places the unsequenced legacy row (oldest) LAST while the
+      // server snapshot would list it first; the helper picks it either way.
+      const window = [
+        activity("seq-1", "2026-04-01T10:00:01.000Z", 1),
+        activity("seq-2", "2026-04-01T10:00:02.000Z", 2),
+        activity("legacy", "2026-04-01T09:00:00.000Z"),
+      ];
+      expect(liveWindowOldestActivityId(window)).toBe("legacy");
+    });
+
+    it("breaks createdAt ties by id", () => {
+      const window = [
+        activity("b", "2026-04-01T10:00:00.000Z", 2),
+        activity("a", "2026-04-01T10:00:00.000Z", 1),
+      ];
+      expect(liveWindowOldestActivityId(window)).toBe("a");
+    });
+
+    it("is stable when a newer activity is appended (no false reshape)", () => {
+      const before = [
+        activity("legacy", "2026-04-01T09:00:00.000Z"),
+        activity("seq-1", "2026-04-01T10:00:01.000Z", 1),
+      ];
+      // A live append is the newest activity and is unsequenced in the payload;
+      // it must not change the detected oldest boundary.
+      const after = [...before, activity("appended", "2026-04-01T11:00:00.000Z")];
+      expect(liveWindowOldestActivityId(after)).toBe(liveWindowOldestActivityId(before));
+      expect(liveWindowOldestActivityId(after)).toBe("legacy");
+    });
+  });
+
+  describe("oldestActivityByChronology", () => {
+    it("returns null for an empty set", () => {
+      expect(oldestActivityByChronology([])).toBeNull();
+    });
+
+    it("returns the unsequenced legacy row so the pagination cursor agrees with the sentinel", () => {
+      // The reducer placed the legacy (unsequenced, oldest) row at the END; paging
+      // must cursor from it (createdAt cursor), not from index 0's sequenced row.
+      const merged = [
+        activity("seq-5", "2026-04-01T10:00:05.000Z", 5),
+        activity("seq-6", "2026-04-01T10:00:06.000Z", 6),
+        activity("legacy", "2026-04-01T09:00:00.000Z"),
+      ];
+      const oldest = oldestActivityByChronology(merged);
+      expect(oldest?.id).toBe("legacy");
+      expect(oldest?.sequence).toBeUndefined(); // → drives the unsequenced cursor
+      expect(liveWindowOldestActivityId(merged)).toBe(oldest?.id); // sentinel agrees
     });
   });
 });
