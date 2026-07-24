@@ -471,7 +471,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       // The mock emits this trailing chunk after the xAI prompt-complete
       // notification, so it is a deterministic boundary for "prompt success".
-      yield* Deferred.await(trailingContentDelta);
+      yield* Deferred.await(trailingContentDelta).pipe(Effect.timeout("10 seconds"));
       yield* Fiber.interrupt(sendTurnFiber);
       for (let yieldAttempt = 0; yieldAttempt < 4; yieldAttempt += 1) {
         yield* Effect.yieldNow;
