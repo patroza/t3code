@@ -64,12 +64,33 @@ export default mergeConfig(
       },
     },
     test: {
-      // Keep enough parallelism to avoid serializing the entire server suite while
-      // capping load from sqlite, git, temp-worktree, and orchestration tests.
-      // Isolate a demonstrably conflicting suite instead of forcing every file
-      // through one worker.
       fileParallelism: true,
       maxWorkers: 4,
+      projects: [
+        {
+          test: {
+            name: "server",
+            isolate: false,
+            include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
+            exclude: [
+              "src/bootstrap.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-module-mocks",
+            isolate: true,
+            include: [
+              "src/bootstrap.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+            ],
+          },
+        },
+      ],
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
