@@ -12,7 +12,15 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import { splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
+import {
+  DirenvEnvironment,
+  identityDirenvEnvironmentResolver,
+} from "../provider/DirenvEnvironment.ts";
+import {
+  makeGitVcsDriverCore,
+  redactGitOutput,
+  splitNullSeparatedGitStdoutPaths,
+} from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -88,6 +96,7 @@ const initRepoWithCommit = (
     yield* driver.initRepo({ cwd });
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
     yield* git(cwd, ["config", "user.name", "Test"]);
+    yield* git(cwd, ["config", "commit.gpgSign", "false"]);
     yield* writeTextFile(cwd, "README.md", "# test\n");
     yield* git(cwd, ["add", "."]);
     yield* git(cwd, ["commit", "-m", "initial commit"]);
@@ -671,8 +680,19 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           "feature-worktree",
         );
         const driver = yield* GitVcsDriver.GitVcsDriver;
+        const approvedWorktrees: Array<string> = [];
+        const driverWithApprovalSpy = yield* makeGitVcsDriverCore().pipe(
+          Effect.provide(ServerConfigLayer),
+          Effect.provideService(DirenvEnvironment, {
+            allow: ({ cwd }) =>
+              Effect.sync(() => {
+                approvedWorktrees.push(cwd);
+              }),
+            resolve: identityDirenvEnvironmentResolver,
+          }),
+        );
 
-        const created = yield* driver.createWorktree({
+        const created = yield* driverWithApprovalSpy.createWorktree({
           cwd,
           path: worktreePath,
           refName: initialBranch,
@@ -682,6 +702,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
+        assert.deepStrictEqual(approvedWorktrees, [worktreePath]);
 
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
@@ -784,6 +805,76 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
         const status = yield* git(cwd, ["status", "--porcelain"]);
         assert.include(status, "?? selected1.txt");
+      }),
+    );
+
+    it("recognizes representative GPG, pinentry, and SSH signing diagnostics", () => {
+      assert.isTrue(isCommitSigningFailureStderr("error: gpg failed to sign the data"));
+      assert.isTrue(
+        isCommitSigningFailureStderr(
+          "gpg: signing failed: Inappropriate ioctl for device\nfatal: failed to write commit object",
+        ),
+      );
+      assert.isTrue(isCommitSigningFailureStderr("error: ssh-keygen failed to sign the data"));
+      assert.isTrue(
+        isCommitSigningFailureStderr(
+          "error: Couldn't load public key /tmp/missing.pub: No such file or directory",
+        ),
+      );
+      assert.isFalse(isCommitSigningFailureStderr("fatal: failed to write commit object"));
+    });
+
+    it.effect("classifies signing failures and can commit unsigned for one attempt", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const signerPath = pathService.join(cwd, "failing-signer.sh");
+        yield* fileSystem.writeFileString(
+          signerPath,
+          "#!/bin/sh\necho 'gpg: signing failed: No secret key' >&2\nexit 1\n",
+        );
+        yield* fileSystem.chmod(signerPath, 0o755);
+        yield* git(cwd, ["config", "commit.gpgSign", "true"]);
+        yield* git(cwd, ["config", "gpg.format", "openpgp"]);
+        yield* git(cwd, ["config", "gpg.program", signerPath]);
+        yield* writeTextFile(cwd, "signed.txt", "sign me\n");
+        yield* git(cwd, ["add", "signed.txt"]);
+
+        const error = yield* driver.commit(cwd, "Signed commit", "").pipe(Effect.flip);
+        assert.equal(error.failureKind, "commit_signing_failed");
+        assert.notProperty(error, "stderr");
+
+        const commit = yield* driver.commit(cwd, "Unsigned commit", "", {
+          disableSigning: true,
+        });
+        assert.match(commit.commitSha, /^[a-f0-9]{40}$/);
+        assert.equal(yield* git(cwd, ["log", "-1", "--pretty=%s"]), "Unsigned commit");
+        assert.notInclude(yield* git(cwd, ["cat-file", "commit", "HEAD"]), "gpgsig ");
+        assert.equal(yield* git(cwd, ["config", "--bool", "commit.gpgSign"]), "true");
+      }),
+    );
+
+    it.effect("does not classify a failed commit hook as a signing failure", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const hookPath = pathService.join(cwd, ".git", "hooks", "pre-commit");
+        yield* fileSystem.writeFileString(
+          hookPath,
+          "#!/bin/sh\necho 'error: gpg failed to sign the data' >&2\nexit 1\n",
+        );
+        yield* fileSystem.chmod(hookPath, 0o755);
+        yield* writeTextFile(cwd, "hooked.txt", "fail first\n");
+        yield* git(cwd, ["add", "hooked.txt"]);
+
+        const error = yield* driver.commit(cwd, "Hook failure", "").pipe(Effect.flip);
+        assert.equal(error.failureKind, "unknown");
       }),
     );
   });
