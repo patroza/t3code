@@ -47,6 +47,10 @@ jobs:
     env:
       APP_VARIANT: production
       NODE_OPTIONS: --max-old-space-size=8192
+      T3CODE_MOBILE_EAS_PROJECT_ID: ${{ vars.T3CODE_MOBILE_EAS_PROJECT_ID }}
+      T3CODE_MOBILE_EXPO_OWNER: ${{ vars.T3CODE_MOBILE_EXPO_OWNER }}
+      T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
+      T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
     steps:
       - id: expo-token
         name: Check for EXPO_TOKEN
