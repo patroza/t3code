@@ -22,7 +22,10 @@ export default defineConfig({
   },
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+    // `--no-error-on-unmatched-pattern`: a commit whose staged files are all
+    // unformattable (e.g. only *.nix) leaves `vp fmt` with no targets, which
+    // otherwise fails the whole pre-commit. Treat "nothing to format" as a no-op.
+    "*": "vp fmt --no-error-on-unmatched-pattern",
   },
   fmt: {
     ignorePatterns: [
@@ -80,6 +83,7 @@ export default defineConfig({
       "oxc/no-map-spread": "off",
       "react-in-jsx-scope": "off",
       "react-hooks/exhaustive-deps": "off",
+      "react/no-unstable-nested-components": ["warn", { allowAsProps: true }],
       "eslint/no-shadow": "off",
       "eslint/no-await-in-loop": "off",
       "eslint/no-underscore-dangle": "off",

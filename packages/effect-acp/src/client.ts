@@ -110,6 +110,13 @@ export class AcpClient extends Context.Service<
         payload: AcpSchema.SetSessionModelRequest,
       ) => Effect.Effect<AcpSchema.SetSessionModelResponse, AcpError.AcpError>;
       /**
+       * Selects the active session mode.
+       * @see https://agentclientprotocol.com/protocol/schema#session/set_mode
+       */
+      readonly setSessionMode: (
+        payload: AcpSchema.SetSessionModeRequest,
+      ) => Effect.Effect<AcpSchema.SetSessionModeResponse, AcpError.AcpError>;
+      /**
        * Updates a session configuration option.
        * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
        */
@@ -481,6 +488,8 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
         callRpc(AGENT_METHODS.session_close, rpc[AGENT_METHODS.session_close](payload)),
       setSessionModel: (payload) =>
         callRpc(AGENT_METHODS.session_set_model, rpc[AGENT_METHODS.session_set_model](payload)),
+      setSessionMode: (payload) =>
+        callRpc(AGENT_METHODS.session_set_mode, rpc[AGENT_METHODS.session_set_mode](payload)),
       setSessionConfigOption: (payload) =>
         callRpc(
           AGENT_METHODS.session_set_config_option,
@@ -580,5 +589,16 @@ export const layerChildProcess = (
 ): Layer.Layer<AcpClient> => {
   const stdio = makeChildStdio(handle);
   const terminationError = makeTerminationError(handle);
-  return Layer.effect(AcpClient, make(stdio, options, terminationError));
+  return Layer.effect(
+    AcpClient,
+    Effect.gen(function* () {
+      const decoder = new TextDecoder();
+      yield* Stream.runForEach(handle.stderr, (chunk) =>
+        Effect.sync(() => {
+          process.stderr.write(`[acp-child-stderr] ${decoder.decode(chunk, { stream: true })}`);
+        }),
+      ).pipe(Effect.ignore, Effect.forkScoped);
+      return yield* make(stdio, options, terminationError);
+    }),
+  );
 };
