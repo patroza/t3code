@@ -55,13 +55,12 @@ type MessageEntry = {
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    sessionCreateCalls: [] as Array<{ baseUrl: string; input: unknown }>,
     connectCalls: [] as Array<{
       serverUrl?: string | null;
       environment?: NodeJS.ProcessEnv;
       cwd?: string;
     }>,
-    sessionCreateUrls: [] as string[],
-    sessionCreateInputs: [] as Array<Record<string, unknown>>,
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as Array<{ sessionID: string; directory?: string }>,
     closeCalls: [] as string[],
@@ -76,9 +75,8 @@ const runtimeMock = {
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.sessionCreateCalls.length = 0;
     this.state.connectCalls.length = 0;
-    this.state.sessionCreateUrls.length = 0;
-    this.state.sessionCreateInputs.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
     this.state.closeCalls.length = 0;

@@ -598,8 +598,18 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
             threadId: input.threadId,
             cwd,
             environment: options?.environment ?? process.env,
-          });
-          const cursorModelSelection =
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterProcessError({
+                  provider: definition.provider,
+                  threadId: input.threadId,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+          const providerModelSelection =
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
@@ -635,61 +645,38 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
             : initialSettings;
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-          const acp = yield* makeCursorAcpRuntime({
-            cursorSettings: effectiveCursorSettings,
-            environment,
-            childProcessSpawner,
-            cwd,
-            ...(resumeSessionId ? { resumeSessionId } : {}),
-            clientInfo: { name: "t3-code", version: "0.0.0" },
-            ...(mcpSession
-              ? {
-                  mcpServers: [
-                    {
-                      type: "http" as const,
-                      name: "t3-code",
-                      url: mcpSession.endpoint,
-                      headers: [
-                        {
-                          name: "Authorization",
-                          value: mcpSession.authorizationHeader,
-                        },
-                      ],
-                    },
-                  ],
-                }
-              : {}),
-            ...acpNativeLoggers,
-          }).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.provideService(Scope.Scope, sessionScope),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterProcessError({
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  detail: cause.message,
-                  cause,
-                }),
-            ),
-          );
-          const started = yield* Effect.gen(function* () {
-            yield* acp.handleExtRequest("cursor/ask_question", CursorAskQuestionRequest, (params) =>
-              mapExtensionFailure(
-                Effect.gen(function* () {
-                  yield* logNative(
-                    input.threadId,
-                    "cursor/ask_question",
-                    params,
-                    "acp.cursor.extension",
-                  );
-                  const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
-                  const runtimeRequestId = RuntimeRequestId.make(requestId);
-                  const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-                  pendingUserInputs.set(requestId, { answers });
-                  yield* offerRuntimeEvent({
-                    type: "user-input.requested",
-                    ...(yield* makeEventStamp()),
+          const acp = yield* definition
+            .makeRuntime(effectiveSettings, {
+              environment,
+              childProcessSpawner,
+              cwd,
+              ...(resumeSessionId ? { resumeSessionId } : {}),
+              clientInfo: { name: "t3-code", version: "0.0.0" },
+              ...(mcpSession
+                ? {
+                    mcpServers: [
+                      {
+                        type: "http" as const,
+                        name: "t3-code",
+                        url: mcpSession.endpoint,
+                        headers: [
+                          {
+                            name: "Authorization",
+                            value: mcpSession.authorizationHeader,
+                          },
+                        ],
+                      },
+                    ],
+                  }
+                : {}),
+              ...acpNativeLoggers,
+            })
+            .pipe(
+              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(Scope.Scope, sessionScope),
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterProcessError({
                     provider: PROVIDER,
                     threadId: input.threadId,
                     detail: cause.message,

@@ -151,6 +151,37 @@ function toRuntimePayloadFromSession(
   };
 }
 
+function readPersistedModelSelection(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): ModelSelection | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
+  return isModelSelection(raw) ? raw : undefined;
+}
+
+function readPersistedCwd(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): string | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
+  if (typeof rawCwd !== "string") return undefined;
+  const trimmed = rawCwd.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeProviderCwd(cwd: string): string {
+  const trimmed = cwd.trim();
+  return trimmed.length > 1 ? trimmed.replace(/[\\/]+$/, "") : trimmed;
+}
+
+function providerCwdMatches(actual: string | undefined, expected: string | undefined): boolean {
+  if (expected === undefined) return true;
+  return actual !== undefined && normalizeProviderCwd(actual) === normalizeProviderCwd(expected);
+}
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
