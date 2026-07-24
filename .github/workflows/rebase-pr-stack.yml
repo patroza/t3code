@@ -29,12 +29,22 @@ jobs:
         with:
           ref: fork/changes
           fetch-depth: 1
-          ssh-key: ${{ secrets.FORK_STACK_DEPLOY_KEY }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
+
+      - name: Configure protected stack push key
+        env:
+          FORK_STACK_DEPLOY_KEY: ${{ secrets.FORK_STACK_DEPLOY_KEY }}
+        run: |
+          key_path="${RUNNER_TEMP}/fork-stack-deploy-key"
+          printf '%s\n' "${FORK_STACK_DEPLOY_KEY}" > "${key_path}"
+          chmod 600 "${key_path}"
+          ssh-keyscan -H github.com >> "${RUNNER_TEMP}/github-known-hosts"
+          echo "GIT_SSH_COMMAND=ssh -i ${key_path} -o IdentitiesOnly=yes -o UserKnownHostsFile=${RUNNER_TEMP}/github-known-hosts" >> "${GITHUB_ENV}"
+          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
 
       - name: Add upstream remote
         run: git remote add upstream https://github.com/pingdotgg/t3code.git
