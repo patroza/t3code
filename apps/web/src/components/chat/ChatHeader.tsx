@@ -63,7 +63,11 @@ export function shouldShowOpenInPicker(input: {
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
 }): boolean {
-  return Boolean(input.activeProjectName);
+  return (
+    Boolean(input.activeProjectName) &&
+    input.primaryEnvironmentId !== null &&
+    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+  );
 }
 
 function encodeRemotePath(path: string): string {
@@ -139,7 +143,7 @@ export const ChatHeader = memo(function ChatHeader({
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName,
     activeThreadEnvironmentId,
-    primaryEnvironmentId: null,
+    primaryEnvironmentId,
   });
   const remoteVscodeTarget = useMemo(
     () =>

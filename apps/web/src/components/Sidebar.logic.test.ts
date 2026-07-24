@@ -4,6 +4,7 @@ import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   buildSidebarV2ThreadContextMenuItems,
+  buildThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   formatWorktreeGroupLabel,
   getSidebarThreadIdsToPrewarm,
@@ -27,7 +28,6 @@ import {
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarV2Status,
-  resolveSidebarV2TopStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   formatWorkingDurationLabel,
@@ -1066,21 +1066,6 @@ describe("resolveSidebarV2Status", () => {
 
   it("defaults to ready with no session", () => {
     expect(resolveSidebarV2Status({ ...idle, session: null })).toBe("ready");
-  });
-});
-
-describe("resolveSidebarV2TopStatus", () => {
-  it("labels ready threads Done only when they carry an unread completion", () => {
-    expect(resolveSidebarV2TopStatus({ status: "ready", isUnread: true })).toMatchObject({
-      label: "Done",
-      icon: "done",
-    });
-    expect(resolveSidebarV2TopStatus({ status: "ready", isUnread: false })).toBeNull();
-    // Unread only matters for ready threads; active statuses keep their label.
-    expect(resolveSidebarV2TopStatus({ status: "working", isUnread: true })).toMatchObject({
-      label: "Working",
-      icon: "working",
-    });
   });
 });
 

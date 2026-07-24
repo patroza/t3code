@@ -1315,6 +1315,9 @@ function ChatViewContent(props: ChatViewProps) {
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
   ] = useState<Record<string, boolean>>({});
+  const [pendingWorktreeThreadIds, setPendingWorktreeThreadIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [
     pendingServerThreadReuseBaseBranchByThreadId,
     setPendingServerThreadReuseBaseBranchByThreadId,
@@ -2490,8 +2493,7 @@ function ChatViewContent(props: ChatViewProps) {
         }),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const activeServerConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const availableEditors = activeServerConfig?.availableEditors ?? [];
+  const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -4952,51 +4954,43 @@ function ChatViewContent(props: ChatViewProps) {
         failure = turnAttachmentsResult;
       }
 
-    const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
-    if (failure === null && turnAttachmentsResult._tag === "Failure") {
-      failure = turnAttachmentsResult;
-    }
-
-    let turnStartSucceeded = false;
-    if (failure === null && turnAttachmentsResult._tag === "Success") {
-      const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
-          ? {
-              ...(isLocalDraftThread
-                ? {
-                    createThread: {
-                      projectId: activeProject.id,
-                      title,
-                      modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
-                      createdAt: activeThread.createdAt,
-                    },
-                  }
-                : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      ...(reuseBaseBranch
-                        ? { reuseBaseBranch: true }
-                        : {
-                            branch: buildTemporaryWorktreeBranchName(randomHex),
-                            ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                          }),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
-            }
-          : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
-      const startResult = await startThreadTurn({
-        environmentId,
-        input: {
+      if (failure === null && turnAttachmentsResult._tag === "Success") {
+        const bootstrap =
+          isLocalDraftThread || baseBranchForWorktree
+            ? {
+                ...(isLocalDraftThread
+                  ? {
+                      createThread: {
+                        projectId: activeProject.id,
+                        title,
+                        modelSelection: threadCreateModelSelection,
+                        runtimeMode,
+                        interactionMode,
+                        branch: activeThreadBranch,
+                        worktreePath: activeThread.worktreePath,
+                        createdAt: activeThread.createdAt,
+                      },
+                    }
+                  : {}),
+                ...(baseBranchForWorktree
+                  ? {
+                      prepareWorktree: {
+                        projectCwd: activeProject.workspaceRoot,
+                        baseBranch: baseBranchForWorktree,
+                        ...(reuseBaseBranch
+                          ? { reuseBaseBranch: true }
+                          : {
+                              branch: buildTemporaryWorktreeBranchName(randomHex),
+                              ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                            }),
+                      },
+                      runSetupScript: true,
+                    }
+                  : {}),
+              }
+            : undefined;
+        const queuedTurnInput = {
+          commandId: newCommandId(),
           threadId: threadIdForSend,
           message: {
             messageId: messageIdForSend,
@@ -5749,7 +5743,9 @@ function ChatViewContent(props: ChatViewProps) {
             newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
           }),
           reuseBaseBranch: false,
-          ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
+          ...(target !== "current-worktree" && draftThread?.worktreePath
+            ? { worktreePath: null }
+            : {}),
         });
       }
       scheduleComposerFocus();
@@ -6232,9 +6228,11 @@ function ChatViewContent(props: ChatViewProps) {
                                 onStartFromOriginChange={onStartFromOriginChange}
                                 reuseBaseBranch={reuseBaseBranch}
                                 onReuseBaseBranchChange={onReuseBaseBranchChange}
-                                {...(canOverrideServerThreadEnvMode
-                                  ? { effectiveEnvModeOverride: envMode }
-                                  : {})}
+                                {...(isPreparingWorktreeUi
+                                  ? { effectiveEnvModeOverride: "worktree" as const }
+                                  : canOverrideServerThreadEnvMode
+                                    ? { effectiveEnvModeOverride: envMode }
+                                    : {})}
                                 {...(canOverrideServerThreadEnvMode
                                   ? {
                                       activeThreadBranchOverride: activeThreadBranch,
