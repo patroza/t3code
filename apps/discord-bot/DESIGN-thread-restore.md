@@ -1,7 +1,7 @@
 # Discord bot: restore thread bridges after restart
 
-**Status:** implemented (boot + T3 reconnect rehydrate)  
-**Branch context:** Discord bot restore bridges on start  
+**Status:** implemented (boot + T3 reconnect rehydrate)
+**Branch context:** Discord bot restore bridges on start
 **Non-goals for implementers:** do not deploy/restart microVM or host services as part of this design work unless explicitly asked later.
 
 ## Problem
@@ -78,8 +78,8 @@ main.ts boot / T3 reconnect
                 → finalize (delete stored openStreamMessageIds, post final + transcript)
 ```
 
-**Link** = durable mapping.  
-**Bridge** = live fiber + ephemeral Discord stream state.  
+**Link** = durable mapping.
+**Bridge** = live fiber + ephemeral Discord stream state.
 Boot/reconnect turns links → bridges for the selected subset only.
 
 ---
@@ -164,7 +164,7 @@ For each `status === active` link:
    - pending user-input request(s)
 4. Exclude idle completed threads (they restore **lazily** on next `@mention` via existing link lookup).
 
-Sort included candidates by `lastActivityAt` **descending**.  
+Sort included candidates by `lastActivityAt` **descending**.
 Take first **50**. Log dropped count.
 
 ---

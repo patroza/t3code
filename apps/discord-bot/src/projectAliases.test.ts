@@ -67,6 +67,8 @@ describe("loadProjectAliasesFromFileSync", () => {
     const yamlPath = NodePath.join(dir, "aliases.yaml");
     await NodeFSP.writeFile(yamlPath, "example-project: /tmp/example-project\n", "utf8");
     const aliases = loadProjectAliasesFromFileSync(yamlPath);
-    expect(aliases).toEqual([{ shortName: "example-project", workspaceRoot: "/tmp/example-project" }]);
+    expect(aliases).toEqual([
+      { shortName: "example-project", workspaceRoot: "/tmp/example-project" },
+    ]);
   });
 });
