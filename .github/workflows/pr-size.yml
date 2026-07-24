@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
+concurrency:
+  group: pr-size-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

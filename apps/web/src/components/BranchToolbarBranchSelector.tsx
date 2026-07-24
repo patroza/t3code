@@ -599,11 +599,7 @@ export function BranchToolbarBranchSelector({
   });
 
   // PR pill shown next to the branch selector when the active branch has one.
-  const branchPr = resolveThreadPr({
-    threadBranch: resolvedActiveBranch,
-    gitStatus: branchStatusQuery.data ?? null,
-    hasDedicatedWorktree: activeWorktreePath !== null,
-  });
+  const branchPr = resolveThreadPr(resolvedActiveBranch, branchStatusQuery.data ?? null);
   const branchPrStatus = prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
   // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
   // state-description tooltip.
@@ -731,14 +727,16 @@ export function BranchToolbarBranchSelector({
             <TooltipPopup side="top">{branchPrTooltip}</TooltipPopup>
           </Tooltip>
         ) : null}
-        <ComboboxTrigger
-          render={<Button variant="ghost" size="xs" />}
-          className="min-w-0 shrink text-muted-foreground/70 hover:text-foreground/80"
-          disabled={isInitialBranchesLoadPending || isBranchActionPending}
+        {/* Context menu lives on the wrapper: the disabled Button has
+            pointer-events-none, so the trigger itself never sees right-clicks
+            while refs are loading or a branch action is pending. */}
+        <span
+          className="flex min-w-0"
+          onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
         >
           <ComboboxTrigger
             render={<Button variant="ghost" size="xs" />}
-            className="min-w-0 max-w-full text-muted-foreground/70 hover:text-foreground/80"
+            className="min-w-0 max-w-full shrink text-muted-foreground/70 hover:text-foreground/80"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
           >
             <GitBranchIcon className="size-3 shrink-0 opacity-70" />

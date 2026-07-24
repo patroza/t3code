@@ -64,6 +64,7 @@ export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
 ) {
   const scheduler = createAtomCommandScheduler();
+  const urgentScheduler = createAtomCommandScheduler();
   const concurrency = {
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: { threadId: string } }) =>
@@ -145,7 +146,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     interruptTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:interrupt-turn",
       execute: (input: InterruptThreadTurnInput) => interruptThreadTurn(input),
-      scheduler,
+      scheduler: urgentScheduler,
       concurrency,
     }),
     respondToApproval: createEnvironmentCommand(runtime, {
@@ -169,7 +170,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
-      scheduler,
+      scheduler: urgentScheduler,
       concurrency,
     }),
   };

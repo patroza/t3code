@@ -70,6 +70,7 @@ import {
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
+import { isLocalMarkdownImageSrc, normalizeLocalMarkdownImageSrc } from "../markdown-images";
 import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -88,6 +89,8 @@ import {
   openUrlInPreview,
   BrowserPreviewUnavailableError,
 } from "../browser/openFileInPreview";
+import { resolveDiscoveredServerUrl } from "../browser/browserTargetResolver";
+import { useAssetUrl } from "../assets/assetUrls";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -859,6 +862,60 @@ const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: 
   );
 });
 
+const MARKDOWN_IMAGE_CLASS_NAME =
+  "my-2 max-h-[28rem] max-w-full rounded-md border border-border/60 object-contain bg-muted/20";
+
+/**
+ * Resolve host-absolute markdown images (e.g. Codex generated_images paths) through
+ * the assets API. Absolute paths outside the project root are already supported by
+ * AssetAccess when issued as workspace-file resources.
+ */
+const MarkdownWorkspaceImage = memo(function MarkdownWorkspaceImage({
+  src,
+  alt,
+  threadRef,
+  className,
+  ...props
+}: {
+  src: string;
+  alt?: string | undefined;
+  threadRef: ScopedThreadRef;
+  className?: string | undefined;
+} & Omit<React.ComponentProps<"img">, "src" | "alt" | "className">) {
+  const localPath = normalizeLocalMarkdownImageSrc(src);
+  const assetUrl = useAssetUrl(threadRef.environmentId, {
+    _tag: "workspace-file",
+    threadId: threadRef.threadId,
+    path: localPath,
+  });
+  const [failed, setFailed] = useState(false);
+
+  if (failed || assetUrl === null) {
+    return (
+      <span
+        className="my-2 inline-flex max-w-full items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground"
+        title={localPath}
+      >
+        <span aria-hidden>🖼</span>
+        <span className="min-w-0 truncate">
+          {alt?.trim() || localPath.split(/[/\\]/).at(-1) || "Image"}
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <img
+      {...props}
+      src={assetUrl}
+      alt={alt ?? ""}
+      loading="lazy"
+      className={cn(MARKDOWN_IMAGE_CLASS_NAME, className)}
+      onError={() => setFailed(true)}
+    />
+  );
+});
+
 function leadingExternalLinkTextLength(text: string): number {
   const protocol = /^(?:https?:\/\/)/i.exec(text)?.[0];
   if (protocol) return protocol.length;
@@ -1285,9 +1342,20 @@ function ChatMarkdown({
     const filePaths = [...markdownFileLinkMetaByHref.values()].map((meta) => meta.filePath);
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [markdownFileLinkMetaByHref]);
-  const markdownUrlTransform = useCallback((href: string) => {
-    return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
-  }, []);
+  const markdownUrlTransform = useCallback(
+    (href: string) => {
+      const fileHref = rewriteMarkdownFileUriHref(href);
+      if (fileHref) return fileHref;
+      // Keep host-absolute image paths intact so the img component can resolve them via assets.
+      if (isLocalMarkdownImageSrc(href)) {
+        return normalizeLocalMarkdownImageSrc(href);
+      }
+      const safeHref = defaultUrlTransform(href);
+      if (!threadRef || !/^https?:\/\//i.test(safeHref)) return safeHref;
+      return resolveDiscoveredServerUrl(threadRef.environmentId, safeHref);
+    },
+    [threadRef],
+  );
   // Re-emit highlighted content as markdown so copying out of the rendered
   // view keeps links, emphasis, lists, and code fences intact.
   const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -1341,6 +1409,30 @@ function ChatMarkdown({
   );
   const markdownComponents = useMemo<Components>(
     () => ({
+      img({ node: _node, src, alt, className, ...props }) {
+        const srcValue = typeof src === "string" ? src : undefined;
+        if (srcValue && isLocalMarkdownImageSrc(srcValue) && threadRef) {
+          return (
+            <MarkdownWorkspaceImage
+              src={srcValue}
+              alt={alt}
+              threadRef={threadRef}
+              className={typeof className === "string" ? className : undefined}
+              {...props}
+            />
+          );
+        }
+        if (!srcValue) return null;
+        return (
+          <img
+            {...props}
+            src={srcValue}
+            alt={alt ?? ""}
+            loading="lazy"
+            className={cn(MARKDOWN_IMAGE_CLASS_NAME, className)}
+          />
+        );
+      },
       p({ node: _node, children, ...props }) {
         return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
       },
