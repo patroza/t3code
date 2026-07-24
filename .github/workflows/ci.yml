@@ -102,6 +102,9 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
       - name: Test macOS Open With integration
         run: vp test run apps/desktop/src/shell/DesktopOpenWith.test.ts
 

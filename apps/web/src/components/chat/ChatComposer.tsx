@@ -2765,25 +2765,33 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           composerEditorRef.current?.focusAt(nextCollapsedCursor);
         });
       },
-      getSendContext: () => ({
-        prompt: promptRef.current,
-        images: composerImagesRef.current,
-        terminalContexts: composerTerminalContextsRef.current,
-        elementContexts: composerElementContextsRef.current,
-        previewAnnotations: composerPreviewAnnotations,
-        reviewComments: composerReviewComments,
-        selectedPromptEffort,
-        selectedModelOptionsForDispatch,
-        selectedModelSelection,
-        providerAvailable: !noProviderAvailable,
-        selectedProvider,
-        selectedModel,
-        selectedProviderModels,
-      }),
+      getSendContext: () => {
+        // Store writes from the native file picker are synchronous, while the
+        // effect that mirrors them into refs runs after React commits. Read the
+        // store at submit time so a quick tap after closing iOS' picker cannot
+        // send the previous attachment list.
+        const latestDraft = getComposerDraft(composerDraftTarget);
+        return {
+          prompt: promptRef.current,
+          images: latestDraft?.images ?? composerImagesRef.current,
+          terminalContexts: latestDraft?.terminalContexts ?? composerTerminalContextsRef.current,
+          elementContexts: latestDraft?.elementContexts ?? composerElementContextsRef.current,
+          previewAnnotations: latestDraft?.previewAnnotations ?? composerPreviewAnnotations,
+          reviewComments: latestDraft?.reviewComments ?? composerReviewComments,
+          selectedPromptEffort,
+          selectedModelOptionsForDispatch,
+          selectedModelSelection,
+          providerAvailable: !noProviderAvailable,
+          selectedProvider,
+          selectedModel,
+          selectedProviderModels,
+        };
+      },
     }),
     [
       activeThread,
       composerDraftTarget,
+      getComposerDraft,
       composerCursor,
       composerTerminalContexts,
       insertComposerDraftTerminalContext,
