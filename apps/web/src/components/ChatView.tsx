@@ -1321,6 +1321,9 @@ function ChatViewContent(props: ChatViewProps) {
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
   ] = useState<Record<string, boolean>>({});
+  const [pendingWorktreeThreadIds, setPendingWorktreeThreadIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [
     pendingServerThreadReuseBaseBranchByThreadId,
     setPendingServerThreadReuseBaseBranchByThreadId,
@@ -2558,8 +2561,7 @@ function ChatViewContent(props: ChatViewProps) {
         }),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const activeServerConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const availableEditors = activeServerConfig?.availableEditors ?? [];
+  const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -5750,7 +5752,9 @@ function ChatViewContent(props: ChatViewProps) {
             newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
           }),
           reuseBaseBranch: false,
-          ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
+          ...(target !== "current-worktree" && draftThread?.worktreePath
+            ? { worktreePath: null }
+            : {}),
         });
       }
       scheduleComposerFocus();
@@ -6220,9 +6224,11 @@ function ChatViewContent(props: ChatViewProps) {
                                 onStartFromOriginChange={onStartFromOriginChange}
                                 reuseBaseBranch={reuseBaseBranch}
                                 onReuseBaseBranchChange={onReuseBaseBranchChange}
-                                {...(canOverrideServerThreadEnvMode
-                                  ? { effectiveEnvModeOverride: envMode }
-                                  : {})}
+                                {...(isPreparingWorktreeUi
+                                  ? { effectiveEnvModeOverride: "worktree" as const }
+                                  : canOverrideServerThreadEnvMode
+                                    ? { effectiveEnvModeOverride: envMode }
+                                    : {})}
                                 {...(canOverrideServerThreadEnvMode
                                   ? {
                                       activeThreadBranchOverride: activeThreadBranch,

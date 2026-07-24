@@ -3,12 +3,16 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { EnvironmentId, VcsStatusResult } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
   CircleCheckIcon,
   CircleDashedIcon,
   CloudIcon,
   FolderGit2Icon,
+  FolderPlusIcon,
   GitPullRequestIcon,
   PencilRulerIcon,
   TerminalIcon,
@@ -21,7 +25,11 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { cn } from "../lib/utils";
 import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
-import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
+import { connectionAtomRuntime } from "../connection/runtime";
+import {
+  resolveChangeRequestPresentation,
+  resolveThreadChangeRequest,
+} from "@t3tools/shared/sourceControl";
 import {
   resolveThreadStatusPill,
   type SidebarV2TopStatus,
@@ -216,12 +224,6 @@ export function ThreadPlanModeIndicator({
   );
 }
 
-/**
- * Renders in the status pill slot with the same visual language as
- * `ThreadStatusLabel`. Settled-ness is context-dependent (auto-settle window,
- * PR state, server capability), so callers decide when to render this instead
- * of the indicator re-deriving it from the thread.
- */
 export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadSummary, "id"> }) {
   return (
     <Tooltip>
@@ -242,11 +244,6 @@ export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadS
   );
 }
 
-/**
- * The sidebar-v2 status indicator: colored label text, with an icon only for
- * the working and done states. Shared by the v2 sidebar rows and board cards
- * so both surfaces speak the same status language.
- */
 export function ThreadStatusV2Indicator({
   status,
   className,
