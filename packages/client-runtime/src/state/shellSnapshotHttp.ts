@@ -11,10 +11,7 @@ import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiClient } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
-
-// Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
-// fallback for long. The cached shell renders while this runs.
-const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 6_000;
+import { SNAPSHOT_HTTP_TIMEOUT_MS } from "./snapshotHttpPolicy.ts";
 
 /**
  * Load the environment shell snapshot (projects + thread shells) over HTTP
@@ -39,7 +36,7 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
   );
   return yield* executeEnvironmentHttpRequest(
     requestUrl,
-    input.timeoutMs ?? DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS,
+    input.timeoutMs ?? SNAPSHOT_HTTP_TIMEOUT_MS,
     withEnvironmentCredentials(
       input.prepared.httpAuthorization,
       client.orchestration.shellSnapshot({ headers }),

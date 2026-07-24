@@ -18,6 +18,10 @@ describe("shouldHideCollapsedToastContent", () => {
   it("hides non-front toasts until the stack is expanded", () => {
     assert.equal(shouldHideCollapsedToastContent(1, 3), true);
   });
+
+  it("keeps error toasts readable even when they are not front-most", () => {
+    assert.equal(shouldHideCollapsedToastContent(2, 4, "error"), false);
+  });
 });
 
 describe("buildVisibleToastLayout", () => {

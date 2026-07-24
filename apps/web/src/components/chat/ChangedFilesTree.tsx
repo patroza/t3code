@@ -34,6 +34,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   showCompactPreview: boolean;
   allDirectoriesExpanded: boolean;
   resolvedTheme: "light" | "dark";
+  className?: string;
   onExpandedChange: (expanded: boolean) => void;
   onToggleAllDirectories: () => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -45,6 +46,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
     showCompactPreview,
     allDirectoriesExpanded,
     resolvedTheme,
+    className,
     onExpandedChange,
     onToggleAllDirectories,
     onOpenTurnDiff,
@@ -56,7 +58,10 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
   return (
     <div
-      className="mt-4 rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32"
+      className={cn(
+        "mt-4 rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32",
+        className,
+      )}
       data-changed-files-state={
         expanded ? "expanded" : compactPreviewVisible ? "preview" : "collapsed"
       }

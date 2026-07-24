@@ -14,6 +14,7 @@ import { cn } from "../../lib/cn";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+import { HostResourceStatus } from "./HostResourceStatus";
 
 function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
   return connectionStatusText({
@@ -112,6 +113,11 @@ export function ConnectionEnvironmentRow(props: {
               ) : null}
             </Text>
           ) : null}
+          <HostResourceStatus
+            environmentId={props.environment.environmentId}
+            environmentLabel={props.environment.environmentLabel}
+            connected={props.environment.connectionState === "connected"}
+          />
         </View>
 
         <SymbolView

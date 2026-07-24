@@ -279,6 +279,34 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  it.effect("reuses a healthy existing backend without spawning or owning it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let spawnCount = 0;
+        const ready = yield* Deferred.make<void>();
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => {
+            spawnCount += 1;
+            return Effect.never;
+          }),
+        );
+        const instance = yield* makeTestInstance({
+          config: { ...baseConfig, reuseExisting: true },
+          spawnerLayer,
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+        });
+
+        yield* instance.start;
+        yield* Deferred.await(ready);
+        assert.equal(spawnCount, 0);
+        assert.equal((yield* instance.snapshot).ready, true);
+        yield* instance.stop();
+        assert.equal(spawnCount, 0);
+      }),
+    ),
+  );
+
   it.effect("starts the configured backend and closes the scoped process on stop", () =>
     Effect.scoped(
       Effect.gen(function* () {

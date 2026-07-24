@@ -1,4 +1,5 @@
 import { RelayEnvironmentConnectScope } from "@t3tools/contracts/relay";
+import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -51,7 +52,7 @@ function primarySocketUrl(target: PrimaryConnectionTarget): string {
   if (url.pathname === "" || url.pathname === "/") {
     url.pathname = "/ws";
   }
-  return url.toString();
+  return appendOmegentT3ProductHandshake(url.toString());
 }
 
 const makePrimaryBroker = Effect.fn("clientRuntime.connection.broker.makePrimary")(function* () {

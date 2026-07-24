@@ -1,5 +1,61 @@
 # AGENTS.md
 
+## Private fork branches and pull requests
+
+Read [docs/fork-stack.md](./docs/fork-stack.md) before creating, rebasing, merging, or retargeting
+branches.
+
+- Before the documented one-time cutover, implementation PRs continue to target `main`.
+- After cutover, `main` is an upstream mirror. Never merge private product work into it.
+- `fork/tim` contains only selected Tim Smart integrations above upstream. The permanent
+  `fork/changes` PR is based on `fork/tim`, contains only our private layer, remains open, and is the
+  GitHub/T3 default branch.
+- Start new work with `pnpm fork:stack start <branch>` and open the PR against `fork/changes`.
+  Ordinary feature/import PRs are not added to `.github/pr-stack.json`; they enter the runnable fork
+  only after being reviewed and merged into `fork/changes`.
+- Independent features use parallel PRs based on `fork/changes`. Chain PRs only when one change
+  genuinely depends on another, and merge that chain bottom-up.
+- Treat external forks as selective import sources. Tim Smart imports land as one reviewed commit
+  per source PR on `fork/tim`; our adaptations land separately on `fork/changes`. Cherry-pick only
+  wanted commits, explicitly document imported, adapted, and excluded pieces, and never merge an
+  external fork branch wholesale.
+- Run and deploy from `fork/integration`, never from a temporary feature or import branch.
+- All features must land in `fork/changes`, including upstreamable work. After its private PR merges,
+  use `pnpm fork:stack promote <private-pr> <upstream-branch>` to extract a clean projection onto
+  upstream `main`. Use `adopt` only for work that began upstream-first, and `demote` to close an
+  upstream projection without removing the canonical private implementation.
+
+### Automatic integration and deployment
+
+- Opening or updating a PR runs CI but does not deploy.
+- Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
+  the provenance layers, rebuilds `fork/integration`, and dispatches CI for its exact SHA.
+- Successful `fork/integration` CI hands the exact tested SHA to the private operations repository.
+- Machine topology and deployment implementation belong in a separate private operations repository,
+  not this repository.
+
+## Pull requests (required handoff)
+
+When implementation work for a user request is done (code, docs, config — not pure Q&A):
+
+1. **Commit** the changes on a feature branch.
+2. **Open or update a PR** against the parent required by the private fork stack before handing off.
+   Use `main` only before cutover or when the work intentionally changes the upstream mirror.
+3. **Before pushing follow-ups or saying “updated the PR”**, verify PR state with `gh pr view` (or equivalent):
+   - If the PR is **open** → push to that branch and update the PR.
+   - If the PR is **merged** or **closed** → do **not** keep committing on that branch. `git fetch origin main`, create a **new branch from `origin/main`**, re-apply unmerged work, and open a **new PR**.
+4. Never assume an earlier PR in the session is still open.
+
+## Discord-originated pull requests
+
+When opening a PR from a Discord thread request, append this footer at the end of the PR description (use the current requester and that thread’s real jump link):
+
+```md
+opened by [<displayName>](discord_user_id) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>)
+```
+
+If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
+
 ## Task Completion Requirements
 
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.
