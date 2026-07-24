@@ -29,6 +29,14 @@ on:
         description: "OTA update message (mode=update only)"
         required: false
         type: string
+      sha:
+        description: "Exact fork/integration SHA (blank uses its current tip)"
+        required: false
+        type: string
+
+concurrency:
+  group: mobile-eas-production
+  cancel-in-progress: false
 
 jobs:
   production:
@@ -56,7 +64,26 @@ jobs:
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
+          ref: fork/integration
           fetch-depth: 0
+
+      - id: source
+        name: Resolve approved integration source
+        if: steps.expo-token.outputs.present == 'true'
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          integration_sha="$(git rev-parse HEAD)"
+          target_sha="${REQUESTED_SHA:-$integration_sha}"
+          if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "sha must be an exact 40-character commit SHA" >&2
+            exit 1
+          fi
+          git fetch origin "$target_sha"
+          git merge-base --is-ancestor "$target_sha" "$integration_sha"
+          git checkout --detach "$target_sha"
+          test "$(git rev-parse HEAD)" = "$target_sha"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
@@ -109,5 +136,5 @@ jobs:
             --channel production \
             --environment production \
             --platform ${{ inputs.platform }} \
-            --message "${{ inputs.message || format('Production OTA ({0})', github.sha) }}" \
+            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
             --non-interactive
