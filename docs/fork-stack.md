@@ -35,6 +35,12 @@ force-with-lease. A repository-scoped write deploy key stored as `FORK_STACK_DEP
 automation actor allowed to bypass `main`'s PR and status-check requirements. It cannot access other
 repositories. Never expose or reuse it.
 
+Upstream's `.github/workflows/ci.yml` and `.github/workflows/deploy-relay.yml` remain present on the
+exact `main` mirror but are disabled in this repository. Fork PR and integration checks use
+`.github/workflows/fork-ci.yml`; the stack workflow dispatches that workflow for the exact generated
+integration SHA. This avoids redundant CI and prevents an upstream-mirror update from being treated
+as a fork product or relay deployment.
+
 ## Starting work
 
 The helper starts an independent branch from `fork/changes`:
