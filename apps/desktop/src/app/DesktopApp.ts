@@ -12,6 +12,7 @@ import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
@@ -213,6 +214,12 @@ const bootstrap = Effect.gen(function* () {
     // slow first wsl.exe spawn.
     yield* Effect.forkScoped(wslBackend.reconcile);
   }
+
+  // Catalog + window services are usable; flush any deep link captured from
+  // initial argv / open-url during single-instance setup.
+  const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
+  yield* deepLinks.start;
+  yield* logBootstrapInfo("bootstrap deep links ready");
 }).pipe(Effect.withSpan("desktop.bootstrap"));
 
 const startup = Effect.gen(function* () {
