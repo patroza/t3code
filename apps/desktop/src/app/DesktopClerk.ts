@@ -3,14 +3,13 @@ import { storage } from "@clerk/electron/storage";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 declare const __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
@@ -47,7 +46,7 @@ export class DesktopClerk extends Context.Service<
     readonly configure: Effect.Effect<
       void,
       never,
-      ElectronApp.ElectronApp | ElectronWindow.ElectronWindow | Scope.Scope
+      DesktopDeepLinks.DesktopDeepLinks | ElectronApp.ElectronApp | Scope.Scope
     >;
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
@@ -109,8 +108,9 @@ export const make = Effect.gen(function* () {
   return DesktopClerk.of({
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
-      const electronWindow = yield* ElectronWindow.ElectronWindow;
-      const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
+      const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
+      // Capture ambient services for Electron event callbacks, which cannot yield.
+      const context = yield* Effect.context<never>();
       const runPromise = Effect.runPromiseWith(context);
 
       if (!(yield* electronApp.requestSingleInstanceLock)) {
@@ -118,16 +118,27 @@ export const make = Effect.gen(function* () {
         return yield* Effect.interrupt;
       }
 
-      yield* electronApp.on("second-instance", () => {
-        void runPromise(
-          Effect.gen(function* () {
-            const mainWindow = yield* electronWindow.currentMainOrFirst;
-            if (Option.isSome(mainWindow)) {
-              yield* electronWindow.reveal(mainWindow.value);
-            }
-          }),
-        );
+      // Register before readiness so cold-start and second-instance deep links
+      // are not dropped. Deep-link processing itself queues until start().
+      yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[] = []) => {
+        void runPromise(deepLinks.handleArgv(argv));
       });
+
+      // macOS delivers custom URL scheme activations through open-url.
+      yield* electronApp.on("open-url", (event: { preventDefault?: () => void }, url: string) => {
+        event.preventDefault?.();
+        void runPromise(deepLinks.handleUrl(url));
+      });
+
+      // Packaged builds own the OS protocol handler. Skip in development so a
+      // local electron binary does not replace the installed t3code handler.
+      if (environment.isPackaged && !environment.isDevelopment) {
+        yield* electronApp.setAsDefaultProtocolClient(DesktopDeepLinks.DESKTOP_EXTERNAL_PROTOCOL);
+      }
+
+      // Initial argv may already contain a deep link (direct CLI invocation or
+      // protocol launch on Linux/Windows).
+      yield* deepLinks.handleArgv(process.argv);
     }).pipe(Effect.withSpan("desktop.clerk.configure")),
   });
 });
