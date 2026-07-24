@@ -1287,9 +1287,6 @@ function ChatViewContent(props: ChatViewProps) {
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
   ] = useState<Record<string, boolean>>({});
-  const [pendingWorktreeThreadIds, setPendingWorktreeThreadIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [
     pendingServerThreadReuseBaseBranchByThreadId,
     setPendingServerThreadReuseBaseBranchByThreadId,
@@ -2340,7 +2337,8 @@ function ChatViewContent(props: ChatViewProps) {
         }),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
+  const activeServerConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const availableEditors = activeServerConfig?.availableEditors ?? [];
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -4747,43 +4745,51 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
-      if (failure === null && turnAttachmentsResult._tag === "Success") {
-        const bootstrap =
-          isLocalDraftThread || baseBranchForWorktree
-            ? {
-                ...(isLocalDraftThread
-                  ? {
-                      createThread: {
-                        projectId: activeProject.id,
-                        title,
-                        modelSelection: threadCreateModelSelection,
-                        runtimeMode,
-                        interactionMode,
-                        branch: activeThreadBranch,
-                        worktreePath: activeThread.worktreePath,
-                        createdAt: activeThread.createdAt,
-                      },
-                    }
-                  : {}),
-                ...(baseBranchForWorktree
-                  ? {
-                      prepareWorktree: {
-                        projectCwd: activeProject.workspaceRoot,
-                        baseBranch: baseBranchForWorktree,
-                        ...(reuseBaseBranch
-                          ? { reuseBaseBranch: true }
-                          : {
-                              branch: buildTemporaryWorktreeBranchName(randomHex),
-                              ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                            }),
-                      },
-                      runSetupScript: true,
-                    }
-                  : {}),
-              }
-            : undefined;
-        const queuedTurnInput = {
-          commandId: newCommandId(),
+    const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
+    if (failure === null && turnAttachmentsResult._tag === "Failure") {
+      failure = turnAttachmentsResult;
+    }
+
+    let turnStartSucceeded = false;
+    if (failure === null && turnAttachmentsResult._tag === "Success") {
+      const bootstrap =
+        isLocalDraftThread || baseBranchForWorktree
+          ? {
+              ...(isLocalDraftThread
+                ? {
+                    createThread: {
+                      projectId: activeProject.id,
+                      title,
+                      modelSelection: threadCreateModelSelection,
+                      runtimeMode,
+                      interactionMode,
+                      branch: activeThreadBranch,
+                      worktreePath: activeThread.worktreePath,
+                      createdAt: activeThread.createdAt,
+                    },
+                  }
+                : {}),
+              ...(baseBranchForWorktree
+                ? {
+                    prepareWorktree: {
+                      projectCwd: activeProject.workspaceRoot,
+                      baseBranch: baseBranchForWorktree,
+                      ...(reuseBaseBranch
+                        ? { reuseBaseBranch: true }
+                        : {
+                            branch: buildTemporaryWorktreeBranchName(randomHex),
+                            ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                          }),
+                    },
+                    runSetupScript: true,
+                  }
+                : {}),
+            }
+          : undefined;
+      beginLocalDispatch({ preparingWorktree: false });
+      const startResult = await startThreadTurn({
+        environmentId,
+        input: {
           threadId: threadIdForSend,
           message: {
             messageId: messageIdForSend,
@@ -5476,9 +5482,7 @@ function ChatViewContent(props: ChatViewProps) {
             newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
           }),
           reuseBaseBranch: false,
-          ...(target !== "current-worktree" && draftThread?.worktreePath
-            ? { worktreePath: null }
-            : {}),
+          ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
         });
       }
       scheduleComposerFocus();
@@ -5826,89 +5830,6 @@ function ChatViewContent(props: ChatViewProps) {
                     }
                   >
                     <div
-                      ref={attachDraftHeroComposerAnchorRef}
-                      className="relative z-10 mx-auto w-full max-w-3xl"
-                    >
-                      <ChatComposer
-                        composerRef={composerRef}
-                        composerDraftTarget={composerDraftTarget}
-                        environmentId={environmentId}
-                        routeKind={routeKind}
-                        routeThreadRef={routeThreadRef}
-                        draftId={draftId}
-                        activeThreadId={activeThreadId}
-                        activeThreadEnvironmentId={activeThread?.environmentId}
-                        activeThread={activeThread}
-                        isServerThread={isServerThread}
-                        isLocalDraftThread={isLocalDraftThread}
-                        forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
-                        projectSelectionRequired={isLocalDraftThread && activeProject === null}
-                        phase={phase}
-                        isConnecting={isConnecting}
-                        isSendBusy={isSendBusy}
-                        isPreparingWorktree={isPreparingWorktreeUi}
-                        environmentUnavailable={activeEnvironmentUnavailableState}
-                        activePendingApproval={activePendingApproval}
-                        pendingApprovals={pendingApprovals}
-                        pendingUserInputs={pendingUserInputs}
-                        activePendingProgress={activePendingProgress}
-                        activePendingResolvedAnswers={activePendingResolvedAnswers}
-                        activePendingIsResponding={activePendingIsResponding}
-                        activePendingDraftAnswers={activePendingDraftAnswers}
-                        activePendingQuestionIndex={activePendingQuestionIndex}
-                        respondingRequestIds={respondingRequestIds}
-                        showPlanFollowUpPrompt={showPlanFollowUpPrompt}
-                        activeProposedPlan={activeProposedPlan}
-                        activePlan={activePlan as { turnId?: TurnId } | null}
-                        sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
-                        planSidebarLabel={planSidebarLabel}
-                        planSidebarOpen={planSidebarOpen}
-                        runtimeMode={runtimeMode}
-                        interactionMode={interactionMode}
-                        lockedProvider={lockedProvider}
-                        providerStatuses={providerStatuses as ServerProvider[]}
-                        activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
-                        activeThreadModelSelection={activeThread?.modelSelection}
-                        // Merged set (older pages + live window), not the windowed
-                        // live slice: the context meter scans for the latest
-                        // context-window.updated event, which can sit in a
-                        // lazy-loaded page on long threads.
-                        activeThreadActivities={threadActivities}
-                        resolvedTheme={resolvedTheme}
-                        settings={settings}
-                        keybindings={keybindings}
-                        terminalOpen={Boolean(terminalUiState.terminalOpen)}
-                        gitCwd={gitCwd}
-                        promptRef={promptRef}
-                        composerImagesRef={composerImagesRef}
-                        composerTerminalContextsRef={composerTerminalContextsRef}
-                        composerElementContextsRef={composerElementContextsRef}
-                        onSend={onSend}
-                        onStartNewThread={handleStartNewThread}
-                        onInterrupt={onInterrupt}
-                        onImplementPlanInNewThread={onImplementPlanInNewThread}
-                        onRespondToApproval={onRespondToApproval}
-                        onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
-                        onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-                        onPreviousActivePendingUserInputQuestion={
-                          onPreviousActivePendingUserInputQuestion
-                        }
-                        onChangeActivePendingUserInputCustomAnswer={
-                          onChangeActivePendingUserInputCustomAnswer
-                        }
-                        onProviderModelSelect={onProviderModelSelect}
-                        getModelDisabledReason={getModelDisabledReason}
-                        toggleInteractionMode={toggleInteractionMode}
-                        handleRuntimeModeChange={handleRuntimeModeChange}
-                        handleInteractionModeChange={handleInteractionModeChange}
-                        togglePlanSidebar={togglePlanSidebar}
-                        focusComposer={focusComposer}
-                        scheduleComposerFocus={scheduleComposerFocus}
-                        setThreadError={setThreadError}
-                        onExpandImage={onExpandTimelineImage}
-                      />
-                    </div>
-                    <div
                       className={cn(
                         "chat-composer-glass-shell relative mx-auto w-full max-w-3xl",
                         showComposerContextStrip && "chat-composer-glass-shell-with-context",
@@ -5969,6 +5890,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
+                            onStartNewThread={handleStartNewThread}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
@@ -6011,11 +5933,9 @@ function ChatViewContent(props: ChatViewProps) {
                                 onStartFromOriginChange={onStartFromOriginChange}
                                 reuseBaseBranch={reuseBaseBranch}
                                 onReuseBaseBranchChange={onReuseBaseBranchChange}
-                                {...(isPreparingWorktreeUi
-                                  ? { effectiveEnvModeOverride: "worktree" as const }
-                                  : canOverrideServerThreadEnvMode
-                                    ? { effectiveEnvModeOverride: envMode }
-                                    : {})}
+                                {...(canOverrideServerThreadEnvMode
+                                  ? { effectiveEnvModeOverride: envMode }
+                                  : {})}
                                 {...(canOverrideServerThreadEnvMode
                                   ? {
                                       activeThreadBranchOverride: activeThreadBranch,

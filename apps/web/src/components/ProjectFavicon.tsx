@@ -33,8 +33,14 @@ export function ProjectFavicon(input: {
   );
 }
 
-export function ProjectFaviconFallback({ className }: { readonly className?: string | undefined }) {
-  return <FolderIcon className={`size-3.5 shrink-0 text-muted-foreground/50 ${className ?? ""}`} />;
+export function ProjectFaviconFallback({
+  className,
+  icon: Icon = FolderIcon,
+}: {
+  readonly className?: string | undefined;
+  readonly icon?: ComponentType<{ className?: string }>;
+}) {
+  return <Icon className={`size-3.5 shrink-0 text-muted-foreground/50 ${className ?? ""}`} />;
 }
 
 function ProjectFaviconImage({

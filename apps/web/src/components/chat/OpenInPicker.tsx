@@ -34,7 +34,7 @@ import {
   type OpenWithOption,
 } from "../../openWith";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
-import { ensureLocalApi, readLocalApi } from "../../localApi";
+import { ensureLocalApi } from "../../localApi";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { shellEnvironment } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -89,26 +89,6 @@ import {
   WebStormIcon,
 } from "../JetBrainsIcons";
 import { cn, isMacPlatform, isWindowsPlatform, randomUUID } from "~/lib/utils";
-
-function desktopEditorUrlScheme(editor: EditorId): string | null {
-  switch (editor) {
-    case "vscode":
-      return "vscode";
-    case "vscode-insiders":
-      return "vscode-insiders";
-    case "cursor":
-      return "cursor";
-    default:
-      return null;
-  }
-}
-
-export function resolveDesktopEditorUri(editor: EditorId, cwd: string): string | null {
-  const scheme = desktopEditorUrlScheme(editor);
-  if (!scheme || !cwd.startsWith("/")) return null;
-  const encodedPath = cwd.split("/").map(encodeURIComponent).join("/");
-  return `${scheme}://file${encodedPath}?windowId=_blank`;
-}
 
 type BuiltinPresentation = {
   readonly label: string;
@@ -381,14 +361,6 @@ export const OpenInPicker = memo(function OpenInPicker({
           );
         }
         return;
-      }
-      const localApi = readLocalApi();
-      if (localApi) {
-        const uri = resolveDesktopEditorUri(option.id, openInCwd);
-        if (uri) {
-          await localApi.shell.openExternal(uri);
-          return;
-        }
       }
       const result = await openInEditorMutation({
         environmentId,
