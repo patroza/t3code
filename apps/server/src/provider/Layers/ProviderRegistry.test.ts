@@ -1904,7 +1904,6 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
         const fable5 = status.models.find((model) => model.slug === "claude-fable-5");
         assert.strictEqual(fable5?.name, "Claude Fable 5");
         assert.strictEqual(status.models[0]?.slug, "claude-opus-4-8");
-        assert.strictEqual(status.models[0]?.slug, "claude-opus-4-8");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
