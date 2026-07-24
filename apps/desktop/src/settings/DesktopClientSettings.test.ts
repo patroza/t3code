@@ -21,7 +21,7 @@ const clientSettings: ClientSettings = {
   diffIgnoreWhitespace: true,
   environmentIdentificationMode: "artwork",
   favorites: [],
-  glassOpacity: 80,
+  providerFavorites: [],
   openWithEntries: [
     {
       id: OpenWithEntryId.make("terminal"),
