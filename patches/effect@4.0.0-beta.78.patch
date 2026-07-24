@@ -276,25 +276,32 @@ index a3161eb..0cb81f3 100644
    }).pipe(Effect.flatMap(() => Effect.fail(new Socket.SocketError({
      reason: new Socket.SocketCloseError({
        code: 1000
-@@ -664,20 +693,20 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+@@ -664,20 +693,26 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
    };
  }));
  const defaultRetryPolicy = /*#__PURE__*/Schedule.exponential(500, 1.5).pipe(/*#__PURE__*/Schedule.either(/*#__PURE__*/Schedule.spaced(5000)));
 -const makePinger = /*#__PURE__*/Effect.fnUntraced(function* (writePing) {
 +const makePinger = /*#__PURE__*/Effect.fnUntraced(function* (writePing, hooks) {
    let recievedPong = true;
++  let missedPongs = 0;
    const latch = Latch.makeUnsafe();
    const reset = () => {
      recievedPong = true;
++    missedPongs = 0;
      latch.closeUnsafe();
    };
 -  const onPong = () => {
 +  const onPong = Effect.sync(() => {
      recievedPong = true;
++    missedPongs = 0;
 -  };
 +  }).pipe(Effect.andThen(hooks?.onPong ?? Effect.void));
    yield* Effect.suspend(() => {
-     if (!recievedPong) return latch.open;
+-    if (!recievedPong) return latch.open;
++    if (!recievedPong) {
++      missedPongs += 1;
++      if (missedPongs >= 3) return latch.open;
++    }
      recievedPong = false;
 -    return writePing;
 +    return (hooks?.onPing ?? Effect.void).pipe(Effect.andThen(writePing));

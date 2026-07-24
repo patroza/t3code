@@ -15,6 +15,7 @@ import {
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
+  toggleThreadPinned,
   type UiState,
 } from "./uiStateStore";
 
@@ -23,11 +24,20 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     threadLastVisitedAtById: {},
+    pinnedThreadKeys: [],
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     ...overrides,
   };
 }
+
+describe("toggleThreadPinned", () => {
+  it("adds and removes a client-local scoped thread key", () => {
+    const pinned = toggleThreadPinned(makeUiState(), "environment-1:thread-1");
+    expect(pinned.pinnedThreadKeys).toEqual(["environment-1:thread-1"]);
+    expect(toggleThreadPinned(pinned, "environment-1:thread-1").pinnedThreadKeys).toEqual([]);
+  });
+});
 
 describe("uiStateStore pure functions", () => {
   it("stores server timestamps without moving visit state backwards", () => {
@@ -184,8 +194,8 @@ describe("parsePersistedState", () => {
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": false,
-          "turn-2": true,
+          "turn-1": true,
+          "turn-2": false,
         },
       },
     });
@@ -198,11 +208,12 @@ describe("parsePersistedState", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      pinnedThreadKeys: [],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
-          "turn-1": false,
-          "turn-2": true,
+          "turn-1": true,
+          "turn-2": false,
         },
       },
     });
@@ -295,6 +306,7 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      pinnedThreadKeys: ["environment:thread-1"],
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -317,6 +329,7 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      pinnedThreadKeys: ["environment:thread-1"],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
