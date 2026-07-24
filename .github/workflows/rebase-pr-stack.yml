@@ -29,16 +29,12 @@ jobs:
         with:
           ref: fork/changes
           fetch-depth: 1
+          ssh-key: ${{ secrets.FORK_STACK_DEPLOY_KEY }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
-
-      - name: Configure authenticated Git pushes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh auth setup-git
 
       - name: Add upstream remote
         run: git remote add upstream https://github.com/pingdotgg/t3code.git
