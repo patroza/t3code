@@ -190,6 +190,16 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 
   /**
+   * Cursor-paginated load of a thread's older activities (lazy-load / infinite
+   * scroll). Returns the page of activities immediately older than the provided
+   * sequence or unsequenced activity cursor, ascending, plus whether older ones
+   * remain.
+   */
+  readonly getThreadActivitiesPage: (
+    input: OrchestrationGetThreadActivitiesInput,
+  ) => Effect.Effect<OrchestrationGetThreadActivitiesResult, ProjectionRepositoryError>;
+
+  /**
    * Read a thread's lifecycle markers regardless of its deleted/archived
    * state. Lets callers that got no active row distinguish a thread that was
    * deleted or archived (permanent) from one whose projection row does not
