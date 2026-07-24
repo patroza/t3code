@@ -39,6 +39,14 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./state/ai-usage": {
+      "types": "./src/state/aiUsage.ts",
+      "default": "./src/state/aiUsage.ts"
+    },
+    "./state/aiUsagePresentation": {
+      "types": "./src/state/aiUsagePresentation.ts",
+      "default": "./src/state/aiUsagePresentation.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
@@ -103,6 +111,10 @@
       "types": "./src/state/server.ts",
       "default": "./src/state/server.ts"
     },
+    "./state/hostResourcePresentation": {
+      "types": "./src/state/hostResourcePresentation.ts",
+      "default": "./src/state/hostResourcePresentation.ts"
+    },
     "./state/session": {
       "types": "./src/state/session.ts",
       "default": "./src/state/session.ts"
@@ -126,6 +138,10 @@
     "./state/thread-reducer": {
       "types": "./src/state/threadReducer.ts",
       "default": "./src/state/threadReducer.ts"
+    },
+    "./state/older-thread-activities": {
+      "types": "./src/state/olderThreadActivities.ts",
+      "default": "./src/state/olderThreadActivities.ts"
     },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
@@ -155,6 +171,16 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@types/react": "~19.2.14",
+    "react": "19.2.6",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }
