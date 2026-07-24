@@ -4,82 +4,84 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   prStatusIndicator,
   resolveThreadPr,
+  computeGroupPrConsensus,
+  type PrStatusIndicator,
   settledPrHoverColorClass,
 } from "./ThreadStatusIndicators";
 
-function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
+const openPr = {
+  number: 42,
+  title: "Add feature",
+  url: "https://github.com/org/repo/pull/42",
+  baseRef: "main",
+  headRef: "feature/demo",
+  state: "open" as const,
+};
+
+function gitStatus(
+  overrides: Partial<VcsStatusResult> & Pick<VcsStatusResult, "refName">,
+): VcsStatusResult {
   return {
     isRepo: true,
     hasPrimaryRemote: true,
     isDefaultRef: false,
-    refName: "feature/current",
     hasWorkingTreeChanges: false,
     workingTree: { files: [], insertions: 0, deletions: 0 },
     hasUpstream: true,
     aheadCount: 0,
     behindCount: 0,
-    pr: {
-      number: 42,
-      title: "PR branch",
-      url: "https://github.com/pingdotgg/t3code/pull/42",
-      baseRef: "main",
-      headRef: "feature/current",
-      state: "open",
-    },
+    aheadOfDefaultCount: 0,
+    pr: null,
     ...overrides,
   };
 }
 
 describe("resolveThreadPr", () => {
-  it("keeps local-checkout PR indicators scoped to the stored thread branch", () => {
+  it("returns the PR when checkout ref matches the thread branch", () => {
     expect(
-      resolveThreadPr({
-        threadBranch: "feature/other",
-        gitStatus: status(),
-        hasDedicatedWorktree: false,
-      }),
+      resolveThreadPr("feature/demo", gitStatus({ refName: "feature/demo", pr: openPr })),
+    ).toEqual(openPr);
+  });
+
+  it("returns the PR when the PR head matches the thread branch but checkout differs", () => {
+    expect(resolveThreadPr("feature/demo", gitStatus({ refName: "main", pr: openPr }))).toEqual(
+      openPr,
+    );
+  });
+
+  it("returns null when neither checkout nor PR head match the thread branch", () => {
+    expect(
+      resolveThreadPr(
+        "feature/other",
+        gitStatus({
+          refName: "main",
+          pr: openPr,
+        }),
+      ),
     ).toBeNull();
-  });
-
-  it("shows PR indicators for dedicated worktree threads even when branch metadata is stale", () => {
-    const gitStatus = status();
-
-    expect(
-      resolveThreadPr({
-        threadBranch: "feature/old-name",
-        gitStatus,
-        hasDedicatedWorktree: true,
-      }),
-    ).toBe(gitStatus.pr);
-  });
-
-  it("shows PR indicators for dedicated worktree threads even when branch metadata is missing", () => {
-    const gitStatus = status();
-
-    expect(
-      resolveThreadPr({
-        threadBranch: null,
-        gitStatus,
-        hasDedicatedWorktree: true,
-      }),
-    ).toBe(gitStatus.pr);
   });
 });
 
 describe("prStatusIndicator", () => {
+  it("maps open PRs to the emerald indicator class", () => {
+    expect(
+      prStatusIndicator(openPr, { kind: "github", name: "GitHub", baseUrl: "" }),
+    ).toMatchObject({
+      label: "PR open",
+      colorClass: "text-emerald-600 dark:text-emerald-300/90",
+    });
+  });
+
   it("formats PR tooltips with number, uppercase status, and title", () => {
-    expect(prStatusIndicator(status().pr, undefined)).toMatchObject({
-      tooltip: "PR #42 - Open: PR branch",
+    expect(prStatusIndicator(openPr, undefined)).toMatchObject({
+      tooltip: "PR #42 - Open: Add feature",
       tooltipLead: "PR #42 - Open",
-      tooltipTitle: "PR branch",
+      tooltipTitle: "Add feature",
     });
   });
 
   it("uses red for closed pull requests", () => {
-    const closedPr = status().pr;
-    if (!closedPr) throw new Error("Expected pull request fixture");
-
-    expect(prStatusIndicator({ ...closedPr, state: "closed" }, undefined)?.colorClass).toContain(
+    expect(prStatusIndicator({ ...openPr, state: "closed" }, undefined)?.colorClass).toContain(
       "text-red-600",
     );
   });
@@ -92,5 +94,56 @@ describe("settledPrHoverColorClass", () => {
     ["closed", "text-red-600"],
   ] as const)("restores the %s pull request color on row hover", (state, colorClass) => {
     expect(settledPrHoverColorClass(state)).toContain(`group-hover/v2-row:${colorClass}`);
+  });
+});
+
+const openIndicator: PrStatusIndicator = {
+  label: "PR open",
+  colorClass: "text-emerald-600 dark:text-emerald-300/90",
+  tooltip: "PR #42 - Open: Add feature",
+  tooltipLead: "PR #42 - Open",
+  tooltipTitle: "Add feature",
+  url: "https://github.com/org/repo/pull/42",
+};
+
+const mergedIndicator: PrStatusIndicator = {
+  label: "PR merged",
+  colorClass: "text-violet-600 dark:text-violet-300/90",
+  tooltip: "PR #7 - Merged: Other",
+  tooltipLead: "PR #7 - Merged",
+  tooltipTitle: "Other",
+  url: "https://github.com/org/repo/pull/7",
+};
+
+describe("computeGroupPrConsensus", () => {
+  it("returns a rolled-up shared indicator when every member agrees", () => {
+    const consensus = computeGroupPrConsensus([openIndicator, openIndicator, openIndicator]);
+    expect(consensus.allSame).toBe(true);
+    expect(consensus.shared).toEqual(openIndicator);
+  });
+
+  it("defers to per-member indicators when any member differs", () => {
+    const consensus = computeGroupPrConsensus([openIndicator, mergedIndicator, openIndicator]);
+    expect(consensus.allSame).toBe(false);
+    expect(consensus.shared).toBeNull();
+  });
+
+  it("still rolls up when every member lacks a PR", () => {
+    const consensus = computeGroupPrConsensus([null, null]);
+    expect(consensus.allSame).toBe(true);
+    expect(consensus.shared).toBeNull();
+  });
+
+  it("does not roll up when some members lack a PR and others have one", () => {
+    const consensus = computeGroupPrConsensus([openIndicator, null]);
+    expect(consensus.allSame).toBe(false);
+    expect(consensus.shared).toBeNull();
+  });
+
+  it("treats an empty group as agreeing on nothing", () => {
+    const consensus = computeGroupPrConsensus([]);
+    expect(consensus.allSame).toBe(true);
+    expect(consensus.shared).toBeNull();
+    expect(consensus.indicators).toEqual([]);
   });
 });

@@ -1,0 +1,16 @@
+{
+  "upstreamRemote": "upstream",
+  "upstreamBranch": "main",
+  "forkChangesBranch": "fork/changes",
+  "integrationBranch": "fork/integration",
+  "pullRequests": [
+    {
+      "number": 1,
+      "branch": "fork/tim"
+    },
+    {
+      "number": 2,
+      "branch": "fork/changes"
+    }
+  ]
+}

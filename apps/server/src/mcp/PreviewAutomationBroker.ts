@@ -102,6 +102,7 @@ interface PreviewAutomationRequestErrorContext {
 interface BrokerState {
   readonly clients: ReadonlyMap<string, ClientConnection>;
   readonly assignments: ReadonlyMap<string, HostAssignment>;
+  readonly threadClaims: ReadonlyMap<string, ClientConnection>;
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly requestSequence: number;
   readonly focusSequence: number;
@@ -114,11 +115,15 @@ const removeConnectionFromState = (
 ): { readonly state: BrokerState; readonly disconnected: ReadonlyArray<PendingRequest> } => {
   const clients = new Map(current.clients);
   const assignments = new Map(current.assignments);
+  const threadClaims = new Map(current.threadClaims);
   const pending = new Map(current.pending);
   const disconnected: PendingRequest[] = [];
   if (current.clients.get(clientId)?.queue === queue) clients.delete(clientId);
   for (const [assignmentKey, assignment] of assignments) {
     if (assignment.queue === queue) assignments.delete(assignmentKey);
+  }
+  for (const [claimKey, claim] of threadClaims) {
+    if (claim.queue === queue) threadClaims.delete(claimKey);
   }
   for (const [requestId, entry] of pending) {
     if (entry.queue !== queue) continue;
@@ -126,7 +131,7 @@ const removeConnectionFromState = (
     disconnected.push(entry);
   }
   return {
-    state: { ...current, clients, assignments, pending },
+    state: { ...current, clients, assignments, threadClaims, pending },
     disconnected,
   };
 };
@@ -146,6 +151,11 @@ const selectorDiagnosticsFromInput = (
 
 const hostAssignmentKey = (scope: McpInvocationContext.McpInvocationScope): string =>
   `${scope.environmentId}\u0000${scope.providerSessionId}`;
+
+const threadClaimKey = (
+  environmentId: McpInvocationContext.McpInvocationScope["environmentId"],
+  threadId: McpInvocationContext.McpInvocationScope["threadId"],
+): string => `${environmentId}\u0000${threadId}`;
 
 const isPreviewTabId = Schema.is(PreviewTabId);
 
@@ -284,6 +294,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   const state = yield* SynchronizedRef.make<BrokerState>({
     clients: new Map(),
     assignments: new Map(),
+    threadClaims: new Map(),
     pending: new Map(),
     requestSequence: 0,
     focusSequence: 0,
@@ -378,6 +389,13 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         return current;
       }
       const clients = new Map(current.clients);
+      if (host.threadId !== undefined) {
+        const threadClaims = new Map(current.threadClaims);
+        const claimKey = threadClaimKey(host.environmentId, host.threadId);
+        if (host.focused) threadClaims.set(claimKey, currentHost);
+        else threadClaims.delete(claimKey);
+        return { ...current, threadClaims };
+      }
       const focusSequence = host.focused ? current.focusSequence + 1 : current.focusSequence;
       clients.set(host.clientId, {
         ...currentHost,
@@ -438,29 +456,38 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       const assigned = assignments.get(assignmentKey);
       const assignedConnection = assigned ? current.clients.get(assigned.clientId) : undefined;
       const hasLiveAssignment = assignedConnection?.environmentId === input.scope.environmentId;
-      // Keep one provider session on one physical desktop runtime so a
-      // multi-step browser interaction cannot jump between independent
-      // Electron cookie/DOM state. A live assignment that predates an
-      // operation is not silently moved to a newer client: the caller gets a
-      // capability failure and can deliberately start a fresh provider
-      // session. A dead lease is pruned above and may fail over.
+      const claimedConnection = current.threadClaims.get(
+        threadClaimKey(input.scope.environmentId, input.scope.threadId),
+      );
+      const hasLiveClaim =
+        claimedConnection?.environmentId === input.scope.environmentId &&
+        current.clients.get(claimedConnection.clientId)?.connectionId ===
+          claimedConnection.connectionId;
+      // Keep a provider session on one physical runtime so a multi-step
+      // interaction cannot jump between independent cookie/DOM state. An
+      // explicit thread claim intentionally overrides that pin; this lets a
+      // headless bridge select its own host before dispatching a turn.
       const connection =
-        hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
-          ? assignedConnection
-          : hasLiveAssignment
+        hasLiveClaim && supportsOperation(claimedConnection, input.operation)
+          ? claimedConnection
+          : hasLiveClaim
             ? undefined
-            : Array.from(current.clients.values())
-                .filter(
-                  (host) =>
-                    host.environmentId === input.scope.environmentId &&
-                    supportsOperation(host, input.operation),
-                )
-                .sort(
-                  (left, right) =>
-                    right.supportedOperations.size - left.supportedOperations.size ||
-                    Number(right.focused) - Number(left.focused) ||
-                    right.focusOrder - left.focusOrder,
-                )[0];
+            : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+              ? assignedConnection
+              : hasLiveAssignment
+                ? undefined
+                : Array.from(current.clients.values())
+                    .filter(
+                      (host) =>
+                        host.environmentId === input.scope.environmentId &&
+                        supportsOperation(host, input.operation),
+                    )
+                    .sort(
+                      (left, right) =>
+                        right.supportedOperations.size - left.supportedOperations.size ||
+                        Number(right.focused) - Number(left.focused) ||
+                        right.focusOrder - left.focusOrder,
+                    )[0];
       if (!connection) {
         if (!hasLiveAssignment) assignments.delete(assignmentKey);
         return [undefined, { ...current, assignments }] as const;
