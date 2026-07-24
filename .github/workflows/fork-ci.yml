@@ -1,4 +1,4 @@
-name: CI
+name: Fork CI
 
 env:
   # Install dependencies without downloading Electron in every job. The desktop jobs
@@ -8,9 +8,6 @@ env:
 on:
   workflow_dispatch:
   pull_request:
-  push:
-    branches:
-      - main
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
