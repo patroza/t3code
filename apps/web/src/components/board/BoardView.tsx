@@ -319,11 +319,7 @@ function BoardContent() {
     const keys = new Set<string>();
     for (const thread of filteredThreads) {
       const changeRequestState =
-        resolveThreadPr({
-          threadBranch: thread.branch,
-          hasDedicatedWorktree: thread.worktreePath != null,
-          gitStatus: getThreadGitContext(thread).gitStatus,
-        })?.state ?? null;
+        resolveThreadPr(thread.branch, getThreadGitContext(thread).gitStatus)?.state ?? null;
       if (
         isThreadSettledForDisplay(thread, {
           serverConfigs,
