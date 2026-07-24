@@ -57,4 +57,4 @@ jobs:
       - name: Dispatch integration CI
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref fork/integration
+        run: gh workflow run fork-ci.yml --repo "$GITHUB_REPOSITORY" --ref fork/integration
