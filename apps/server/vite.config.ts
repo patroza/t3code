@@ -64,9 +64,12 @@ export default mergeConfig(
       },
     },
     test: {
-      // The server suite exercises sqlite, git, temp worktrees, and orchestration
-      // runtimes heavily. Running files in parallel introduces load-sensitive flakes.
-      fileParallelism: false,
+      // Keep enough parallelism to avoid serializing the entire server suite while
+      // capping load from sqlite, git, temp-worktree, and orchestration tests.
+      // Isolate a demonstrably conflicting suite instead of forcing every file
+      // through one worker.
+      fileParallelism: true,
+      maxWorkers: 4,
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
       hookTimeout: 120_000,
