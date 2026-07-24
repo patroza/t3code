@@ -24,6 +24,17 @@ describe("createHandledDiscordMessageTracker", () => {
     expect(tracker.has("message-2")).toBe(true);
     expect(tracker.has("message-3")).toBe(true);
   });
+
+  it("claims a message id only once so create/update races cannot double-route", () => {
+    const tracker = createHandledDiscordMessageTracker(8);
+
+    expect(tracker.claim("message-1")).toBe(true);
+    expect(tracker.claim("message-1")).toBe(false);
+    expect(tracker.has("message-1")).toBe(true);
+
+    tracker.mark("message-2");
+    expect(tracker.claim("message-2")).toBe(false);
+  });
 });
 
 describe("isIncompleteDiscordLink", () => {
