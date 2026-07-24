@@ -802,7 +802,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          if (
+            event.type !== "thread.message-sent" ||
+            event.payload.role !== "assistant" ||
+            !event.payload.streaming
+          ) {
+            yield* refreshThreadShellSummary(event.payload.threadId);
+          }
           return;
         }
 
@@ -813,9 +819,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          // Keep the completed turn pointer when the session clears activeTurnId
+          // (ready/idle/interrupted). Wiping latest_turn_id made response bridges
+          // that key off latestTurn miss already-finished turns after restart.
+          const nextLatestTurnId =
+            event.payload.session.activeTurnId ?? existingRow.value.latestTurnId;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: event.payload.session.activeTurnId,
+            latestTurnId: nextLatestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
@@ -919,6 +930,58 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
+          return;
+        }
+
+        case "thread.messages-resynced": {
+          // Rebuild the transcript tail from an authoritative external source.
+          // Everything up to and including `afterMessageId` is known-good and is
+          // kept as-is; only what follows is replaced.
+          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const anchorIndex =
+            event.payload.afterMessageId === null
+              ? -1
+              : existingRows.findIndex((row) => row.messageId === event.payload.afterMessageId);
+          if (event.payload.afterMessageId !== null && anchorIndex === -1) {
+            // Anchor is gone (already reverted/pruned): applying the tail would
+            // graft it onto an unknown prefix, so leave the projection alone.
+            yield* Effect.logWarning(
+              "Skipping thread.messages-resynced: anchor message is not in the projection.",
+              {
+                threadId: event.payload.threadId,
+                afterMessageId: event.payload.afterMessageId,
+                reason: event.payload.reason,
+              },
+            );
+            return;
+          }
+          const keptRows = existingRows.slice(0, anchorIndex + 1);
+          const tailRows = event.payload.messages.map(
+            (message) =>
+              ({
+                messageId: message.id,
+                threadId: event.payload.threadId,
+                turnId: message.turnId,
+                role: message.role,
+                text: message.text,
+                ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+                isStreaming: message.streaming,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              }) satisfies ProjectionThreadMessage,
+          );
+          yield* projectionThreadMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            [...keptRows, ...tailRows],
+            projectionThreadMessageRepository.upsert,
+            {
+              concurrency: 1,
+            },
+          ).pipe(Effect.asVoid);
           return;
         }
 

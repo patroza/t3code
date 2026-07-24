@@ -656,6 +656,76 @@ it.effect("pins a provider session to its initial host despite later focus chang
   ),
 );
 
+it.effect("routes a claimed thread to its host without affecting other threads", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      let claimedConnectionId = "";
+      const claimedRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({ clientId: "client-discord", supportedOperations: ["status", "snapshot"] }),
+        ),
+        (connectionId) => {
+          claimedConnectionId = connectionId;
+        },
+      );
+      const richerRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({
+            clientId: "client-desktop",
+            supportedOperations: ["status", "snapshot", "evaluate"],
+          }),
+        ),
+      );
+      yield* Stream.runForEach(claimedRequests, (request) =>
+        broker.respond({
+          clientId: "client-discord",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "discord",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Stream.runForEach(richerRequests, (request) =>
+        broker.respond({
+          clientId: "client-desktop",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "desktop",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke<string>({ scope, operation: "snapshot", input: {} })).toBe(
+        "desktop",
+      );
+      yield* broker.focusHost({
+        clientId: "client-discord",
+        environmentId: scope.environmentId,
+        connectionId: claimedConnectionId,
+        focused: true,
+        threadId: scope.threadId,
+      });
+
+      expect(yield* broker.invoke<string>({ scope, operation: "snapshot", input: {} })).toBe(
+        "discord",
+      );
+      expect(
+        yield* broker.invoke<string>({
+          scope: {
+            ...scope,
+            threadId: ThreadId.make("thread-desktop"),
+            providerSessionId: "provider-session-desktop",
+          },
+          operation: "snapshot",
+          input: {},
+        }),
+      ).toBe("desktop");
+    }),
+  ),
+);
+
 it.effect("does not route new operations to legacy hosts that did not advertise support", () =>
   Effect.scoped(
     Effect.gen(function* () {
