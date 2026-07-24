@@ -35,6 +35,10 @@ branches.
 - The stack workflow runs every six hours and may be dispatched manually to mirror
   `pingdotgg/t3code:main`. Its deploy key is the only automation bypass for protected `main`; agents
   must never print, replace, or reuse that credential outside this workflow.
+- Fork checks live in `.github/workflows/fork-ci.yml` and run for PRs or by explicit integration
+  dispatch. The inherited upstream `.github/workflows/ci.yml` and `deploy-relay.yml` workflows are
+  disabled at repository level so mirror updates do not run redundant CI or attempt upstream relay
+  deployment. Do not re-enable or target those workflows for fork releases.
 - Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
   the provenance layers, rebuilds `fork/integration`, and dispatches CI for its exact SHA.
 - Successful `fork/integration` CI hands the exact tested SHA to the private operations repository.
