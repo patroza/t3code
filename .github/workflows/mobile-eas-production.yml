@@ -6,10 +6,6 @@ name: Mobile EAS Production
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [fork/integration]
   workflow_dispatch:
     inputs:
       mode:
@@ -45,9 +41,6 @@ concurrency:
 jobs:
   production:
     name: EAS Production ${{ inputs.mode }}
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -78,7 +71,7 @@ jobs:
         name: Resolve approved integration source
         if: steps.expo-token.outputs.present == 'true'
         env:
-          REQUESTED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.sha }}
+          REQUESTED_SHA: ${{ inputs.sha }}
         run: |
           integration_sha="$(git rev-parse HEAD)"
           target_sha="${REQUESTED_SHA:-$integration_sha}"
@@ -127,19 +120,14 @@ jobs:
         run: eas env:pull production --non-interactive
 
       - name: Build and submit
-        if: >-
-          steps.expo-token.outputs.present == 'true' &&
-          github.event_name == 'workflow_dispatch' &&
-          inputs.mode == 'build'
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
 
       - name: Publish OTA update
-        if: >-
-          steps.expo-token.outputs.present == 'true' &&
-          (github.event_name == 'workflow_run' || inputs.mode == 'update')
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
