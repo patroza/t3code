@@ -197,6 +197,96 @@ export function makeXAiAskUserQuestionCancelledResponse(): XAiAskUserQuestionCan
 }
 
 /**
+ * Grok's reverse-RPC for plan approval. The agent intercepts `exit_plan_mode`,
+ * auto-allows the tool permission, then asks the client to review the plan via
+ * `_x.ai/exit_plan_mode` (alias `x.ai/exit_plan_mode`) with the plan markdown.
+ */
+const XAiExitPlanModeParams = Schema.Struct({
+  sessionId: Schema.String,
+  toolCallId: Schema.String,
+  planContent: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const XAiWrappedExitPlanModeParams = Schema.Struct({
+  method: Schema.Literals(["x.ai/exit_plan_mode", "_x.ai/exit_plan_mode"]),
+  params: XAiExitPlanModeParams,
+});
+
+export const XAiExitPlanModeRequest = Schema.Union([
+  XAiExitPlanModeParams,
+  XAiWrappedExitPlanModeParams,
+]);
+
+type XAiExitPlanModeRequestParams = typeof XAiExitPlanModeParams.Type;
+type XAiExitPlanModeRequest = typeof XAiExitPlanModeRequest.Type;
+
+export type XAiExitPlanModeResponse =
+  | { readonly outcome: "approved"; readonly feedback?: string | null }
+  | { readonly outcome: "rejected"; readonly feedback?: string | null }
+  | { readonly outcome: "abandoned" };
+
+function unwrapExitPlanModeParams(params: XAiExitPlanModeRequest): XAiExitPlanModeRequestParams {
+  return "params" in params ? params.params : params;
+}
+
+/** Prefer non-empty planContent from the extension request; otherwise undefined. */
+export function extractXAiExitPlanModePlanMarkdown(
+  params: XAiExitPlanModeRequest,
+): string | undefined {
+  const planContent = unwrapExitPlanModeParams(params).planContent;
+  if (typeof planContent !== "string") {
+    return undefined;
+  }
+  const trimmed = planContent.trim();
+  return trimmed.length > 0 ? planContent : undefined;
+}
+
+export function makeXAiExitPlanModeApprovedResponse(
+  feedback?: string | null,
+): Extract<XAiExitPlanModeResponse, { outcome: "approved" }> {
+  const trimmed = typeof feedback === "string" ? feedback.trim() : "";
+  return trimmed.length > 0 ? { outcome: "approved", feedback: trimmed } : { outcome: "approved" };
+}
+
+export function makeXAiExitPlanModeRejectedResponse(
+  feedback?: string | null,
+): Extract<XAiExitPlanModeResponse, { outcome: "rejected" }> {
+  const trimmed = typeof feedback === "string" ? feedback.trim() : "";
+  return trimmed.length > 0 ? { outcome: "rejected", feedback: trimmed } : { outcome: "rejected" };
+}
+
+export function makeXAiExitPlanModeAbandonedResponse(): Extract<
+  XAiExitPlanModeResponse,
+  { outcome: "abandoned" }
+> {
+  return { outcome: "abandoned" };
+}
+
+/**
+ * Maps a follow-up sendTurn onto an exit_plan_mode resolution.
+ * - default / implement prompt → approved (leave plan mode and build)
+ * - non-empty plan-mode text → rejected with feedback (revise plan)
+ * - empty / cancel-like → abandoned
+ */
+export function resolveXAiExitPlanModeFromFollowUp(input: {
+  readonly interactionMode: "default" | "plan" | undefined;
+  readonly text: string | undefined;
+}): XAiExitPlanModeResponse {
+  const text = input.text?.trim() ?? "";
+  const looksLikeImplement =
+    input.interactionMode === "default" ||
+    text.startsWith("PLEASE IMPLEMENT THIS PLAN:") ||
+    text.startsWith("PLEASE IMPLEMENT THIS PLAN");
+  if (looksLikeImplement) {
+    return makeXAiExitPlanModeApprovedResponse();
+  }
+  if (text.length > 0) {
+    return makeXAiExitPlanModeRejectedResponse(text);
+  }
+  return makeXAiExitPlanModeAbandonedResponse();
+}
+
+/**
  * Adds Grok's private prompt-completion fallback around a standards-only ACP runtime.
  * The underlying runtime remains unaware of xAI methods and metadata.
  */
@@ -228,11 +318,11 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
         runtime
           .start()
           .pipe(Effect.tap((started) => Ref.set(activeSessionIdRef, started.sessionId))),
-      prompt: (payload) =>
+      prompt: (payload, options?) =>
         Effect.gen(function* () {
           const sessionId = yield* Ref.get(activeSessionIdRef);
           if (sessionId === undefined) {
-            return yield* runtime.prompt(payload);
+            return yield* runtime.prompt(payload, options);
           }
 
           const promptId = yield* allocatePromptFallbackId;
@@ -247,11 +337,21 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
               ...payload._meta,
               promptId: fallback.promptId,
               requestId: fallback.promptId,
+              // Grok's "send now": cancel whatever the agent is still doing and
+              // take this prompt as the next turn, keeping background tasks and
+              // the queue alive. Without it the agent queues the prompt behind
+              // the running turn and answers it only once that turn finishes.
+              //
+              // Sent on every prompt, not just steers: it is a no-op on an idle
+              // session, and it also covers the windows where the agent is busy
+              // but T3 believes otherwise — a Stop whose cancellation is still
+              // winding down, or a resumed/reconnected session.
+              sendNow: true,
             },
           } satisfies Omit<EffectAcpSchema.PromptRequest, "sessionId">;
 
           return yield* Effect.raceFirst(
-            runtime.prompt(requestPayload),
+            runtime.prompt(requestPayload, options),
             Deferred.await(fallback.deferred),
           ).pipe(
             Effect.tap((response) =>

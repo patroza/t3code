@@ -115,6 +115,15 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, "ensure $NVM_DIR/nvm.sh is available");
   });
 
+  it("prepends user-local bins before accepting an existing node", () => {
+    const script = buildRemoteT3RunnerScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE });
+
+    assert.isBelow(
+      script.indexOf('prepend_path_if_dir "$HOME/.local/bin"'),
+      script.indexOf("if command -v node >/dev/null 2>&1"),
+    );
+  });
+
   it("does not hard-code a remote node engine range", () => {
     const script = buildRemoteT3RunnerScript();
 

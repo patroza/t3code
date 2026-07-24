@@ -1,4 +1,9 @@
-import type { SourceControlProviderInfo, SourceControlProviderKind } from "@t3tools/contracts";
+import type {
+  SourceControlProviderInfo,
+  SourceControlProviderKind,
+  VcsStatusChangeRequest,
+  VcsStatusResult,
+} from "@t3tools/contracts";
 
 export interface ChangeRequestPresentation {
   readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
@@ -96,6 +101,55 @@ export function resolveChangeRequestPresentationForKind(
   kind: SourceControlProviderKind,
 ): ChangeRequestPresentation {
   return resolveChangeRequestPresentation({ kind, name: "", baseUrl: "" });
+}
+
+export interface ChangeRequestIndicator {
+  readonly state: VcsStatusChangeRequest["state"];
+  readonly number: number;
+  readonly label: string;
+  readonly tooltip: string;
+  readonly url: string;
+}
+
+/**
+ * Picks the change request that belongs to `threadBranch` out of a checkout's
+ * status. The checkout may have moved on to another ref while a thread still
+ * boxes the branch its change request was opened from, so a head-ref match
+ * counts even when the live ref differs.
+ */
+export function resolveThreadChangeRequest(
+  threadBranch: string | null,
+  status: VcsStatusResult | null,
+): VcsStatusChangeRequest | null {
+  if (threadBranch === null || status === null) {
+    return null;
+  }
+  const pr = status.pr ?? null;
+  if (!pr) {
+    return null;
+  }
+  return status.refName === threadBranch || pr.headRef === threadBranch ? pr : null;
+}
+
+/**
+ * Derives the provider-agnostic wording for a change request badge. Callers map
+ * {@link ChangeRequestIndicator.state} onto their own palette.
+ */
+export function resolveChangeRequestIndicator(
+  pr: VcsStatusChangeRequest | null | undefined,
+  provider: SourceControlProviderInfo | null | undefined,
+): ChangeRequestIndicator | null {
+  if (!pr) {
+    return null;
+  }
+  const { shortName } = resolveChangeRequestPresentation(provider);
+  return {
+    state: pr.state,
+    number: pr.number,
+    label: `${shortName} ${pr.state}`,
+    tooltip: `#${pr.number} ${shortName} ${pr.state}: ${pr.title}`,
+    url: pr.url,
+  };
 }
 
 export function formatChangeRequestAction(

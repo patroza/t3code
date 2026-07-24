@@ -469,7 +469,11 @@ describe("remote environment authorization", () => {
         bearerToken: "bearer-token",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
-      expect(url).toBe("wss://remote.example.com/ws?wsTicket=ws-ticket");
+      const parsed = new URL(url);
+      expect(parsed.origin + parsed.pathname).toBe("wss://remote.example.com/ws");
+      expect(parsed.searchParams.get("wsTicket")).toBe("ws-ticket");
+      expect(parsed.searchParams.get("productFamily")).toBe("omegent-t3");
+      expect(parsed.searchParams.get("productToken")).toBeTruthy();
     }),
   );
 });

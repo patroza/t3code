@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,7 @@ import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import {
+  buildSelectOptionDescriptor,
   buildServerProvider,
   isCommandMissingCause,
   parseGenericCliVersion,
@@ -34,12 +36,40 @@ import { makeGrokAcpRuntime, resolveGrokAcpBaseModelId } from "../acp/GrokAcpSup
 const GROK_PRESENTATION = {
   displayName: "Grok",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
   requiresNewThreadForModelChange: true,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
+
+/** Fallback effort menu when ACP model meta is unavailable but Grok still supports effort. */
+const GROK_FALLBACK_REASONING_EFFORTS: ReadonlyArray<{
+  value: string;
+  label: string;
+  isDefault?: boolean;
+}> = [
+  { value: "high", label: "High", isDefault: true },
+  { value: "medium", label: "Medium" },
+  { value: "low", label: "Low" },
+];
+
+export function buildGrokReasoningEffortCapabilities(
+  efforts: ReadonlyArray<{ value: string; label: string; isDefault?: boolean }>,
+): ModelCapabilities {
+  if (efforts.length === 0) {
+    return EMPTY_CAPABILITIES;
+  }
+  return createModelCapabilities({
+    optionDescriptors: [
+      buildSelectOptionDescriptor({
+        id: "reasoningEffort",
+        label: "Reasoning",
+        options: efforts,
+      }),
+    ],
+  });
+}
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const GROK_ACP_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
@@ -49,9 +79,111 @@ const GROK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     slug: "grok-build",
     name: "Grok Build",
     isCustom: false,
-    capabilities: EMPTY_CAPABILITIES,
+    capabilities: buildGrokReasoningEffortCapabilities(GROK_FALLBACK_REASONING_EFFORTS),
   },
 ];
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function effortLabel(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.replace(/\s*effort\s*$/iu, "").trim() || trimmed;
+}
+
+/**
+ * Builds reasoning-effort option descriptors from Grok ACP model `_meta`.
+ * Grok advertises `supportsReasoningEffort`, `reasoningEffort` (current/default),
+ * and `reasoningEfforts` (menu entries) on each available model.
+ */
+export function buildGrokCapabilitiesFromModelMeta(
+  meta: EffectAcpSchema.ModelInfo["_meta"] | null | undefined,
+): ModelCapabilities {
+  const record = asRecord(meta);
+  if (!record) {
+    return EMPTY_CAPABILITIES;
+  }
+
+  const supports =
+    record.supportsReasoningEffort === true ||
+    record.supports_reasoning_effort === true ||
+    Array.isArray(record.reasoningEfforts) ||
+    Array.isArray(record.reasoning_efforts);
+
+  if (!supports) {
+    return EMPTY_CAPABILITIES;
+  }
+
+  const rawEfforts = Array.isArray(record.reasoningEfforts)
+    ? record.reasoningEfforts
+    : Array.isArray(record.reasoning_efforts)
+      ? record.reasoning_efforts
+      : null;
+
+  const defaultEffortRaw =
+    typeof record.reasoningEffort === "string"
+      ? record.reasoningEffort.trim()
+      : typeof record.reasoning_effort === "string"
+        ? record.reasoning_effort.trim()
+        : undefined;
+
+  const efforts: Array<{ value: string; label: string; isDefault?: boolean }> = [];
+  const seen = new Set<string>();
+
+  if (rawEfforts) {
+    for (const entry of rawEfforts) {
+      const item = asRecord(entry);
+      if (!item) continue;
+      const value =
+        (typeof item.value === "string" && item.value.trim()) ||
+        (typeof item.id === "string" && item.id.trim()) ||
+        "";
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      const label =
+        (typeof item.label === "string" && item.label.trim()) ||
+        (typeof item.name === "string" && item.name.trim()) ||
+        value;
+      const isDefault =
+        item.default === true || (defaultEffortRaw !== undefined && defaultEffortRaw === value);
+      efforts.push({
+        value,
+        label: effortLabel(label),
+        ...(isDefault ? { isDefault: true } : {}),
+      });
+    }
+  }
+
+  if (efforts.length === 0) {
+    // Catalog claims support but did not list levels — use the known Grok menu.
+    return buildGrokReasoningEffortCapabilities(
+      GROK_FALLBACK_REASONING_EFFORTS.map((effort) =>
+        defaultEffortRaw && effort.value === defaultEffortRaw
+          ? { ...effort, isDefault: true }
+          : defaultEffortRaw
+            ? { value: effort.value, label: effort.label }
+            : effort,
+      ),
+    );
+  }
+
+  // Ensure exactly one default: prefer catalog default flag, else advertised current, else first.
+  if (!efforts.some((effort) => effort.isDefault)) {
+    const preferred =
+      (defaultEffortRaw && efforts.find((effort) => effort.value === defaultEffortRaw)) ||
+      efforts[0];
+    if (preferred) {
+      preferred.isDefault = true;
+    }
+  }
+
+  return buildGrokReasoningEffortCapabilities(efforts);
+}
 
 export function buildInitialGrokProviderSnapshot(
   grokSettings: GrokSettings,
@@ -117,7 +249,7 @@ function buildGrokDiscoveredModelsFromSessionModelState(
         slug,
         name: model.name.trim() || slug,
         isCustom: false,
-        capabilities: EMPTY_CAPABILITIES,
+        capabilities: buildGrokCapabilitiesFromModelMeta(model._meta),
       };
     })
     .filter((model): model is ServerProviderModel => model !== undefined);
@@ -258,6 +390,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   if (Exit.isFailure(discoveryExit)) {
     yield* Effect.logWarning("Grok ACP model discovery failed", {
       errorTag: causeErrorTag(discoveryExit.cause),
+      causeDetail: Cause.pretty(discoveryExit.cause),
     });
     return buildServerProvider({
       presentation: GROK_PRESENTATION,
