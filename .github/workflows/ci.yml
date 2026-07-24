@@ -68,7 +68,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-15
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -102,6 +102,9 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Test macOS Open With integration
+        run: vp test run apps/desktop/src/shell/DesktopOpenWith.test.ts
+
       - name: Install mobile native static analysis tools
         run: brew bundle install --file apps/mobile/Brewfile
 
@@ -125,3 +128,25 @@ jobs:
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
+
+  dispatch_mobile_ota:
+    name: Dispatch Mobile OTA
+    needs: [check, test, mobile_native_static_analysis, release_smoke]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fork/integration'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch exact integration SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run mobile-eas-production.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref fork/integration \
+            -f mode=update \
+            -f platform=all \
+            -f sha="$GITHUB_SHA" \
+            -f message="Integration ${GITHUB_SHA}"
