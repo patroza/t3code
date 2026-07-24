@@ -5,15 +5,23 @@ import * as NodeURL from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { describe, expect } from "vite-plus/test";
 
 import {
   extractXAiAskUserQuestions,
+  extractXAiExitPlanModePlanMarkdown,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
+  makeXAiExitPlanModeAbandonedResponse,
+  makeXAiExitPlanModeApprovedResponse,
+  makeXAiExitPlanModeRejectedResponse,
   makeXAiPromptCompletionRuntime,
+  resolveXAiExitPlanModeFromFollowUp,
   XAiAskUserQuestionRequest,
+  XAiExitPlanModeRequest,
 } from "./XAiAcpExtension.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 
@@ -275,6 +283,58 @@ describe("XAiAcpExtension", () => {
     });
   });
 
+  it("decodes _x.ai/exit_plan_mode request payloads and extracts plan markdown", () => {
+    const decode = Schema.decodeUnknownSync(XAiExitPlanModeRequest);
+    const flat = decode({
+      sessionId: "session-1",
+      toolCallId: "tool-1",
+      planContent: "# Plan\n\n- step\n",
+    });
+    expect(extractXAiExitPlanModePlanMarkdown(flat)).toBe("# Plan\n\n- step\n");
+
+    const wrapped = decode({
+      method: "_x.ai/exit_plan_mode",
+      params: {
+        sessionId: "session-1",
+        toolCallId: "tool-1",
+        planContent: null,
+      },
+    });
+    expect(extractXAiExitPlanModePlanMarkdown(wrapped)).toBeUndefined();
+  });
+
+  it("builds exit_plan_mode response outcomes and maps follow-up turns", () => {
+    expect(makeXAiExitPlanModeApprovedResponse()).toEqual({ outcome: "approved" });
+    expect(makeXAiExitPlanModeApprovedResponse(" ship it ")).toEqual({
+      outcome: "approved",
+      feedback: "ship it",
+    });
+    expect(makeXAiExitPlanModeRejectedResponse("use REST")).toEqual({
+      outcome: "rejected",
+      feedback: "use REST",
+    });
+    expect(makeXAiExitPlanModeAbandonedResponse()).toEqual({ outcome: "abandoned" });
+
+    expect(
+      resolveXAiExitPlanModeFromFollowUp({
+        interactionMode: "default",
+        text: "PLEASE IMPLEMENT THIS PLAN:\n# Plan",
+      }),
+    ).toEqual({ outcome: "approved" });
+    expect(
+      resolveXAiExitPlanModeFromFollowUp({
+        interactionMode: "plan",
+        text: "prefer a smaller approach",
+      }),
+    ).toEqual({ outcome: "rejected", feedback: "prefer a smaller approach" });
+    expect(
+      resolveXAiExitPlanModeFromFollowUp({
+        interactionMode: "plan",
+        text: "  ",
+      }),
+    ).toEqual({ outcome: "abandoned" });
+  });
+
   it.effect("resolves a hung standard prompt from xAI prompt completion", () =>
     Effect.gen(function* () {
       const runtime = yield* makePromptCompletionRuntime({
@@ -327,6 +387,46 @@ describe("XAiAcpExtension", () => {
           requestId: secondPromptId,
         },
       });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("steers a running turn instead of queueing behind it", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makePromptCompletionRuntime({ T3_ACP_XAI_SEND_NOW_QUEUE: "1" });
+      yield* runtime.start();
+
+      const runningTurn = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "long task" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      // Without `steer`, this prompt would wait for the running turn to settle
+      // and neither turn would ever complete.
+      const steerResult = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "actually, do this" }] }, { steer: true })
+        .pipe(Effect.timeout("10 seconds"));
+
+      expect(steerResult.stopReason).toBe("end_turn");
+      const runningTurnResult = yield* Fiber.join(runningTurn).pipe(Effect.timeout("10 seconds"));
+      expect(runningTurnResult.stopReason).toBe("cancelled");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // Real clock: the assertion is that the queued prompt does *not* resolve,
+  // which a TestClock would never let elapse.
+  it.live("keeps a non-steering prompt queued behind the running turn", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makePromptCompletionRuntime({ T3_ACP_XAI_SEND_NOW_QUEUE: "1" });
+      yield* runtime.start();
+
+      yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "long task" }] })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      const queued = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "follow-up" }] })
+        .pipe(Effect.timeout("1 second"), Effect.option);
+
+      expect(Option.isNone(queued)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
