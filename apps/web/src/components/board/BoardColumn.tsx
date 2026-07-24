@@ -1,3 +1,4 @@
+import { useDroppable } from "@dnd-kit/core";
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
@@ -27,10 +28,22 @@ export function BoardColumn({
   count: number;
   children: ReactNode;
 }) {
+  // Only the settled column accepts drops (dropping a card there settles the
+  // thread); the droppable ids are per-column so the intent resolver only
+  // matches the settled one.
+  const { isOver, setNodeRef } = useDroppable({
+    id: `board-column-${columnId}`,
+    disabled: columnId !== "settled",
+  });
+
   return (
     <section
+      ref={setNodeRef}
       data-testid={`board-column-${columnId}`}
-      className="flex h-full w-72 shrink-0 flex-col rounded-xl border border-border/55 bg-muted/30"
+      className={cn(
+        "flex h-full w-72 shrink-0 flex-col rounded-xl border border-border/55 bg-muted/30",
+        columnId === "settled" && isOver && "border-primary/60 bg-primary/5",
+      )}
       aria-label={BOARD_COLUMN_LABELS[columnId]}
     >
       <header className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
