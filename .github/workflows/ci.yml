@@ -1,10 +1,20 @@
 name: CI
 
+env:
+  # Install dependencies without downloading Electron in every job. The desktop jobs
+  # fetch and verify the runtime explicitly below; mobile lint and release smoke do not need it.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
       - main
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -22,6 +32,15 @@ jobs:
           cache: true
           run-install: true
 
+      - name: Restore Vite Task check cache
+        id: vite-task-check-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-check-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-check-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
@@ -29,16 +48,23 @@ jobs:
         run: vp check
 
       - name: Typecheck
-        run: vpr typecheck
+        run: vp run -r --cache --log labeled typecheck
 
       - name: Build desktop pipeline
-        run: vp run build:desktop
+        run: vp run --cache build:desktop
 
       - name: Verify preload bundle output
         run: |
           test -f apps/desktop/dist-electron/preload.cjs
           grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
           grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
+
+      - name: Save Vite Task check cache
+        if: success()
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-check-cache.outputs.cache-primary-key }}
 
   test:
     name: Test
