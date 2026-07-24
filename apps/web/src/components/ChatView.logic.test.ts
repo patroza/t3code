@@ -25,6 +25,9 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  shouldRenderServerThreadRoute,
+  shouldTreatServerThreadAsActive,
+  resolveServerThreadError,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
@@ -447,6 +450,44 @@ describe("shouldWriteThreadErrorToCurrentServerThread", () => {
   });
 });
 
+describe("server thread liveness", () => {
+  it("requires shell and detail before treating a server thread as active", () => {
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: true,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldTreatServerThreadAsActive({
+        hasServerThreadShell: false,
+        hasServerThreadDetail: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not keep server routes alive from stale cached detail alone", () => {
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: false,
+        hasDraftThread: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRenderServerThreadRoute({
+        hasServerThreadShell: true,
+        hasDraftThread: false,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   it("does not acknowledge unchanged server state", () => {
     const localDispatch = createLocalDispatchSnapshot(
@@ -649,5 +690,112 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+
+  it("does not acknowledge a queued follow-up while the same turn is still running", () => {
+    const runningTurn = {
+      ...completedTurn,
+      turnId: TurnId.make("turn-2"),
+      state: "running" as const,
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: null,
+    };
+    const runningSession = {
+      ...readySession,
+      status: "running" as const,
+      activeTurnId: runningTurn.turnId,
+      updatedAt: runningTurn.startedAt,
+    };
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: runningTurn, session: runningSession }),
+    );
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestTurn: runningTurn,
+        latestUserMessageId: localDispatch.latestUserMessageId,
+        session: runningSession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveServerThreadError", () => {
+  const CAPACITY = "Selected model is at capacity. Please try a different model.";
+
+  it("shows the server error when nothing is dismissed", () => {
+    expect(
+      resolveServerThreadError({
+        localError: undefined,
+        serverError: CAPACITY,
+        dismissedServerError: undefined,
+      }),
+    ).toBe(CAPACITY);
+  });
+
+  it("dismisses a server-sourced error", () => {
+    // Regression: dismissal used to clear the local error, which then fell back
+    // to session.lastError via `??` — leaving server errors undismissable.
+    expect(
+      resolveServerThreadError({
+        localError: null,
+        serverError: CAPACITY,
+        dismissedServerError: CAPACITY,
+      }),
+    ).toBeNull();
+  });
+
+  it("still surfaces a different server error after a dismissal", () => {
+    // A dismissal covers the message it dismissed, not the thread forever.
+    expect(
+      resolveServerThreadError({
+        localError: null,
+        serverError: "Provider crashed",
+        dismissedServerError: CAPACITY,
+      }),
+    ).toBe("Provider crashed");
+  });
+
+  it("re-shows the same error if the server raises it again after it cleared", () => {
+    expect(
+      resolveServerThreadError({
+        localError: undefined,
+        serverError: null,
+        dismissedServerError: CAPACITY,
+      }),
+    ).toBeNull();
+    expect(
+      resolveServerThreadError({
+        localError: undefined,
+        serverError: CAPACITY,
+        dismissedServerError: undefined,
+      }),
+    ).toBe(CAPACITY);
+  });
+
+  it("prefers a local error over the server error", () => {
+    expect(
+      resolveServerThreadError({
+        localError: "Failed to send",
+        serverError: CAPACITY,
+        dismissedServerError: undefined,
+      }),
+    ).toBe("Failed to send");
+  });
+
+  it("shows nothing when there is no error at all", () => {
+    expect(
+      resolveServerThreadError({
+        localError: null,
+        serverError: null,
+        dismissedServerError: undefined,
+      }),
+    ).toBeNull();
   });
 });

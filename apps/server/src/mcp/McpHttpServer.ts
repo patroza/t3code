@@ -1,8 +1,11 @@
+import { CommandId } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Random from "effect/Random";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
@@ -13,6 +16,8 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as DiscordLinkedChannelTool from "./DiscordLinkedChannelTool.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -162,6 +167,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   readonly data: string;
                   readonly width: number;
                   readonly height: number;
+                  readonly path?: string;
                 };
                 readonly [key: string]: unknown;
               };
@@ -172,6 +178,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
                   mimeType: screenshot.mimeType,
                   width: screenshot.width,
                   height: screenshot.height,
+                  ...(screenshot.path === undefined ? {} : { path: screenshot.path }),
                 },
               };
               return Effect.succeed(
@@ -203,9 +210,122 @@ const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnaps
   Layer.provide(PreviewSnapshotToolkitHandlersLive),
 );
 
+const registerDiscordRenameThread = Effect.fn("McpHttpServer.registerDiscordRenameThread")(
+  function* () {
+    const server = yield* McpServer.McpServer;
+    const engine = yield* OrchestrationEngineService;
+
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: "discord_rename_thread",
+        description:
+          "Rename the current T3 thread. When this thread is linked to a Discord thread through the Discord bot, the bot mirrors the new title onto that Discord thread automatically.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            title: {
+              type: "string",
+              description: "New concise title for the current linked thread.",
+            },
+          },
+          required: ["title"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Rename linked Discord thread",
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      }),
+      annotations: Context.empty(),
+      handle: (payload) =>
+        Effect.withFiber((fiber) => {
+          const invocation = Context.getUnsafe(
+            fiber.context,
+            McpInvocationContext.McpInvocationContext,
+          );
+          const rawTitle =
+            typeof payload === "object" && payload !== null && "title" in payload
+              ? payload.title
+              : undefined;
+          const title = typeof rawTitle === "string" ? rawTitle.trim().replace(/\s+/g, " ") : "";
+          if (title.length === 0) {
+            return Effect.succeed(
+              new McpSchema.CallToolResult({
+                isError: true,
+                structuredContent: {
+                  error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
+                },
+                content: [{ type: "text", text: "Title cannot be empty." }],
+              }),
+            );
+          }
+
+          return Effect.gen(function* () {
+            const millis = yield* Clock.currentTimeMillis;
+            const random = yield* Random.nextInt;
+            const commandId = CommandId.make(
+              `server:mcp-discord-rename-thread:${millis}:${String(Math.abs(random))}`,
+            );
+            yield* engine.dispatch({
+              type: "thread.meta.update",
+              commandId,
+              threadId: invocation.threadId,
+              title,
+            });
+            return new McpSchema.CallToolResult({
+              isError: false,
+              structuredContent: {
+                threadId: invocation.threadId,
+                title,
+                discordMirrorRequested: true,
+              },
+              content: [
+                {
+                  type: "text",
+                  text: `Renamed the T3 thread to "${title}". A linked Discord bot will mirror the title.`,
+                },
+              ],
+            });
+          }).pipe(
+            Effect.matchCause({
+              onFailure: (cause) =>
+                new McpSchema.CallToolResult({
+                  isError: true,
+                  structuredContent: {
+                    error: {
+                      _tag: "ThreadRenameFailed",
+                      message: Cause.pretty(cause),
+                    },
+                  },
+                  content: [{ type: "text", text: "Failed to rename the linked thread." }],
+                }),
+              onSuccess: (result) => result,
+            }),
+          );
+        }),
+    });
+  },
+);
+
+export const DiscordThreadToolkitRegistrationLive = Layer.effectDiscard(
+  registerDiscordRenameThread(),
+);
+
+export const DiscordLinkedChannelToolkitRegistrationLive = Layer.effectDiscard(
+  DiscordLinkedChannelTool.registerDiscordLinkedChannelPostTool(),
+);
+
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
+);
+
+export const AgentThreadToolkitRegistrationLive = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  DiscordThreadToolkitRegistrationLive,
+  DiscordLinkedChannelToolkitRegistrationLive,
 );
 
 const McpTransportLive = McpServer.layerHttp({
@@ -214,4 +334,4 @@ const McpTransportLive = McpServer.layerHttp({
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = AgentThreadToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));

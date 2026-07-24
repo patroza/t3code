@@ -10,6 +10,7 @@ import {
   desktopLocalBackendId,
   desktopLocalConnectionId,
   isDesktopLocalConnectionTarget,
+  isLocalConnectionTarget,
 } from "./desktopLocal";
 
 describe("desktop local connection identity", () => {
@@ -21,6 +22,7 @@ describe("desktop local connection identity", () => {
     });
 
     expect(isDesktopLocalConnectionTarget(target)).toBe(true);
+    expect(isLocalConnectionTarget(target)).toBe(true);
     expect(desktopLocalBackendId(target)).toBe("wsl:Ubuntu");
   });
 
@@ -33,7 +35,18 @@ describe("desktop local connection identity", () => {
     });
 
     expect(isDesktopLocalConnectionTarget(target)).toBe(false);
+    expect(isLocalConnectionTarget(target)).toBe(true);
     expect(desktopLocalBackendId(target)).toBeNull();
+  });
+
+  it("does not classify a saved bearer connection as local", () => {
+    const target = new BearerConnectionTarget({
+      connectionId: "saved:smart",
+      environmentId: EnvironmentId.make("environment-smart"),
+      label: "Smart",
+    });
+
+    expect(isLocalConnectionTarget(target)).toBe(false);
   });
 });
 
@@ -73,6 +86,16 @@ describe("desktop local topology reads", () => {
     }));
 
     expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [secondary] });
+  });
+
+  it("reports whether a bridge backs the reader at all", () => {
+    let bridge: { getLocalEnvironmentBootstraps: () => [] } | undefined = undefined;
+    const reader = createDesktopSecondaryBootstrapsReader(() => bridge);
+
+    expect(reader.hasBridge()).toBe(false);
+
+    bridge = { getLocalEnvironmentBootstraps: () => [] };
+    expect(reader.hasBridge()).toBe(true);
   });
 
   it("retains the last successful snapshot only until another read succeeds", () => {

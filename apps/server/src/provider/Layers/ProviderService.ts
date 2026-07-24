@@ -11,6 +11,7 @@
  */
 import {
   NonNegativeInt,
+  ModelSelection,
   ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -60,6 +61,8 @@ import {
   readPersistedProviderCwd,
   readPersistedProviderModelSelection,
 } from "../ProviderRestartRecovery.ts";
+
+const isModelSelection = Schema.is(ModelSelection);
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -442,6 +445,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (session) => session.threadId === input.binding.threadId,
         );
         if (existing) {
+          const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
+          if (!providerCwdMatches(existing.cwd, persistedCwd)) {
+            return yield* toValidationError(
+              input.operation,
+              [
+                `Active provider session for thread '${input.binding.threadId}' is in '${existing.cwd ?? "unknown"}' but persisted cwd is '${persistedCwd ?? "unknown"}'.`,
+                "Refusing to recover a provider session for the wrong workspace.",
+              ].join(" "),
+            );
+          }
           yield* upsertSessionBinding(
             { ...existing, providerInstanceId: bindingInstanceId },
             input.binding.threadId,
@@ -484,6 +497,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         return yield* toValidationError(
           input.operation,
           `Adapter/provider mismatch while recovering thread '${input.binding.threadId}'. Expected '${adapter.provider}', received '${resumed.provider}'.`,
+        );
+      }
+      if (!providerCwdMatches(resumed.cwd, persistedCwd)) {
+        yield* adapter.stopSession(resumed.threadId).pipe(Effect.ignore);
+        yield* clearMcpSession(input.binding.threadId);
+        return yield* toValidationError(
+          input.operation,
+          [
+            `Recovered provider session for thread '${input.binding.threadId}' is in '${resumed.cwd ?? "unknown"}' but persisted cwd is '${persistedCwd ?? "unknown"}'.`,
+            "Refusing to recover a provider session for the wrong workspace.",
+          ].join(" "),
         );
       }
 
@@ -677,6 +701,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
           );
         }
+        if (!providerCwdMatches(session.cwd, effectiveCwd)) {
+          yield* adapter.stopSession(session.threadId).pipe(Effect.ignore);
+          yield* clearMcpSession(threadId);
+          return yield* toValidationError(
+            "ProviderService.startSession",
+            [
+              `Provider '${adapter.provider}' started in '${session.cwd ?? "unknown"}' but T3 requested '${effectiveCwd}'.`,
+              "Refusing to persist a provider session for the wrong workspace.",
+            ].join(" "),
+          );
+        }
         const sessionWithInstance = {
           ...session,
           providerInstanceId: resolvedInstanceId,
@@ -803,7 +838,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
+          // Interrupt must never resurrect an old persisted session merely to
+          // cancel it. The orchestration reactor authoritatively clears the
+          // projected running state even when no live adapter session exists.
+          allowRecovery: false,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
@@ -812,7 +850,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
-        yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        if (routed.isActive) {
+          yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        }
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
         });

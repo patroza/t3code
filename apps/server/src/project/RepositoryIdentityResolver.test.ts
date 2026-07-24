@@ -130,6 +130,35 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect("reports every configured remote, not just the primary one", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-all-remotes-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@github.com:example-user/example-repo.git"]);
+      yield* git(cwd, ["remote", "add", "upstream", "git@github.com:T3Tools/t3code.git"]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+
+      expect(identity?.canonicalKey).toBe("github.com/t3tools/t3code");
+      expect(
+        identity?.remotes?.map((remote) => [remote.remoteName, remote.canonicalKey]).toSorted(),
+      ).toEqual([
+        ["origin", "github.com/example-user/example-repo"],
+        ["upstream", "github.com/t3tools/t3code"],
+      ]);
+      expect(identity?.remotes?.every((remote) => remote.provider === "github")).toBe(true);
+      expect(identity?.remotes?.find((remote) => remote.remoteName === "origin")).toMatchObject({
+        owner: "example-user",
+        name: "example-repo",
+      });
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect("uses the last remote path segment as the repository name for nested groups", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
