@@ -16,6 +16,25 @@ selected Tim Smart PR and a permanently open PR against `main`. `fork/changes` i
 branch and canonical private layer, with a permanently open PR against `fork/tim`.
 `fork/integration` is generated from both reviewed layers and is used by running instances.
 
+## Updating from upstream
+
+Do not use GitHub's **Sync fork** button, create a PR into this repository's `main`, or push `main`
+manually. A GitHub PR merge would rewrite upstream commits, while an ordinary push is correctly
+blocked by the `Protect upstream main` ruleset.
+
+The `Rebase fork PR stack` workflow is the sole synchronization path. It runs every six hours and
+can also be started with:
+
+```sh
+gh workflow run rebase-pr-stack.yml --repo patroza/t3code --ref fork/changes
+```
+
+The workflow fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged,
+and atomically updates `main`, `fork/tim`, `fork/changes`, and `fork/integration` with
+force-with-lease. A repository-scoped write deploy key stored as `FORK_STACK_DEPLOY_KEY` is the only
+automation actor allowed to bypass `main`'s PR and status-check requirements. It cannot access other
+repositories. Never expose or reuse it.
+
 ## Starting work
 
 The helper starts an independent branch from `fork/changes`:
