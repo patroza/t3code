@@ -40,6 +40,7 @@ import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -88,8 +89,11 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { GrokTranscriptResyncLive } from "./externalSessions/GrokTranscriptResync.ts";
+import { OrphanSessionRecoveryLive } from "./orchestration/Layers/OrphanSessionRecovery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -97,6 +101,11 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as GitHubAppClient from "./github/GitHubAppClient.ts";
+import * as GitHubAppConfig from "./github/GitHubAppConfig.ts";
+import * as GitHubDeliveryStore from "./github/GitHubDeliveryStore.ts";
+import * as GitHubPrBridge from "./github/GitHubPrBridge.ts";
+import { githubWebhookRouteLayer } from "./github/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -230,6 +239,13 @@ const ReviewLayerLive = ReviewService.layer.pipe(
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
 
+const GitHubAppDependenciesLive = Layer.mergeAll(
+  GitHubAppClient.layer,
+  GitHubDeliveryStore.layer,
+).pipe(Layer.provideMerge(GitHubAppConfig.layer));
+
+const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(Layer.provideMerge(GitHubAppDependenciesLive));
+
 const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(VcsProjectConfig.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
@@ -288,8 +304,21 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const OrphanSessionRecoveryLayerLive = OrphanSessionRecoveryLive.pipe(
+  Layer.provide(ProviderLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(OrphanSessionRecoveryLayerLive),
+  Layer.provideMerge(
+    GrokTranscriptResyncLive.pipe(
+      Layer.provide(ProviderSessionRuntime.layer),
+      Layer.provide(OrphanSessionRecoveryLayerLive),
+      Layer.provide(OrchestrationLayerLive),
+    ),
+  ),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
@@ -300,7 +329,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
+  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, AiUsageMonitor.layer)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
@@ -342,9 +371,14 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeCoreWithGitHubLive = GitHubPrBridgeLive.pipe(
+  Layer.provideMerge(RuntimeCoreDependenciesLive),
+);
+
+const RuntimeDependenciesLive = RuntimeCoreWithGitHubLive.pipe(
   // Misc.
   Layer.provideMerge(ProcessDiagnostics.layer),
+  Layer.provideMerge(HostResourceProbe.layer),
   Layer.provideMerge(ProcessResourceMonitor.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
@@ -377,6 +411,8 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(browserApiCorsLayer),
 );
+
+const productionRoutesLayer = Layer.mergeAll(makeRoutesLayer, githubWebhookRouteLayer);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -506,7 +542,7 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
+      HttpRouter.serve(productionRoutesLayer, {
         disableLogger: !config.logWebSocketEvents,
       }),
       httpListeningLayer,

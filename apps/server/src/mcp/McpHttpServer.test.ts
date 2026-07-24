@@ -7,10 +7,12 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { vi } from "vite-plus/test";
 
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -36,6 +38,9 @@ const client = McpSchema.McpServerClient.of({
 const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
+);
+const DiscordThreadToolTestLayer = McpHttpServer.DiscordThreadToolkitRegistrationLive.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
 );
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -268,4 +273,80 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(press.content).toEqual([{ type: "text", text: "null" }]);
     }),
   ).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("renames the current thread through the Discord mirror tool", () => {
+  const dispatchCalls: Array<unknown> = [];
+  const dispatch = vi.fn((command: unknown) => {
+    dispatchCalls.push(command);
+    return Promise.resolve({ sequence: 1 });
+  });
+
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+
+    const renamed = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "Review PR #428" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(renamed.isError).toBe(false);
+    expect(renamed.structuredContent).toMatchObject({
+      threadId,
+      title: "Review PR #428",
+      discordMirrorRequested: true,
+    });
+    expect(dispatchCalls).toHaveLength(1);
+    expect(dispatchCalls[0]).toMatchObject({
+      type: "thread.meta.update",
+      threadId,
+      title: "Review PR #428",
+    });
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.succeed(OrchestrationEngineService, {
+            readEvents: () => Stream.empty,
+            dispatch: (command) => Effect.promise(() => dispatch(command)),
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("rejects empty Discord mirror thread titles", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+
+    const result = yield* server
+      .callTool({ name: "discord_rename_thread", arguments: { title: "   " } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: { _tag: "InvalidTitle", message: "Title cannot be empty." },
+    });
+  }).pipe(
+    Effect.provide(
+      DiscordThreadToolTestLayer.pipe(
+        Layer.provideMerge(
+          Layer.succeed(OrchestrationEngineService, {
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.die("unused"),
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+          }),
+        ),
+      ),
+    ),
+  ),
 );

@@ -12,6 +12,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTranscript";
 
 import type {
   ChatMessage,
@@ -103,6 +104,7 @@ export interface WorkLogEntry {
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   /** Present on clarifying-question entries; rendered as a Q&A card, never folded away. */
   userInput?: WorkLogUserInput;
+  userInputTranscript?: string;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -799,6 +801,9 @@ export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const resolvedUserInputs = new Map(
+    deriveResolvedUserInputTranscripts(activities).map((entry) => [entry.activityId, entry]),
+  );
   const entries: DerivedWorkLogEntry[] = [];
   // Answers arrive in a separate activity from the questions; fold them back
   // into the entry that asked, so one round trip renders as one Q&A card.
@@ -871,7 +876,13 @@ export function deriveWorkLogEntries(
       }
     }
 
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    const resolvedUserInput = resolvedUserInputs.get(activity.id);
+    if (resolvedUserInput) {
+      entry.detail = resolvedUserInput.preview;
+      entry.userInputTranscript = resolvedUserInput.detail;
+    }
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
     const { activityKind, collapseKey: _collapseKey, ...rest } = entry;

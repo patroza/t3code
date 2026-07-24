@@ -194,6 +194,7 @@ function buildProps() {
     onAnchorReady: () => {},
     onAnchorSizeChanged: () => {},
     contentInsetEndAdjustment: 0,
+    maintainScrollAtEnd: true,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
   };
@@ -424,7 +425,22 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-footer="true"');
   });
 
-  it("does not render collapse controls for short user messages", () => {
+  it("disables end maintenance after the user scrolls away", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        maintainScrollAtEnd={false}
+        timelineEntries={[buildUserTimelineEntry("Earlier prompt.")]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
+    expect(markup).toContain('data-maintain-visible-content-position="object"');
+  });
+
+  it("does not render collapse controls for short user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
