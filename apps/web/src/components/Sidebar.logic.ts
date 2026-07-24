@@ -60,6 +60,25 @@ export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 // stays behind an explicit Show more. Shared by SidebarV2 and the board.
 export const SETTLED_TAIL_INITIAL_COUNT = 10;
 export const SETTLED_TAIL_PAGE_COUNT = 25;
+export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarThreadWorktreeSection =
+  | {
+      kind: "thread";
+      thread: SidebarThreadSummary;
+      /** Resolved checkout path for PR/git status when this thread is not grouped. */
+      checkoutPath?: string;
+    }
+  | {
+      kind: "worktree";
+      key: string;
+      label: string;
+      branch: string | null;
+      checkoutPath: string;
+      source: "local" | "worktree";
+      worktreePath: string | null;
+      threads: SidebarThreadSummary[];
+    };
+
 type SidebarProject = {
   id: string;
   title: string;
@@ -796,9 +815,6 @@ export interface SidebarV2TopStatus {
   className: string;
 }
 
-// The v2 indicator presentation: colored label text (with an icon only for
-// "in motion" and "done") instead of the v1 dot pill. Ready threads stay
-// unlabeled unless they carry an unread completion, which surfaces as "Done".
 export function resolveSidebarV2TopStatus(input: {
   status: SidebarV2Status;
   isUnread: boolean;
