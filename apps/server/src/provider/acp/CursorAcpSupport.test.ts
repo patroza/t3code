@@ -74,6 +74,21 @@ describe("buildCursorAcpSpawnInput", () => {
       cwd: "/tmp/project",
     });
   });
+
+  it("uses a complete non-extending environment when one is supplied", () => {
+    expect(
+      buildCursorAcpSpawnInput(undefined, "/tmp/project", {
+        PATH: "/project/bin",
+        KEEP: "value",
+      }),
+    ).toEqual({
+      command: "cursor-agent",
+      args: ["acp"],
+      cwd: "/tmp/project",
+      env: { PATH: "/project/bin", KEEP: "value" },
+      extendEnv: false,
+    });
+  });
 });
 
 describe("applyCursorAcpModelSelection", () => {

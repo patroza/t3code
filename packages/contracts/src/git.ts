@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
 import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
 import { VcsDriverKind } from "./vcs.ts";
@@ -28,6 +29,11 @@ export const GitActionProgressKind = Schema.Literals([
   "action_failed",
 ]);
 export type GitActionProgressKind = typeof GitActionProgressKind.Type;
+export const GitActionFailureKind = Schema.Literals(["unknown", "commit_signing_failed"]);
+export type GitActionFailureKind = typeof GitActionFailureKind.Type;
+const GitActionFailureKindWithDefault = GitActionFailureKind.pipe(
+  Schema.withDecodingDefaultKey(Effect.succeed("unknown" as const)),
+);
 export const GitActionProgressStream = Schema.Literals(["stdout", "stderr"]);
 export type GitActionProgressStream = typeof GitActionProgressStream.Type;
 const GitCommitStepStatus = Schema.Literals([
@@ -115,6 +121,7 @@ export const GitRunStackedActionInput = Schema.Struct({
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
+  disableCommitSigning: Schema.optional(Schema.Boolean),
   filePaths: Schema.optional(
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
@@ -162,6 +169,46 @@ export const VcsRemoveWorktreeInput = Schema.Struct({
   force: Schema.optional(Schema.Boolean),
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
+
+// Worktree lifecycle (thread-scoped cleanup)
+//
+// These inputs are keyed by thread id instead of a client-provided repository
+// root and path so the server stays authoritative over which worktree (if
+// any) is safe to remove or must be restored.
+
+export const WorktreeCleanupPreviewInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type WorktreeCleanupPreviewInput = typeof WorktreeCleanupPreviewInput.Type;
+
+export const WorktreeCleanupCandidate = Schema.Struct({
+  worktreePath: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema,
+});
+export type WorktreeCleanupCandidate = typeof WorktreeCleanupCandidate.Type;
+
+export const WorktreeCleanupPreviewResult = Schema.Struct({
+  candidate: Schema.NullOr(WorktreeCleanupCandidate),
+});
+export type WorktreeCleanupPreviewResult = typeof WorktreeCleanupPreviewResult.Type;
+
+export const WorktreeCleanupInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type WorktreeCleanupInput = typeof WorktreeCleanupInput.Type;
+
+export const WorktreeCleanupStatus = Schema.Literals([
+  "removed",
+  "retained-active",
+  "already-missing",
+]);
+export type WorktreeCleanupStatus = typeof WorktreeCleanupStatus.Type;
+
+export const WorktreeCleanupResult = Schema.Struct({
+  status: WorktreeCleanupStatus,
+  worktreePath: TrimmedNonEmptyStringSchema,
+});
+export type WorktreeCleanupResult = typeof WorktreeCleanupResult.Type;
 
 export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -329,11 +376,26 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   stdoutLength: Schema.optional(Schema.Number),
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
+  failureKind: GitActionFailureKindWithDefault,
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}`;
+  }
+}
+
+export class WorktreeLifecycleError extends Schema.TaggedErrorClass<WorktreeLifecycleError>()(
+  "WorktreeLifecycleError",
+  {
+    operation: Schema.String,
+    threadId: ThreadId,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Worktree ${this.operation} failed: ${this.detail}`;
   }
 }
 
@@ -432,6 +494,7 @@ const GitActionFailedEvent = Schema.Struct({
   kind: Schema.Literal("action_failed"),
   phase: Schema.NullOr(GitActionProgressPhase),
   message: TrimmedNonEmptyStringSchema,
+  failureKind: GitActionFailureKindWithDefault,
 });
 
 export const GitActionProgressEvent = Schema.Union([

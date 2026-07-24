@@ -40,7 +40,9 @@ import {
   getComposerDraftSnapshot,
   mergeComposerDraftContent,
   restoreComposerDraftSnapshot,
+  updateComposerDraftSettings,
   type ComposerDraft,
+  type ComposerDraftWorkspaceSelection,
 } from "../../state/use-composer-drafts";
 import { useProjects } from "../../state/entities";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
@@ -68,6 +70,7 @@ export function NewTaskDraftScreen(props: {
     readonly environmentId?: string;
     readonly projectId?: string;
   };
+  readonly initialWorkspaceSelection?: ComposerDraftWorkspaceSelection;
   /** Queued outbox message id when editing an existing pending task. */
   readonly pendingTaskId?: string;
   /** Durable native share inbox item to merge into this project draft. */
@@ -292,6 +295,33 @@ export function NewTaskDraftScreen(props: {
     navigation,
     selectedProject,
     setProject,
+  ]);
+
+  const appliedInitialWorkspaceSelectionRef = useRef<ComposerDraftWorkspaceSelection | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    const selection = props.initialWorkspaceSelection;
+    const initialEnvironmentId = props.initialProjectRef?.environmentId;
+    const initialProjectId = props.initialProjectRef?.projectId;
+    if (
+      !selection ||
+      !flow.draftKey ||
+      !selectedProject ||
+      selectedProject.environmentId !== initialEnvironmentId ||
+      selectedProject.id !== initialProjectId ||
+      appliedInitialWorkspaceSelectionRef.current === selection
+    ) {
+      return;
+    }
+    appliedInitialWorkspaceSelectionRef.current = selection;
+    updateComposerDraftSettings(flow.draftKey, { workspaceSelection: selection });
+  }, [
+    flow.draftKey,
+    props.initialProjectRef?.environmentId,
+    props.initialProjectRef?.projectId,
+    props.initialWorkspaceSelection,
+    selectedProject,
   ]);
 
   useEffect(() => {
