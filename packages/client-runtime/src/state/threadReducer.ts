@@ -16,6 +16,12 @@ import type {
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
+  /**
+   * The cached transcript cannot be reconciled in place (a resync rewound past
+   * what this client holds). The caller must drop the cached snapshot and reload
+   * the thread rather than keep rendering stale messages.
+   */
+  | { readonly kind: "reload-required" }
   | { readonly kind: "unchanged" };
 
 const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]>(
@@ -34,6 +40,45 @@ const activityOrder = O.combineAll<OrchestrationThreadActivity>([
   O.mapInput(O.String, (a) => a.createdAt),
   O.mapInput(O.String, (a) => a.id),
 ]);
+
+/**
+ * The oldest activity in a set, by chronology (`createdAt`, then `id`) rather
+ * than array position.
+ *
+ * `activities[0]` is not a stable "oldest": {@link activityOrder} sorts
+ * unsequenced rows to the end (a missing `sequence` is treated as newest) while
+ * the server snapshot lists legacy unsequenced rows first, so the first live
+ * append re-sorts the array and shifts index 0. Both the lazy-load *reshape*
+ * sentinel ({@link liveWindowOldestActivityId}) and the lazy-load *pagination
+ * cursor* derive from this so they agree on which row is oldest regardless of
+ * the reducer's placement of unsequenced rows. Returns `null` when empty.
+ */
+export function oldestActivityByChronology(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadActivity | null {
+  let oldest: OrchestrationThreadActivity | null = null;
+  for (const activity of activities) {
+    if (
+      oldest === null ||
+      activity.createdAt < oldest.createdAt ||
+      (activity.createdAt === oldest.createdAt && activity.id < oldest.id)
+    ) {
+      oldest = activity;
+    }
+  }
+  return oldest;
+}
+
+/**
+ * The id of {@link oldestActivityByChronology}, used as the lazy-load reshape
+ * sentinel (a reconnect re-snapshot or checkpoint revert changes it; a plain
+ * append does not). Returns `null` when empty.
+ */
+export function liveWindowOldestActivityId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadActivity["id"] | null {
+  return oldestActivityByChronology(activities)?.id ?? null;
+}
 
 /**
  * Apply a single orchestration event to an `OrchestrationThread`, returning
@@ -454,6 +499,31 @@ export function applyThreadDetailEvent(
     }
 
     // ── Revert ──────────────────────────────────────────────────────
+    case "thread.messages-resynced": {
+      // Rewind to the last known-good message and replace only the tail after
+      // it. Everything before the anchor is untouched, so a resync costs a
+      // splice rather than re-downloading the whole thread.
+      const tail = Arr.fromIterable(event.payload.messages);
+      if (event.payload.afterMessageId === null) {
+        return { kind: "updated", thread: { ...thread, messages: tail } };
+      }
+      const anchorIndex = thread.messages.findIndex(
+        (entry) => entry.id === event.payload.afterMessageId,
+      );
+      if (anchorIndex === -1) {
+        // The anchor predates what we hold (or we never had it), so we cannot
+        // splice precisely. Reload rather than render a wrong transcript.
+        return { kind: "reload-required" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: [...thread.messages.slice(0, anchorIndex + 1), ...tail],
+        },
+      };
+    }
+
     case "thread.reverted": {
       const checkpoints = pipe(
         thread.checkpoints,
@@ -505,12 +575,21 @@ export function applyThreadDetailEvent(
 
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
-      const activities = pipe(
-        thread.activities,
-        Arr.filter((activity) => activity.id !== event.payload.activity.id),
-        Arr.append(event.payload.activity),
-        Arr.sort(activityOrder),
-      );
+      const activity = event.payload.activity;
+      // Live activities arrive in order and are new: keep the sorted invariant
+      // with a single append instead of filter+append+sort over the (possibly
+      // very long) history on every event.
+      const lastActivity = thread.activities.at(-1);
+      const activities =
+        (lastActivity === undefined || activityOrder(lastActivity, activity) <= 0) &&
+        !thread.activities.some((entry) => entry.id === activity.id)
+          ? Arr.append(thread.activities, activity)
+          : pipe(
+              thread.activities,
+              Arr.filter((entry) => entry.id !== activity.id),
+              Arr.append(activity),
+              Arr.sort(activityOrder),
+            );
 
       return {
         kind: "updated",
