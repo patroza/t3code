@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalConsole:off
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
