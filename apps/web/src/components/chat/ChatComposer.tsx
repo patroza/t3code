@@ -3386,6 +3386,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   variant="ghost"
                   className="shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80"
                   aria-label="Attach images"
+                  onPointerDown={(event) => {
+                    // Keep the editor focused while iOS opens its native picker.
+                    // Pointer focus would blur and collapse an existing-thread composer.
+                    event.preventDefault();
+                  }}
                   onClick={() => imageFileInputRef.current?.click()}
                 >
                   <PlusIcon aria-hidden="true" className="size-4" />
