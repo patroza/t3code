@@ -41,6 +41,8 @@ function makeReadModel(input: {
         pinnedAt: input.pinnedAt ?? null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],

@@ -327,6 +327,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.000Z",
             },
           ],
+          queuedMessages: [],
+          pendingTurnStart: null,
           proposedPlans: [
             {
               id: "plan-1",
