@@ -1,0 +1,35 @@
+name: Managed PR draft lock
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  keep-draft:
+    name: Keep managed PR draft
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Restore draft state without changing CI status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          manifest="$(
+            gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${REPOSITORY}/contents/.github/pr-stack.json?ref=fork/changes"
+          )"
+          if ! jq -e --argjson number "${PR_NUMBER}" \
+            '([.pullRequests[], .integrationOverlays[]] | any(.number == $number))' \
+            <<<"${manifest}" >/dev/null; then
+            exit 0
+          fi
+          if [[ "${IS_DRAFT}" != "true" ]]; then
+            gh pr ready "${PR_NUMBER}" --undo --repo "${REPOSITORY}"
+          fi

@@ -70,6 +70,7 @@ export interface StackManifest {
   readonly forkChangesBranch: string;
   readonly integrationBranch: string;
   readonly pullRequests: ReadonlyArray<StackPullRequest>;
+  readonly integrationOverlays: ReadonlyArray<StackPullRequest>;
 }
 
 export interface PullRequestSnapshot {
@@ -78,6 +79,7 @@ export interface PullRequestSnapshot {
   readonly headBranch: string;
   readonly headOwner: string;
   readonly baseBranch: string;
+  readonly isDraft: boolean;
 }
 
 interface RebaseOperation {
@@ -264,8 +266,14 @@ export function parseManifest(source: string): StackManifest {
     throw new StackError("The PR stack manifest is not valid JSON.", { cause });
   }
   assertObject(value, "The PR stack manifest");
-  const { upstreamRemote, upstreamBranch, forkChangesBranch, integrationBranch, pullRequests } =
-    value;
+  const {
+    upstreamRemote,
+    upstreamBranch,
+    forkChangesBranch,
+    integrationBranch,
+    pullRequests,
+    integrationOverlays = [],
+  } = value;
   if (
     typeof upstreamRemote !== "string" ||
     upstreamRemote.length === 0 ||
@@ -275,7 +283,8 @@ export function parseManifest(source: string): StackManifest {
     forkChangesBranch.length === 0 ||
     typeof integrationBranch !== "string" ||
     integrationBranch.length === 0 ||
-    !Array.isArray(pullRequests)
+    !Array.isArray(pullRequests) ||
+    !Array.isArray(integrationOverlays)
   ) {
     throw new StackError("The PR stack manifest has missing or invalid fields.");
   }
@@ -292,10 +301,23 @@ export function parseManifest(source: string): StackManifest {
     }
     return { number: Number(entry.number), branch: entry.branch };
   });
+  const parsedIntegrationOverlays = integrationOverlays.map((entry, index) => {
+    assertObject(entry, `integrationOverlays[${index}]`);
+    if (
+      !Number.isSafeInteger(entry.number) ||
+      Number(entry.number) <= 0 ||
+      typeof entry.branch !== "string" ||
+      entry.branch.length === 0
+    ) {
+      throw new StackError(`integrationOverlays[${index}] has an invalid number or branch.`);
+    }
+    return { number: Number(entry.number), branch: entry.branch };
+  });
 
-  const numbers = new Set(parsedPullRequests.map(({ number }) => number));
-  const branches = new Set(parsedPullRequests.map(({ branch }) => branch));
-  if (numbers.size !== parsedPullRequests.length || branches.size !== parsedPullRequests.length) {
+  const managed = [...parsedPullRequests, ...parsedIntegrationOverlays];
+  const numbers = new Set(managed.map(({ number }) => number));
+  const branches = new Set(managed.map(({ branch }) => branch));
+  if (numbers.size !== managed.length || branches.size !== managed.length) {
     throw new StackError("The PR stack manifest contains duplicate PR numbers or branches.");
   }
   if (branches.has(integrationBranch)) {
@@ -313,6 +335,7 @@ export function parseManifest(source: string): StackManifest {
     forkChangesBranch,
     integrationBranch,
     pullRequests: parsedPullRequests,
+    integrationOverlays: parsedIntegrationOverlays,
   };
 }
 
@@ -338,6 +361,9 @@ export function validatePullRequestSnapshots(
     if (!actual || actual.state !== "open") {
       throw new StackError(`Manifest PR #${expected.number} is not open.`);
     }
+    if (!actual.isDraft) {
+      throw new StackError(`Managed PR #${expected.number} must remain a draft.`);
+    }
     if (actual.headOwner !== EXPECTED_REPOSITORY.split("/")[0]) {
       throw new StackError(
         `PR #${expected.number} is owned by ${actual.headOwner}, expected ${EXPECTED_REPOSITORY.split("/")[0]}.`,
@@ -355,6 +381,28 @@ export function validatePullRequestSnapshots(
       );
     }
   }
+  for (const expected of manifest.integrationOverlays) {
+    const actual = pullRequests.find(({ number }) => number === expected.number);
+    if (!actual || actual.state !== "open") {
+      throw new StackError(`Integration overlay PR #${expected.number} is not open.`);
+    }
+    if (!actual.isDraft) {
+      throw new StackError(`Integration overlay PR #${expected.number} must remain a draft.`);
+    }
+    if (actual.headOwner !== EXPECTED_REPOSITORY.split("/")[0]) {
+      throw new StackError(`Integration overlay PR #${expected.number} is not owned by this fork.`);
+    }
+    if (actual.headBranch !== expected.branch) {
+      throw new StackError(
+        `Integration overlay PR #${expected.number} uses ${actual.headBranch}, expected ${expected.branch}.`,
+      );
+    }
+    if (actual.baseBranch !== manifest.forkChangesBranch) {
+      throw new StackError(
+        `Integration overlay PR #${expected.number} is based on ${actual.baseBranch}, expected ${manifest.forkChangesBranch}.`,
+      );
+    }
+  }
 }
 
 interface GitHubPullResponse {
@@ -366,6 +414,7 @@ interface GitHubPullResponse {
     readonly repo?: { readonly full_name?: unknown } | null;
   } | null;
   readonly base?: { readonly ref?: unknown } | null;
+  readonly draft?: unknown;
 }
 
 function githubToken(): string {
@@ -410,7 +459,7 @@ export async function fetchPullRequestSnapshots(
   for (const response of openResponses) {
     if (typeof response.number === "number") byNumber.set(response.number, response);
   }
-  for (const { number } of manifest.pullRequests) {
+  for (const { number } of [...manifest.pullRequests, ...manifest.integrationOverlays]) {
     if (!byNumber.has(number)) {
       const value = await githubRequest(`/repos/${EXPECTED_REPOSITORY}/pulls/${number}`);
       assertObject(value, `GitHub PR #${number}`);
@@ -425,12 +474,14 @@ export async function fetchPullRequestSnapshots(
     const headOwner = response.head?.user?.login;
     const headRepository = response.head?.repo?.full_name;
     const baseBranch = response.base?.ref;
+    const isDraft = response.draft;
     if (
       typeof number !== "number" ||
       typeof state !== "string" ||
       typeof headBranch !== "string" ||
       typeof headOwner !== "string" ||
-      typeof baseBranch !== "string"
+      typeof baseBranch !== "string" ||
+      typeof isDraft !== "boolean"
     ) {
       throw new StackError("GitHub returned an invalid pull request record.");
     }
@@ -441,9 +492,10 @@ export async function fetchPullRequestSnapshots(
         headBranch,
         headOwner: typeof headRepository === "string" ? headRepository : headOwner,
         baseBranch,
+        isDraft,
       };
     }
-    return { number, state, headBranch, headOwner, baseBranch };
+    return { number, state, headBranch, headOwner, baseBranch, isDraft };
   });
 }
 
