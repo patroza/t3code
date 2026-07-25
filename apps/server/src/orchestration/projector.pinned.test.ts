@@ -2,6 +2,7 @@ import {
   CommandId,
   EventId,
   ProjectId,
+  ProviderDriverKind,
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
@@ -9,6 +10,9 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
+
+const firstThread = (model: ReturnType<typeof createEmptyReadModel>) =>
+  Array.from(model.threads)[0]?.[1];
 
 function makeEvent(input: {
   readonly sequence: number;
@@ -42,7 +46,7 @@ it.effect("projects pin lifecycle events", () =>
           threadId: ThreadId.make("thread-1"),
           projectId: ProjectId.make("project-1"),
           title: "Thread",
-          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          modelSelection: { provider: ProviderDriverKind.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
           interactionMode: "default",
           branch: null,
@@ -52,7 +56,7 @@ it.effect("projects pin lifecycle events", () =>
         },
       }),
     );
-    expect(created.threads[0]?.pinnedAt ?? null).toBeNull();
+    expect(firstThread(created)?.pinnedAt ?? null).toBeNull();
 
     const pinned = yield* projectEvent(
       created,
@@ -62,7 +66,7 @@ it.effect("projects pin lifecycle events", () =>
         payload: { threadId: ThreadId.make("thread-1"), pinnedAt: now, updatedAt: now },
       }),
     );
-    expect(pinned.threads[0]?.pinnedAt).toBe(now);
+    expect(firstThread(pinned)?.pinnedAt).toBe(now);
 
     const unpinned = yield* projectEvent(
       pinned,
@@ -72,6 +76,6 @@ it.effect("projects pin lifecycle events", () =>
         payload: { threadId: ThreadId.make("thread-1"), updatedAt: now },
       }),
     );
-    expect(unpinned.threads[0]?.pinnedAt).toBeNull();
+    expect(firstThread(unpinned)?.pinnedAt ?? null).toBeNull();
   }),
 );
