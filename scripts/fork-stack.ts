@@ -335,7 +335,7 @@ export function transplantUniqueCommits(
     if (
       shouldAutoSkipConflictingTransplant({
         changedFileCount: fileCount,
-        maxFiles: options.maxAutoSkipFiles,
+        ...(options.maxAutoSkipFiles === undefined ? {} : { maxFiles: options.maxAutoSkipFiles }),
       })
     ) {
       skipped.push(oid);
