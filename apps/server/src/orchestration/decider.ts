@@ -322,7 +322,9 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       },
     });
   }
-  if (thread.snoozedUntil !== null) {
+  // Older snapshots may omit the optional snooze fields entirely. Treat both
+  // null and undefined as awake; only a real wake timestamp needs an event.
+  if (thread.snoozedUntil != null) {
     lifecycleResetEvents.push({
       ...(yield* withEventBase({
         aggregateKind: "thread",
