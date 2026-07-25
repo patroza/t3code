@@ -143,6 +143,12 @@
         "command": "t3Code.openChat",
         "title": "T3 Code: Open Chat",
         "category": "T3 Code"
+      },
+      {
+        "command": "t3Code.openInT3",
+        "title": "T3 Code: Open in T3",
+        "category": "T3 Code",
+        "icon": "$(link-external)"
       }
     ],
     "menus": {
@@ -187,6 +193,7 @@
     "onCommand:t3Code.clearBearerToken",
     "onCommand:t3Code.newThread",
     "onCommand:t3Code.openChat",
+    "onCommand:t3Code.openInT3",
     "onCommand:t3Code.selectThread",
     "onCommand:t3Code.setBearerToken",
     "onCommand:t3Code.showDiagnostics",
