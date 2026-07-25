@@ -75,6 +75,13 @@ commit. Unknown paths are runtime-affecting by default. This preserves safe depl
 contains mixed changes or a new source directory appears, while avoiding fleet rebuilds and mobile
 OTA updates for tests, snapshots, documentation, agent instructions, and GitHub-only metadata.
 
+Runtime-affecting integrations also publish both mobile release tracks from the exact tested SHA.
+The production track receives an OTA update. The development track uses Expo Fingerprint: it
+publishes an OTA update when a compatible development client already exists, or creates a new
+internal iOS development build when native inputs changed. Manual runs of
+`Mobile EAS Development` may target iOS, Android, or both; automatic integration publishing targets
+iOS.
+
 The manifest contains the permanent `fork/tim`, `fork/candidates`, and `fork/changes` PRs. The
 synchronizer rebases that provenance chain onto the latest upstream `main` and rebuilds
 `fork/integration`. Other open repository PRs are ignored. Temporary state is retained after a
