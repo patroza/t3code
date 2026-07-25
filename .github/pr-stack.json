@@ -16,5 +16,11 @@
       "number": 2,
       "branch": "fork/changes"
     }
+  ],
+  "integrationOverlays": [
+    {
+      "number": 10,
+      "branch": "t3-discord/f7d37879-desktop-deeplinks"
+    }
   ]
 }
