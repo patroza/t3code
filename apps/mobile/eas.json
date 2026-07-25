@@ -45,7 +45,11 @@
       "corepack": true,
       "env": {
         "APP_VARIANT": "production",
-        "NODE_OPTIONS": "--max-old-space-size=4096"
+        "NODE_OPTIONS": "--max-old-space-size=4096",
+        "T3CODE_MOBILE_EAS_PROJECT_ID": "731ac55d-f006-4a63-95ef-091c2146caeb",
+        "T3CODE_MOBILE_EXPO_OWNER": "patroza",
+        "T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER": "dev.patroza.t3code",
+        "T3CODE_MOBILE_IOS_TEAM_ID": "8B9VRZFRAA"
       },
       "channel": "production",
       "environment": "production",
