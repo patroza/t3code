@@ -6,6 +6,12 @@
       "sourceSha": "de8fd65934768173819b93adcd6b92af3e8c7fc3",
       "status": "active",
       "purpose": "Bound server thread history and lazily page older web activity"
+    },
+    {
+      "upstreamPr": 3510,
+      "sourceSha": "034f4936d7a1435887bb62ac3f2db61f08928cbf",
+      "status": "active",
+      "purpose": "Page mobile history and bound stale subscription catch-up"
     }
   ]
 }
