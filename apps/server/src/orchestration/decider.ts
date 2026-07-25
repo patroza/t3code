@@ -322,7 +322,9 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       },
     });
   }
-  if (thread.snoozedUntil !== null) {
+  // Treat missing optional the same as null: fixtures and older snapshots may
+  // omit snoozedUntil entirely (`undefined !== null` would false-positive).
+  if (thread.snoozedUntil != null) {
     lifecycleResetEvents.push({
       ...(yield* withEventBase({
         aggregateKind: "thread",
