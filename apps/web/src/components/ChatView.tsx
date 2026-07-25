@@ -400,6 +400,12 @@ const PreviewPanel = lazy(() =>
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+
+// Turns whose original startThreadTurn call has not settled yet. The outbox
+// drain must not replay these: a bootstrap turn stays in flight for seconds
+// while the server creates the worktree, and a replay in that window re-runs
+// `git worktree add` against a branch that now exists.
+const inFlightThreadTurnSends = new Set<MessageId>();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
   "textarea",
@@ -1717,7 +1723,8 @@ function ChatViewContent(props: ChatViewProps) {
         const turn = turns.find(
           (candidate) =>
             candidate.environmentId === drainThread.environmentId &&
-            candidate.input.threadId === drainThread.id,
+            candidate.input.threadId === drainThread.id &&
+            !inFlightThreadTurnSends.has(candidate.messageId),
         );
         if (!turn || cancelled) return;
 
@@ -5056,10 +5063,16 @@ function ChatViewContent(props: ChatViewProps) {
           outboxPersisted = false;
           console.warn("[thread-turn-outbox] failed to persist outgoing turn", error);
         }
-        const startResult = await startThreadTurn({
-          environmentId,
-          input: queuedTurnInput,
-        });
+        inFlightThreadTurnSends.add(messageIdForSend);
+        let startResult: Awaited<ReturnType<typeof startThreadTurn>>;
+        try {
+          startResult = await startThreadTurn({
+            environmentId,
+            input: queuedTurnInput,
+          });
+        } finally {
+          inFlightThreadTurnSends.delete(messageIdForSend);
+        }
         if (startResult._tag === "Failure") {
           const error = squashAtomCommandFailure(startResult);
           const message = error instanceof Error ? error.message : String(error);
