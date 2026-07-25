@@ -33,6 +33,7 @@ interface FixtureOptions {
   readonly emptyIntegration?: boolean;
   readonly unchangedUpstream?: boolean;
   readonly insertMiddleLayer?: boolean;
+  readonly advanceTopAfterIntegration?: boolean;
 }
 
 function runGit(
@@ -165,6 +166,12 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     commitFile(work, "automation.txt", "automation\n", "stack automation");
   }
   runGit(work, ["push", "--quiet", "origin", "fork/integration"]);
+
+  if (options.advanceTopAfterIntegration) {
+    runGit(work, ["checkout", "--quiet", "feature/pr-6"]);
+    commitFile(work, "pr-6-late.txt", "merged after integration\n", "advance fork changes");
+    runGit(work, ["push", "--quiet", "origin", "feature/pr-6"]);
+  }
 
   if (options.updatePr5AfterDescendant) {
     runGit(work, ["checkout", "--quiet", "feature/pr-5"]);
@@ -333,6 +340,29 @@ describe("rebase-pr-stack", () => {
     assert.deepStrictEqual(
       runGit(fixture.origin, ["log", "--reverse", "--format=%s", `${pr5}..${pr6}`]).split("\n"),
       ["pr 6"],
+    );
+  });
+
+  it("rebases integration from its actual base after fork changes advances", async () => {
+    const fixture = createFixture({ advanceTopAfterIntegration: true });
+
+    await syncStack({
+      sourceRoot: fixture.work,
+      push: true,
+      validatePullRequests: false,
+    });
+
+    const forkChanges = remoteTip(fixture.origin, fixture.manifest.forkChangesBranch);
+    const integration = remoteTip(fixture.origin, fixture.manifest.integrationBranch);
+    assert.ok(isAncestor(fixture.origin, forkChanges, integration));
+    assert.deepStrictEqual(
+      runGit(fixture.origin, [
+        "log",
+        "--reverse",
+        "--format=%s",
+        `${forkChanges}..${integration}`,
+      ]).split("\n"),
+      ["stack automation"],
     );
   });
 
