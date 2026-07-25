@@ -18,6 +18,8 @@ import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTra
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
+import type { DraftComposerImageAttachment } from "./composerImages";
+
 export interface PendingApproval {
   readonly requestId: ApprovalRequestId;
   readonly requestKind: "command" | "file-read" | "file-change";
@@ -94,6 +96,9 @@ type RawThreadFeedEntry =
       readonly id: string;
       readonly createdAt: string;
       readonly message: OrchestrationThread["messages"][number];
+      readonly deliveryState?: "waiting" | "sending" | "queued";
+      readonly queueSource?: "local" | "server";
+      readonly previewAttachments?: ReadonlyArray<DraftComposerImageAttachment>;
     }
   | {
       readonly type: "activity";
@@ -135,6 +140,18 @@ export type ThreadFeedEntry =
       readonly label: string;
       readonly expanded: boolean;
     };
+
+export function deriveQueuedMessageControls(
+  deliveryState: "waiting" | "sending" | "queued" | undefined,
+  queueSource: "local" | "server" | undefined,
+): { readonly canSteer: boolean; readonly canRemove: boolean } {
+  return {
+    canSteer: deliveryState === "queued" && queueSource === "server",
+    canRemove:
+      (deliveryState === "queued" && queueSource === "server") ||
+      (deliveryState === "waiting" && queueSource === "local"),
+  };
+}
 
 export type ThreadFeedLatestTurn = Pick<
   OrchestrationLatestTurn,
