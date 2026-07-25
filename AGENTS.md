@@ -41,7 +41,9 @@ branches.
   deployment. Do not re-enable or target those workflows for fork releases.
 - Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
   the provenance layers, rebuilds `fork/integration`, and dispatches CI for its exact SHA.
-- Successful `fork/integration` CI hands the exact tested SHA to the private operations repository.
+- Successful `fork/integration` CI classifies the complete tree diff from the previous approved
+  integration tree. Runtime-affecting changes hand the exact tested SHA to the private operations
+  repository; tests, documentation, agent metadata, and GitHub-only metadata do not deploy.
 - Machine topology and deployment implementation belong in a separate private operations repository,
   not this repository.
 
