@@ -793,7 +793,6 @@ function ThreadRouteContent(
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
-          selectedThreadQueueCount={composer.selectedThreadQueueCount}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}
@@ -804,6 +803,8 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onSteerQueuedMessage={composer.onSteerQueuedMessage}
+          onRemoveQueuedMessage={composer.onRemoveQueuedMessage}
           onStartNewThread={handleStartNewThread}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
