@@ -986,57 +986,141 @@ export async function rebaseOpenFeaturePullRequests(options: {
       continue;
     }
 
-    // Skip if feature does not contain old base (already rebased, or never based on it).
+    const hasNewBase = run("git", ["merge-base", "--is-ancestor", newBase, remoteTip], {
+      cwd: repoDir,
+      allowFailure: true,
+    });
+    if (hasNewBase.status === 0) {
+      skipped.push({
+        number: feature.number,
+        branch: feature.branch,
+        reason: "already based on new fork/changes",
+      });
+      continue;
+    }
+
+    // Prefer one-step rebase --onto when the previous fork/changes tip is still an ancestor.
     const hasOldBase = run(
       "git",
       ["merge-base", "--is-ancestor", options.oldForkChangesTip, remoteTip],
       { cwd: repoDir, allowFailure: true },
     );
-    if (hasOldBase.status !== 0) {
-      const hasNewBase = run("git", ["merge-base", "--is-ancestor", newBase, remoteTip], {
-        cwd: repoDir,
-        allowFailure: true,
-      });
-      skipped.push({
-        number: feature.number,
-        branch: feature.branch,
-        reason:
-          hasNewBase.status === 0
-            ? "already based on new fork/changes"
-            : "does not contain previous fork/changes tip; needs manual replay",
-      });
-      continue;
-    }
 
-    git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
-    const rebaseResult = run(
-      "git",
-      ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, options.oldForkChangesTip],
-      {
-        cwd: repoDir,
-        allowFailure: true,
-        env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
-      },
-    );
-    if (rebaseResult.status !== 0) {
-      if (rebaseInProgress(repoDir)) {
-        run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
+    let newTip: string | null = null;
+
+    if (hasOldBase.status === 0) {
+      git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
+      const rebaseResult = run(
+        "git",
+        ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, options.oldForkChangesTip],
+        {
+          cwd: repoDir,
+          allowFailure: true,
+          env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+        },
+      );
+      if (rebaseResult.status !== 0) {
+        if (rebaseInProgress(repoDir)) {
+          run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
+        }
+        // Fall through to patch-id transplant below.
+      } else {
+        newTip = git(repoDir, ["rev-parse", "HEAD"]);
       }
-      const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
-        allowFailure: true,
-      });
-      conflicts.push({
-        number: feature.number,
-        branch: feature.branch,
-        message: conflictPaths
-          ? `conflict: ${conflictPaths.split("\n").join(", ")}`
-          : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase failed"),
-      });
-      continue;
     }
 
-    const newTip = git(repoDir, ["rev-parse", "HEAD"]);
-    if (newTip === remoteTip) {
+    // Multi-generation / rewritten-base fallback: transplant only git-cherry unique patches.
+    if (newTip === null) {
+      const cherryOutput = git(repoDir, ["cherry", newBase, remoteTip], { allowFailure: true });
+      const uniqueLines = cherryOutput
+        ? cherryOutput
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.startsWith("+"))
+            .map(
+              (line) =>
+                line
+                  .replace(/^\+\s*/, "")
+                  .trim()
+                  .split(/\s+/)[0] ?? "",
+            )
+            .filter(Boolean)
+        : [];
+      const revOldestFirst = git(
+        repoDir,
+        ["rev-list", "--reverse", "--no-merges", `${newBase}..${remoteTip}`],
+        { allowFailure: true },
+      )
+        .split("\n")
+        .filter(Boolean);
+      const uniqueSet = new Set(uniqueLines);
+      const uniqueOldestFirst = revOldestFirst.filter((oid) => uniqueSet.has(oid));
+
+      if (uniqueOldestFirst.length === 0) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason:
+            hasOldBase.status === 0
+              ? "rebase --onto failed and no unique patches vs new base"
+              : "no unique patches vs new fork/changes (already landed or empty)",
+        });
+        continue;
+      }
+
+      git(repoDir, ["checkout", "--quiet", "--detach", newBase]);
+      const applied: string[] = [];
+      let hardConflict: string | null = null;
+      for (const oid of uniqueOldestFirst) {
+        const pick = run("git", ["-c", "commit.gpgsign=false", "cherry-pick", oid], {
+          cwd: repoDir,
+          allowFailure: true,
+          env: { GIT_EDITOR: "true" },
+        });
+        if (pick.status === 0) {
+          applied.push(oid);
+          continue;
+        }
+        const cherryHead = git(repoDir, ["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"], {
+          allowFailure: true,
+        });
+        if (cherryHead || rebaseInProgress(repoDir)) {
+          run("git", ["cherry-pick", "--abort"], { cwd: repoDir, allowFailure: true });
+        }
+        const nameOnly = git(repoDir, ["show", "--pretty=format:", "--name-only", oid], {
+          allowFailure: true,
+        });
+        const fileCount = nameOnly
+          ? nameOnly.split("\n").filter((line) => line.trim() !== "").length
+          : 0;
+        // Match fork-stack FEATURE_TRANSPLANT_AUTO_SKIP_MAX_FILES (30).
+        if (fileCount > 30) {
+          continue;
+        }
+        hardConflict = oid;
+        break;
+      }
+
+      if (hardConflict !== null) {
+        conflicts.push({
+          number: feature.number,
+          branch: feature.branch,
+          message: `cherry-pick conflict on ${hardConflict.slice(0, 12)} (portable unique commit)`,
+        });
+        continue;
+      }
+      if (applied.length === 0) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason: "only non-portable rewritten-layer commits remained unique",
+        });
+        continue;
+      }
+      newTip = git(repoDir, ["rev-parse", "HEAD"]);
+    }
+
+    if (newTip === null || newTip === remoteTip) {
       skipped.push({
         number: feature.number,
         branch: feature.branch,
