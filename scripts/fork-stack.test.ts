@@ -1,19 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseManifest, StackError, type StackManifest } from "./rebase-pr-stack.ts";
+import {
+  appendBaseHistory,
+  parseBaseHistory,
+  parseManifest,
+  recoverOldBaseTip,
+  selectOpenFeaturePullRequests,
+  StackError,
+  type StackManifest,
+} from "./rebase-pr-stack.ts";
 import {
   featurePullRequestBaseBranch,
-  orderUniqueCommitsOldestFirst,
   planFeatureBranchUpdate,
   planLocalSyncWithRemote,
   registerPullRequest,
-  shouldAutoSkipConflictingTransplant,
   shouldRetargetPullRequestBase,
   stackParentBranch,
   uniqueLocalCommitsFromCherry,
   unregisterTopPullRequest,
 } from "./fork-stack.ts";
-import { selectOpenFeaturePullRequests } from "./rebase-pr-stack.ts";
 
 const manifest: StackManifest = {
   upstreamRemote: "upstream",
@@ -38,54 +43,69 @@ describe("fork stack helpers", () => {
   it("plans a simple rebase when behind an ancestor base", () => {
     expect(
       planFeatureBranchUpdate({
-        baseIsAncestorOfHead: true,
+        newBaseIsAncestorOfHead: true,
         behindCount: 3,
-        aheadCount: 1,
-        uniquePatchOidsOldestFirst: ["abc"],
+        recoveredOldBaseOid: null,
       }),
-    ).toEqual({ action: "rebase", replayOids: [] });
+    ).toEqual({ action: "rebase", oldBaseOid: null });
   });
 
   it("is a noop when already up to date with the base tip", () => {
     expect(
       planFeatureBranchUpdate({
-        baseIsAncestorOfHead: true,
+        newBaseIsAncestorOfHead: true,
         behindCount: 0,
-        aheadCount: 2,
-        uniquePatchOidsOldestFirst: ["abc", "def"],
+        recoveredOldBaseOid: null,
       }),
-    ).toEqual({ action: "noop", replayOids: [] });
+    ).toEqual({ action: "noop", oldBaseOid: null });
   });
 
-  it("cherry-picks only patch-id unique commits when history diverged after a base rewrite", () => {
+  it("plans rebase --onto when the old base tip is recovered after a rewrite", () => {
     expect(
       planFeatureBranchUpdate({
-        baseIsAncestorOfHead: false,
+        newBaseIsAncestorOfHead: false,
         behindCount: 50,
-        aheadCount: 600,
-        uniquePatchOidsOldestFirst: ["only-feature-commit"],
+        recoveredOldBaseOid: "oldbase123",
       }),
-    ).toEqual({ action: "cherry-pick-unique", replayOids: ["only-feature-commit"] });
+    ).toEqual({ action: "rebase-onto", oldBaseOid: "oldbase123" });
   });
 
-  it("is a noop when diverged but every patch already exists on the new base", () => {
-    expect(
+  it("throws when diverged and no old base tip can be recovered", () => {
+    expect(() =>
       planFeatureBranchUpdate({
-        baseIsAncestorOfHead: false,
+        newBaseIsAncestorOfHead: false,
         behindCount: 10,
-        aheadCount: 10,
-        uniquePatchOidsOldestFirst: [],
+        recoveredOldBaseOid: null,
       }),
-    ).toEqual({ action: "noop", replayOids: [] });
+    ).toThrow(StackError);
   });
 
-  it("orders unique commits oldest-first from rev-list order", () => {
-    expect(orderUniqueCommitsOldestFirst(["a", "b", "c", "d"], ["d", "b"])).toEqual(["b", "d"]);
+  it("recovers the newest historical base tip that is still an ancestor of head", () => {
+    const ancestors = new Set(["aaa", "bbb"]);
+    expect(
+      recoverOldBaseTip({
+        historicalBaseTipsNewestFirst: ["ccc", "bbb", "aaa"],
+        isAncestorOfHead: (tip) => ancestors.has(tip),
+      }),
+    ).toBe("bbb");
   });
 
-  it("auto-skips only large conflicting transplants", () => {
-    expect(shouldAutoSkipConflictingTransplant({ changedFileCount: 7 })).toBe(false);
-    expect(shouldAutoSkipConflictingTransplant({ changedFileCount: 31 })).toBe(true);
+  it("returns null when no historical base tip is an ancestor", () => {
+    expect(
+      recoverOldBaseTip({
+        historicalBaseTipsNewestFirst: ["ccc", "ddd"],
+        isAncestorOfHead: () => false,
+      }),
+    ).toBeNull();
+  });
+
+  it("appends base history newest-first without duplicates", () => {
+    expect(parseBaseHistory("aaa1111\nbbb2222\n")).toEqual(["aaa1111", "bbb2222"]);
+    expect(appendBaseHistory(["bbb2222", "aaa1111"], ["ccc3333", "bbb2222"], 10)).toEqual([
+      "ccc3333",
+      "bbb2222",
+      "aaa1111",
+    ]);
   });
 
   it("resets local to remote when git cherry has no unique patches", () => {
