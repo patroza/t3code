@@ -51,6 +51,8 @@ function makeReadModel(input: {
         snoozedAt: input.snoozedAt ?? (input.snoozedUntil != null ? SNOOZED_AT : null),
         deletedAt: null,
         messages: input.messages ?? [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: input.activities ?? [],
         checkpoints: [],
