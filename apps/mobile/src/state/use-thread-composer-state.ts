@@ -41,12 +41,16 @@ import {
   updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
-import { setPendingConnectionError } from "../state/use-remote-environment-registry";
+import {
+  setPendingConnectionError,
+  useRemoteConnectionStatus,
+} from "../state/use-remote-environment-registry";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { threadEnvironment } from "./threads";
+import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "./thread-outbox";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
@@ -87,6 +91,7 @@ export function useThreadComposerState() {
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const { connectedEnvironments } = useRemoteConnectionStatus();
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -105,6 +110,12 @@ export function useThreadComposerState() {
   // sets `hasMoreActivities`); older pages are fetched on demand and prepended.
   const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
     reportFailure: false,
+  });
+  const steerQueuedMessage = useAtomCommand(threadEnvironment.steerQueuedMessage, {
+    label: "steer queued message",
+  });
+  const removeServerQueuedMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
+    label: "remove queued message",
   });
   const selectedEnvironmentIdForActivities = selectedThreadShell?.environmentId ?? null;
   const selectedThreadIdForActivities = selectedThreadShell?.id ?? null;
@@ -143,18 +154,91 @@ export function useThreadComposerState() {
     loadPage: loadOlderActivitiesPage,
   });
 
-  const selectedThreadFeed = useMemo(
-    () =>
-      selectedThreadDetail
-        ? buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities })
-        : [],
-    [selectedThreadDetail, mergedActivities],
-  );
+  const selectedThreadFeed = useMemo(() => {
+    // Local outbox rows must still paint while detail is hydrating — otherwise
+    // send during "Loading messages…" produces no bubble until the snapshot lands.
+    const feed = selectedThreadDetail
+      ? buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities })
+      : [];
+    const timelineMessageIds = new Set(
+      selectedThreadDetail?.messages.map((message) => message.id) ?? [],
+    );
+    const optimisticByMessageId = new Map<
+      MessageId,
+      (typeof feed)[number] & { readonly type: "message" }
+    >();
+
+    for (const message of selectedThreadDetail?.queuedMessages ?? []) {
+      if (timelineMessageIds.has(message.messageId)) {
+        continue;
+      }
+      optimisticByMessageId.set(message.messageId, {
+        type: "message",
+        id: message.messageId,
+        createdAt: message.queuedAt,
+        deliveryState: "queued",
+        queueSource: "server",
+        message: {
+          id: message.messageId,
+          role: "user",
+          text: message.text,
+          attachments: message.attachments,
+          turnId: null,
+          streaming: false,
+          createdAt: message.queuedAt,
+          updatedAt: message.queuedAt,
+        },
+      });
+    }
+
+    // A local outbox entry wins over the matching server projection until the
+    // command acknowledgement removes it. That makes the bubble transition
+    // from "Sending" to "Queued" without rendering twice.
+    for (const message of selectedThreadQueuedMessages) {
+      if (timelineMessageIds.has(message.messageId)) {
+        continue;
+      }
+      optimisticByMessageId.set(message.messageId, {
+        type: "message",
+        id: message.messageId,
+        createdAt: message.createdAt,
+        queueSource: "local",
+        deliveryState: connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === message.environmentId &&
+            environment.connectionState === "connected",
+        )
+          ? "sending"
+          : "waiting",
+        previewAttachments: message.attachments,
+        message: {
+          id: message.messageId,
+          role: "user",
+          text: message.text,
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: message.createdAt,
+          updatedAt: message.createdAt,
+        },
+      });
+    }
+
+    if (optimisticByMessageId.size === 0) {
+      return feed;
+    }
+
+    return [
+      ...feed,
+      ...Array.from(optimisticByMessageId.values()).sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      ),
+    ];
+  }, [connectedEnvironments, selectedThreadDetail, selectedThreadQueuedMessages, mergedActivities]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
-  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
@@ -205,28 +289,68 @@ export function useThreadComposerState() {
 
     const metadata = makeQueuedMessageMetadata();
     const messageId = MessageId.make(metadata.messageId);
-    try {
-      await enqueueThreadOutboxMessage({
-        environmentId: selectedThreadShell.environmentId,
-        threadId: selectedThreadShell.id,
-        messageId,
-        commandId: CommandId.make(metadata.commandId),
-        text,
-        attachments,
-        modelSelection: draft.modelSelection ?? thread.modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
-        createdAt: metadata.createdAt,
-      });
-      clearComposerDraftContent(threadKey);
-      return messageId;
-    } catch (error) {
+    // Enqueue updates the in-memory outbox synchronously so the feed can paint
+    // "Sending" before disk I/O finishes. Clear the draft in the same turn and
+    // return immediately — durability trails off the critical path.
+    void enqueueThreadOutboxMessage({
+      environmentId: selectedThreadShell.environmentId,
+      threadId: selectedThreadShell.id,
+      messageId,
+      commandId: CommandId.make(metadata.commandId),
+      text,
+      attachments,
+      modelSelection: draft.modelSelection ?? thread.modelSelection,
+      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+      interactionMode: draft.interactionMode ?? thread.interactionMode,
+      createdAt: metadata.createdAt,
+    }).catch((error) => {
+      // Memory outbox already rolled back on write failure; restore the draft.
+      setComposerDraftText(threadKey, draft.text);
+      if (draft.attachments.length > 0) {
+        appendComposerDraftAttachments(threadKey, draft.attachments);
+      }
       setPendingConnectionError(
         error instanceof Error ? error.message : "Failed to save the queued message.",
       );
-      return null;
-    }
+    });
+    clearComposerDraftContent(threadKey);
+    return messageId;
   }, [selectedThreadDetail, selectedThreadShell]);
+
+  const onSteerQueuedMessage = useCallback(
+    async (messageId: MessageId) => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      await steerQueuedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, messageId },
+      });
+    },
+    [selectedThreadShell, steerQueuedMessage],
+  );
+
+  const onRemoveQueuedMessage = useCallback(
+    async (messageId: MessageId, source: "local" | "server") => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      if (source === "local") {
+        const message = selectedThreadQueuedMessages.find(
+          (candidate) => candidate.messageId === messageId,
+        );
+        if (message) {
+          await removeThreadOutboxMessage(message);
+        }
+        return;
+      }
+      await removeServerQueuedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, messageId },
+      });
+    },
+    [removeServerQueuedMessage, selectedThreadQueuedMessages, selectedThreadShell],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -348,7 +472,6 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
-    selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
@@ -369,6 +492,8 @@ export function useThreadComposerState() {
     onNativePasteImages,
     onRemoveDraftImage,
     onSendMessage,
+    onSteerQueuedMessage,
+    onRemoveQueuedMessage,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,
