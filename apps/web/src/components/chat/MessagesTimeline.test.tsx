@@ -527,6 +527,89 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Work Log");
   });
 
+  it("renders a clarifying question with the answer it received", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Question: Approach",
+              tone: "info",
+              userInput: {
+                requestId: "req-1",
+                answered: true,
+                questions: [
+                  {
+                    id: "How should we proceed?",
+                    header: "Approach",
+                    question: "How should we proceed?",
+                    multiSelect: false,
+                    options: [
+                      { label: "Ship it", description: "Merge as-is" },
+                      { label: "Iterate", description: "Another review round" },
+                    ],
+                    selectedLabels: ["Iterate"],
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Approach");
+    expect(markup).toContain("How should we proceed?");
+    expect(markup).toContain("Iterate");
+    expect(markup).toContain("Show options");
+    // The chosen answer reads on its own; alternatives stay behind the toggle.
+    expect(markup).not.toContain("Another review round");
+  });
+
+  it("marks an unanswered clarifying question as awaiting a reply", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Question: Approach",
+              tone: "info",
+              userInput: {
+                requestId: "req-1",
+                answered: false,
+                questions: [
+                  {
+                    id: "How should we proceed?",
+                    header: "Approach",
+                    question: "How should we proceed?",
+                    multiSelect: false,
+                    options: [{ label: "Ship it", description: "Merge as-is" }],
+                    selectedLabels: [],
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Awaiting your answer");
+    expect(markup).not.toContain("Work Log");
+  });
+
   it("formats changed file paths from the workspace root", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
