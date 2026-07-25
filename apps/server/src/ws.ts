@@ -933,6 +933,7 @@ const makeWsRpcLayer = (
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
+          let worktreeAlreadyPrepared = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
@@ -1054,7 +1055,7 @@ const makeWsRpcLayer = (
 
           const runSetupProgram = () =>
             Effect.gen(function* () {
-              if (!bootstrap?.runSetupScript || !targetWorktreePath) {
+              if (!bootstrap?.runSetupScript || !targetWorktreePath || worktreeAlreadyPrepared) {
                 return;
               }
               const worktreePath = targetWorktreePath;
@@ -1132,7 +1133,26 @@ const makeWsRpcLayer = (
                 );
             }
 
-            if (bootstrap?.prepareWorktree) {
+            if (bootstrap?.prepareWorktree && !(bootstrap.createThread && createdThread)) {
+              // A replayed bootstrap (reconnect or outbox retry) can reach
+              // this point after the original already prepared the worktree;
+              // re-running `git worktree add` would fail on the now-existing
+              // branch. When the thread pre-existed, reuse its recorded
+              // worktree and skip setup, which the original bootstrap ran.
+              const projectedShell = yield* projectionSnapshotQuery
+                .getThreadShellById(command.threadId)
+                .pipe(Effect.orElseSucceed(() => Option.none()));
+              const existingWorktreePath = Option.isSome(projectedShell)
+                ? projectedShell.value.worktreePath
+                : null;
+              if (existingWorktreePath !== null) {
+                targetWorktreePath = existingWorktreePath;
+                worktreeAlreadyPrepared = true;
+                yield* refreshGitStatus(existingWorktreePath);
+              }
+            }
+
+            if (bootstrap?.prepareWorktree && !worktreeAlreadyPrepared) {
               const prepareWorktree = bootstrap.prepareWorktree;
               let worktreeBaseRef = prepareWorktree.baseBranch;
               let worktreeNewRefName = prepareWorktree.branch;
