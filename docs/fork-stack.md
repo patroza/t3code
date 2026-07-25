@@ -76,18 +76,20 @@ pnpm fork:stack update
 
 `update` will:
 
-1. fetch latest `origin/fork/changes`;
-2. **rebase** when the branch already descends from that tip but is behind;
-3. when history diverged (normal after a stack rewrite of `fork/changes`): transplant only commits
-   that `git cherry` marks **unique by patch-id**, oldest-first — not the full GitHub PR commit
-   list. Large conflicting commits (&gt;30 files) are treated as rewritten-layer noise and skipped;
-   small conflicts still fail loudly;
+1. fetch latest `origin/fork/changes` and the durable base-history ref
+   (`refs/t3/stack/base-history/fork-changes`);
+2. **rebase** when the branch already descends from the new tip but is behind;
+3. when history diverged (normal after a stack rewrite): recover the **old base tip** this PR was
+   built on — the newest recorded historical `fork/changes` tip that is still an ancestor of
+   HEAD — then `git rebase --onto newBase oldBase`. Feature commits are exactly `oldBase..HEAD`
+   (the commits that were on top of the old base), not a file-count guess and not the full GitHub
+   PR commit list;
 4. **retarget** the PR base to `fork/changes` if it still points at `main` or another wrong branch;
 5. **force-with-lease push** when `--push` is set;
 6. print `gh pr view` mergeability JSON.
 
-The stack cascade uses the same strategy: prefer `rebase --onto` when the previous
-`fork/changes` tip is still an ancestor, otherwise fall back to patch-id unique cherry-picks.
+The stack cascade records each `fork/changes` tip into that base-history ref before rebasing open
+feature PRs the same way (`rebase --onto` from the recovered old base).
 
 Do not use GitHub “Update branch” merge commits for these feature PRs; prefer this rebase/replay
 path so history stays linear and reviewable.
