@@ -1634,6 +1634,78 @@ export function resolveTemporaryDiscordThreadTitleBadge(input: {
   return resolveDiscordThreadActivityBadgeState(input);
 }
 
+/**
+ * Desired-state plan for Discord thread renames.
+ *
+ * Title apply must be durable and coalesced:
+ * - Never apply a previously captured thread snapshot (VCS races re-painted ⏳
+ *   after settle when the callback held a stale "running" thread).
+ * - On REST failure / rate-limit / interrupt, keep `pending` so a later tick retries.
+ * - Only clear pending when Discord already shows that exact name.
+ */
+export function planDiscordThreadTitleApply(input: {
+  readonly mirroredThreadTitle: string | null;
+  readonly pendingDesiredThreadTitle: string | null;
+  /** Freshly computed desired name, or null when compute has nothing new. */
+  readonly computedDesiredTitle: string | null;
+}): {
+  readonly pendingDesiredThreadTitle: string | null;
+  readonly applyTitle: string | null;
+} {
+  if (input.computedDesiredTitle !== null) {
+    if (input.computedDesiredTitle === input.mirroredThreadTitle) {
+      return { pendingDesiredThreadTitle: null, applyTitle: null };
+    }
+    return {
+      pendingDesiredThreadTitle: input.computedDesiredTitle,
+      applyTitle: input.computedDesiredTitle,
+    };
+  }
+  // No fresh compute — retry a prior failed apply if Discord still lags.
+  if (
+    input.pendingDesiredThreadTitle !== null &&
+    input.pendingDesiredThreadTitle !== input.mirroredThreadTitle
+  ) {
+    return {
+      pendingDesiredThreadTitle: input.pendingDesiredThreadTitle,
+      applyTitle: input.pendingDesiredThreadTitle,
+    };
+  }
+  return { pendingDesiredThreadTitle: null, applyTitle: null };
+}
+
+/**
+ * Commit or roll back after a Discord channel rename attempt.
+ * Success updates mirrored; failure keeps pending so settle/busy is retried.
+ */
+export function nextMirroredThreadTitleAfterApply(input: {
+  readonly mirroredThreadTitle: string | null;
+  readonly pendingDesiredThreadTitle: string | null;
+  readonly appliedTitle: string;
+  readonly success: boolean;
+}): {
+  readonly mirroredThreadTitle: string | null;
+  readonly pendingDesiredThreadTitle: string | null;
+  readonly attemptedThreadTitle: string | null;
+} {
+  if (!input.success) {
+    return {
+      mirroredThreadTitle: input.mirroredThreadTitle,
+      pendingDesiredThreadTitle: input.appliedTitle,
+      // Do not poison attempted with a name Discord never accepted.
+      attemptedThreadTitle: null,
+    };
+  }
+  const pendingCleared =
+    input.pendingDesiredThreadTitle === null ||
+    input.pendingDesiredThreadTitle === input.appliedTitle;
+  return {
+    mirroredThreadTitle: input.appliedTitle,
+    pendingDesiredThreadTitle: pendingCleared ? null : input.pendingDesiredThreadTitle,
+    attemptedThreadTitle: input.appliedTitle,
+  };
+}
+
 export function resolveThreadTitleChangeRequestFromStatus(
   thread: Pick<OrchestrationThread, "branch">,
   status: VcsStatusResult | null,
@@ -2139,6 +2211,12 @@ export const runBridge = (
 
     const streamWriteLock = yield* Semaphore.make(1);
     const titleSyncLock = yield* Semaphore.make(1);
+    /**
+     * Latest desired Discord thread name that has not been confirmed on Discord yet.
+     * Survives REST failures / secondary timeouts so heartbeat can retry without
+     * waiting for another T3 snapshot (idle threads used to stay on ⏳ forever).
+     */
+    const pendingDesiredThreadTitleRef = yield* Ref.make<string | null>(null);
 
     // Seed title settle cache from Discord's live name so rehydrate demotion guards
     // work immediately (in-memory mirrored starts null after every bridge restart).
@@ -3890,236 +3968,323 @@ export const runBridge = (
 
     /**
      * Apply a Discord thread title only after a successful rename.
-     * Never mark `attemptedThreadTitle` before the REST call — a rate-limit /
-     * network failure used to poison retries so busy/wake badges never appeared.
+     * Never mark `attemptedThreadTitle` / `mirroredThreadTitle` before the REST call —
+     * a rate-limit / network failure used to poison retries so busy/wake badges never
+     * appeared. Failed applies keep `pendingDesiredThreadTitle` for heartbeat retry.
+     *
+     * Must run under `titleSyncLock`.
      */
     const applyDiscordThreadTitle = (desiredTitle: string, reason: string) =>
       Effect.gen(function* () {
         const latest = yield* Ref.get(stateRef);
         if (latest.mirroredThreadTitle === desiredTitle) {
+          yield* Ref.set(pendingDesiredThreadTitleRef, null);
           return;
         }
-        yield* rest.updateChannel(input.discordChannelId, { name: desiredTitle });
+        // Record desired *before* REST so interrupt/timeout/rate-limit still retries.
+        yield* Ref.set(pendingDesiredThreadTitleRef, desiredTitle);
+        const result = yield* rest
+          .updateChannel(input.discordChannelId, { name: desiredTitle })
+          .pipe(Effect.result);
+        const pending = yield* Ref.get(pendingDesiredThreadTitleRef);
+        if (Result.isFailure(result)) {
+          const afterFail = nextMirroredThreadTitleAfterApply({
+            mirroredThreadTitle: latest.mirroredThreadTitle,
+            pendingDesiredThreadTitle: pending,
+            appliedTitle: desiredTitle,
+            success: false,
+          });
+          yield* Ref.set(pendingDesiredThreadTitleRef, afterFail.pendingDesiredThreadTitle);
+          yield* Effect.logWarning("Discord thread title rename failed; will retry", {
+            discordChannelId: input.discordChannelId,
+            t3ThreadId: input.t3ThreadId,
+            desiredTitle,
+            reason,
+            cause: formatAlertCause(result.failure, 300),
+          });
+          return;
+        }
+        const afterOk = nextMirroredThreadTitleAfterApply({
+          mirroredThreadTitle: latest.mirroredThreadTitle,
+          pendingDesiredThreadTitle: pending,
+          appliedTitle: desiredTitle,
+          success: true,
+        });
         yield* Effect.logInfo("Discord thread title mirrored to Discord", {
           discordChannelId: input.discordChannelId,
           t3ThreadId: input.t3ThreadId,
           desiredTitle,
           reason,
         });
+        yield* Ref.set(pendingDesiredThreadTitleRef, afterOk.pendingDesiredThreadTitle);
         yield* Ref.update(stateRef, (current) => ({
           ...current,
-          attemptedThreadTitle: desiredTitle,
-          mirroredThreadTitle: desiredTitle,
+          attemptedThreadTitle: afterOk.attemptedThreadTitle ?? desiredTitle,
+          mirroredThreadTitle: afterOk.mirroredThreadTitle,
         }));
       });
 
     /**
-     * Idempotent title badge sync.
+     * Idempotent, desired-state title badge sync.
      *
      * Dual optional columns (like T3 client): `| PR | activity | Title`.
      * Activity (busy / wake-required) is independent of sticky PR evidence.
      * Unknown remote never paints ▫️.
+     *
+     * **Always re-reads `latestThreadRef` under the lock** — never apply a caller-
+     * captured thread snapshot for activity. VCS callbacks used to re-paint ⏳ after
+     * settle when they held a stale "running" thread across the lock queue.
+     *
+     * Callers must publish the latest orchestration thread to `latestThreadRef`
+     * (via `ensureVcsStatusSubscription` / snapshot path) *before* invoking this.
      */
-    const syncDiscordThreadTitle = (thread: OrchestrationThread) =>
+    const syncDiscordThreadTitle = () =>
       titleSyncLock
         .withPermit(
           Effect.gen(function* () {
-            const state = yield* Ref.get(stateRef);
-            const titleBase = (value: string) =>
-              decorateDiscordThreadTitle(value, null, 100, false);
-            const currentBase = titleBase(thread.title);
-            const alreadySettled =
-              (state.mirroredThreadTitle !== null &&
-                titleBase(state.mirroredThreadTitle) === currentBase) ||
-              (state.attemptedThreadTitle !== null &&
-                titleBase(state.attemptedThreadTitle) === currentBase);
-
-            const cachedStatus = yield* Ref.get(latestVcsStatusRef);
-            const remoteObserved = yield* Ref.get(vcsRemoteObservedRef);
-            const stickyBefore = yield* Ref.get(stickyTitlePrRef);
-            const statusPr = toStickyTitlePrEvidence(
-              resolveThreadTitleChangeRequestFromStatus(thread, cachedStatus),
-            );
-
-            const activity = resolveDiscordThreadActivityBadgeState({
-              sessionStatus: thread.session?.status ?? null,
-              activeTurnId: thread.session?.activeTurnId ?? null,
-              latestTurnState: thread.latestTurn?.state ?? null,
-              latestTurnCompletedAt: thread.latestTurn?.completedAt ?? null,
-            });
-
-            // Fast path: settled base + no new PR evidence from warm VCS — compose
-            // PR (sticky) + activity without GH dual-lookup.
-            if (alreadySettled && statusPr === null) {
-              const evidence = resolveDiscordTitlePrEvidence({
-                stickyPr: stickyBefore,
-                statusPr: null,
-                remoteStatusObserved: remoteObserved,
+            const commitComputedTitle = (desiredTitle: string | null, reason: string) =>
+              Effect.gen(function* () {
+                const latest = yield* Ref.get(stateRef);
+                const pending = yield* Ref.get(pendingDesiredThreadTitleRef);
+                const plan = planDiscordThreadTitleApply({
+                  mirroredThreadTitle: latest.mirroredThreadTitle,
+                  pendingDesiredThreadTitle: pending,
+                  computedDesiredTitle: desiredTitle,
+                });
+                yield* Ref.set(pendingDesiredThreadTitleRef, plan.pendingDesiredThreadTitle);
+                if (plan.applyTitle === null) return;
+                yield* applyDiscordThreadTitle(plan.applyTitle, reason);
               });
-              yield* Ref.set(stickyTitlePrRef, evidence.stickyPr);
-              const upgradeTitle = resolveSettledDiscordThreadTitleUpgrade({
-                thread,
-                mirroredThreadTitle: state.mirroredThreadTitle,
-                attemptedThreadTitle: state.attemptedThreadTitle,
-                cachedPr: evidence.effectivePr,
-                canApplyNoPrBadge: evidence.canApplyNoPrBadge,
-              });
-              if (upgradeTitle === null) return;
-              yield* applyDiscordThreadTitle(
-                upgradeTitle,
-                activity !== null ? "dual-badge-settled" : "settled-title-badge-upgrade",
+
+            // Coalesce: re-read the latest thread under the lock before every compute
+            // and again right before apply so a settle that landed while we held the
+            // lock (or during GH lookup) always wins over a stale busy state.
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              const thread = yield* Ref.get(latestThreadRef);
+              if (thread === null) {
+                const pendingOnly = yield* Ref.get(pendingDesiredThreadTitleRef);
+                const stateOnly = yield* Ref.get(stateRef);
+                const planOnly = planDiscordThreadTitleApply({
+                  mirroredThreadTitle: stateOnly.mirroredThreadTitle,
+                  pendingDesiredThreadTitle: pendingOnly,
+                  computedDesiredTitle: null,
+                });
+                yield* Ref.set(pendingDesiredThreadTitleRef, planOnly.pendingDesiredThreadTitle);
+                if (planOnly.applyTitle !== null) {
+                  yield* applyDiscordThreadTitle(planOnly.applyTitle, "pending-retry-no-thread");
+                }
+                return;
+              }
+
+              const state = yield* Ref.get(stateRef);
+              const titleBase = (value: string) =>
+                decorateDiscordThreadTitle(value, null, 100, false);
+              const currentBase = titleBase(thread.title);
+              const alreadySettled =
+                (state.mirroredThreadTitle !== null &&
+                  titleBase(state.mirroredThreadTitle) === currentBase) ||
+                (state.attemptedThreadTitle !== null &&
+                  titleBase(state.attemptedThreadTitle) === currentBase);
+
+              const cachedStatus = yield* Ref.get(latestVcsStatusRef);
+              const remoteObserved = yield* Ref.get(vcsRemoteObservedRef);
+              const stickyBefore = yield* Ref.get(stickyTitlePrRef);
+              const statusPr = toStickyTitlePrEvidence(
+                resolveThreadTitleChangeRequestFromStatus(thread, cachedStatus),
               );
-              return;
-            }
 
-            const project = yield* t3.getProjectShell(thread.projectId);
-            const branch = thread.branch;
+              // Fast path: settled base + no new PR evidence from warm VCS — compose
+              // PR (sticky) + activity without GH dual-lookup. Covers turn start/end
+              // busy toggles so settle never waits on branch lookup.
+              if (alreadySettled && statusPr === null) {
+                const evidence = resolveDiscordTitlePrEvidence({
+                  stickyPr: stickyBefore,
+                  statusPr: null,
+                  remoteStatusObserved: remoteObserved,
+                });
+                yield* Ref.set(stickyTitlePrRef, evidence.stickyPr);
 
-            // Prefer warm VCS stream. Only cold-start GH lookup when remote is unknown
-            // and sticky is empty — never dual-source every snapshot.
-            let branchLookupPr: StickyTitlePrEvidence | null = null;
-            let branchLookupCompleted = false;
-            let prSource: "vcs-status-stream" | "sticky" | "branch-lookup" | "none" = "none";
-            let lookupCwds: ReadonlyArray<string> = [];
+                // Re-read immediately before decorating activity so we do not paint ⏳
+                // from a thread that settled while we waited for this lock.
+                const threadNow = (yield* Ref.get(latestThreadRef)) ?? thread;
+                if (threadNow !== thread && attempt < 2) {
+                  continue;
+                }
+                const upgradeTitle = resolveSettledDiscordThreadTitleUpgrade({
+                  thread: threadNow,
+                  mirroredThreadTitle: state.mirroredThreadTitle,
+                  attemptedThreadTitle: state.attemptedThreadTitle,
+                  cachedPr: evidence.effectivePr,
+                  canApplyNoPrBadge: evidence.canApplyNoPrBadge,
+                });
+                const activityNow = resolveDiscordThreadActivityBadgeState({
+                  sessionStatus: threadNow.session?.status ?? null,
+                  activeTurnId: threadNow.session?.activeTurnId ?? null,
+                  latestTurnState: threadNow.latestTurn?.state ?? null,
+                  latestTurnCompletedAt: threadNow.latestTurn?.completedAt ?? null,
+                });
+                yield* commitComputedTitle(
+                  upgradeTitle,
+                  activityNow !== null ? "dual-badge-settled" : "settled-title-badge-upgrade",
+                );
+                return;
+              }
 
-            if (statusPr !== null) {
-              prSource = "vcs-status-stream";
-            } else if (stickyBefore !== null) {
-              prSource = "sticky";
-            } else if (!remoteObserved && branch !== null && project !== null) {
-              lookupCwds = resolveThreadChangeRequestLookupCwds(thread, project);
-              for (const cwd of lookupCwds) {
-                const resolved = yield* t3
-                  .resolveBranchChangeRequest({
+              const project = yield* t3.getProjectShell(thread.projectId);
+              const branch = thread.branch;
+
+              // Prefer warm VCS stream. Only cold-start GH lookup when remote is unknown
+              // and sticky is empty — never dual-source every snapshot.
+              let branchLookupPr: StickyTitlePrEvidence | null = null;
+              let branchLookupCompleted = false;
+              let prSource: "vcs-status-stream" | "sticky" | "branch-lookup" | "none" = "none";
+              let lookupCwds: ReadonlyArray<string> = [];
+
+              if (statusPr !== null) {
+                prSource = "vcs-status-stream";
+              } else if (stickyBefore !== null) {
+                prSource = "sticky";
+              } else if (!remoteObserved && branch !== null && project !== null) {
+                lookupCwds = resolveThreadChangeRequestLookupCwds(thread, project);
+                for (const cwd of lookupCwds) {
+                  const resolved = yield* t3
+                    .resolveBranchChangeRequest({
+                      cwd,
+                      refName: branch,
+                    })
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("Discord thread title PR lookup failed", {
+                          discordChannelId: input.discordChannelId,
+                          t3ThreadId: input.t3ThreadId,
+                          title: thread.title,
+                          branch,
+                          cwd,
+                          cause: formatAlertCause(cause, 400),
+                        }).pipe(Effect.as({ pr: null })),
+                      ),
+                    );
+                  yield* Effect.logInfo("Discord thread title PR lookup result", {
+                    discordChannelId: input.discordChannelId,
+                    t3ThreadId: input.t3ThreadId,
+                    title: thread.title,
+                    branch,
                     cwd,
-                    refName: branch,
-                  })
-                  .pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Discord thread title PR lookup failed", {
-                        discordChannelId: input.discordChannelId,
-                        t3ThreadId: input.t3ThreadId,
-                        title: thread.title,
-                        branch,
-                        cwd,
-                        cause: formatAlertCause(cause, 400),
-                      }).pipe(Effect.as({ pr: null })),
-                    ),
-                  );
-                yield* Effect.logInfo("Discord thread title PR lookup result", {
+                    prNumber: resolved.pr?.number ?? null,
+                    prState: resolved.pr?.state ?? null,
+                    prHeadRef: resolved.pr?.headRef ?? null,
+                    prBaseRef: resolved.pr?.baseRef ?? null,
+                  });
+                  if (resolved.pr !== null) {
+                    branchLookupPr = toStickyTitlePrEvidence(resolved.pr);
+                    prSource = "branch-lookup";
+                    break;
+                  }
+                }
+                // Completed the cold-start lookup path (possibly with no PR).
+                branchLookupCompleted = true;
+                if (prSource === "none") prSource = "branch-lookup";
+              } else if (branch === null || project === null) {
+                yield* Effect.logInfo("Discord thread title sync skipping PR lookup", {
                   discordChannelId: input.discordChannelId,
                   t3ThreadId: input.t3ThreadId,
                   title: thread.title,
                   branch,
-                  cwd,
-                  prNumber: resolved.pr?.number ?? null,
-                  prState: resolved.pr?.state ?? null,
-                  prHeadRef: resolved.pr?.headRef ?? null,
-                  prBaseRef: resolved.pr?.baseRef ?? null,
+                  hasProject: project !== null,
+                  worktreePath: thread.worktreePath,
                 });
-                if (resolved.pr !== null) {
-                  branchLookupPr = toStickyTitlePrEvidence(resolved.pr);
-                  prSource = "branch-lookup";
-                  break;
-                }
               }
-              // Completed the cold-start lookup path (possibly with no PR).
-              branchLookupCompleted = true;
-              if (prSource === "none") prSource = "branch-lookup";
-            } else if (branch === null || project === null) {
-              yield* Effect.logInfo("Discord thread title sync skipping PR lookup", {
+
+              const evidence = resolveDiscordTitlePrEvidence({
+                stickyPr: stickyBefore,
+                statusPr,
+                remoteStatusObserved: remoteObserved,
+                branchLookupPr,
+                branchLookupCompleted,
+              });
+              yield* Ref.set(stickyTitlePrRef, evidence.stickyPr);
+
+              // Re-read after slow GH lookup — settle may have landed mid-wait.
+              const threadAfterLookup = (yield* Ref.get(latestThreadRef)) ?? thread;
+              if (threadAfterLookup !== thread && attempt < 2) {
+                continue;
+              }
+
+              const activityAfterLookup = resolveDiscordThreadActivityBadgeState({
+                sessionStatus: threadAfterLookup.session?.status ?? null,
+                activeTurnId: threadAfterLookup.session?.activeTurnId ?? null,
+                latestTurnState: threadAfterLookup.latestTurn?.state ?? null,
+                latestTurnCompletedAt: threadAfterLookup.latestTurn?.completedAt ?? null,
+              });
+
+              const prState = threadTitleChangeRequestState(
+                threadAfterLookup,
+                evidence.effectivePr,
+              );
+              // Unknown evidence: do not paint ▫️ / no-PR from missing data.
+              const effectivePrState: DiscordThreadPrBadgeState =
+                prState === "initialized" && !evidence.canApplyNoPrBadge ? null : prState;
+
+              const latest = yield* Ref.get(stateRef);
+              const mirroredBadges = parseDiscordThreadTitleBadges(latest.mirroredThreadTitle);
+              const currentBadges =
+                mirroredBadges.pr !== null || mirroredBadges.activity !== null
+                  ? mirroredBadges
+                  : parseDiscordThreadTitleBadges(latest.attemptedThreadTitle);
+              const prAllowed = shouldApplyDiscordThreadPrBadge(currentBadges.pr, effectivePrState);
+              const appliedPr = prAllowed ? effectivePrState : currentBadges.pr;
+
+              // Still nothing actionable (no PR column, no activity, nothing mirrored).
+              if (appliedPr === null && activityAfterLookup === null && currentBadges.pr === null) {
+                yield* Effect.logInfo("Discord thread title sync deferred; PR evidence not ready", {
+                  discordChannelId: input.discordChannelId,
+                  t3ThreadId: input.t3ThreadId,
+                  remoteObserved,
+                  stickyPr: evidence.stickyPr?.number ?? null,
+                  prSource,
+                  activity: activityAfterLookup,
+                });
+                yield* commitComputedTitle(null, "pending-retry-deferred");
+                return;
+              }
+
+              const desiredTitle = decorateDiscordThreadTitle(
+                threadAfterLookup.title,
+                {
+                  pr: appliedPr,
+                  activity: activityAfterLookup,
+                  hasFailingChecks:
+                    appliedPr === "open" && evidence.effectivePr?.hasFailingChecks === true,
+                },
+                100,
+              );
+              yield* Effect.logInfo("Discord thread title sync resolved", {
                 discordChannelId: input.discordChannelId,
                 t3ThreadId: input.t3ThreadId,
-                title: thread.title,
+                title: threadAfterLookup.title,
                 branch,
-                hasProject: project !== null,
-                worktreePath: thread.worktreePath,
-              });
-            }
-
-            const evidence = resolveDiscordTitlePrEvidence({
-              stickyPr: stickyBefore,
-              statusPr,
-              remoteStatusObserved: remoteObserved,
-              branchLookupPr,
-              branchLookupCompleted,
-            });
-            yield* Ref.set(stickyTitlePrRef, evidence.stickyPr);
-
-            const prState = threadTitleChangeRequestState(thread, evidence.effectivePr);
-            // Unknown evidence: do not paint ▫️ / no-PR from missing data.
-            const effectivePrState: DiscordThreadPrBadgeState =
-              prState === "initialized" && !evidence.canApplyNoPrBadge ? null : prState;
-
-            const latest = yield* Ref.get(stateRef);
-            const mirroredBadges = parseDiscordThreadTitleBadges(latest.mirroredThreadTitle);
-            const currentBadges =
-              mirroredBadges.pr !== null || mirroredBadges.activity !== null
-                ? mirroredBadges
-                : parseDiscordThreadTitleBadges(latest.attemptedThreadTitle);
-            const prAllowed = shouldApplyDiscordThreadPrBadge(currentBadges.pr, effectivePrState);
-            const appliedPr = prAllowed ? effectivePrState : currentBadges.pr;
-
-            // Still nothing actionable (no PR column, no activity, nothing mirrored).
-            if (appliedPr === null && activity === null && currentBadges.pr === null) {
-              yield* Effect.logInfo("Discord thread title sync deferred; PR evidence not ready", {
-                discordChannelId: input.discordChannelId,
-                t3ThreadId: input.t3ThreadId,
-                remoteObserved,
-                stickyPr: evidence.stickyPr?.number ?? null,
+                worktreePath: threadAfterLookup.worktreePath,
+                projectWorkspaceRoot: project?.workspaceRoot ?? null,
+                lookupCwds,
+                cachedStatusRefName: cachedStatus?.refName ?? null,
+                prNumber: evidence.effectivePr?.number ?? null,
+                prState: effectivePrState,
+                appliedPr,
+                activity: activityAfterLookup,
+                sessionStatus: threadAfterLookup.session?.status ?? null,
                 prSource,
-                activity,
+                remoteObserved,
+                canApplyNoPrBadge: evidence.canApplyNoPrBadge,
+                desiredTitle,
+                currentBadges,
+                prAllowed,
+                mirroredThreadTitle: latest.mirroredThreadTitle,
+                attemptedThreadTitle: latest.attemptedThreadTitle,
               });
+
+              yield* commitComputedTitle(desiredTitle, "title-sync");
               return;
             }
-
-            const desiredTitle = decorateDiscordThreadTitle(
-              thread.title,
-              {
-                pr: appliedPr,
-                activity,
-                hasFailingChecks:
-                  appliedPr === "open" && evidence.effectivePr?.hasFailingChecks === true,
-              },
-              100,
-            );
-            yield* Effect.logInfo("Discord thread title sync resolved", {
-              discordChannelId: input.discordChannelId,
-              t3ThreadId: input.t3ThreadId,
-              title: thread.title,
-              branch,
-              worktreePath: thread.worktreePath,
-              projectWorkspaceRoot: project?.workspaceRoot ?? null,
-              lookupCwds,
-              cachedStatusRefName: cachedStatus?.refName ?? null,
-              prNumber: evidence.effectivePr?.number ?? null,
-              prState: effectivePrState,
-              appliedPr,
-              activity,
-              sessionStatus: thread.session?.status ?? null,
-              prSource,
-              remoteObserved,
-              canApplyNoPrBadge: evidence.canApplyNoPrBadge,
-              desiredTitle,
-              currentBadges,
-              prAllowed,
-              mirroredThreadTitle: latest.mirroredThreadTitle,
-              attemptedThreadTitle: latest.attemptedThreadTitle,
-            });
-            // Only skip when Discord already shows the desired dual-slot title.
-            if (latest.mirroredThreadTitle === desiredTitle) {
-              return;
-            }
-            const mirroredBase =
-              latest.mirroredThreadTitle === null ? null : titleBase(latest.mirroredThreadTitle);
-            const sameTitleBase = mirroredBase === currentBase;
-            // Refuse pure PR demotion when base unchanged — but still allow activity-only
-            // changes (e.g. keep 🔀 and add/remove ⏳).
-            if (!prAllowed && sameTitleBase && appliedPr === currentBadges.pr) {
-              // appliedPr kept sticky current; activity may still differ — continue apply.
-            }
-
-            yield* applyDiscordThreadTitle(desiredTitle, "title-sync");
           }),
         )
         .pipe(
@@ -4127,7 +4292,6 @@ export const runBridge = (
             Effect.logWarning("Failed to mirror T3 thread title to Discord thread", {
               discordChannelId: input.discordChannelId,
               t3ThreadId: input.t3ThreadId,
-              title: thread.title,
               cause: formatAlertCause(cause, 400),
             }),
           ),
@@ -4173,7 +4337,8 @@ export const runBridge = (
           );
         }
 
-        yield* syncDiscordThreadTitle(thread);
+        yield* Ref.set(latestThreadRef, thread);
+        yield* syncDiscordThreadTitle();
         const state = yield* Ref.get(stateRef);
         if (state.mirroredThreadTitle !== null) {
           yield* Effect.logInfo("Discord thread indicators refreshed", {
@@ -4262,8 +4427,10 @@ export const runBridge = (
               yield* Ref.update(latestVcsStatusRef, (current) =>
                 applyGitStatusStreamEvent(current, event),
               );
-              const currentThread = yield* Ref.get(latestThreadRef);
-              if (currentThread === null) return;
+              // Do not capture a thread snapshot here — activity must be re-read under
+              // titleSyncLock from latestThreadRef so a concurrent settle cannot lose to
+              // a stale "running" VCS callback (⏳ flip-flop after the turn ends).
+              if ((yield* Ref.get(latestThreadRef)) === null) return;
 
               yield* Effect.logInfo("Discord thread title VCS status update received", {
                 discordChannelId: input.discordChannelId,
@@ -4274,7 +4441,7 @@ export const runBridge = (
                   event._tag === "remoteUpdated" ||
                   (event._tag === "snapshot" && event.remote !== null),
               });
-              yield* syncDiscordThreadTitle(currentThread);
+              yield* syncDiscordThreadTitle();
             }),
           )
           .pipe(
@@ -4826,11 +4993,22 @@ export const runBridge = (
         }
 
         // --- Secondary: title / pin / side posts (must not starve tip edits) ---
-        // Best-effort + hard time budget: never fail the primary stream/finalize pass
-        // because GH PR lookup / title / tasks hung (outer 90s TimeoutError left Discord
-        // stuck on Working until the next chance event).
+        // Title first, with its own budget: turn settle must clear ⏳ even when GH
+        // lookup / tasks would burn the shared secondary timeout. Pending renames
+        // also retry on the Working heartbeat so idle threads do not stay stale.
+        yield* syncDiscordThreadTitle().pipe(
+          Effect.timeout("12 seconds"),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Discord thread title sync failed or timed out", {
+              t3ThreadId: input.t3ThreadId,
+              cause: formatAlertCause(cause, 300),
+            }),
+          ),
+          Effect.asVoid,
+        );
+
+        // Best-effort + hard time budget for remaining secondary work.
         yield* Effect.gen(function* () {
-          yield* syncDiscordThreadTitle(thread);
           yield* syncThreadInfoModelPin(thread);
 
           // Tasks first: first-class Discord progress UI from turn.plan (not External User Input).
@@ -5050,6 +5228,48 @@ export const runBridge = (
         yield* Ref.update(deliveryGenerationRef, (n) => n + 1);
         yield* deliveryLock.withPermit(runDeliveryWorker).pipe(Effect.forkDetach);
       });
+
+    /**
+     * Retry pending / desynced Discord titles without waiting for another T3 snapshot.
+     * Rate-limits and secondary timeouts used to leave ⏳ after settle forever.
+     * Only wakes full sync when needed — never cold-starts GH every tick.
+     */
+    const flushDiscordThreadTitleIfNeeded = Effect.gen(function* () {
+      const pendingTitle = yield* Ref.get(pendingDesiredThreadTitleRef);
+      const stateNow = yield* Ref.get(stateRef);
+      const threadNow = yield* Ref.get(latestThreadRef);
+      const mirroredActivity = parseDiscordThreadTitleBadges(stateNow.mirroredThreadTitle).activity;
+      const desiredActivity =
+        threadNow === null
+          ? null
+          : resolveDiscordThreadActivityBadgeState({
+              sessionStatus: threadNow.session?.status ?? null,
+              activeTurnId: threadNow.session?.activeTurnId ?? null,
+              latestTurnState: threadNow.latestTurn?.state ?? null,
+              latestTurnCompletedAt: threadNow.latestTurn?.completedAt ?? null,
+            });
+      const titleNeedsSync =
+        (pendingTitle !== null && pendingTitle !== stateNow.mirroredThreadTitle) ||
+        desiredActivity !== mirroredActivity;
+      if (!titleNeedsSync) return;
+      yield* syncDiscordThreadTitle();
+    });
+
+    const titleRetryFiber = yield* Effect.gen(function* () {
+      while (true) {
+        yield* Effect.sleep("15 seconds");
+        yield* flushDiscordThreadTitleIfNeeded.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Periodic Discord title retry failed", {
+              discordChannelId: input.discordChannelId,
+              t3ThreadId: input.t3ThreadId,
+              cause: formatAlertCause(cause, 200),
+            }),
+          ),
+          Effect.asVoid,
+        );
+      }
+    }).pipe(Effect.forkChild);
 
     const heartbeatFiber =
       input.presentationMode === "final-only"
@@ -5283,6 +5503,7 @@ export const runBridge = (
             if (heartbeatFiber !== null) {
               yield* Fiber.interrupt(heartbeatFiber).pipe(Effect.ignore);
             }
+            yield* Fiber.interrupt(titleRetryFiber).pipe(Effect.ignore);
             yield* Fiber.interrupt(reconcileFiber).pipe(Effect.ignore);
             yield* stopVcsStatusSubscription;
             // Do NOT delete open stream tips on stop when the turn is still running.

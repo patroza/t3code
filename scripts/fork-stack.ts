@@ -31,23 +31,90 @@ interface PullRequestCommitsView {
   readonly commits: ReadonlyArray<{ readonly oid: string }>;
 }
 
+/** Strip ANSI color / SGR sequences (agent hosts often set FORCE_COLOR). */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "");
+}
+
+/** Subprocess env: force plain stdout so `gh --json` is parseable under FORCE_COLOR hosts. */
+function subprocessEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    NO_COLOR: "1",
+    CLICOLOR: "0",
+    FORCE_COLOR: "0",
+    CLICOLOR_FORCE: "0",
+  };
+}
+
 function run(executable: string, args: ReadonlyArray<string>, cwd: string): string {
+  // Do not pass `gh --color=never`: the t3-github-app gh wrapper rejects that flag.
   const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: subprocessEnv(),
   });
   if (result.error) throw new StackError(`Unable to run ${executable}: ${result.error.message}`);
   if (result.status !== 0) {
     throw new StackError(
-      `${executable} ${args.join(" ")} failed: ${result.stderr.trim() || result.stdout.trim()}`,
+      `${executable} ${args.join(" ")} failed: ${stripAnsi(result.stderr.trim() || result.stdout.trim())}`,
     );
   }
-  return result.stdout.trim();
+  return stripAnsi(result.stdout).trim();
 }
 
 export function stackParentBranch(manifest: StackManifest): string {
   return manifest.pullRequests.at(-1)?.branch ?? manifest.forkChangesBranch;
+}
+
+/**
+ * Ordinary feature/import PRs always target the private default branch, not the
+ * upstream mirror (`main`) and not intermediate stack provenance branches.
+ */
+export function featurePullRequestBaseBranch(manifest: StackManifest): string {
+  return manifest.forkChangesBranch;
+}
+
+export function shouldRetargetPullRequestBase(
+  currentBase: string | null | undefined,
+  expectedBase: string,
+): boolean {
+  if (currentBase === null || currentBase === undefined || currentBase.trim() === "") {
+    return false;
+  }
+  return currentBase !== expectedBase;
+}
+
+/**
+ * Plan how to bring a feature PR branch up to date with `fork/changes`.
+ *
+ * - `rebase` when the base tip is already an ancestor (normal drift).
+ * - `replay` when the branch was cut from the wrong parent (e.g. upstream `main`)
+ *   and only the PR's own commits should be kept.
+ * - `noop` when already current.
+ */
+export function planFeatureBranchUpdate(input: {
+  readonly baseIsAncestorOfHead: boolean;
+  readonly behindCount: number;
+  readonly aheadCount: number;
+  readonly pullRequestCommitOids: ReadonlyArray<string>;
+}): {
+  readonly action: "noop" | "rebase" | "replay";
+  readonly replayOids: ReadonlyArray<string>;
+} {
+  if (input.baseIsAncestorOfHead) {
+    if (input.behindCount <= 0) {
+      return { action: "noop", replayOids: [] };
+    }
+    return { action: "rebase", replayOids: [] };
+  }
+  if (input.pullRequestCommitOids.length === 0) {
+    throw new StackError(
+      "Branch is not based on fork/changes and no PR commits are available to replay. Re-create the branch with `pnpm fork:stack start <branch>`.",
+    );
+  }
+  return { action: "replay", replayOids: input.pullRequestCommitOids };
 }
 
 export function registerPullRequest(
@@ -130,10 +197,210 @@ function ensureClean(sourceRoot: string): void {
   }
 }
 
+function runAllowFailure(
+  executable: string,
+  args: ReadonlyArray<string>,
+  cwd: string,
+): NodeChildProcess.SpawnSyncReturns<string> {
+  return NodeChildProcess.spawnSync(executable, [...args], {
+    cwd,
+    encoding: "utf8",
+    env: subprocessEnv(),
+  });
+}
+
+function currentBranchName(sourceRoot: string): string {
+  const name = run("git", ["branch", "--show-current"], sourceRoot);
+  if (name === "") {
+    throw new StackError("Detached HEAD: check out the feature branch before updating.");
+  }
+  return name;
+}
+
+function resolveOpenPullRequestForBranch(
+  sourceRoot: string,
+  branch: string,
+): { readonly number: number; readonly baseRefName: string; readonly headRefName: string } | null {
+  const listed = run(
+    "gh",
+    [
+      "pr",
+      "list",
+      "--repo",
+      FORK_REPOSITORY,
+      "--head",
+      branch,
+      "--state",
+      "open",
+      "--json",
+      "number,baseRefName,headRefName",
+      "--limit",
+      "1",
+    ],
+    sourceRoot,
+  );
+  const rows = JSON.parse(listed) as ReadonlyArray<{
+    readonly number: number;
+    readonly baseRefName: string;
+    readonly headRefName: string;
+  }>;
+  return rows[0] ?? null;
+}
+
+function pullRequestCommitOids(sourceRoot: string, number: number): ReadonlyArray<string> {
+  const output = run(
+    "gh",
+    ["pr", "view", String(number), "--repo", FORK_REPOSITORY, "--json", "commits"],
+    sourceRoot,
+  );
+  const value = JSON.parse(output) as {
+    readonly commits: ReadonlyArray<{ readonly oid: string }>;
+  };
+  return value.commits.map((commit) => commit.oid);
+}
+
+/**
+ * Rebase or replay the current feature branch onto latest `fork/changes`, retarget the
+ * open PR base if needed, and optionally force-with-lease push so the PR stays mergeable.
+ */
+function updateFeatureBranch(
+  sourceRoot: string,
+  manifest: StackManifest,
+  options: {
+    readonly pullRequestNumber?: number | undefined;
+    readonly push: boolean;
+  },
+): void {
+  ensureClean(sourceRoot);
+  const expectedBase = featurePullRequestBaseBranch(manifest);
+  run("git", ["fetch", "origin", expectedBase], sourceRoot);
+
+  let branch = currentBranchName(sourceRoot);
+  let prNumber: number | null = options.pullRequestNumber ?? null;
+  let prBaseRefName: string | null = null;
+
+  if (options.pullRequestNumber !== undefined) {
+    const pullRequest = readPullRequest(sourceRoot, options.pullRequestNumber);
+    if (pullRequest.state.toLowerCase() !== "open") {
+      throw new StackError(
+        `PR #${options.pullRequestNumber} is ${pullRequest.state}; only open feature PRs can be updated.`,
+      );
+    }
+    branch = pullRequest.headRefName;
+    prNumber = pullRequest.number;
+    prBaseRefName = pullRequest.baseRefName;
+    run(
+      "git",
+      ["fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+      sourceRoot,
+    );
+    run("git", ["switch", branch], sourceRoot);
+    // Prefer the remote tip when updating a named PR so local drift does not win.
+    const remoteTip = run("git", ["rev-parse", `origin/${branch}`], sourceRoot);
+    run("git", ["reset", "--hard", remoteTip], sourceRoot);
+  } else {
+    const open = resolveOpenPullRequestForBranch(sourceRoot, branch);
+    if (open !== null) {
+      prNumber = open.number;
+      prBaseRefName = open.baseRefName;
+    }
+  }
+
+  const baseRef = `origin/${expectedBase}`;
+  const ancestorCheck = runAllowFailure(
+    "git",
+    ["merge-base", "--is-ancestor", baseRef, "HEAD"],
+    sourceRoot,
+  );
+  const baseIsAncestorOfHead = ancestorCheck.status === 0;
+  const behindCount = Number(run("git", ["rev-list", "--count", `HEAD..${baseRef}`], sourceRoot));
+  const aheadCount = Number(run("git", ["rev-list", "--count", `${baseRef}..HEAD`], sourceRoot));
+  const prOids = prNumber === null ? [] : pullRequestCommitOids(sourceRoot, prNumber);
+  const plan = planFeatureBranchUpdate({
+    baseIsAncestorOfHead,
+    behindCount,
+    aheadCount,
+    pullRequestCommitOids: prOids,
+  });
+
+  if (plan.action === "rebase") {
+    const result = runAllowFailure(
+      "git",
+      ["-c", "commit.gpgsign=false", "rebase", baseRef],
+      sourceRoot,
+    );
+    if (result.status !== 0) {
+      runAllowFailure("git", ["rebase", "--abort"], sourceRoot);
+      throw new StackError(
+        `Rebase onto ${expectedBase} failed:\n${result.stderr.trim() || result.stdout.trim()}\nResolve conflicts, then re-run with a clean tree or finish manually.`,
+      );
+    }
+    console.log(`Rebased ${branch} onto ${expectedBase}.`);
+  } else if (plan.action === "replay") {
+    const tipBefore = run("git", ["rev-parse", "HEAD"], sourceRoot);
+    run("git", ["reset", "--hard", baseRef], sourceRoot);
+    const cherry = runAllowFailure(
+      "git",
+      ["-c", "commit.gpgsign=false", "cherry-pick", ...plan.replayOids],
+      sourceRoot,
+    );
+    if (cherry.status !== 0) {
+      runAllowFailure("git", ["cherry-pick", "--abort"], sourceRoot);
+      run("git", ["reset", "--hard", tipBefore], sourceRoot);
+      throw new StackError(
+        `Replay onto ${expectedBase} failed while cherry-picking PR commits:\n${cherry.stderr.trim() || cherry.stdout.trim()}`,
+      );
+    }
+    console.log(
+      `Replayed ${plan.replayOids.length} PR commit(s) onto ${expectedBase} (was misbased).`,
+    );
+  } else {
+    console.log(`${branch} is already up to date with ${expectedBase}.`);
+  }
+
+  if (prNumber !== null && shouldRetargetPullRequestBase(prBaseRefName, expectedBase)) {
+    run(
+      "gh",
+      ["pr", "edit", String(prNumber), "--repo", FORK_REPOSITORY, "--base", expectedBase],
+      sourceRoot,
+    );
+    console.log(`Retargeted PR #${prNumber} base ${prBaseRefName} → ${expectedBase}.`);
+  }
+
+  if (options.push) {
+    run(
+      "git",
+      ["push", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`],
+      sourceRoot,
+    );
+    console.log(`Pushed ${branch} with --force-with-lease.`);
+  } else {
+    console.log("Dry run complete (no push). Re-run with --push to update the remote PR branch.");
+  }
+
+  if (prNumber !== null) {
+    const status = run(
+      "gh",
+      [
+        "pr",
+        "view",
+        String(prNumber),
+        "--repo",
+        FORK_REPOSITORY,
+        "--json",
+        "url,baseRefName,mergeable,mergeStateStatus",
+      ],
+      sourceRoot,
+    );
+    console.log(status);
+  }
+}
+
 function usage(): string {
   return `Usage:
   node scripts/fork-stack.ts start <branch>
   node scripts/fork-stack.ts start-upstream <branch>
+  node scripts/fork-stack.ts update [--push] [pr-number]
   node scripts/fork-stack.ts promote <private-pr-number> <upstream-branch>
   node scripts/fork-stack.ts adopt <upstream-branch> <private-branch>
   node scripts/fork-stack.ts demote <upstream-pr-number> <private-pr-number>
@@ -151,10 +418,34 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
 
   if (command === "start" && value && extra.length === 0) {
     ensureClean(sourceRoot);
-    const parent = stackParentBranch(manifest);
+    const parent = featurePullRequestBaseBranch(manifest);
     run("git", ["fetch", "origin", parent], sourceRoot);
     run("git", ["switch", "-c", value, `origin/${parent}`], sourceRoot);
     console.log(`Created ${value} from ${parent}. Open its PR against ${parent}.`);
+    return;
+  }
+
+  if (command === "update") {
+    const tokens = [value, ...extra].filter((token): token is string => token !== undefined);
+    let push = false;
+    let pullRequestNumber: number | undefined;
+    for (const token of tokens) {
+      if (token === "--push") {
+        push = true;
+        continue;
+      }
+      if (token === "--dry-run") {
+        push = false;
+        continue;
+      }
+      const number = Number(token);
+      if (Number.isSafeInteger(number) && number > 0 && pullRequestNumber === undefined) {
+        pullRequestNumber = number;
+        continue;
+      }
+      throw new StackError(usage());
+    }
+    updateFeatureBranch(sourceRoot, manifest, { pullRequestNumber, push });
     return;
   }
 

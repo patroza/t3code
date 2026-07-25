@@ -62,6 +62,8 @@ import {
   resolveTemporaryDiscordThreadTitleBadge,
   resolveThreadChangeRequestLookupCwds,
   mergeStickyTitlePr,
+  nextMirroredThreadTitleAfterApply,
+  planDiscordThreadTitleApply,
   shouldApplyDiscordThreadPrBadge,
   shouldApplyDiscordThreadTitleBadge,
   shouldConvertWorkingTipsToWakeUp,
@@ -2032,6 +2034,107 @@ describe("resolveSettledDiscordThreadTitleUpgrade", () => {
         cachedPr: { state: "open", hasFailingChecks: false },
       }),
     ).toBe("🔀 ⏳ Empasa pickup carrier rollout");
+  });
+});
+
+describe("planDiscordThreadTitleApply", () => {
+  it("applies a freshly computed title that Discord does not have yet", () => {
+    expect(
+      planDiscordThreadTitleApply({
+        mirroredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: null,
+        computedDesiredTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+      }),
+    ).toEqual({
+      pendingDesiredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+      applyTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+    });
+  });
+
+  it("clears pending when compute says Discord already matches", () => {
+    expect(
+      planDiscordThreadTitleApply({
+        mirroredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        computedDesiredTitle: "🔀 Empasa pickup carrier rollout",
+      }),
+    ).toEqual({
+      pendingDesiredThreadTitle: null,
+      applyTitle: null,
+    });
+  });
+
+  it("retries a prior failed rename when compute has nothing new", () => {
+    // Turn settled, secondary timed out mid-rename — heartbeat must re-apply settle.
+    expect(
+      planDiscordThreadTitleApply({
+        mirroredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        computedDesiredTitle: null,
+      }),
+    ).toEqual({
+      pendingDesiredThreadTitle: "🔀 Empasa pickup carrier rollout",
+      applyTitle: "🔀 Empasa pickup carrier rollout",
+    });
+  });
+
+  it("does not re-apply when mirrored already matches pending", () => {
+    expect(
+      planDiscordThreadTitleApply({
+        mirroredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        computedDesiredTitle: null,
+      }),
+    ).toEqual({
+      pendingDesiredThreadTitle: null,
+      applyTitle: null,
+    });
+  });
+
+  it("prefers a newer computed settle over a stale pending busy title", () => {
+    // VCS raced with settle: pending still wants ⏳, compute now wants settled.
+    expect(
+      planDiscordThreadTitleApply({
+        mirroredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        computedDesiredTitle: "🔀 Empasa pickup carrier rollout",
+      }),
+    ).toEqual({
+      pendingDesiredThreadTitle: "🔀 Empasa pickup carrier rollout",
+      applyTitle: "🔀 Empasa pickup carrier rollout",
+    });
+  });
+});
+
+describe("nextMirroredThreadTitleAfterApply", () => {
+  it("keeps pending and leaves mirrored unchanged on REST failure", () => {
+    expect(
+      nextMirroredThreadTitleAfterApply({
+        mirroredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        appliedTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        success: false,
+      }),
+    ).toEqual({
+      mirroredThreadTitle: "🔀 Empasa pickup carrier rollout",
+      pendingDesiredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+      attemptedThreadTitle: null,
+    });
+  });
+
+  it("updates mirrored and clears matching pending on success", () => {
+    expect(
+      nextMirroredThreadTitleAfterApply({
+        mirroredThreadTitle: "🔀 ⏳ Empasa pickup carrier rollout",
+        pendingDesiredThreadTitle: "🔀 Empasa pickup carrier rollout",
+        appliedTitle: "🔀 Empasa pickup carrier rollout",
+        success: true,
+      }),
+    ).toEqual({
+      mirroredThreadTitle: "🔀 Empasa pickup carrier rollout",
+      pendingDesiredThreadTitle: null,
+      attemptedThreadTitle: "🔀 Empasa pickup carrier rollout",
+    });
   });
 });
 
