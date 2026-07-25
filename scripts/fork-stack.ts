@@ -31,21 +31,26 @@ interface PullRequestCommitsView {
   readonly commits: ReadonlyArray<{ readonly oid: string }>;
 }
 
+/** Strip ANSI color / SGR sequences (agent hosts often set FORCE_COLOR). */
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "");
+}
+
 /** Subprocess env: force plain stdout so `gh --json` is parseable under FORCE_COLOR hosts. */
 function subprocessEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", NO_COLOR: "1", CLICOLOR: "0" };
-  delete env.FORCE_COLOR;
-  delete env.CLICOLOR_FORCE;
-  return env;
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    NO_COLOR: "1",
+    CLICOLOR: "0",
+    FORCE_COLOR: "0",
+    CLICOLOR_FORCE: "0",
+  };
 }
 
 function run(executable: string, args: ReadonlyArray<string>, cwd: string): string {
-  // gh may still colorize under some agent hosts; force plain output for parseable --json.
-  const finalArgs =
-    executable === "gh" && !args.includes("--color=never") && !args.includes("--color")
-      ? ["--color=never", ...args]
-      : args;
-  const result = NodeChildProcess.spawnSync(executable, finalArgs, {
+  // Do not pass `gh --color=never`: the t3-github-app gh wrapper rejects that flag.
+  const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd,
     encoding: "utf8",
     env: subprocessEnv(),
@@ -53,11 +58,10 @@ function run(executable: string, args: ReadonlyArray<string>, cwd: string): stri
   if (result.error) throw new StackError(`Unable to run ${executable}: ${result.error.message}`);
   if (result.status !== 0) {
     throw new StackError(
-      `${executable} ${args.join(" ")} failed: ${result.stderr.trim() || result.stdout.trim()}`,
+      `${executable} ${args.join(" ")} failed: ${stripAnsi(result.stderr.trim() || result.stdout.trim())}`,
     );
   }
-  // Strip any residual ANSI color in case a wrapper still injects it.
-  return result.stdout.replace(/\u001b\[[0-9;]*m/g, "").trim();
+  return stripAnsi(result.stdout).trim();
 }
 
 export function stackParentBranch(manifest: StackManifest): string {
