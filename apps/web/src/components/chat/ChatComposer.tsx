@@ -2899,24 +2899,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       onTogglePlanSidebar={togglePlanSidebar}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />
-                    <input
-                      ref={imageFileInputRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={onImageFileInputChange}
-                    />
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80"
-                      aria-label="Attach images"
-                      onClick={() => imageFileInputRef.current?.click()}
-                    >
-                      <PlusIcon aria-hidden="true" className="size-4" />
-                    </Button>
                   </>
                 ) : (
                   <>
@@ -2939,6 +2921,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     />
                   </>
                 )}
+                {/* Keep this outside the responsive footer branches. iOS can resize the
+                    viewport while its native picker is open; remounting the input then
+                    discards the pending change event. */}
+                <input
+                  ref={imageFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={onImageFileInputChange}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80"
+                  aria-label="Attach images"
+                  onClick={() => imageFileInputRef.current?.click()}
+                >
+                  <PlusIcon aria-hidden="true" className="size-4" />
+                </Button>
               </div>
 
               {/* Right side: send / stop button */}
