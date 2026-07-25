@@ -562,14 +562,23 @@ function makeOperation(state: PersistedState): RebaseOperation | undefined {
     const pullRequest = manifest.pullRequests[nextIndex];
     if (!pullRequest) return undefined;
     const parentBranch = expectedBase(manifest, nextIndex);
-    const oldBaseBranch =
-      nextIndex === 0 || initialBaseForAll ? manifest.upstreamBranch : parentBranch;
-    const oldBase = snapshots[oldBaseBranch];
     const oldTip = snapshots[pullRequest.branch];
+    const desiredOldBase =
+      snapshots[nextIndex === 0 || initialBaseForAll ? manifest.upstreamBranch : parentBranch];
     const newBase = nextIndex === 0 ? state.upstreamTip : newTips[parentBranch];
-    if (!oldBase || !oldTip || !newBase) {
+    if (!desiredOldBase || !oldTip || !newBase) {
       throw new StackError(`Missing snapshot while preparing PR #${pullRequest.number}.`);
     }
+    // A newly inserted middle layer is not yet an ancestor of its old child,
+    // and an updated parent may have moved after its child was last rebased.
+    // Replay from their actual common ancestor instead of assuming the desired
+    // parent tip was already present in the child.
+    const oldBase =
+      nextIndex === 0 || initialBaseForAll
+        ? desiredOldBase
+        : git(state.repoDir, ["merge-base", desiredOldBase, oldTip], {
+            stateDir: NodePath.dirname(state.repoDir),
+          });
     return {
       kind: "pull-request",
       index: nextIndex,

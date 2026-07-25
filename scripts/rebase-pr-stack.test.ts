@@ -32,6 +32,7 @@ interface FixtureOptions {
   readonly divergedMain?: boolean;
   readonly emptyIntegration?: boolean;
   readonly unchangedUpstream?: boolean;
+  readonly insertMiddleLayer?: boolean;
 }
 
 function runGit(
@@ -124,6 +125,7 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     integrationBranch: "fork/integration",
     pullRequests: [
       { number: 4, branch: "feature/pr-4" },
+      ...(options.insertMiddleLayer ? [{ number: 45, branch: "feature/upstream-candidates" }] : []),
       { number: 5, branch: "feature/pr-5" },
       { number: 6, branch: "feature/pr-6" },
     ],
@@ -138,6 +140,13 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     ? commitFile(work, "shared.txt", "from pr 4\n", "pr 4 conflicts")
     : commitFile(work, "pr-4.txt", "four\n", "pr 4");
   runGit(work, ["push", "--quiet", "origin", "feature/pr-4"]);
+
+  if (options.insertMiddleLayer) {
+    runGit(work, ["checkout", "--quiet", "-b", "feature/upstream-candidates"]);
+    commitFile(work, "candidate.txt", "candidate\n", "upstream candidate");
+    runGit(work, ["push", "--quiet", "origin", "feature/upstream-candidates"]);
+    runGit(work, ["checkout", "--quiet", "feature/pr-4"]);
+  }
 
   runGit(work, ["checkout", "--quiet", "-b", "feature/pr-5"]);
   commitFile(work, "pr-5.txt", "five\n", "pr 5");
@@ -214,6 +223,27 @@ describe("rebase-pr-stack", () => {
       ),
     );
     assert.equal(remoteTip(fixture.origin, "main"), remoteTip(fixture.upstream, "main"));
+  });
+
+  it("inserts a new middle layer before a child that does not contain it yet", async () => {
+    const fixture = createFixture({ insertMiddleLayer: true });
+    await syncStack({
+      sourceRoot: fixture.work,
+      push: true,
+      validatePullRequests: false,
+    });
+
+    const candidate = remoteTip(fixture.origin, "feature/upstream-candidates");
+    const pr5 = remoteTip(fixture.origin, "feature/pr-5");
+    const pr6 = remoteTip(fixture.origin, "feature/pr-6");
+    assert.ok(isAncestor(fixture.origin, candidate, pr5));
+    assert.ok(isAncestor(fixture.origin, pr5, pr6));
+    assert.deepStrictEqual(
+      runGit(fixture.origin, ["log", "--reverse", "--format=%s", `${candidate}..${pr5}`]).split(
+        "\n",
+      ),
+      ["pr 5"],
+    );
   });
 
   it("moves an integration branch with no unique commits to the rewritten stack tip", async () => {
