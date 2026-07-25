@@ -60,6 +60,29 @@ export type WorkLogToolLifecycleStatus =
   | "declined"
   | "stopped";
 
+/** One question from a clarifying-question round trip, with what the user picked. */
+export interface WorkLogUserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: ReadonlyArray<{ label: string; description: string }>;
+  /** Chosen option labels, in the order the question listed them. */
+  selectedLabels: ReadonlyArray<string>;
+  /** Free-text answer that matched no option (the "Other" escape hatch). */
+  customAnswer?: string;
+}
+
+/**
+ * A `user-input.requested` / `user-input.resolved` pair merged into one entry so
+ * the timeline can show the question alongside the answer it received.
+ */
+export interface WorkLogUserInput {
+  requestId: string;
+  answered: boolean;
+  questions: ReadonlyArray<WorkLogUserInputQuestion>;
+}
+
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
@@ -78,6 +101,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
+  /** Present on clarifying-question entries; rendered as a Q&A card, never folded away. */
+  userInput?: WorkLogUserInput;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -458,6 +483,152 @@ function parseUserInputQuestions(
   return parsed.length > 0 ? parsed : null;
 }
 
+function parseUserInputAnswerValues(value: unknown): ReadonlyArray<string> {
+  const values = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+  return values.flatMap((entry) => {
+    if (typeof entry !== "string") return [];
+    const trimmed = entry.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+}
+
+/**
+ * OpenCode reports a multi-select reply as one `", "`-joined string rather than
+ * a list. Consume the value label by label, longest first, so a label that
+ * itself contains a comma survives; anything that is not a run of option labels
+ * is left alone as free text.
+ */
+function splitJoinedOptionLabels(
+  value: string,
+  optionLabels: ReadonlySet<string>,
+): ReadonlyArray<string> | null {
+  const labelsByLength = [...optionLabels].toSorted((left, right) => right.length - left.length);
+  const picked: string[] = [];
+  let rest = value.trim();
+  while (rest.length > 0) {
+    const label = labelsByLength.find(
+      (candidate) => rest === candidate || rest.startsWith(`${candidate},`),
+    );
+    if (label === undefined) {
+      return null;
+    }
+    picked.push(label);
+    rest = rest.slice(label.length).replace(/^,\s*/, "");
+  }
+  return picked.length > 1 ? picked : null;
+}
+
+/** Structural shape shared by a freshly parsed question and an already-derived one. */
+interface AskedUserInputQuestion {
+  readonly id: string;
+  readonly header: string;
+  readonly question: string;
+  readonly multiSelect?: boolean | undefined;
+  readonly options: ReadonlyArray<{ readonly label: string; readonly description: string }>;
+}
+
+/** Pairs one asked question with the answer recorded for it, when there is one. */
+function toWorkLogUserInputQuestion(
+  question: AskedUserInputQuestion,
+  answers: Record<string, unknown> | null,
+): WorkLogUserInputQuestion {
+  const optionLabels = new Set(question.options.map((option) => option.label));
+  const reported = parseUserInputAnswerValues(answers?.[question.id]);
+  const [onlyValue] = reported;
+  const answered =
+    (question.multiSelect === true &&
+    reported.length === 1 &&
+    onlyValue !== undefined &&
+    !optionLabels.has(onlyValue)
+      ? splitJoinedOptionLabels(onlyValue, optionLabels)
+      : null) ?? reported;
+  // Keep question order rather than answer order so multi-select reads consistently.
+  const selectedLabels = question.options
+    .map((option) => option.label)
+    .filter((label) => answered.includes(label));
+  const customAnswer = answered.filter((value) => !optionLabels.has(value)).join("\n");
+  return {
+    id: question.id,
+    header: question.header,
+    question: question.question,
+    multiSelect: question.multiSelect === true,
+    options: question.options.map((option) => ({
+      label: option.label,
+      description: option.description,
+    })),
+    selectedLabels,
+    ...(customAnswer.length > 0 ? { customAnswer } : {}),
+  };
+}
+
+/**
+ * `user-input.resolved` without its request in view (older activity trimmed
+ * away) still carries the questions as answer keys — enough to show the answer.
+ */
+function toOrphanedWorkLogUserInputQuestions(
+  answers: Record<string, unknown>,
+): WorkLogUserInputQuestion[] {
+  return Object.entries(answers).flatMap(([question, value]) => {
+    const answered = parseUserInputAnswerValues(value);
+    if (answered.length === 0) return [];
+    return [
+      {
+        id: question,
+        header: "Answer",
+        question,
+        multiSelect: answered.length > 1,
+        options: [],
+        selectedLabels: [],
+        customAnswer: answered.join("\n"),
+      },
+    ];
+  });
+}
+
+function toWorkLogUserInputEntry(
+  activity: OrchestrationThreadActivity,
+  userInput: WorkLogUserInput,
+): DerivedWorkLogEntry {
+  return {
+    id: activity.id,
+    createdAt: activity.createdAt,
+    turnId: activity.turnId,
+    label: userInputWorkLogLabel(userInput.questions),
+    tone: "info",
+    activityKind: activity.kind,
+    userInput,
+  };
+}
+
+function userInputWorkLogLabel(questions: ReadonlyArray<WorkLogUserInputQuestion>): string {
+  const [first] = questions;
+  if (questions.length === 1 && first) {
+    return `Question: ${first.header}`;
+  }
+  return `${questions.length} questions`;
+}
+
+/**
+ * Claude surfaces `AskUserQuestion` through the user-input event channel, so its
+ * tool row is a duplicate whose only content is the raw question JSON.
+ */
+function isUserInputToolActivity(activity: OrchestrationThreadActivity): boolean {
+  if (
+    activity.kind !== "tool.started" &&
+    activity.kind !== "tool.updated" &&
+    activity.kind !== "tool.completed"
+  ) {
+    return false;
+  }
+  const payload = asRecord(activity.payload);
+  const toolName = asTrimmedString(asRecord(payload?.data)?.toolName);
+  if (toolName === "AskUserQuestion") {
+    return true;
+  }
+  // `tool.started` lands before any input streams, leaving only the detail prefix.
+  return asTrimmedString(payload?.detail)?.startsWith("AskUserQuestion:") === true;
+}
+
 export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
@@ -629,12 +800,77 @@ export function deriveWorkLogEntries(
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries: DerivedWorkLogEntry[] = [];
+  // Answers arrive in a separate activity from the questions; fold them back
+  // into the entry that asked, so one round trip renders as one Q&A card.
+  const userInputEntryIndexByRequestId = new Map<string, number>();
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
+    if (isUserInputToolActivity(activity)) continue;
+
+    if (activity.kind === "user-input.requested") {
+      const payload = asRecord(activity.payload);
+      const requestId = asTrimmedString(payload?.requestId);
+      const questions = parseUserInputQuestions(payload);
+      if (requestId) {
+        userInputEntryIndexByRequestId.set(requestId, entries.length);
+        if (questions) {
+          const derived = toWorkLogUserInputEntry(activity, {
+            requestId,
+            answered: false,
+            questions: questions.map((question) => toWorkLogUserInputQuestion(question, null)),
+          });
+          entries.push(derived);
+          continue;
+        }
+      }
+    }
+
+    if (activity.kind === "user-input.resolved") {
+      const payload = asRecord(activity.payload);
+      const requestId = asTrimmedString(payload?.requestId);
+      const answers = asRecord(payload?.answers);
+      const askedIndex = requestId ? userInputEntryIndexByRequestId.get(requestId) : undefined;
+      if (askedIndex !== undefined) {
+        const asked = entries[askedIndex];
+        if (asked?.userInput) {
+          const questions = asked.userInput.questions.map((question) =>
+            toWorkLogUserInputQuestion(question, answers),
+          );
+          entries[askedIndex] = {
+            ...asked,
+            label: userInputWorkLogLabel(questions),
+            userInput: { ...asked.userInput, answered: true, questions },
+          };
+          continue;
+        }
+        if (asked && requestId && answers) {
+          const questions = toOrphanedWorkLogUserInputQuestions(answers);
+          if (questions.length > 0) {
+            entries[askedIndex] = {
+              ...asked,
+              label: userInputWorkLogLabel(questions),
+              tone: "info",
+              userInput: { requestId, answered: true, questions },
+            };
+          }
+        }
+        // The matching request already represents this lifecycle. Keep one
+        // generic row when neither side has enough structure for a Q&A card.
+        continue;
+      }
+      if (requestId && answers) {
+        const questions = toOrphanedWorkLogUserInputQuestions(answers);
+        if (questions.length > 0) {
+          entries.push(toWorkLogUserInputEntry(activity, { requestId, answered: true, questions }));
+          continue;
+        }
+      }
+    }
+
     entries.push(toDerivedWorkLogEntry(activity));
   }
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
