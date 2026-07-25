@@ -12,6 +12,9 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { forkMigrationTable, makeForkMigrationLoader } from "./ForkMigrations.ts";
+import { bootstrapMigrationNamespaces, upstreamMigrationTable } from "./MigrationBootstrap.ts";
+
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
@@ -133,7 +136,16 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  yield* bootstrapMigrationNamespaces();
+  const upstreamMigrations = yield* run({
+    loader: makeMigrationLoader(toMigrationInclusive),
+    table: upstreamMigrationTable,
+  });
+  const forkMigrations =
+    toMigrationInclusive === undefined
+      ? yield* run({ loader: makeForkMigrationLoader(), table: forkMigrationTable })
+      : [];
+  const executedMigrations = [...upstreamMigrations, ...forkMigrations];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

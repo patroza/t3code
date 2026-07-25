@@ -31,6 +31,8 @@ const readModel: CommandReadModel = fromWireReadModel({
       snoozedAt: null,
       deletedAt: null,
       messages: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       proposedPlans: [],
       activities: [],
       checkpoints: [],

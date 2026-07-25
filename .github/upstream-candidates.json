@@ -24,6 +24,12 @@
       "sourceSha": "f7eaa00b99e67a9c1caf09e2fe6ff1f536f66b91",
       "status": "active",
       "purpose": "Show answered provider questions in the web thread timeline"
+    },
+    {
+      "upstreamPr": 4245,
+      "sourceSha": "6be48eb238cf310a60cc9571240601e774c7d381",
+      "status": "active",
+      "purpose": "Queue follow-up messages server-side during active turns with explicit steer controls"
     }
   ]
 }
