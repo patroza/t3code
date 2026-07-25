@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import { MessageId, type EnvironmentId, type ThreadId, type TurnId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
@@ -86,6 +86,7 @@ import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCo
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
 import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
 import {
+  deriveQueuedMessageControls,
   deriveThreadFeedPresentation,
   type ThreadFeedEntry,
   type ThreadFeedLatestTurn,
@@ -146,6 +147,11 @@ export interface ThreadFeedProps {
   readonly hasMoreOlder?: boolean;
   readonly loadingOlder?: boolean;
   readonly onLoadOlder?: () => void;
+  readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
+  readonly onRemoveQueuedMessage: (
+    messageId: MessageId,
+    source: "local" | "server",
+  ) => Promise<void>;
 }
 
 function MessageAttachmentImage(props: {
@@ -801,7 +807,10 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills"> & {
+  props: Pick<
+    ThreadFeedProps,
+    "environmentId" | "skills" | "onSteerQueuedMessage" | "onRemoveQueuedMessage"
+  > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -869,6 +878,8 @@ function renderFeedEntry(
     const attachments = message.attachments ?? [];
     const previewAttachments = entry.previewAttachments ?? [];
     const deliveryState = entry.deliveryState;
+    const queueSource = entry.queueSource;
+    const queueControls = deriveQueuedMessageControls(deliveryState, queueSource);
     const hasReviewCommentContext = message.text.includes("<review_comment");
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
@@ -941,6 +952,36 @@ function renderFeedEntry(
               <NativeText className="font-t3-medium text-xs text-foreground-muted">
                 Queued on server
               </NativeText>
+            ) : null}
+            {queueControls.canSteer ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Send queued message now"
+                hitSlop={8}
+                onPress={() => void props.onSteerQueuedMessage(MessageId.make(message.id))}
+                className="min-h-8 justify-center rounded-full px-2"
+              >
+                <NativeText className="font-t3-semibold text-xs text-accent">Send now</NativeText>
+              </Pressable>
+            ) : null}
+            {queueControls.canRemove && queueSource ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  queueSource === "server"
+                    ? "Remove queued message"
+                    : "Discard offline queued message"
+                }
+                hitSlop={8}
+                onPress={() =>
+                  void props.onRemoveQueuedMessage(MessageId.make(message.id), queueSource)
+                }
+                className="min-h-8 justify-center rounded-full px-2"
+              >
+                <NativeText className="font-t3-semibold text-xs text-destructive">
+                  {queueSource === "local" ? "Discard" : "Remove"}
+                </NativeText>
+              </Pressable>
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
@@ -1749,6 +1790,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         onToggleTurnFold,
         onPressImage,
         onMarkdownLinkPress,
+        onSteerQueuedMessage: props.onSteerQueuedMessage,
+        onRemoveQueuedMessage: props.onRemoveQueuedMessage,
         iconSubtleColor,
         userBubbleColor,
         markdownStyles,
@@ -1770,6 +1813,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       userBubbleMaxWidth,
       onCopyWorkRow,
       onMarkdownLinkPress,
+      props.onSteerQueuedMessage,
+      props.onRemoveQueuedMessage,
       onPressImage,
       onToggleTurnFold,
       onToggleWorkGroup,

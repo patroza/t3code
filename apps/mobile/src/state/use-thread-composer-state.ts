@@ -49,7 +49,8 @@ import { orchestrationEnvironment } from "../state/orchestration";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { threadEnvironment } from "./threads";
+import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "./thread-outbox";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
@@ -110,6 +111,12 @@ export function useThreadComposerState() {
   const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
     reportFailure: false,
   });
+  const steerQueuedMessage = useAtomCommand(threadEnvironment.steerQueuedMessage, {
+    label: "steer queued message",
+  });
+  const removeServerQueuedMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
+    label: "remove queued message",
+  });
   const selectedEnvironmentIdForActivities = selectedThreadShell?.environmentId ?? null;
   const selectedThreadIdForActivities = selectedThreadShell?.id ?? null;
   const loadOlderActivitiesPage = useCallback(
@@ -168,6 +175,7 @@ export function useThreadComposerState() {
         id: message.messageId,
         createdAt: message.queuedAt,
         deliveryState: "queued",
+        queueSource: "server",
         message: {
           id: message.messageId,
           role: "user",
@@ -192,6 +200,7 @@ export function useThreadComposerState() {
         type: "message",
         id: message.messageId,
         createdAt: message.createdAt,
+        queueSource: "local",
         deliveryState: connectedEnvironments.some(
           (environment) =>
             environment.environmentId === message.environmentId &&
@@ -296,6 +305,41 @@ export function useThreadComposerState() {
       return null;
     }
   }, [selectedThreadDetail, selectedThreadShell]);
+
+  const onSteerQueuedMessage = useCallback(
+    async (messageId: MessageId) => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      await steerQueuedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, messageId },
+      });
+    },
+    [selectedThreadShell, steerQueuedMessage],
+  );
+
+  const onRemoveQueuedMessage = useCallback(
+    async (messageId: MessageId, source: "local" | "server") => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      if (source === "local") {
+        const message = selectedThreadQueuedMessages.find(
+          (candidate) => candidate.messageId === messageId,
+        );
+        if (message) {
+          await removeThreadOutboxMessage(message);
+        }
+        return;
+      }
+      await removeServerQueuedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, messageId },
+      });
+    },
+    [removeServerQueuedMessage, selectedThreadQueuedMessages, selectedThreadShell],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -437,6 +481,8 @@ export function useThreadComposerState() {
     onNativePasteImages,
     onRemoveDraftImage,
     onSendMessage,
+    onSteerQueuedMessage,
+    onRemoveQueuedMessage,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,

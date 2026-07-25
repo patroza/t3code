@@ -803,6 +803,8 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onSteerQueuedMessage={composer.onSteerQueuedMessage}
+          onRemoveQueuedMessage={composer.onRemoveQueuedMessage}
           onStartNewThread={handleStartNewThread}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}

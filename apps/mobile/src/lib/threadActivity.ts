@@ -97,6 +97,7 @@ type RawThreadFeedEntry =
       readonly createdAt: string;
       readonly message: OrchestrationThread["messages"][number];
       readonly deliveryState?: "waiting" | "sending" | "queued";
+      readonly queueSource?: "local" | "server";
       readonly previewAttachments?: ReadonlyArray<DraftComposerImageAttachment>;
     }
   | {
@@ -139,6 +140,18 @@ export type ThreadFeedEntry =
       readonly label: string;
       readonly expanded: boolean;
     };
+
+export function deriveQueuedMessageControls(
+  deliveryState: "waiting" | "sending" | "queued" | undefined,
+  queueSource: "local" | "server" | undefined,
+): { readonly canSteer: boolean; readonly canRemove: boolean } {
+  return {
+    canSteer: deliveryState === "queued" && queueSource === "server",
+    canRemove:
+      (deliveryState === "queued" && queueSource === "server") ||
+      (deliveryState === "waiting" && queueSource === "local"),
+  };
+}
 
 export type ThreadFeedLatestTurn = Pick<
   OrchestrationLatestTurn,

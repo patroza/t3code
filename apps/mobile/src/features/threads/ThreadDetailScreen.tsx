@@ -79,6 +79,11 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
+  readonly onRemoveQueuedMessage: (
+    messageId: MessageId,
+    source: "local" | "server",
+  ) => Promise<void>;
   readonly onStartNewThread: () => void;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
@@ -381,6 +386,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             hasMoreOlder={props.hasMoreOlderActivities}
             loadingOlder={props.loadingOlderActivities}
             onLoadOlder={props.onLoadOlderActivities}
+            onSteerQueuedMessage={props.onSteerQueuedMessage}
+            onRemoveQueuedMessage={props.onRemoveQueuedMessage}
           />
         </View>
       ) : (
