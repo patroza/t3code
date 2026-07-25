@@ -129,6 +129,7 @@ function createFixture(options: FixtureOptions = {}): Fixture {
       { number: 5, branch: "feature/pr-5" },
       { number: 6, branch: "feature/pr-6" },
     ],
+    integrationOverlays: [],
   };
   write(
     NodePath.join(work, ".github", "pr-stack.json"),
@@ -419,6 +420,7 @@ describe("rebase-pr-stack", () => {
         headBranch: branch,
         headOwner: "patroza",
         baseBranch: index === 0 ? "main" : fixture.manifest.pullRequests[index - 1]!.branch,
+        isDraft: true,
       }),
     );
 
@@ -441,6 +443,7 @@ describe("rebase-pr-stack", () => {
         headBranch: branch,
         headOwner: "patroza",
         baseBranch: index === 0 ? "main" : fixture.manifest.pullRequests[index - 1]!.branch,
+        isDraft: true,
       }),
     );
     assert.doesNotThrow(() =>
@@ -452,6 +455,7 @@ describe("rebase-pr-stack", () => {
           headBranch: "feature/parallel",
           headOwner: "patroza",
           baseBranch: "fork/changes",
+          isDraft: true,
         },
       ]),
     );
