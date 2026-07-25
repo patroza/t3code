@@ -1214,14 +1214,21 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
   if (options.push && (process.env.GH_TOKEN || process.env.GITHUB_TOKEN)) {
     const oldTip = result.snapshots[manifest.forkChangesBranch];
     const newTip = result.newTips[manifest.forkChangesBranch];
-    if (oldTip && newTip && oldTip !== newTip) {
+    if (oldTip && newTip) {
       try {
-        pushForkChangesBaseHistory(sourceRoot, [newTip, oldTip]);
+        // A normal PR merge advances fork/changes before this workflow starts, so
+        // snapshots already contain the new tip. Its first parent is the previous
+        // fork/changes base that open feature PRs still contain.
+        const firstParent = git(sourceRoot, ["rev-parse", `${newTip}^`], {
+          allowFailure: true,
+        });
+        const previousBase = oldTip !== newTip ? oldTip : firstParent;
+        pushForkChangesBaseHistory(sourceRoot, [newTip, previousBase, oldTip]);
         const featureResult = await rebaseOpenFeaturePullRequests({
           sourceRoot,
           manifest,
           push: true,
-          oldForkChangesTip: oldTip,
+          oldForkChangesTip: previousBase,
           newForkChangesTip: newTip,
         });
         appendFeatureRebaseSummary(featureResult);
