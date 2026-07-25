@@ -49,7 +49,6 @@ import {
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   OrchestrationReplayEventsError,
-  ServerExternalSessionImportError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -96,7 +95,6 @@ import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
-import * as ExternalSessions from "./externalSessions/importSessions.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -363,7 +361,6 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetHostResourceSnapshot, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverImportExternalSessions, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
@@ -1815,29 +1812,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
-        [WS_METHODS.serverImportExternalSessions]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverImportExternalSessions,
-            Effect.try({
-              try: () => ({
-                results: ExternalSessions.runImportSessions({
-                  cwd: input.cwd,
-                  provider: input.provider,
-                  limit: input.limit,
-                  dryRun: input.dryRun,
-                  opencodeModel: input.opencodeModel,
-                  baseDir: config.baseDir,
-                }),
-              }),
-              catch: (cause) =>
-                new ServerExternalSessionImportError({
-                  cwd: input.cwd,
-                  reason: cause instanceof Error ? cause.message : String(cause),
-                  cause,
-                }),
-            }),
-            { "rpc.aggregate": "server" },
-          ),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
             "rpc.aggregate": "cloud",
