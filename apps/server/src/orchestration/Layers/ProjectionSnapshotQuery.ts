@@ -2560,43 +2560,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       ),
     );
-  const getThreadActivitiesPage: ProjectionSnapshotQueryShape["getThreadActivitiesPage"] = (
-    input,
-  ) =>
-    Effect.gen(function* () {
-      const limit = Math.min(
-        Math.max(1, input.limit ?? THREAD_DETAIL_ACTIVITY_WINDOW),
-        THREAD_DETAIL_ACTIVITY_WINDOW,
-      );
-      // Fetch one extra to detect whether older activities remain.
-      const rowsEffect =
-        "beforeSequence" in input
-          ? listThreadActivityRowsBeforeSequence({
-              threadId: input.threadId,
-              beforeSequence: input.beforeSequence,
-              limit: limit + 1,
-            })
-          : listUnsequencedThreadActivityRowsBeforeActivity({
-              threadId: input.threadId,
-              beforeCreatedAt: input.beforeCreatedAt,
-              beforeActivityId: input.beforeActivityId,
-              limit: limit + 1,
-            });
-      const rows = yield* rowsEffect.pipe(
-        Effect.mapError(
-          toPersistenceSqlOrDecodeError(
-            "ProjectionSnapshotQuery.getThreadActivitiesPage:query",
-            "ProjectionSnapshotQuery.getThreadActivitiesPage:decodeRows",
-          ),
-        ),
-      );
-      const hasMore = rows.length > limit;
-      // Rows are newest-first; keep the page closest to the cursor, then reverse
-      // to ascending for display.
-      const page = (hasMore ? rows.slice(0, limit) : rows).map(mapThreadActivityRow).toReversed();
-      return { activities: page, hasMore };
-    });
-
   return {
     getCommandReadModel,
     getSnapshot,
