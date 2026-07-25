@@ -2,6 +2,10 @@ name: Mobile EAS Preview
 
 on:
   pull_request:
+    # Preview builds belong to feature PRs. The permanent fork stack PRs target
+    # lower provenance layers and must not create a preview run on every rebase.
+    branches:
+      - fork/changes
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
