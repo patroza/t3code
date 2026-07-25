@@ -5,6 +5,7 @@ import {
   workLogEntryIsToolLike,
   type TimelineEntry,
   type WorkLogEntry,
+  type WorkLogUserInput,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 import { type MessageId, type OrchestrationLatestTurn, type TurnId } from "@t3tools/contracts";
@@ -220,6 +221,13 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
+  | {
+      kind: "user-input";
+      id: string;
+      createdAt: string;
+      entry: WorkLogEntry;
+      userInput: WorkLogUserInput;
+    }
   | { kind: "working"; id: string; createdAt: string | null };
 
 export interface StableMessagesTimelineRowsState {
@@ -406,6 +414,11 @@ function deriveTurnFolds(input: {
       if (entry.kind === "work" && entry.entry.agentSpawn !== undefined) {
         continue;
       }
+      // A clarifying question and its answer record a decision the user made;
+      // keep them readable once the turn settles instead of folding them away.
+      if (entry.kind === "work" && entry.entry.userInput !== undefined) {
+        continue;
+      }
       hiddenEntryIds.add(entry.id);
     }
     if (hiddenEntryIds.size === 0) {
@@ -512,6 +525,20 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
+      // Clarifying-question exchanges are conversation, not tool noise: they get
+      // their own row so neither work-group collapsing nor a turn fold hides them.
+      const userInput = timelineEntry.entry.userInput;
+      if (userInput) {
+        nextRows.push({
+          kind: "user-input",
+          id: timelineEntry.id,
+          createdAt: timelineEntry.createdAt,
+          entry: timelineEntry.entry,
+          userInput,
+        });
+        continue;
+      }
+
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
       while (cursor < input.timelineEntries.length) {
@@ -519,6 +546,7 @@ export function deriveMessagesTimelineRows(input: {
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
+          nextEntry.entry.userInput !== undefined ||
           collapsedEntryIds.has(nextEntry.id) ||
           foldsByAnchorEntryId.has(nextEntry.id)
         ) {
@@ -680,6 +708,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "work":
       return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);
+
+    case "user-input":
+      return Equal.equals(a.userInput, (b as typeof a).userInput);
 
     case "work-toggle": {
       const bw = b as typeof a;
