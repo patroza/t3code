@@ -912,6 +912,10 @@ type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
 type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
+type TimelineUserInputQuestion = Extract<
+  MessagesTimelineRow,
+  { kind: "user-input" }
+>["userInput"]["questions"][number];
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   return (
@@ -939,6 +943,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+      {row.kind === "user-input" ? <UserInputTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1308,6 +1313,113 @@ function WorkGroupToggleTimelineRow({
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * A clarifying-question round trip: what the agent asked and what the user
+ * picked. The interactive prompt lives in the composer, so this row is the
+ * thread's only lasting record of the exchange.
+ */
+const UserInputTimelineRow = memo(function UserInputTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "user-input" }>;
+}) {
+  const [showOptions, setShowOptions] = useState(false);
+  const { userInput } = row;
+  const hasUnpickedOptions = userInput.questions.some(
+    (question) => question.options.length > question.selectedLabels.length,
+  );
+
+  return (
+    <section
+      className="rounded-lg border border-border/45 bg-muted/16 px-3 py-2.5"
+      aria-label={row.entry.label}
+    >
+      {userInput.questions.map((question, index) => (
+        <div key={question.id} className={cn(index > 0 && "mt-3 border-t border-border/40 pt-3")}>
+          <div className="flex items-center gap-1.5 text-muted-foreground/60">
+            <MessageCircleIcon className="size-3.5 shrink-0 stroke-[1.8]" aria-hidden />
+            <span className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-widest">
+              {question.header}
+            </span>
+          </div>
+          <p className="mt-1.5 text-[13px] leading-5 text-foreground/85">{question.question}</p>
+          <UserInputAnswer answered={userInput.answered} question={question} />
+          {showOptions && question.options.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {question.options.map((option) => {
+                const picked = question.selectedLabels.includes(option.label);
+                return (
+                  <li
+                    key={option.label}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-[12px] leading-4",
+                      picked ? "bg-primary/8 text-foreground/85" : "text-muted-foreground/70",
+                    )}
+                  >
+                    <span className="font-medium">{option.label}</span>
+                    {option.description && option.description !== option.label ? (
+                      <span className="ms-1.5 text-muted-foreground/60">{option.description}</span>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
+      ))}
+      {hasUnpickedOptions ? (
+        <button
+          type="button"
+          className="mt-2 flex cursor-pointer items-center gap-1 rounded-md text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
+          aria-expanded={showOptions}
+          onClick={() => setShowOptions((value) => !value)}
+        >
+          <ChevronDownIcon
+            className={cn("size-3 transition-transform duration-200", showOptions && "rotate-180")}
+            aria-hidden
+          />
+          {showOptions ? "Hide options" : "Show options"}
+        </button>
+      ) : null}
+    </section>
+  );
+});
+
+function UserInputAnswer({
+  answered,
+  question,
+}: {
+  answered: boolean;
+  question: TimelineUserInputQuestion;
+}) {
+  const { selectedLabels, customAnswer } = question;
+
+  if (selectedLabels.length === 0 && !customAnswer) {
+    return (
+      <p className="mt-2 text-[12px] italic leading-5 text-muted-foreground/60">
+        {answered ? "No answer recorded" : "Awaiting your answer"}
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      {selectedLabels.map((label) => (
+        <p key={label} className="flex items-start gap-1.5 text-[12px] leading-5 text-foreground">
+          <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 font-medium">{label}</span>
+        </p>
+      ))}
+      {customAnswer ? (
+        <p className="flex items-start gap-1.5 text-[12px] leading-5 text-foreground/90">
+          <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 whitespace-pre-wrap italic">{customAnswer}</span>
+        </p>
+      ) : null}
+    </div>
   );
 }
 
