@@ -202,11 +202,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # mode=auto, not update: an OTA alone never reaches a phone when the
+          # native runtime changed, so the fingerprint decides between an update
+          # and a TestFlight build. iOS only, because Android has no keystore.
           gh workflow run mobile-eas-production.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref fork/integration \
-            -f mode=update \
-            -f platform=all \
+            -f mode=auto \
+            -f platform=ios \
             -f sha="$GITHUB_SHA" \
             -f message="Integration ${GITHUB_SHA}"
           gh workflow run mobile-eas-development.yml \
