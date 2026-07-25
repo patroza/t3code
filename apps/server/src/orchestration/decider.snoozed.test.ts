@@ -5,7 +5,6 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationReadModel,
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -13,6 +12,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 // The decider's clock is the Effect test clock, pinned to the epoch, so
@@ -27,8 +27,8 @@ function makeReadModel(input: {
   readonly archivedAt?: string | null;
   readonly activities?: OrchestrationThread["activities"];
   readonly messages?: OrchestrationThread["messages"];
-}): OrchestrationReadModel {
-  return {
+}): CommandReadModel {
+  return fromWireReadModel({
     snapshotSequence: 0,
     projects: [],
     threads: [
@@ -58,7 +58,7 @@ function makeReadModel(input: {
       },
     ],
     updatedAt: NOW,
-  };
+  });
 }
 
 it.layer(NodeServices.layer)("snoozed thread decider", (it) => {
