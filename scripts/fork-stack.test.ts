@@ -3,9 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseManifest, StackError, type StackManifest } from "./rebase-pr-stack.ts";
 import {
   featurePullRequestBaseBranch,
+  orderUniqueCommitsOldestFirst,
   planFeatureBranchUpdate,
   planLocalSyncWithRemote,
   registerPullRequest,
+  shouldAutoSkipConflictingTransplant,
   shouldRetargetPullRequestBase,
   stackParentBranch,
   uniqueLocalCommitsFromCherry,
@@ -39,7 +41,7 @@ describe("fork stack helpers", () => {
         baseIsAncestorOfHead: true,
         behindCount: 3,
         aheadCount: 1,
-        pullRequestCommitOids: ["abc"],
+        uniquePatchOidsOldestFirst: ["abc"],
       }),
     ).toEqual({ action: "rebase", replayOids: [] });
   });
@@ -50,31 +52,40 @@ describe("fork stack helpers", () => {
         baseIsAncestorOfHead: true,
         behindCount: 0,
         aheadCount: 2,
-        pullRequestCommitOids: ["abc", "def"],
+        uniquePatchOidsOldestFirst: ["abc", "def"],
       }),
     ).toEqual({ action: "noop", replayOids: [] });
   });
 
-  it("replays only PR commits when the branch was cut from the wrong parent", () => {
+  it("cherry-picks only patch-id unique commits when history diverged after a base rewrite", () => {
     expect(
       planFeatureBranchUpdate({
         baseIsAncestorOfHead: false,
         behindCount: 50,
         aheadCount: 600,
-        pullRequestCommitOids: ["only-feature-commit"],
+        uniquePatchOidsOldestFirst: ["only-feature-commit"],
       }),
-    ).toEqual({ action: "replay", replayOids: ["only-feature-commit"] });
+    ).toEqual({ action: "cherry-pick-unique", replayOids: ["only-feature-commit"] });
   });
 
-  it("rejects misbased branches with no PR commits to replay", () => {
-    expect(() =>
+  it("is a noop when diverged but every patch already exists on the new base", () => {
+    expect(
       planFeatureBranchUpdate({
         baseIsAncestorOfHead: false,
         behindCount: 10,
         aheadCount: 10,
-        pullRequestCommitOids: [],
+        uniquePatchOidsOldestFirst: [],
       }),
-    ).toThrow(/not based on fork\/changes/);
+    ).toEqual({ action: "noop", replayOids: [] });
+  });
+
+  it("orders unique commits oldest-first from rev-list order", () => {
+    expect(orderUniqueCommitsOldestFirst(["a", "b", "c", "d"], ["d", "b"])).toEqual(["b", "d"]);
+  });
+
+  it("auto-skips only large conflicting transplants", () => {
+    expect(shouldAutoSkipConflictingTransplant({ changedFileCount: 7 })).toBe(false);
+    expect(shouldAutoSkipConflictingTransplant({ changedFileCount: 31 })).toBe(true);
   });
 
   it("resets local to remote when git cherry has no unique patches", () => {
