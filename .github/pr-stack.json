@@ -9,6 +9,10 @@
       "branch": "fork/tim"
     },
     {
+      "number": 27,
+      "branch": "fork/candidates"
+    },
+    {
       "number": 2,
       "branch": "fork/changes"
     }
