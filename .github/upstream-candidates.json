@@ -18,6 +18,12 @@
       "sourceSha": "56b6615afdfe3804a466e33cbab9056b8981f217",
       "status": "active",
       "purpose": "Bound long-lived orchestration, browser, preview, and VCS in-memory state"
+    },
+    {
+      "upstreamPr": 4506,
+      "sourceSha": "f7eaa00b99e67a9c1caf09e2fe6ff1f536f66b91",
+      "status": "active",
+      "purpose": "Show answered provider questions in the web thread timeline"
     }
   ]
 }
