@@ -58,6 +58,18 @@ export const OMEGENT_SLASH_COMMAND = {
           description: "Run in plan mode",
           required: false,
         },
+        {
+          type: Discord.ApplicationCommandOptionType.BOOLEAN,
+          name: "steer",
+          description: "Mid-turn: inject now (default when a turn is already running)",
+          required: false,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.BOOLEAN,
+          name: "queue",
+          description: "Mid-turn: park until the active turn finishes (opt out of steer)",
+          required: false,
+        },
       ],
     },
     {
@@ -167,10 +179,17 @@ export function formatAskSlashAck(input: {
   readonly prompt: string;
   readonly plan: boolean;
   readonly local: boolean;
+  readonly followUpDelivery?: "steer" | "queue";
 }): string {
-  const flags = [input.plan ? "`--plan`" : null, input.local ? "`--local`" : null].filter(
-    (value): value is string => value !== null,
-  );
+  const flags = [
+    input.plan ? "`--plan`" : null,
+    input.local ? "`--local`" : null,
+    input.followUpDelivery === "queue"
+      ? "`--queue`"
+      : input.followUpDelivery === "steer"
+        ? "`--steer`"
+        : null,
+  ].filter((value): value is string => value !== null);
   const flagSuffix = flags.length > 0 ? ` (${flags.join(" ")})` : "";
   const preview =
     input.prompt.length > 280 ? `${input.prompt.slice(0, 277).trimEnd()}…` : input.prompt;

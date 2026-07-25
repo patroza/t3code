@@ -2,13 +2,34 @@ import { parseProviderModelFlags } from "@t3tools/shared/providerModelSelection"
 
 import { parseLinkThreadCommand, type LinkThreadCommand } from "./t3ThreadRef.ts";
 
+/** How a mid-turn Discord follow-up is delivered to the server queue. */
+export type DiscordFollowUpDelivery = "steer" | "queue";
+
 export interface ParsedMentionFlags {
   readonly model?: string;
   readonly provider?: string;
   readonly base?: string;
   readonly local: boolean;
   readonly plan: boolean;
+  /**
+   * Explicit mid-turn delivery override. When omitted, busy-thread follow-ups
+   * **steer** into the active turn (Discord default). `--queue` parks the
+   * message server-side until the turn finishes; `--steer` forces immediate
+   * injection.
+   */
+  readonly followUpDelivery?: DiscordFollowUpDelivery;
   readonly prompt: string;
+}
+
+/**
+ * Resolve mid-turn delivery. Discord keeps historical steer-by-default
+ * behavior; flags force either path. Idle threads ignore this (startTurn
+ * opens a normal turn).
+ */
+export function resolveDiscordFollowUpDelivery(
+  flags: Pick<ParsedMentionFlags, "followUpDelivery">,
+): DiscordFollowUpDelivery {
+  return flags.followUpDelivery ?? "steer";
 }
 
 export type ParsedMentionIntent =
@@ -30,6 +51,9 @@ const REFRESH_INDICATORS_PROMPTS = new Set([
 /**
  * Parse optional flags from a bot mention body (after stripping the mention).
  * Flags: --model <slug> --provider <instanceId> --base <branch> --local --plan
+ *        --steer --queue
+ *
+ * `--steer` / `--queue` last-wins when both appear.
  */
 export function parseMentionFlags(raw: string): ParsedMentionFlags {
   const providerModel = parseProviderModelFlags(raw);
@@ -40,6 +64,7 @@ export function parseMentionFlags(raw: string): ParsedMentionFlags {
   let base: string | undefined;
   let local = false;
   let plan = false;
+  let followUpDelivery: DiscordFollowUpDelivery | undefined;
   const promptParts: string[] = [];
 
   for (let index = 0; index < tokens.length; index += 1) {
@@ -50,6 +75,14 @@ export function parseMentionFlags(raw: string): ParsedMentionFlags {
     }
     if (token === "--plan") {
       plan = true;
+      continue;
+    }
+    if (token === "--steer") {
+      followUpDelivery = "steer";
+      continue;
+    }
+    if (token === "--queue") {
+      followUpDelivery = "queue";
       continue;
     }
     if (token === "--base") {
@@ -69,6 +102,7 @@ export function parseMentionFlags(raw: string): ParsedMentionFlags {
     ...(base === undefined ? {} : { base }),
     local,
     plan,
+    ...(followUpDelivery === undefined ? {} : { followUpDelivery }),
     prompt: promptParts.join(" ").trim(),
   };
 }

@@ -143,6 +143,15 @@ export interface T3SessionService {
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
   }) => Effect.Effect<{ readonly messageId: string }, T3SessionError>;
   /**
+   * Inject a server-queued follow-up into the active turn (or start a turn if
+   * idle). Used after `startTurn` queues a mid-turn Discord message so the bot
+   * keeps historical steer-by-default behavior.
+   */
+  readonly steerQueuedMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, T3SessionError>;
+  /**
    * Subscribe to thread events until disconnect/interrupt.
    * Runs `onThread` in the caller fiber context (must not be forked onto a bare T3 runtime).
    *
@@ -755,6 +764,14 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             createdAt: nowIso(),
           });
           return { messageId };
+        }),
+      steerQueuedMessage: (input) =>
+        dispatch({
+          type: "thread.queue.steer",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          messageId: input.messageId,
+          createdAt: nowIso(),
         }),
       /**
        * Subscribe to thread events and run `onThread` in the **caller's** Effect context.

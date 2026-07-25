@@ -83,6 +83,7 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("/omegent refresh-indicators");
     expect(rendered).toContain("@Omegent …");
     expect(rendered).toContain("Same actions (fallback)");
+    expect(rendered).toContain("--steer (default mid-turn) --queue (park until turn ends)");
     expect(rendered).toContain("Default provider/model: `codex/gpt-5.4`");
     // Labels pad to the widest provider label ("grok [missing]").
     expect(rendered).toContain("codex           gpt-5.4, gpt-5.5");

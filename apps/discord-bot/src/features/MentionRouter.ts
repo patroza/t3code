@@ -1,10 +1,11 @@
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalDate:off globalErrorInEffectFailure:off outdatedApi:off globalFetchInEffect:off
-import type {
-  ModelSelection,
-  OrchestrationThread,
-  ServerProvider,
-  ThreadId,
-  UploadChatAttachment,
+import {
+  MessageId,
+  type ModelSelection,
+  type OrchestrationThread,
+  type ServerProvider,
+  type ThreadId,
+  type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { Discord, DiscordREST, Ix } from "dfx";
@@ -38,6 +39,7 @@ import {
   parseTopicShortName,
   projectTopicFromParentLookup,
   normalizeWorkspacePath,
+  resolveDiscordFollowUpDelivery,
   type ProjectTopicLookup,
 } from "../presentation/mentions.ts";
 import {
@@ -891,9 +893,41 @@ const make = (botConfig: DiscordBotConfig) =>
                 }),
               ),
             );
+          // Server queues busy-thread follow-ups by default. Discord keeps the
+          // historical mid-turn **steer** default: after startTurn parks the
+          // message, immediately inject it via thread.queue.steer unless the
+          // user opted into --queue.
+          const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags);
+          if (followUpDelivery === "steer" && turnAlreadyRunning) {
+            yield* t3
+              .steerQueuedMessage({
+                threadId: existing.t3ThreadId,
+                messageId: MessageId.make(startedTurn.messageId),
+              })
+              .pipe(
+                Effect.tap(() =>
+                  Effect.logInfo("Steered mid-turn Discord follow-up into active turn", {
+                    t3ThreadId: existing.t3ThreadId,
+                    messageId: startedTurn.messageId,
+                  }),
+                ),
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    "Steer after startTurn failed; message may remain server-queued",
+                    {
+                      t3ThreadId: existing.t3ThreadId,
+                      messageId: startedTurn.messageId,
+                      error: String(error),
+                    },
+                  ),
+                ),
+              );
+          }
           yield* Effect.logInfo("startTurn dispatched", {
             t3ThreadId: existing.t3ThreadId,
             messageId: startedTurn.messageId,
+            followUpDelivery,
+            turnAlreadyRunning,
             modelSelection: continueModelSelection
               ? `${continueModelSelection.instanceId}/${continueModelSelection.model}`
               : "thread-sticky",
@@ -1943,7 +1977,7 @@ const make = (botConfig: DiscordBotConfig) =>
             content:
               content.length === 0
                 ? "I saw your mention but message content is empty. Enable **Message Content Intent** for this bot in the Discord Developer Portal, then restart me."
-                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` `--provider` `--base` `--local` `--plan`.",
+                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` `--provider` `--base` `--local` `--plan` `--steer` `--queue`. Mid-turn follow-ups steer by default; use `--queue` to park until the turn finishes.",
             message_reference: { message_id: event.id },
           });
           return;
@@ -2538,12 +2572,22 @@ const make = (botConfig: DiscordBotConfig) =>
               const base = optionString("base").trim();
               const local = optionBoolean("local");
               const plan = optionBoolean("plan");
+              const steer = optionBoolean("steer");
+              const queue = optionBoolean("queue");
+              // Slash booleans: when both true, queue wins (explicit opt-out of default steer).
+              const followUpDelivery =
+                queue === true
+                  ? ("queue" as const)
+                  : steer === true
+                    ? ("steer" as const)
+                    : undefined;
               const flags = {
                 ...(model.length > 0 ? { model } : {}),
                 ...(provider.length > 0 ? { provider } : {}),
                 ...(base.length > 0 ? { base } : {}),
                 local,
                 plan,
+                ...(followUpDelivery === undefined ? {} : { followUpDelivery }),
                 prompt,
               };
 
@@ -2573,7 +2617,13 @@ const make = (botConfig: DiscordBotConfig) =>
               const requester = interactionRequester(interaction);
               const displayName =
                 requester.author?.displayName ?? requester.author?.username ?? "Someone";
-              const ack = formatAskSlashAck({ displayName, prompt, plan, local });
+              const ack = formatAskSlashAck({
+                displayName,
+                prompt,
+                plan,
+                local,
+                ...(followUpDelivery === undefined ? {} : { followUpDelivery }),
+              });
 
               if (inThread) {
                 // Fire-and-forget so we ack within Discord's interaction window.
