@@ -36,20 +36,39 @@ function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "");
 }
 
-/** Subprocess env: force plain stdout so `gh --json` is parseable under FORCE_COLOR hosts. */
+/**
+ * Parse JSON that may be ANSI-colored by the t3 `gh` wrapper under FORCE_COLOR hosts.
+ */
+export function parsePossiblyColoredJson(text: string): unknown {
+  const cleaned = stripAnsi(text).trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (firstError) {
+    const match = cleaned.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+    if (match) {
+      try {
+        return JSON.parse(match[1]!);
+      } catch {
+        // fall through
+      }
+    }
+    throw firstError;
+  }
+}
+
+/**
+ * Subprocess env for git/gh.
+ * Keep FORCE_COLOR as-is: the t3 gh wrapper returns empty --head lists when
+ * FORCE_COLOR=0 / NO_COLOR is forced. Strip ANSI from stdout instead.
+ */
 function subprocessEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
-    NO_COLOR: "1",
-    CLICOLOR: "0",
-    FORCE_COLOR: "0",
-    CLICOLOR_FORCE: "0",
   };
 }
 
 function run(executable: string, args: ReadonlyArray<string>, cwd: string): string {
-  // Do not pass `gh --color=never`: the t3-github-app gh wrapper rejects that flag.
   const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd,
     encoding: "utf8",
@@ -61,7 +80,7 @@ function run(executable: string, args: ReadonlyArray<string>, cwd: string): stri
       `${executable} ${args.join(" ")} failed: ${stripAnsi(result.stderr.trim() || result.stdout.trim())}`,
     );
   }
-  return stripAnsi(result.stdout).trim();
+  return stripAnsi(result.stdout ?? "").trim();
 }
 
 export function stackParentBranch(manifest: StackManifest): string {
@@ -187,8 +206,7 @@ function readPullRequest(sourceRoot: string, number: number): PullRequestView {
     ],
     sourceRoot,
   );
-  const value = JSON.parse(output) as PullRequestView;
-  return value;
+  return parsePossiblyColoredJson(output) as PullRequestView;
 }
 
 function ensureClean(sourceRoot: string): void {
@@ -239,7 +257,7 @@ function resolveOpenPullRequestForBranch(
     ],
     sourceRoot,
   );
-  const rows = JSON.parse(listed) as ReadonlyArray<{
+  const rows = parsePossiblyColoredJson(listed) as ReadonlyArray<{
     readonly number: number;
     readonly baseRefName: string;
     readonly headRefName: string;
@@ -253,10 +271,54 @@ function pullRequestCommitOids(sourceRoot: string, number: number): ReadonlyArra
     ["pr", "view", String(number), "--repo", FORK_REPOSITORY, "--json", "commits"],
     sourceRoot,
   );
-  const value = JSON.parse(output) as {
+  const value = parsePossiblyColoredJson(output) as {
     readonly commits: ReadonlyArray<{ readonly oid: string }>;
   };
   return value.commits.map((commit) => commit.oid);
+}
+
+/**
+ * After a remote force-push rebase, decide how to update the local checkout.
+ *
+ * Uses `git cherry` patch-ids: if every local commit is patch-equivalent to
+ * something already on the remote tip, hard-reset to remote (no unique work).
+ * If local has unique patches, rebase those onto the remote tip.
+ */
+export function planLocalSyncWithRemote(input: {
+  readonly uniqueLocalCommitOids: ReadonlyArray<string>;
+  readonly remoteTipExists: boolean;
+}): {
+  readonly action: "noop" | "reset-to-remote" | "rebase-onto-remote";
+  readonly uniqueLocalCommitOids: ReadonlyArray<string>;
+} {
+  if (!input.remoteTipExists) {
+    throw new StackError("Remote tracking tip does not exist; fetch the branch first.");
+  }
+  if (input.uniqueLocalCommitOids.length === 0) {
+    return { action: "reset-to-remote", uniqueLocalCommitOids: [] };
+  }
+  return {
+    action: "rebase-onto-remote",
+    uniqueLocalCommitOids: input.uniqueLocalCommitOids,
+  };
+}
+
+/**
+ * Parse `git cherry <remote> <local>` output into oids whose patches are NOT on remote (+).
+ */
+export function uniqueLocalCommitsFromCherry(cherryOutput: string): ReadonlyArray<string> {
+  return cherryOutput
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("+ ") || line.startsWith("+"))
+    .map(
+      (line) =>
+        line
+          .replace(/^\+\s*/, "")
+          .trim()
+          .split(/\s+/)[0] ?? "",
+    )
+    .filter(Boolean);
 }
 
 /**
@@ -396,11 +458,65 @@ function updateFeatureBranch(
   }
 }
 
+/**
+ * Safely update a local checkout after the remote branch was force-pushed
+ * (stack rebase / feature auto-rebase).
+ *
+ * If local commits are patch-id-equivalent to the remote tip (`git cherry` has
+ * no `+` lines), hard-reset to remote. If local has unique unpushed patches,
+ * rebase those onto the remote tip.
+ */
+function pullLocalBranch(sourceRoot: string, options: { readonly remote?: string }): void {
+  ensureClean(sourceRoot);
+  const remote = options.remote ?? "origin";
+  const branch = currentBranchName(sourceRoot);
+  run("git", ["fetch", remote, branch], sourceRoot);
+  const remoteRef = `${remote}/${branch}`;
+  const remoteExists = runAllowFailure("git", ["rev-parse", "--verify", remoteRef], sourceRoot);
+  if (remoteExists.status !== 0) {
+    throw new StackError(`Remote tip ${remoteRef} not found after fetch.`);
+  }
+  const localTip = run("git", ["rev-parse", "HEAD"], sourceRoot);
+  const remoteTip = run("git", ["rev-parse", remoteRef], sourceRoot);
+  if (localTip === remoteTip) {
+    console.log(`${branch} already matches ${remoteRef}.`);
+    return;
+  }
+  const cherry = run("git", ["cherry", remoteRef, "HEAD"], sourceRoot);
+  const uniqueLocal = uniqueLocalCommitsFromCherry(cherry);
+  const plan = planLocalSyncWithRemote({
+    uniqueLocalCommitOids: uniqueLocal,
+    remoteTipExists: true,
+  });
+  if (plan.action === "reset-to-remote") {
+    run("git", ["reset", "--hard", remoteRef], sourceRoot);
+    console.log(
+      `No unique local patches (git cherry clean). Reset ${branch} to ${remoteRef} (${remoteTip.slice(0, 12)}).`,
+    );
+    return;
+  }
+  const result = runAllowFailure(
+    "git",
+    ["-c", "commit.gpgsign=false", "rebase", remoteRef],
+    sourceRoot,
+  );
+  if (result.status !== 0) {
+    runAllowFailure("git", ["rebase", "--abort"], sourceRoot);
+    throw new StackError(
+      `Local has ${plan.uniqueLocalCommitOids.length} unique commit(s) not on ${remoteRef}, but rebase failed:\n${stripAnsi(result.stderr.trim() || result.stdout.trim())}\nResolve manually, or stash/reset if you intended to discard local work.`,
+    );
+  }
+  console.log(
+    `Rebased ${plan.uniqueLocalCommitOids.length} unique local commit(s) onto ${remoteRef}.`,
+  );
+}
+
 function usage(): string {
   return `Usage:
   node scripts/fork-stack.ts start <branch>
   node scripts/fork-stack.ts start-upstream <branch>
   node scripts/fork-stack.ts update [--push] [pr-number]
+  node scripts/fork-stack.ts pull
   node scripts/fork-stack.ts promote <private-pr-number> <upstream-branch>
   node scripts/fork-stack.ts adopt <upstream-branch> <private-branch>
   node scripts/fork-stack.ts demote <upstream-pr-number> <private-pr-number>
@@ -449,6 +565,11 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
     return;
   }
 
+  if (command === "pull" && value === undefined && extra.length === 0) {
+    pullLocalBranch(sourceRoot, {});
+    return;
+  }
+
   if (command === "start-upstream" && value && extra.length === 0) {
     ensureClean(sourceRoot);
     run(
@@ -476,7 +597,7 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
     const upstreamBranch = extra[0]!;
     if (!Number.isSafeInteger(number) || number <= 0) throw new StackError(usage());
     ensureClean(sourceRoot);
-    const pullRequest = JSON.parse(
+    const pullRequest = parsePossiblyColoredJson(
       run(
         "gh",
         [
