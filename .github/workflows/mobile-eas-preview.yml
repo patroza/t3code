@@ -80,7 +80,9 @@ jobs:
           # `preview:dev` profile stays available for local Metro attachment.
           profile: preview
           branch: pr-${{ github.event.pull_request.number }}
-          platform: all
+          # iOS only: Android has no signing keystore configured, so including
+          # it fails the job before the iOS artifact is published.
+          platform: ios
           environment: preview
           working-directory: apps/mobile
           github-token: ${{ secrets.GITHUB_TOKEN }}
