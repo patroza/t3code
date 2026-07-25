@@ -68,7 +68,6 @@ export interface ThreadDetailScreenProps {
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
-  readonly selectedThreadQueueCount: number;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -80,6 +79,11 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
+  readonly onRemoveQueuedMessage: (
+    messageId: MessageId,
+    source: "local" | "server",
+  ) => Promise<void>;
   readonly onStartNewThread: () => void;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
@@ -247,10 +251,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, selectedThreadKey]);
 
   useEffect(() => {
+    // Anchor as soon as the target row exists in the feed — including local
+    // outbox "Sending" bubbles painted before thread detail has finished loading.
     if (
       anchorMessageId === null ||
       lastScrolledAnchorMessageIdRef.current === anchorMessageId ||
-      contentPresentationKind !== "ready" ||
       !selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === anchorMessageId)
     ) {
       return;
@@ -289,14 +294,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         });
     });
     return () => cancelAnimationFrame(frame);
-  }, [
-    anchorMessageId,
-    freeze,
-    contentPresentationKind,
-    selectedThreadFeed,
-    scrollMessageToEnd,
-    selectedThreadKey,
-  ]);
+  }, [anchorMessageId, freeze, selectedThreadFeed, scrollMessageToEnd, selectedThreadKey]);
 
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
@@ -382,6 +380,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             hasMoreOlder={props.hasMoreOlderActivities}
             loadingOlder={props.loadingOlderActivities}
             onLoadOlder={props.onLoadOlderActivities}
+            onSteerQueuedMessage={props.onSteerQueuedMessage}
+            onRemoveQueuedMessage={props.onRemoveQueuedMessage}
           />
         </View>
       ) : (
@@ -439,7 +439,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               threadSyncPhase={threadSyncPhase}
               selectedThread={props.selectedThread}
               serverConfig={props.serverConfig}
-              queueCount={props.selectedThreadQueueCount}
               activeThreadBusy={props.activeThreadBusy}
               environmentId={props.environmentId}
               projectCwd={props.projectWorkspaceRoot}
