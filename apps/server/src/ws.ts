@@ -306,12 +306,12 @@ function projectSetupScriptCompatibilityDetail(
 export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
-      type:
-        | "thread.message-sent"
-        | "thread.message-queued"
-        | "thread.queued-message-removed"
-        | "thread.messages-resynced"
-        | "thread.meta-updated"
+    type:
+      | "thread.message-sent"
+      | "thread.message-queued"
+      | "thread.queued-message-removed"
+      | "thread.messages-resynced"
+      | "thread.meta-updated"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
