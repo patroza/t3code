@@ -122,7 +122,7 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 ## EAS Builds
 
-CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
+CI uses Expo fingerprinting with the `preview` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. That profile builds the release configuration, so labelled PR builds behave like production for performance and memory; use `preview:dev` when you want a dev client on the preview channel that attaches to local Metro. Production and default local builds continue to use the `appVersion` runtime policy.
 
 For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
 `T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
