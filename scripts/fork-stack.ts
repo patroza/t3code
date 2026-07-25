@@ -31,11 +31,19 @@ interface PullRequestCommitsView {
   readonly commits: ReadonlyArray<{ readonly oid: string }>;
 }
 
+/** Subprocess env: force plain stdout so `gh --json` is parseable under FORCE_COLOR hosts. */
+function subprocessEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", NO_COLOR: "1", CLICOLOR: "0" };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  return env;
+}
+
 function run(executable: string, args: ReadonlyArray<string>, cwd: string): string {
   const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: subprocessEnv(),
   });
   if (result.error) throw new StackError(`Unable to run ${executable}: ${result.error.message}`);
   if (result.status !== 0) {
@@ -187,7 +195,7 @@ function runAllowFailure(
   return NodeChildProcess.spawnSync(executable, [...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: subprocessEnv(),
   });
 }
 
