@@ -129,10 +129,64 @@ jobs:
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
 
+  deployment_scope:
+    name: Classify Deployment Scope
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fork/integration'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      deploy: ${{ steps.classify.outputs.deploy }}
+    steps:
+      - name: Checkout integration source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Find previous successful integration CI
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous_sha="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-ci.yml/runs" \
+              -f branch=fork/integration \
+              -f event=workflow_dispatch \
+              -f status=success \
+              -f per_page=20 \
+              --jq ".workflow_runs | map(select(.head_sha != \"${GITHUB_SHA}\")) | first | .head_sha // \"\""
+          )"
+          echo "sha=${previous_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Classify changes since previous successful integration CI
+        id: classify
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          deploy=true
+          if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]] &&
+             git fetch --quiet origin "${PREVIOUS_SHA}" &&
+             git cat-file -e "${PREVIOUS_SHA}^{commit}"; then
+            deploy="$(
+              scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${GITHUB_SHA}" |
+                tee /dev/stderr |
+                sed -n 's/^deploy=//p'
+            )"
+          else
+            echo "No fetchable previous successful integration SHA; deployment remains enabled."
+          fi
+          echo "deploy=${deploy}" >>"${GITHUB_OUTPUT}"
+
   dispatch_mobile_ota:
     name: Dispatch Mobile OTA
-    needs: [check, test, mobile_native_static_analysis, release_smoke]
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fork/integration'
+    needs: [check, test, mobile_native_static_analysis, release_smoke, deployment_scope]
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/fork/integration' &&
+      needs.deployment_scope.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
