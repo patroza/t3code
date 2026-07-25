@@ -120,6 +120,23 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { deriveLocalBranchNameFromRemoteRef } from "@t3tools/shared/git";
+
+const ORCHESTRATION_SUBSCRIPTION_REPLAY_LIMIT = 1_000;
+
+const subscriptionReplayLimit = (
+  afterSequence: number,
+  snapshotSequence: number,
+): number | null => {
+  const eventCount = snapshotSequence - afterSequence;
+  if (
+    !Number.isSafeInteger(eventCount) ||
+    eventCount < 0 ||
+    eventCount > ORCHESTRATION_SUBSCRIPTION_REPLAY_LIMIT
+  ) {
+    return null;
+  }
+  return eventCount;
+};
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1385,14 +1402,60 @@ const makeWsRpcLayer = (
               // catch-up followed by the buffered/ongoing live events. Overlapping
               // events are deduped by sequence on the client.
               //
-              // Read the full range after the cursor (not the store's default
-              // page-bounded limit): the range is normally tiny (a fresh HTTP
-              // snapshot sequence) and the per-thread filter runs after reading,
-              // so a global cap could otherwise omit this thread's events.
+              // A recent cursor replays the exact global range through the
+              // per-thread filter. A stale cursor receives a current thread
+              // snapshot instead, keeping catch-up bounded even when the global
+              // event log is very large.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
+                const { snapshotSequence } = yield* projectionSnapshotQuery
+                  .getSnapshotSequence()
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationGetSnapshotError({
+                          message: "Failed to load orchestration snapshot sequence",
+                          cause,
+                        }),
+                    ),
+                  );
+                const replayLimit = subscriptionReplayLimit(afterSequence, snapshotSequence);
+
+                if (replayLimit === null) {
+                  const snapshot = yield* projectionSnapshotQuery
+                    .getThreadDetailSnapshot(input.threadId)
+                    .pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new OrchestrationGetSnapshotError({
+                            message: `Failed to load thread ${input.threadId}`,
+                            cause,
+                          }),
+                      ),
+                    );
+
+                  if (Option.isNone(snapshot)) {
+                    return yield* new OrchestrationGetSnapshotError({
+                      message: `Thread ${input.threadId} was not found`,
+                      cause: input.threadId,
+                    });
+                  }
+
+                  const replacementSnapshot =
+                    input.requestCompletionMarker === true
+                      ? Stream.make(
+                          { kind: "snapshot" as const, snapshot: snapshot.value },
+                          { kind: "synchronized" as const },
+                        )
+                      : Stream.make({
+                          kind: "snapshot" as const,
+                          snapshot: snapshot.value,
+                        });
+                  return Stream.concat(replacementSnapshot, bufferedLiveStream);
+                }
+
                 const catchUpStream = orchestrationEngine
-                  .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
+                  .readEvents(afterSequence, replayLimit)
                   .pipe(
                     Stream.filter(isThisThreadDetailEvent),
                     Stream.map((event) => ({
