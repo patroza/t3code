@@ -75,7 +75,7 @@ export function splitAssistantTextAtSteers(input: {
   const store = input.boundaryStore ?? defaultBoundaryStore;
   const steersAfterStart = input.steers
     .filter((steer) => steer.createdAt > input.assistantCreatedAt)
-    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 
   if (steersAfterStart.length === 0) {
     return [
@@ -177,7 +177,7 @@ export function findMidTurnSteerUserIds(input: {
     readonly belongsToActiveTurn: boolean;
   }>;
 }): ReadonlyArray<{ readonly id: string; readonly createdAt: string }> {
-  const sorted = input.items.toSorted((left, right) =>
+  const sorted = [...input.items].sort((left, right) =>
     left.createdAt.localeCompare(right.createdAt),
   );
 
