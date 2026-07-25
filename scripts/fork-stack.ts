@@ -10,10 +10,22 @@ import * as NodeURL from "node:url";
 const FORK_REPOSITORY = process.env.T3CODE_FORK_REPOSITORY ?? "patroza/t3code";
 
 import {
+  appendBaseHistory,
+  FORK_CHANGES_BASE_HISTORY_REF,
+  parseBaseHistory,
   readManifest,
+  recoverOldBaseTip,
   StackError,
   type StackManifest,
   type StackPullRequest,
+} from "./rebase-pr-stack.ts";
+
+export {
+  appendBaseHistory,
+  FORK_CHANGES_BASE_HISTORY_MAX,
+  FORK_CHANGES_BASE_HISTORY_REF,
+  parseBaseHistory,
+  recoverOldBaseTip,
 } from "./rebase-pr-stack.ts";
 
 const MANIFEST_PATH = NodePath.join(".github", "pr-stack.json");
@@ -105,66 +117,36 @@ export function shouldRetargetPullRequestBase(
   return currentBase !== expectedBase;
 }
 
-/** Default: conflicting transplants larger than this are treated as rewritten layer noise. */
-export const FEATURE_TRANSPLANT_AUTO_SKIP_MAX_FILES = 30 as const;
-
 /**
  * Plan how to bring a feature PR branch up to date with `fork/changes`.
  *
- * - `rebase` when the base tip is already an ancestor (normal one-generation drift).
- * - `cherry-pick-unique` when history diverged (base rewrite / multi-generation): only
- *   commits that `git cherry` marks unique by patch-id, oldest-first — never the full
- *   GitHub PR commit list (that re-applies obsolete private-layer bootstraps).
- * - `noop` when already current, or when diverged but every patch already exists on base.
+ * - `rebase` when the new base tip is already an ancestor (simple behind).
+ * - `rebase-onto` when history diverged: replay only `oldBase..head` onto `newBase`
+ *   (oldBase recovered from historical fork/changes tips).
+ * - `noop` when already current.
  */
 export function planFeatureBranchUpdate(input: {
-  readonly baseIsAncestorOfHead: boolean;
+  readonly newBaseIsAncestorOfHead: boolean;
   readonly behindCount: number;
-  readonly aheadCount: number;
-  /** Unique-by-patch-id commits on the feature tip, oldest first. */
-  readonly uniquePatchOidsOldestFirst: ReadonlyArray<string>;
+  readonly recoveredOldBaseOid: string | null;
 }): {
-  readonly action: "noop" | "rebase" | "cherry-pick-unique";
-  readonly replayOids: ReadonlyArray<string>;
+  readonly action: "noop" | "rebase" | "rebase-onto";
+  readonly oldBaseOid: string | null;
 } {
-  if (input.baseIsAncestorOfHead) {
+  if (input.newBaseIsAncestorOfHead) {
     if (input.behindCount <= 0) {
-      return { action: "noop", replayOids: [] };
+      return { action: "noop", oldBaseOid: null };
     }
-    return { action: "rebase", replayOids: [] };
+    return { action: "rebase", oldBaseOid: null };
   }
-  // Diverged from base (typical after fork/changes rewrite). Prefer patch-id unique commits.
-  if (input.uniquePatchOidsOldestFirst.length === 0) {
-    // No unique patches left — content is already on base; nothing to transplant.
-    return { action: "noop", replayOids: [] };
+  if (input.recoveredOldBaseOid !== null) {
+    return { action: "rebase-onto", oldBaseOid: input.recoveredOldBaseOid };
   }
-  return {
-    action: "cherry-pick-unique",
-    replayOids: input.uniquePatchOidsOldestFirst,
-  };
-}
-
-/**
- * Preserve ancestry order: keep only unique oids in oldest-first rev-list order.
- */
-export function orderUniqueCommitsOldestFirst(
-  revListOldestFirst: ReadonlyArray<string>,
-  uniqueOids: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  const unique = new Set(uniqueOids);
-  return revListOldestFirst.filter((oid) => unique.has(oid));
-}
-
-/**
- * Whether a conflicting cherry-pick can be auto-skipped as a rewritten-layer artifact.
- * Small feature commits that conflict must still fail loudly.
- */
-export function shouldAutoSkipConflictingTransplant(input: {
-  readonly changedFileCount: number;
-  readonly maxFiles?: number;
-}): boolean {
-  const max = input.maxFiles ?? FEATURE_TRANSPLANT_AUTO_SKIP_MAX_FILES;
-  return input.changedFileCount > max;
+  throw new StackError(
+    "Cannot recover the old fork/changes tip this branch was built on " +
+      "(no known historical base tip is an ancestor of HEAD). " +
+      "Re-cut with `pnpm fork:stack start <branch>` after the cascade records base history.",
+  );
 }
 
 export function registerPullRequest(
@@ -296,70 +278,19 @@ function resolveOpenPullRequestForBranch(
   return rows[0] ?? null;
 }
 
-function countCommitChangedFiles(sourceRoot: string, oid: string): number {
-  const output = run("git", ["show", "--pretty=format:", "--name-only", oid], sourceRoot);
-  return output.split("\n").filter((line) => line.trim() !== "").length;
-}
-
-/**
- * Cherry-pick unique commits oldest-first. Large conflicting commits (rewritten private
- * layer bootstraps) are skipped; small conflicts fail hard.
- */
-export function transplantUniqueCommits(
-  sourceRoot: string,
-  oidsOldestFirst: ReadonlyArray<string>,
-  options: {
-    readonly onSkip?: (oid: string, reason: string) => void;
-    readonly maxAutoSkipFiles?: number;
-  } = {},
-): {
-  readonly appliedOids: ReadonlyArray<string>;
-  readonly skippedOids: ReadonlyArray<string>;
-  readonly hardConflictOid: string | null;
-  readonly hardConflictMessage: string | null;
-} {
-  const applied: string[] = [];
-  const skipped: string[] = [];
-  for (const oid of oidsOldestFirst) {
-    const result = runAllowFailure(
-      "git",
-      ["-c", "commit.gpgsign=false", "cherry-pick", oid],
-      sourceRoot,
-    );
-    if (result.status === 0) {
-      applied.push(oid);
-      continue;
-    }
-    runAllowFailure("git", ["cherry-pick", "--abort"], sourceRoot);
-    const fileCount = countCommitChangedFiles(sourceRoot, oid);
-    if (
-      shouldAutoSkipConflictingTransplant({
-        changedFileCount: fileCount,
-        ...(options.maxAutoSkipFiles === undefined ? {} : { maxFiles: options.maxAutoSkipFiles }),
-      })
-    ) {
-      skipped.push(oid);
-      options.onSkip?.(
-        oid,
-        `conflicting transplant touches ${fileCount} files; treating as rewritten-layer noise`,
-      );
-      continue;
-    }
-    return {
-      appliedOids: applied,
-      skippedOids: skipped,
-      hardConflictOid: oid,
-      hardConflictMessage:
-        stripAnsi(result.stderr.trim() || result.stdout.trim()) ||
-        `conflict while cherry-picking (${fileCount} files)`,
-    };
+function fetchBaseHistory(sourceRoot: string): ReadonlyArray<string> {
+  const fetched = runAllowFailure(
+    "git",
+    ["fetch", "origin", `${FORK_CHANGES_BASE_HISTORY_REF}:${FORK_CHANGES_BASE_HISTORY_REF}`],
+    sourceRoot,
+  );
+  if (fetched.status !== 0) {
+    // Ref may not exist yet (first cascade after this lands).
+    return [];
   }
-  return {
-    appliedOids: applied,
-    skippedOids: skipped,
-    hardConflictOid: null,
-    hardConflictMessage: null,
-  };
+  const blob = runAllowFailure("git", ["show", FORK_CHANGES_BASE_HISTORY_REF], sourceRoot);
+  if (blob.status !== 0 || !blob.stdout) return [];
+  return parseBaseHistory(stripAnsi(blob.stdout));
 }
 
 /**
@@ -454,32 +385,40 @@ function updateFeatureBranch(
   }
 
   const baseRef = `origin/${expectedBase}`;
-  const ancestorCheck = runAllowFailure(
-    "git",
-    ["merge-base", "--is-ancestor", baseRef, "HEAD"],
-    sourceRoot,
-  );
-  const baseIsAncestorOfHead = ancestorCheck.status === 0;
+  const newBaseOid = run("git", ["rev-parse", baseRef], sourceRoot);
+  const newBaseIsAncestorOfHead =
+    runAllowFailure("git", ["merge-base", "--is-ancestor", baseRef, "HEAD"], sourceRoot).status ===
+    0;
   const behindCount = Number(run("git", ["rev-list", "--count", `HEAD..${baseRef}`], sourceRoot));
-  const aheadCount = Number(run("git", ["rev-list", "--count", `${baseRef}..HEAD`], sourceRoot));
 
-  // Patch-id uniqueness vs base (handles multi-generation fork/changes rewrites).
-  const cherryOutput = run("git", ["cherry", baseRef, "HEAD"], sourceRoot);
-  const uniqueUnordered = uniqueLocalCommitsFromCherry(cherryOutput);
-  const revOldestFirst = run(
-    "git",
-    ["rev-list", "--reverse", "--no-merges", `${baseRef}..HEAD`],
-    sourceRoot,
-  )
-    .split("\n")
-    .filter(Boolean);
-  const uniqueOldestFirst = orderUniqueCommitsOldestFirst(revOldestFirst, uniqueUnordered);
+  // Historical fork/changes tips (newest first), plus the current tip as a candidate.
+  const history = fetchBaseHistory(sourceRoot);
+  const historicalTips = appendBaseHistory(history, [newBaseOid]);
+  const recoveredOldBaseOid = recoverOldBaseTip({
+    historicalBaseTipsNewestFirst: historicalTips,
+    isAncestorOfHead: (tip) =>
+      runAllowFailure("git", ["merge-base", "--is-ancestor", tip, "HEAD"], sourceRoot).status === 0,
+  });
+
+  // If current base is already an ancestor, recovery is not needed for --onto.
+  // If diverged, recovered tip must be a *previous* base still in this branch's history
+  // (not the new tip, which is never an ancestor when diverged).
+  const recoveredForOnto =
+    recoveredOldBaseOid !== null && recoveredOldBaseOid.toLowerCase() !== newBaseOid.toLowerCase()
+      ? recoveredOldBaseOid
+      : recoverOldBaseTip({
+          historicalBaseTipsNewestFirst: history.filter(
+            (tip) => tip.toLowerCase() !== newBaseOid.toLowerCase(),
+          ),
+          isAncestorOfHead: (tip) =>
+            runAllowFailure("git", ["merge-base", "--is-ancestor", tip, "HEAD"], sourceRoot)
+              .status === 0,
+        });
 
   const plan = planFeatureBranchUpdate({
-    baseIsAncestorOfHead,
+    newBaseIsAncestorOfHead,
     behindCount,
-    aheadCount,
-    uniquePatchOidsOldestFirst: uniqueOldestFirst,
+    recoveredOldBaseOid: recoveredForOnto,
   });
 
   if (plan.action === "rebase") {
@@ -495,51 +434,27 @@ function updateFeatureBranch(
       );
     }
     console.log(`Rebased ${branch} onto ${expectedBase}.`);
-  } else if (plan.action === "cherry-pick-unique") {
-    const tipBefore = run("git", ["rev-parse", "HEAD"], sourceRoot);
-    const leaseTip = tipBefore;
-    run("git", ["reset", "--hard", baseRef], sourceRoot);
-    const picked = transplantUniqueCommits(sourceRoot, plan.replayOids, {
-      onSkip: (oid, reason) => {
-        console.log(`Skipped ${oid.slice(0, 12)} (${reason}).`);
-      },
-    });
-    if (picked.hardConflictOid !== null) {
-      run("git", ["reset", "--hard", leaseTip], sourceRoot);
+  } else if (plan.action === "rebase-onto") {
+    const oldBase = plan.oldBaseOid!;
+    const featureCount = Number(
+      run("git", ["rev-list", "--count", `${oldBase}..HEAD`], sourceRoot),
+    );
+    const result = runAllowFailure(
+      "git",
+      ["-c", "commit.gpgsign=false", "rebase", "--onto", baseRef, oldBase],
+      sourceRoot,
+    );
+    if (result.status !== 0) {
+      runAllowFailure("git", ["rebase", "--abort"], sourceRoot);
       throw new StackError(
-        `Transplant onto ${expectedBase} conflicted on small commit ${picked.hardConflictOid.slice(0, 12)} (${picked.hardConflictMessage}). Resolve manually or re-cut the branch with fork:stack start.`,
+        `rebase --onto ${expectedBase} (old base ${oldBase.slice(0, 12)}, ${featureCount} feature commit(s)) failed:\n${result.stderr.trim() || result.stdout.trim()}`,
       );
     }
-    if (picked.appliedOids.length === 0) {
-      // All unique commits were large rewrite artifacts — leave tip at base only if
-      // the PR would become empty; still force-with-lease to clear dead history.
-      console.log(
-        `No portable unique commits left vs ${expectedBase} (skipped ${picked.skippedOids.length} large/conflicting layer commit(s)). Branch tip matches base.`,
-      );
-    } else {
-      console.log(
-        `Cherry-picked ${picked.appliedOids.length} unique commit(s) onto ${expectedBase}` +
-          (picked.skippedOids.length > 0
-            ? ` (skipped ${picked.skippedOids.length} rewritten-layer commit(s))`
-            : "") +
-          ".",
-      );
-    }
+    console.log(
+      `Rebased ${featureCount} feature commit(s) onto ${expectedBase} (recovered old base ${oldBase.slice(0, 12)}).`,
+    );
   } else {
-    if (!baseIsAncestorOfHead && uniqueOldestFirst.length === 0) {
-      // Diverged SHAs but every patch already on base — reset tip to base to become mergeable.
-      const tipBefore = run("git", ["rev-parse", "HEAD"], sourceRoot);
-      if (tipBefore !== run("git", ["rev-parse", baseRef], sourceRoot)) {
-        run("git", ["reset", "--hard", baseRef], sourceRoot);
-        console.log(
-          `${branch} had no unique patches vs ${expectedBase}; reset tip to base (empty PR / already landed).`,
-        );
-      } else {
-        console.log(`${branch} is already up to date with ${expectedBase}.`);
-      }
-    } else {
-      console.log(`${branch} is already up to date with ${expectedBase}.`);
-    }
+    console.log(`${branch} is already up to date with ${expectedBase}.`);
   }
 
   if (prNumber !== null && shouldRetargetPullRequestBase(prBaseRefName, expectedBase)) {
