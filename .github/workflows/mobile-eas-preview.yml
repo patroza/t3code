@@ -75,7 +75,10 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         with:
-          profile: preview:dev
+          # Release configuration, not `preview:dev`: PR builds must show
+          # production-grade performance and memory behaviour. The dev-client
+          # `preview:dev` profile stays available for local Metro attachment.
+          profile: preview
           branch: pr-${{ github.event.pull_request.number }}
           platform: all
           environment: preview
