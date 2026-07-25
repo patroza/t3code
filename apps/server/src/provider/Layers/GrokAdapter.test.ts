@@ -486,14 +486,15 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     });
 
     const runBoundedAttempt = Effect.gen(function* () {
-      // Run detached so timing out the join does not wait for a wedged provider
+      // Run detached so timing out the observation does not wait for a wedged provider
       // fiber's cooperative interruption or finalizers.
       const attempt = yield* runAttempt.pipe(Effect.forkDetach);
-      return yield* Fiber.join(attempt).pipe(
+      const exit = yield* Fiber.await(attempt).pipe(
         Effect.timeout("5 seconds"),
         // Request cleanup without turning the timeout back into an unbounded wait.
         Effect.ensuring(Fiber.interrupt(attempt).pipe(Effect.forkDetach, Effect.asVoid)),
       );
+      return yield* exit;
     });
 
     return runBoundedAttempt.pipe(
@@ -940,10 +941,11 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
     const runBoundedAttempt = Effect.gen(function* () {
       const attempt = yield* runAttempt.pipe(Effect.forkDetach);
-      return yield* Fiber.join(attempt).pipe(
+      const exit = yield* Fiber.await(attempt).pipe(
         Effect.timeout("5 seconds"),
         Effect.ensuring(Fiber.interrupt(attempt).pipe(Effect.forkDetach, Effect.asVoid)),
       );
+      return yield* exit;
     });
 
     return runBoundedAttempt.pipe(
