@@ -168,7 +168,7 @@ describe("compareSteerTimelineSortable", () => {
       { id: "post", sortAt: "2026-01-01T00:08:30Z", sortRank: 2 },
       { id: "steer", sortAt: "2026-01-01T00:08:30Z", sortRank: 1 },
       { id: "pre", sortAt: "2026-01-01T00:01:05Z", sortRank: 0 },
-    ].toSorted(compareSteerTimelineSortable);
+    ].sort(compareSteerTimelineSortable);
     expect(ordered.map((item) => item.id)).toEqual(["pre", "steer", "post"]);
   });
 });

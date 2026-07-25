@@ -110,6 +110,7 @@ export const createOxlintRuleHarness = (
         rules: { [ruleName]: "error" },
       }),
     );
+    yield* fs.makeDirectory(path.dirname(sourcePath), { recursive: true });
     yield* fs.writeFileString(sourcePath, source);
 
     const output = yield* spawnAndCollectOutput(
