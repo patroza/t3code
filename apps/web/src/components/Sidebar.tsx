@@ -451,11 +451,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       lastVisitedAt,
     },
   });
-  const pr = resolveThreadPr({
-    threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
-    hasDedicatedWorktree: thread.worktreePath !== null,
-  });
+  const pr = resolveThreadPr(thread.branch, gitStatus.data ?? null);
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
