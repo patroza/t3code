@@ -4077,9 +4077,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(preCommitOutput).toBeDefined();
-      expect([null, "pre-commit"]).toContain(preCommitOutput?.hookName);
+      expect(preCommitOutput).toMatchObject({ hookName: null });
       expect(commitMsgOutput).toBeDefined();
-      expect([null, "commit-msg"]).toContain(commitMsgOutput?.hookName);
+      expect(commitMsgOutput).toMatchObject({ hookName: null });
       expect(gitOutput).toMatchObject({ hookName: null });
     }),
   );
