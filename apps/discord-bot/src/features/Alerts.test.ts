@@ -5,6 +5,7 @@ import {
   classifySessionLastError,
   formatAlertCause,
   isExpectedSessionLastError,
+  rssAlertThresholdMbForProcess,
   selectSessionErrorsForAlert,
   sessionErrorAlertKey,
   trackSustainedHotProcesses,
@@ -29,6 +30,7 @@ const proc = (over: Partial<ProcInfo> & { pid: number }): ProcInfo => ({
 function run(
   ticks: ReadonlyArray<ReadonlyArray<ProcInfo>>,
   startMs = 1_000_000,
+  rssMbThresholdFor?: (proc: ProcInfo) => number,
 ): {
   hot: ReturnType<typeof trackSustainedHotProcesses>["hot"];
   state: ReadonlyMap<number, ProcSustainState>;
@@ -42,6 +44,7 @@ function run(
       nowMs: startMs + index * TICK_MS,
       cpuPercentThreshold: CPU_THRESHOLD,
       rssMbThreshold: RSS_THRESHOLD,
+      ...(rssMbThresholdFor ? { rssMbThresholdFor } : {}),
       sustainedTicks: SUSTAINED_TICKS,
     });
     state = result.next;
@@ -173,7 +176,33 @@ describe("trackSustainedHotProcesses", () => {
     const hot = run(ticks).hot;
     expect(hot).toHaveLength(1);
     expect(hot[0]!.rssMb).toBe(900);
+    expect(hot[0]!.rssAlertThresholdMb).toBe(RSS_THRESHOLD);
     expect(hot[0]!.cpuPercent).toBe(0);
+  });
+
+  it("uses a higher RSS threshold for Jaeger without changing other processes", () => {
+    const ticks = Array.from({ length: SUSTAINED_TICKS + 1 }, () => [
+      proc({ pid: 950, rssMb: 4_095, cmd: "/cmd/jaeger/jaeger-linux" }),
+      proc({ pid: 951, rssMb: 900, cmd: "/usr/bin/worker" }),
+    ]);
+
+    const hot = run(ticks, 1_000_000, rssAlertThresholdMbForProcess).hot;
+    expect(hot.map((process) => process.pid)).toEqual([951]);
+    expect(hot[0]!.rssAlertThresholdMb).toBe(RSS_THRESHOLD);
+  });
+
+  it("alerts once Jaeger sustains at least 4 GiB RSS", () => {
+    const ticks = Array.from({ length: SUSTAINED_TICKS + 1 }, () => [
+      proc({ pid: 950, rssMb: 4 * 1024, cmd: "/cmd/jaeger/jaeger-linux" }),
+    ]);
+
+    const hot = run(ticks, 1_000_000, rssAlertThresholdMbForProcess).hot;
+    expect(hot).toHaveLength(1);
+    expect(hot[0]).toMatchObject({
+      pid: 950,
+      rssMb: 4 * 1024,
+      rssAlertThresholdMb: 4 * 1024,
+    });
   });
 
   it("treats a reused pid as a new process and resets its streak", () => {

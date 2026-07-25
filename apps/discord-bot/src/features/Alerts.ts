@@ -38,10 +38,12 @@ const DISK_FREE_MIN_GB = 2;
 const SENTRY_RSS_ALERT_MB = 512;
 const SENTRY_COUNT_ALERT = 2;
 const STUCK_RSS_ALERT_MB = 768;
+/** Jaeger's bounded in-memory trace store is expected to use more RSS than generic processes. */
+const JAEGER_RSS_ALERT_MB = 4 * 1024;
 /**
- * A process is "hot" when it holds ≥STUCK_RSS_ALERT_MB of RSS or averages
- * ≥SUSTAINED_CPU_PERCENT of a core, and it only alerts once it has stayed hot
- * for SUSTAINED_TICKS consecutive ticks.
+ * A process is "hot" when it exceeds its RSS threshold or averages at least
+ * SUSTAINED_CPU_PERCENT of a core, and it only alerts once it has stayed hot for
+ * SUSTAINED_TICKS consecutive ticks.
  *
  * This measures a *rate* (Δcpu / Δwall between ticks), not cumulative CPU time:
  * a long-lived-but-idle process (e.g. one that gathered 200s of CPU over hours
@@ -82,6 +84,10 @@ export interface ProcInfo {
   readonly label: string;
 }
 
+export function rssAlertThresholdMbForProcess(proc: ProcInfo): number {
+  return /(?:^|[/\s])jaeger(?:$|[/\s-])/i.test(proc.cmd) ? JAEGER_RSS_ALERT_MB : STUCK_RSS_ALERT_MB;
+}
+
 /** Per-process tracker state carried between ticks to derive a CPU rate. */
 export interface ProcSustainState {
   readonly cpuSeconds: number;
@@ -96,6 +102,8 @@ export interface ProcSustainState {
 export interface SustainedHotProcess {
   readonly pid: number;
   readonly rssMb: number;
+  /** Process-specific RSS threshold used to classify this sample as hot. */
+  readonly rssAlertThresholdMb: number;
   /** Average CPU over the last tick gap, as percent of a single core. */
   readonly cpuPercent: number;
   /** How long it has been continuously hot. */
@@ -116,6 +124,7 @@ export function trackSustainedHotProcesses(input: {
   readonly nowMs: number;
   readonly cpuPercentThreshold: number;
   readonly rssMbThreshold: number;
+  readonly rssMbThresholdFor?: (proc: ProcInfo) => number;
   readonly sustainedTicks: number;
 }): {
   readonly next: Map<number, ProcSustainState>;
@@ -136,9 +145,10 @@ export function trackSustainedHotProcesses(input: {
         ? (Math.max(0, proc.cpuSeconds - previous.cpuSeconds) / (elapsedMs / 1_000)) * 100
         : null;
 
+    const rssAlertThresholdMb = input.rssMbThresholdFor?.(proc) ?? input.rssMbThreshold;
     const isHot =
       (cpuPercent !== null && cpuPercent >= input.cpuPercentThreshold) ||
-      proc.rssMb >= input.rssMbThreshold;
+      proc.rssMb >= rssAlertThresholdMb;
     const hotTicks = isHot ? (previous?.hotTicks ?? 0) + 1 : 0;
     const hotSinceMs = isHot
       ? previous?.hotTicks
@@ -157,6 +167,7 @@ export function trackSustainedHotProcesses(input: {
       hot.push({
         pid: proc.pid,
         rssMb: proc.rssMb,
+        rssAlertThresholdMb,
         cpuPercent: cpuPercent ?? 0,
         sustainedMs: input.nowMs - hotSinceMs,
         label: proc.label,
@@ -456,6 +467,7 @@ function listFatProcesses(
     nowMs,
     cpuPercentThreshold: SUSTAINED_CPU_PERCENT,
     rssMbThreshold: STUCK_RSS_ALERT_MB,
+    rssMbThresholdFor: rssAlertThresholdMbForProcess,
     sustainedTicks: SUSTAINED_TICKS,
   });
   sustainState = next;
@@ -806,10 +818,12 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
               "**Sustained high RSS / CPU process(es)**",
               ...fatNonRunaway.map(
                 (p) =>
-                  `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
+                  `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB ` +
+                  `(RSS alert ≥${p.rssAlertThresholdMb.toFixed(0)}MiB) ` +
+                  `cpu≈${p.cpuPercent.toFixed(0)}% ` +
                   `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
               ),
-              `_Sustained ≥${SUSTAINED_TICKS} ticks with RSS≥${STUCK_RSS_ALERT_MB}MiB or CPU≥${SUSTAINED_CPU_PERCENT}% of a core (not auto-killed)._`,
+              `_Sustained ≥${SUSTAINED_TICKS} ticks with process-specific high RSS or CPU≥${SUSTAINED_CPU_PERCENT}% of a core (not auto-killed)._`,
             ].join("\n"),
           );
         }
