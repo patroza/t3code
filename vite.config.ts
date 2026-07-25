@@ -79,6 +79,7 @@ export default defineConfig({
     },
     rules: {
       "unicorn/no-array-sort": "off",
+      "unicorn/no-array-reverse": "off",
       "unicorn/consistent-function-scoping": "off",
       "oxc/no-map-spread": "off",
       "react-in-jsx-scope": "off",
@@ -119,6 +120,7 @@ export default defineConfig({
       "t3code/no-global-process-runtime": "error",
       "t3code/no-inline-schema-compile": "warn",
       "t3code/no-manual-effect-runtime-in-tests": "error",
+      "t3code/no-unsupported-hermes-array-methods": "error",
       "t3code/namespace-node-imports": "error",
     },
     options: {
