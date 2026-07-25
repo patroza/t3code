@@ -7,6 +7,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  baseHistoryPushArgs,
   RebaseConflictError,
   resumeStack,
   StackError,
@@ -15,6 +16,24 @@ import {
   type StackManifest,
   validatePullRequestSnapshots,
 } from "./rebase-pr-stack.ts";
+
+describe("baseHistoryPushArgs", () => {
+  it("force-updates the blob ref while leasing its observed remote value", () => {
+    assert.deepEqual(baseHistoryPushArgs("abc123"), [
+      "push",
+      "--force-with-lease=refs/t3/stack/base-history/fork-changes:abc123",
+      "origin",
+      "refs/t3/stack/base-history/fork-changes:refs/t3/stack/base-history/fork-changes",
+    ]);
+  });
+
+  it("leases non-existence when the remote history ref is absent", () => {
+    assert.include(
+      baseHistoryPushArgs(""),
+      "--force-with-lease=refs/t3/stack/base-history/fork-changes:",
+    );
+  });
+});
 
 interface Fixture {
   readonly root: string;
