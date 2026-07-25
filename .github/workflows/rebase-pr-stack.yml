@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fork/tim
+      - fork/candidates
       - fork/changes
   schedule:
     - cron: "17 */6 * * *"
