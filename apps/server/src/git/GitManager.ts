@@ -1582,11 +1582,12 @@ export const make = Effect.gen(function* () {
         ? {
             onOutputLine: (output: { stream: "stdout" | "stderr"; text: string }) =>
               Effect.suspend(() => {
-                if (currentHookName === null) {
-                  pendingUnattributedOutput.push(output);
-                  return Effect.void;
-                }
-                return emitHookOutput(currentHookName, output);
+                // Trace2 hook lifecycle events and child-process output arrive over
+                // independent streams, so their relative delivery order cannot
+                // safely identify which hook produced a line. Buffer output and
+                // emit it without attribution once Git confirms that hooks ran.
+                pendingUnattributedOutput.push(output);
+                return Effect.void;
               }),
             onHookStarted: (hookName: string) =>
               Effect.suspend(() => {
