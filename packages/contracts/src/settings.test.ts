@@ -79,9 +79,10 @@ describe("ClientSettings glass opacity", () => {
   });
 });
 
-describe("ClientSettings sidebar v2", () => {
-  it("defaults the beta off with a three-day auto-settle threshold", () => {
+describe("ClientSettings sidebar", () => {
+  it("defaults recent work on and the v2 beta off with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
+    expect(settings.sidebarRecentThreadsEnabled).toBe(true);
     expect(settings.sidebarV2Enabled).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
   });
@@ -109,6 +110,7 @@ describe("ClientSettings sidebar v2", () => {
     });
     expect(patch.sidebarV2Enabled).toBe(false);
     expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+      decodeClientSettings({ sidebarRecentThreadsEnabled: false }).sidebarRecentThreadsEnabled,
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {
