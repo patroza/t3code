@@ -701,12 +701,15 @@ function makeOperation(state: PersistedState): RebaseOperation | undefined {
   if (nextIndex === manifest.pullRequests.length) {
     const top = manifest.pullRequests.at(-1);
     if (!top) return undefined;
-    const oldBase = snapshots[top.branch];
+    const desiredOldBase = snapshots[top.branch];
     const oldTip = snapshots[manifest.integrationBranch];
     const newBase = newTips[top.branch];
-    if (!oldBase || !oldTip || !newBase) {
+    if (!desiredOldBase || !oldTip || !newBase) {
       throw new StackError("Missing snapshot while preparing the integration branch.");
     }
+    const oldBase = git(state.repoDir, ["merge-base", desiredOldBase, oldTip], {
+      stateDir: NodePath.dirname(state.repoDir),
+    });
     return {
       kind: "integration",
       index: nextIndex,
