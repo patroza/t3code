@@ -113,7 +113,7 @@ export function findLatestProposedPlan<T extends ProposedPlanFields>(
   if (latestTurnId) {
     const matchingTurnPlan = [...proposedPlans]
       .filter((proposedPlan) => proposedPlan.turnId === latestTurnId)
-      .toSorted(
+      .sort(
         (left, right) =>
           left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
       )
@@ -124,7 +124,7 @@ export function findLatestProposedPlan<T extends ProposedPlanFields>(
   }
 
   const latestPlan = [...proposedPlans]
-    .toSorted(
+    .sort(
       (left, right) =>
         left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
     )
