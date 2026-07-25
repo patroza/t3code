@@ -1,6 +1,9 @@
 name: Rebase fork PR stack
 
 on:
+  pull_request:
+    types: [opened, reopened, synchronize, converted_to_draft]
+    branches: [fork/changes]
   push:
     branches:
       - fork/tim
@@ -20,8 +23,37 @@ permissions:
   actions: write
 
 jobs:
+  classify:
+    name: Classify stack event
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.classify.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fork/changes
+          fetch-depth: 1
+      - id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if jq -e --argjson number "${PR_NUMBER}" \
+            '.integrationOverlays | any(.number == $number)' \
+            .github/pr-stack.json >/dev/null; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   rebase:
     name: Rebase and dispatch integration CI
+    needs: classify
+    if: needs.classify.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -54,6 +86,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/rebase-pr-stack.ts sync --push
+
+      - name: Compose registered integration overlays
+        run: node scripts/compose-integration-overlays.ts
 
       - name: Dispatch integration CI
         env:
