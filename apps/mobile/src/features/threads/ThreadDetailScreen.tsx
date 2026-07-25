@@ -251,10 +251,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, selectedThreadKey]);
 
   useEffect(() => {
+    // Anchor as soon as the target row exists in the feed — including local
+    // outbox "Sending" bubbles painted before thread detail has finished loading.
     if (
       anchorMessageId === null ||
       lastScrolledAnchorMessageIdRef.current === anchorMessageId ||
-      contentPresentationKind !== "ready" ||
       !selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === anchorMessageId)
     ) {
       return;
@@ -293,14 +294,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         });
     });
     return () => cancelAnimationFrame(frame);
-  }, [
-    anchorMessageId,
-    freeze,
-    contentPresentationKind,
-    selectedThreadFeed,
-    scrollMessageToEnd,
-    selectedThreadKey,
-  ]);
+  }, [anchorMessageId, freeze, selectedThreadFeed, scrollMessageToEnd, selectedThreadKey]);
 
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;

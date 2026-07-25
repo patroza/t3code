@@ -155,18 +155,20 @@ export function useThreadComposerState() {
   });
 
   const selectedThreadFeed = useMemo(() => {
-    if (!selectedThreadDetail) {
-      return [];
-    }
-
-    const feed = buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities });
-    const timelineMessageIds = new Set(selectedThreadDetail.messages.map((message) => message.id));
+    // Local outbox rows must still paint while detail is hydrating — otherwise
+    // send during "Loading messages…" produces no bubble until the snapshot lands.
+    const feed = selectedThreadDetail
+      ? buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities })
+      : [];
+    const timelineMessageIds = new Set(
+      selectedThreadDetail?.messages.map((message) => message.id) ?? [],
+    );
     const optimisticByMessageId = new Map<
       MessageId,
       (typeof feed)[number] & { readonly type: "message" }
     >();
 
-    for (const message of selectedThreadDetail.queuedMessages) {
+    for (const message of selectedThreadDetail?.queuedMessages ?? []) {
       if (timelineMessageIds.has(message.messageId)) {
         continue;
       }
@@ -220,6 +222,10 @@ export function useThreadComposerState() {
           updatedAt: message.createdAt,
         },
       });
+    }
+
+    if (optimisticByMessageId.size === 0) {
+      return feed;
     }
 
     return [
@@ -283,27 +289,32 @@ export function useThreadComposerState() {
 
     const metadata = makeQueuedMessageMetadata();
     const messageId = MessageId.make(metadata.messageId);
-    try {
-      await enqueueThreadOutboxMessage({
-        environmentId: selectedThreadShell.environmentId,
-        threadId: selectedThreadShell.id,
-        messageId,
-        commandId: CommandId.make(metadata.commandId),
-        text,
-        attachments,
-        modelSelection: draft.modelSelection ?? thread.modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
-        createdAt: metadata.createdAt,
-      });
-      clearComposerDraftContent(threadKey);
-      return messageId;
-    } catch (error) {
+    // Enqueue updates the in-memory outbox synchronously so the feed can paint
+    // "Sending" before disk I/O finishes. Clear the draft in the same turn and
+    // return immediately — durability trails off the critical path.
+    void enqueueThreadOutboxMessage({
+      environmentId: selectedThreadShell.environmentId,
+      threadId: selectedThreadShell.id,
+      messageId,
+      commandId: CommandId.make(metadata.commandId),
+      text,
+      attachments,
+      modelSelection: draft.modelSelection ?? thread.modelSelection,
+      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+      interactionMode: draft.interactionMode ?? thread.interactionMode,
+      createdAt: metadata.createdAt,
+    }).catch((error) => {
+      // Memory outbox already rolled back on write failure; restore the draft.
+      setComposerDraftText(threadKey, draft.text);
+      if (draft.attachments.length > 0) {
+        appendComposerDraftAttachments(threadKey, draft.attachments);
+      }
       setPendingConnectionError(
         error instanceof Error ? error.message : "Failed to save the queued message.",
       );
-      return null;
-    }
+    });
+    clearComposerDraftContent(threadKey);
+    return messageId;
   }, [selectedThreadDetail, selectedThreadShell]);
 
   const onSteerQueuedMessage = useCallback(
