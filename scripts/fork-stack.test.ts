@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { parseManifest, StackError, type StackManifest } from "./rebase-pr-stack.ts";
-import { registerPullRequest, stackParentBranch, unregisterTopPullRequest } from "./fork-stack.ts";
+import {
+  featurePullRequestBaseBranch,
+  planFeatureBranchUpdate,
+  registerPullRequest,
+  shouldRetargetPullRequestBase,
+  stackParentBranch,
+  unregisterTopPullRequest,
+} from "./fork-stack.ts";
 
 const manifest: StackManifest = {
   upstreamRemote: "upstream",
@@ -15,6 +22,56 @@ describe("fork stack helpers", () => {
   it("accepts an empty manifest before the one-time cutover", () => {
     expect(parseManifest(JSON.stringify(manifest))).toEqual(manifest);
     expect(stackParentBranch(manifest)).toBe("fork/changes");
+  });
+
+  it("targets ordinary feature PRs at fork/changes", () => {
+    expect(featurePullRequestBaseBranch(manifest)).toBe("fork/changes");
+    expect(shouldRetargetPullRequestBase("main", "fork/changes")).toBe(true);
+    expect(shouldRetargetPullRequestBase("fork/changes", "fork/changes")).toBe(false);
+  });
+
+  it("plans a simple rebase when behind an ancestor base", () => {
+    expect(
+      planFeatureBranchUpdate({
+        baseIsAncestorOfHead: true,
+        behindCount: 3,
+        aheadCount: 1,
+        pullRequestCommitOids: ["abc"],
+      }),
+    ).toEqual({ action: "rebase", replayOids: [] });
+  });
+
+  it("is a noop when already up to date with the base tip", () => {
+    expect(
+      planFeatureBranchUpdate({
+        baseIsAncestorOfHead: true,
+        behindCount: 0,
+        aheadCount: 2,
+        pullRequestCommitOids: ["abc", "def"],
+      }),
+    ).toEqual({ action: "noop", replayOids: [] });
+  });
+
+  it("replays only PR commits when the branch was cut from the wrong parent", () => {
+    expect(
+      planFeatureBranchUpdate({
+        baseIsAncestorOfHead: false,
+        behindCount: 50,
+        aheadCount: 600,
+        pullRequestCommitOids: ["only-feature-commit"],
+      }),
+    ).toEqual({ action: "replay", replayOids: ["only-feature-commit"] });
+  });
+
+  it("rejects misbased branches with no PR commits to replay", () => {
+    expect(() =>
+      planFeatureBranchUpdate({
+        baseIsAncestorOfHead: false,
+        behindCount: 10,
+        aheadCount: 10,
+        pullRequestCommitOids: [],
+      }),
+    ).toThrow(/not based on fork\/changes/);
   });
 
   it("registers the permanent fork changes PR first", () => {
