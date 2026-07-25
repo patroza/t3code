@@ -7,7 +7,12 @@ env:
 
 on:
   workflow_dispatch:
+  # Full PR CI is for our implementation layer. Candidate and Tim imports are
+  # verified after they are folded into fork/integration; including their
+  # permanent stack PRs here creates duplicate runs on every stack rewrite.
   pull_request:
+    branches:
+      - fork/changes
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
