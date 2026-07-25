@@ -47,6 +47,8 @@ function makeThread(
     hasMoreActivities: false,
     latestTurn: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     session: null,
     activities: [],
     proposedPlans: [],

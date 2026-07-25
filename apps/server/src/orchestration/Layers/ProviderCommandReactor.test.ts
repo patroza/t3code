@@ -547,11 +547,61 @@ describe("ProviderCommandReactor", () => {
       await startReactor();
     }
 
+    // Queue-by-default holds turn.start commands while the session is
+    // starting/running. The mock provider never emits runtime events, so
+    // tests that send a follow-up on an idle thread must settle the session
+    // back to ready first — in production, turn completion does this. The
+    // projected session is preserved apart from status/activeTurnId so
+    // provider identity fields survive the settle.
+    const harnessRuntime = runtime;
+    let settleIndex = 0;
+    const settleSession = async (threadId: ThreadId = ThreadId.make("thread-1")) => {
+      settleIndex += 1;
+      const readModel = await harnessRuntime.runPromise(snapshotQuery.getSnapshot());
+      const session = readModel.threads.find((entry) => entry.id === threadId)?.session;
+      if (!session) {
+        return;
+      }
+      // Mirror the real lifecycle: report the turn running (stamping
+      // latestTurn so the decider's pending-turn-start guard clears), then
+      // settle back to ready. A lone ready-set would leave latestTurn null
+      // and the just-sent message would read as a still-pending start.
+      await harnessRuntime.runPromise(
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-run-${settleIndex}`),
+          threadId,
+          session: {
+            ...session,
+            status: "running",
+            activeTurnId: asTurnId(`turn-settle-${settleIndex}`),
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await harnessRuntime.runPromise(
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-settle-${settleIndex}`),
+          threadId,
+          session: {
+            ...session,
+            status: "ready",
+            activeTurnId: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    };
+
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       readTurns: (threadId: ThreadId) =>
         Effect.runPromise(turnRepository.listByThreadId({ threadId })),
+      settleSession,
       startSession,
       sendTurn,
       interruptTurn,
@@ -2354,6 +2404,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2408,6 +2459,7 @@ describe("ProviderCommandReactor", () => {
 
         yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
 
+        yield* Effect.promise(() => harness.settleSession());
         yield* harness.engine.dispatch({
           type: "thread.turn.start",
           commandId: CommandId.make("cmd-turn-start-restricted-2"),
@@ -2528,6 +2580,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2577,6 +2630,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2653,6 +2707,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2719,6 +2774,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2803,6 +2859,7 @@ describe("ProviderCommandReactor", () => {
       return thread?.runtimeMode === "approval-required";
     });
     await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2975,6 +3032,7 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
+    await harness.settleSession();
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",

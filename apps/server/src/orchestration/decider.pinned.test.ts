@@ -1,15 +1,10 @@
-import {
-  CommandId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-  type OrchestrationReadModel,
-} from "@t3tools/contracts";
+import { CommandId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const PINNED_AT = "1969-12-30T00:00:00.000Z";
@@ -21,8 +16,8 @@ function makeReadModel(input: {
   readonly settledAt?: string | null;
   readonly snoozedUntil?: string | null;
   readonly snoozedAt?: string | null;
-}): OrchestrationReadModel {
-  return {
+}): CommandReadModel {
+  return fromWireReadModel({
     snapshotSequence: 0,
     projects: [],
     threads: [
@@ -46,6 +41,8 @@ function makeReadModel(input: {
         pinnedAt: input.pinnedAt ?? null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -53,7 +50,7 @@ function makeReadModel(input: {
       },
     ],
     updatedAt: NOW,
-  };
+  });
 }
 
 it.layer(NodeServices.layer)("pinned thread decider", (it) => {
