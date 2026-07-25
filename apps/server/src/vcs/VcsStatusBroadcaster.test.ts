@@ -705,12 +705,12 @@ describe("VcsStatusBroadcaster", () => {
         event._tag === "localUpdated"
           ? Deferred.succeed(firstLocal, event).pipe(Effect.ignore)
           : Effect.void,
-      ).pipe(Effect.forkIn(firstScope));
+      ).pipe(Effect.forkIn(firstScope, { startImmediately: true }));
       yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) =>
         event._tag === "localUpdated"
           ? Deferred.succeed(secondLocal, event).pipe(Effect.ignore)
           : Effect.void,
-      ).pipe(Effect.forkIn(secondScope));
+      ).pipe(Effect.forkIn(secondScope, { startImmediately: true }));
 
       yield* Deferred.await(firstLocal);
       yield* Deferred.await(secondLocal);
@@ -729,10 +729,10 @@ describe("VcsStatusBroadcaster", () => {
       const nextSnapshot = yield* Deferred.make<VcsStatusStreamEvent>();
       const nextScope = yield* Scope.make();
       yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) =>
-        event._tag === "snapshot"
+        event._tag === "localUpdated"
           ? Deferred.succeed(nextSnapshot, event).pipe(Effect.ignore)
           : Effect.void,
-      ).pipe(Effect.forkIn(nextScope));
+      ).pipe(Effect.forkIn(nextScope, { startImmediately: true }));
       yield* Deferred.await(nextSnapshot);
 
       // Releasing the final poller also evicts its cwd cache entry, so a later

@@ -1836,8 +1836,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // maintainVisibleContentPosition also keeps the viewport anchored
             // when older history prepends at the top.
             maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onStartReached={onStartReachedOlderHistory}
-            onStartReachedThreshold={0.5}
             data={presentedFeed}
             extraData={listAppearanceData}
             renderItem={renderItem}
