@@ -14,10 +14,12 @@ import {
   planFeatureBranchUpdate,
   planLocalSyncWithRemote,
   registerPullRequest,
+  registerIntegrationOverlay,
   shouldRetargetPullRequestBase,
   stackParentBranch,
   uniqueLocalCommitsFromCherry,
   unregisterTopPullRequest,
+  unregisterIntegrationOverlay,
 } from "./fork-stack.ts";
 
 const manifest: StackManifest = {
@@ -26,6 +28,7 @@ const manifest: StackManifest = {
   forkChangesBranch: "fork/changes",
   integrationBranch: "fork/integration",
   pullRequests: [],
+  integrationOverlays: [],
 };
 
 describe("fork stack helpers", () => {
@@ -250,5 +253,35 @@ describe("fork stack helpers", () => {
       { number: 201, branch: "fork/changes" },
     ]);
     expect(() => unregisterTopPullRequest(stacked, 201)).toThrow(/Only the top PR/);
+  });
+
+  it("registers only draft overlays based on fork/changes", () => {
+    const next = registerIntegrationOverlay(manifest, {
+      number: 10,
+      state: "OPEN",
+      headRefName: "feature/deep-links",
+      baseRefName: "fork/changes",
+      isDraft: true,
+    });
+    expect(next.integrationOverlays).toEqual([{ number: 10, branch: "feature/deep-links" }]);
+    expect(() =>
+      registerIntegrationOverlay(manifest, {
+        number: 11,
+        state: "OPEN",
+        headRefName: "feature/ready",
+        baseRefName: "fork/changes",
+        isDraft: false,
+      }),
+    ).toThrow(/must be a draft/);
+    expect(() =>
+      registerIntegrationOverlay(manifest, {
+        number: 12,
+        state: "OPEN",
+        headRefName: "feature/wrong-base",
+        baseRefName: "main",
+        isDraft: true,
+      }),
+    ).toThrow(/expected fork\/changes/);
+    expect(unregisterIntegrationOverlay(next, 10).integrationOverlays).toEqual([]);
   });
 });
