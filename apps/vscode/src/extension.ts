@@ -454,6 +454,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await chatView.reveal();
     }),
     vscode.commands.registerCommand("t3Code.openChat", () => chatView.reveal()),
+    vscode.commands.registerCommand("t3Code.openInT3", () => chatView.openInT3()),
     vscode.commands.registerCommand("t3Code.setBearerToken", async () => {
       const token = await vscode.window.showInputBox({
         prompt: "T3 Code server bearer token",
