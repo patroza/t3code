@@ -409,6 +409,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
+      ...(settings.sidebarRecentThreadsEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled
+        ? ["Recent work"]
+        : []),
       ...(settings.sidebarProjectGroupingMode !==
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
@@ -471,6 +475,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarProjectGroupingMode,
+      settings.sidebarRecentThreadsEnabled,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       settings.wordWrap,
@@ -495,6 +500,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
+      sidebarRecentThreadsEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
@@ -643,6 +649,34 @@ export function GeneralSettingsPanel() {
                 value={settings.glassOpacity}
               />
             </div>
+          }
+        />
+
+        <SettingsRow
+          title="Recent work"
+          description="Show recently active threads across projects at the top of the sidebar."
+          resetAction={
+            settings.sidebarRecentThreadsEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled ? (
+              <SettingResetButton
+                label="recent work"
+                onClick={() =>
+                  updateSettings({
+                    sidebarRecentThreadsEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarRecentThreadsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarRecentThreadsEnabled: Boolean(checked) })
+              }
+              aria-label="Show recent work"
+            />
           }
         />
 
