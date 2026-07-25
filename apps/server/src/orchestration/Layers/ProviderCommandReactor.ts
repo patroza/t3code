@@ -941,7 +941,14 @@ const make = Effect.gen(function* () {
       return { _tag: "Superseded" } as const;
     }
 
-    const { message, attachments } = formatThreadTitleContext(thread.messages);
+    const { message, attachments } = formatThreadTitleContext([
+      ...thread.messages,
+      ...thread.queuedMessages.map((queued) => ({
+        role: "user" as const,
+        text: queued.text,
+        attachments: queued.attachments,
+      })),
+    ]);
     if (message.length === 0) {
       return { _tag: "Completed", title: undefined } as const;
     }
