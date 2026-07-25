@@ -61,8 +61,15 @@ feature PR merged into fork/changes
     → rebase-pr-stack workflow
     → fork/integration updated atomically
     → CI dispatched for the exact integration SHA
-    → successful CI triggers fleet deployment
+    → successful CI classifies the tree diff
+        → runtime-affecting changes trigger fleet deployment
+        → test, documentation, and automation-only changes stop after CI
 ```
+
+Deployment classification compares complete tested integration trees rather than only the latest
+commit. Unknown paths are runtime-affecting by default. This preserves safe deployment when a PR
+contains mixed changes or a new source directory appears, while avoiding fleet rebuilds and mobile
+OTA updates for tests, snapshots, documentation, agent instructions, and GitHub-only metadata.
 
 The manifest contains the permanent `fork/tim` PR followed by the permanent `fork/changes` PR. The
 synchronizer rebases that provenance chain onto the latest upstream `main` and rebuilds
