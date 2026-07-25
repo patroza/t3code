@@ -1,4 +1,11 @@
 {
   "version": 1,
-  "candidates": []
+  "candidates": [
+    {
+      "upstreamPr": 4018,
+      "sourceSha": "de8fd65934768173819b93adcd6b92af3e8c7fc3",
+      "status": "active",
+      "purpose": "Bound server thread history and lazily page older web activity"
+    }
+  ]
 }
