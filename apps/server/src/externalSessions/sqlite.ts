@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off preferSchemaOverJson:off
-// Shared sqlite / id helpers for external-session tooling (import + backfill).
+// Shared sqlite / id helpers for external-session recovery and backfill tooling.
 // These deliberately shell out to the `sqlite3` CLI so the tooling can run as a
 // plain script against an on-disk state DB without pulling in a native driver.
 import * as NodeChildProcess from "node:child_process";
@@ -14,10 +14,6 @@ export function homePath(value: string): string {
   return value === "~" || value.startsWith("~/")
     ? NodePath.join(NodeOS.homedir(), value.slice(value === "~" ? 1 : 2))
     : value;
-}
-
-export function iso(ms: number): string {
-  return new Date(ms).toISOString();
 }
 
 /** Deterministic RFC-4122-shaped UUID from a namespace + key (stable across runs). */
