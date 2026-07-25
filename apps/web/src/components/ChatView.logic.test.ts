@@ -717,6 +717,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         phase: "running",
         latestTurn: runningTurn,
         latestUserMessageId: localDispatch.latestUserMessageId,
+        projectedMessageIds: new Set<string>(),
         session: runningSession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
