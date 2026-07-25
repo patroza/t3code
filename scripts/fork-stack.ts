@@ -35,6 +35,7 @@ interface PullRequestView {
   readonly state: string;
   readonly headRefName: string;
   readonly baseRefName: string;
+  readonly isDraft?: boolean;
 }
 
 interface PullRequestCommitsView {
@@ -197,6 +198,52 @@ export function unregisterTopPullRequest(manifest: StackManifest, number: number
   return { ...manifest, pullRequests: manifest.pullRequests.slice(0, -1) };
 }
 
+export function registerIntegrationOverlay(
+  manifest: StackManifest,
+  pullRequest: PullRequestView,
+): StackManifest {
+  if (pullRequest.state.toLowerCase() !== "open") {
+    throw new StackError(`PR #${pullRequest.number} is not open.`);
+  }
+  if (!pullRequest.isDraft) {
+    throw new StackError(`Integration overlay PR #${pullRequest.number} must be a draft.`);
+  }
+  if (pullRequest.baseRefName !== manifest.forkChangesBranch) {
+    throw new StackError(
+      `Integration overlay PR #${pullRequest.number} is based on ${pullRequest.baseRefName}, expected ${manifest.forkChangesBranch}.`,
+    );
+  }
+  const managed = [...manifest.pullRequests, ...manifest.integrationOverlays];
+  if (managed.some(({ number }) => number === pullRequest.number)) {
+    throw new StackError(`PR #${pullRequest.number} is already managed.`);
+  }
+  if (managed.some(({ branch }) => branch === pullRequest.headRefName)) {
+    throw new StackError(`Branch ${pullRequest.headRefName} is already managed.`);
+  }
+  return {
+    ...manifest,
+    integrationOverlays: [
+      ...manifest.integrationOverlays,
+      { number: pullRequest.number, branch: pullRequest.headRefName },
+    ],
+  };
+}
+
+export function unregisterIntegrationOverlay(
+  manifest: StackManifest,
+  number: number,
+): StackManifest {
+  if (!manifest.integrationOverlays.some((overlay) => overlay.number === number)) {
+    throw new StackError(`PR #${number} is not a registered integration overlay.`);
+  }
+  return {
+    ...manifest,
+    integrationOverlays: manifest.integrationOverlays.filter(
+      (overlay) => overlay.number !== number,
+    ),
+  };
+}
+
 function writeManifest(sourceRoot: string, manifest: StackManifest): void {
   NodeFS.writeFileSync(
     NodePath.join(sourceRoot, MANIFEST_PATH),
@@ -215,7 +262,7 @@ function readPullRequest(sourceRoot: string, number: number): PullRequestView {
       "--repo",
       FORK_REPOSITORY,
       "--json",
-      "number,state,headRefName,baseRefName",
+      "number,state,headRefName,baseRefName,isDraft",
     ],
     sourceRoot,
   );
@@ -557,6 +604,10 @@ function usage(): string {
   node scripts/fork-stack.ts promote <private-pr-number> <upstream-branch>
   node scripts/fork-stack.ts adopt <upstream-branch> <private-branch>
   node scripts/fork-stack.ts demote <upstream-pr-number> <private-pr-number>
+  node scripts/fork-stack.ts overlay-add <pr-number>
+  node scripts/fork-stack.ts overlay-start <overlay-pr-number> <branch>
+  node scripts/fork-stack.ts overlay-remove <pr-number>
+  node scripts/fork-stack.ts overlay-promote <pr-number> <upstream-branch>
   node scripts/fork-stack.ts register <pr-number>
   node scripts/fork-stack.ts unregister <pr-number>
   node scripts/fork-stack.ts find <query>
@@ -575,6 +626,20 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
     run("git", ["fetch", "origin", parent], sourceRoot);
     run("git", ["switch", "-c", value, `origin/${parent}`], sourceRoot);
     console.log(`Created ${value} from ${parent}. Open its PR against ${parent}.`);
+    return;
+  }
+
+  if (command === "overlay-start" && value && extra.length === 1) {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number <= 0) throw new StackError(usage());
+    const overlay = manifest.integrationOverlays.find((entry) => entry.number === number);
+    if (!overlay) throw new StackError(`PR #${number} is not a registered integration overlay.`);
+    ensureClean(sourceRoot);
+    run("git", ["fetch", "origin", overlay.branch], sourceRoot);
+    run("git", ["switch", "-c", extra[0]!, `origin/${overlay.branch}`], sourceRoot);
+    console.log(
+      `Created ${extra[0]} from overlay PR #${number}. Open its PR against ${overlay.branch}; merge that child into #${number}.`,
+    );
     return;
   }
 
@@ -688,6 +753,65 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
     return;
   }
 
+  if (command === "overlay-promote" && value && extra.length === 1) {
+    const number = Number(value);
+    const upstreamBranch = extra[0]!;
+    if (!Number.isSafeInteger(number) || number <= 0) throw new StackError(usage());
+    const overlay = manifest.integrationOverlays.find((entry) => entry.number === number);
+    if (!overlay) throw new StackError(`PR #${number} is not a registered integration overlay.`);
+    ensureClean(sourceRoot);
+    const pullRequest = parsePossiblyColoredJson(
+      run(
+        "gh",
+        [
+          "pr",
+          "view",
+          String(number),
+          "--repo",
+          FORK_REPOSITORY,
+          "--json",
+          "state,baseRefName,commits",
+        ],
+        sourceRoot,
+      ),
+    ) as PullRequestCommitsView;
+    if (
+      pullRequest.state.toLowerCase() !== "open" ||
+      pullRequest.baseRefName !== manifest.forkChangesBranch ||
+      pullRequest.commits.length === 0
+    ) {
+      throw new StackError(`Overlay PR #${number} is not an open non-empty fork overlay.`);
+    }
+    run(
+      "git",
+      [
+        "fetch",
+        manifest.upstreamRemote,
+        `+refs/heads/${manifest.upstreamBranch}:refs/remotes/${manifest.upstreamRemote}/${manifest.upstreamBranch}`,
+      ],
+      sourceRoot,
+    );
+    run(
+      "git",
+      ["fetch", "origin", `+refs/pull/${number}/head:refs/remotes/origin/pr/${number}`],
+      sourceRoot,
+    );
+    run(
+      "git",
+      ["switch", "-c", upstreamBranch, `${manifest.upstreamRemote}/${manifest.upstreamBranch}`],
+      sourceRoot,
+    );
+    run(
+      "git",
+      ["cherry-pick", "--no-commit", ...pullRequest.commits.map(({ oid }) => oid)],
+      sourceRoot,
+    );
+    console.log(
+      `Projected open overlay PR #${number} onto ${upstreamBranch}. Remove fork-only assumptions, test, commit, and open it to pingdotgg/t3code:${manifest.upstreamBranch}.`,
+    );
+    return;
+  }
+
   if (command === "adopt" && value && extra.length === 1) {
     const upstreamBranch = value;
     const privateBranch = extra[0]!;
@@ -790,6 +914,25 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
     return;
   }
 
+  if (command === "overlay-add" && value && extra.length === 0) {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number <= 0) throw new StackError(usage());
+    writeManifest(
+      sourceRoot,
+      registerIntegrationOverlay(manifest, readPullRequest(sourceRoot, number)),
+    );
+    console.log(`Registered draft PR #${number} as an integration overlay.`);
+    return;
+  }
+
+  if (command === "overlay-remove" && value && extra.length === 0) {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number <= 0) throw new StackError(usage());
+    writeManifest(sourceRoot, unregisterIntegrationOverlay(manifest, number));
+    console.log(`Removed integration overlay PR #${number} from the manifest.`);
+    return;
+  }
+
   if ((command === "find" || command === "find-upstream") && value && extra.length === 0) {
     const repository = command === "find-upstream" ? "pingdotgg/t3code" : FORK_REPOSITORY;
     const output = run(
@@ -824,6 +967,7 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
           integrationBranch: manifest.integrationBranch,
           nextBaseBranch: stackParentBranch(manifest),
           pullRequests: rows,
+          integrationOverlays: manifest.integrationOverlays,
         },
         undefined,
         2,
