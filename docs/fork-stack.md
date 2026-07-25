@@ -76,11 +76,12 @@ contains mixed changes or a new source directory appears, while avoiding fleet r
 OTA updates for tests, snapshots, documentation, agent instructions, and GitHub-only metadata.
 
 Runtime-affecting integrations also publish both mobile release tracks from the exact tested SHA.
-The production track receives an OTA update. The development track uses Expo Fingerprint: it
-publishes an OTA update when a compatible development client already exists, or creates a new
-internal iOS development build when native inputs changed. Manual runs of
-`Mobile EAS Development` may target iOS, Android, or both; automatic integration publishing targets
-iOS.
+Both tracks use Expo Fingerprint: they publish an OTA update when a compatible build already
+exists, and start a new build when native runtime inputs changed. A new production build is
+submitted to TestFlight automatically, so an installed tester build stays current without a manual
+dispatch. Manual runs of `Mobile EAS Production` can still force `build` or `update`; manual runs of
+`Mobile EAS Development` may target iOS, Android, or both. Automatic integration publishing targets
+iOS, because Android has no signing keystore configured.
 
 The manifest contains the permanent `fork/tim`, `fork/candidates`, and `fork/changes` PRs. The
 synchronizer rebases that provenance chain onto the latest upstream `main` and rebuilds
