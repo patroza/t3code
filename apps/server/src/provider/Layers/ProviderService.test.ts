@@ -367,6 +367,53 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   }),
 );
 
+it.effect("ProviderServiceLive bounds a provider that wedges during shutdown", () =>
+  Effect.gen(function* () {
+    const codex = makeFakeCodexAdapter();
+    codex.stopAll.mockImplementation(() => Effect.never);
+    const registry = makeAdapterRegistryMock({
+      [CODEX_DRIVER]: codex.adapter,
+    });
+    const providerAdapterLayer = Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+      registry,
+    );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = Layer.mergeAll(
+      makeProviderServiceLive({ shutdownGracePeriod: "50 millis" }).pipe(
+        Layer.provide(providerAdapterLayer),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    );
+    const scope = yield* Scope.make();
+    const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+
+    yield* ProviderService.ProviderService.pipe(Effect.provide(runtimeServices));
+    const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* advanceTestClock(50);
+    const closeExit = yield* Fiber.join(closeFiber).pipe(Effect.exit);
+
+    assert.equal(Exit.isSuccess(closeExit), true);
+    assert.equal(codex.stopAll.mock.calls.length, 1);
+  }),
+);
+
 it.effect("graceful shutdown preserves recovery intent only for working sessions", () =>
   Effect.gen(function* () {
     const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-recovery-"));
@@ -377,7 +424,7 @@ it.effect("graceful shutdown preserves recovery intent only for working sessions
     );
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const codex = makeFakeCodexAdapter();
-    const providerLayer = makeProviderServiceLive().pipe(
+    const providerLayer = makeProviderServiceLive({ shutdownGracePeriod: "50 millis" }).pipe(
       Layer.provide(
         Layer.succeed(
           ProviderAdapterRegistry.ProviderAdapterRegistry,
@@ -428,7 +475,14 @@ it.effect("graceful shutdown preserves recovery intent only for working sessions
     }));
 
     yield* provider.stopSession({ threadId: stoppedThreadId });
-    yield* Scope.close(scope, Exit.void);
+    // Model a provider protocol drain that never completes. Recovery intent
+    // must already be durable when the global shutdown deadline interrupts it.
+    codex.stopAll.mockImplementation(() => Effect.never);
+    const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* advanceTestClock(50);
+    yield* Fiber.join(closeFiber);
 
     const rows = yield* Effect.gen(function* () {
       const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
