@@ -9,11 +9,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "build (+ auto-submit to TestFlight) or update (OTA)"
+        description: "auto (fingerprint decides), build (+ auto-submit to TestFlight), or update (OTA)"
         required: true
         type: choice
-        default: build
+        default: auto
         options:
+          - auto
           - build
           - update
       platform:
@@ -122,6 +123,24 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull production --non-interactive
+
+      # Fingerprint decides: a JavaScript-only integration publishes an OTA
+      # update to the production channel, which the installed TestFlight build
+      # picks up on next launch. A change to native runtime inputs starts a
+      # production build and submits it to TestFlight instead.
+      - name: Deploy with fingerprint check
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'auto'
+        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        with:
+          profile: production
+          branch: production
+          platform: ${{ inputs.platform }}
+          environment: production
+          auto-submit-builds: true
+          working-directory: apps/mobile
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and submit
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
