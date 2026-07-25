@@ -30,6 +30,7 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
+  OrchestrationGetThreadActivitiesError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
@@ -1140,6 +1141,20 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new OrchestrationGetTurnDiffError({
                     message: "Failed to load turn diff",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getThreadActivities]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getThreadActivities,
+            projectionSnapshotQuery.getThreadActivitiesPage(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationGetThreadActivitiesError({
+                    message: "Failed to load thread activities page",
                     cause,
                   }),
               ),

@@ -214,6 +214,7 @@ describe("ProviderSessionReaper", () => {
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
           searchThreads: () => Effect.succeed({ matches: [] }),
+          getThreadActivitiesPage: () => Effect.die("unused"),
           getThreadLifecycleById: () => Effect.die("unused"),
         }),
       ),
