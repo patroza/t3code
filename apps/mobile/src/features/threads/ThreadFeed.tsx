@@ -867,6 +867,8 @@ function renderFeedEntry(
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
+    const previewAttachments = entry.previewAttachments ?? [];
+    const deliveryState = entry.deliveryState;
     const hasReviewCommentContext = message.text.includes("<review_comment");
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
@@ -884,6 +886,7 @@ function renderFeedEntry(
         <Animated.View
           className="mb-5 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
+          style={deliveryState ? { opacity: 0.58 } : undefined}
         >
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
@@ -913,8 +916,32 @@ function renderFeedEntry(
                 />
               );
             })}
+            {previewAttachments.map((attachment) => (
+              <Image
+                key={attachment.id}
+                source={{ uri: attachment.previewUri }}
+                className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
+                resizeMode="cover"
+              />
+            ))}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+            {deliveryState === "sending" ? (
+              <>
+                <ActivityIndicator size="small" color={iconSubtleColor} />
+                <NativeText className="font-t3-medium text-xs text-foreground-muted">
+                  Sending
+                </NativeText>
+              </>
+            ) : deliveryState === "waiting" ? (
+              <NativeText className="font-t3-medium text-xs text-foreground-muted">
+                Waiting for connection
+              </NativeText>
+            ) : deliveryState === "queued" ? (
+              <NativeText className="font-t3-medium text-xs text-foreground-muted">
+                Queued on server
+              </NativeText>
+            ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>

@@ -41,7 +41,10 @@ import {
   updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
-import { setPendingConnectionError } from "../state/use-remote-environment-registry";
+import {
+  setPendingConnectionError,
+  useRemoteConnectionStatus,
+} from "../state/use-remote-environment-registry";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
@@ -87,6 +90,7 @@ export function useThreadComposerState() {
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const { connectedEnvironments } = useRemoteConnectionStatus();
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -143,18 +147,83 @@ export function useThreadComposerState() {
     loadPage: loadOlderActivitiesPage,
   });
 
-  const selectedThreadFeed = useMemo(
-    () =>
-      selectedThreadDetail
-        ? buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities })
-        : [],
-    [selectedThreadDetail, mergedActivities],
-  );
+  const selectedThreadFeed = useMemo(() => {
+    if (!selectedThreadDetail) {
+      return [];
+    }
+
+    const feed = buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities });
+    const timelineMessageIds = new Set(selectedThreadDetail.messages.map((message) => message.id));
+    const optimisticByMessageId = new Map<
+      MessageId,
+      (typeof feed)[number] & { readonly type: "message" }
+    >();
+
+    for (const message of selectedThreadDetail.queuedMessages) {
+      if (timelineMessageIds.has(message.messageId)) {
+        continue;
+      }
+      optimisticByMessageId.set(message.messageId, {
+        type: "message",
+        id: message.messageId,
+        createdAt: message.queuedAt,
+        deliveryState: "queued",
+        message: {
+          id: message.messageId,
+          role: "user",
+          text: message.text,
+          attachments: message.attachments,
+          turnId: null,
+          streaming: false,
+          createdAt: message.queuedAt,
+          updatedAt: message.queuedAt,
+        },
+      });
+    }
+
+    // A local outbox entry wins over the matching server projection until the
+    // command acknowledgement removes it. That makes the bubble transition
+    // from "Sending" to "Queued" without rendering twice.
+    for (const message of selectedThreadQueuedMessages) {
+      if (timelineMessageIds.has(message.messageId)) {
+        continue;
+      }
+      optimisticByMessageId.set(message.messageId, {
+        type: "message",
+        id: message.messageId,
+        createdAt: message.createdAt,
+        deliveryState: connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === message.environmentId &&
+            environment.connectionState === "connected",
+        )
+          ? "sending"
+          : "waiting",
+        previewAttachments: message.attachments,
+        message: {
+          id: message.messageId,
+          role: "user",
+          text: message.text,
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: message.createdAt,
+          updatedAt: message.createdAt,
+        },
+      });
+    }
+
+    return [
+      ...feed,
+      ...Array.from(optimisticByMessageId.values()).sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      ),
+    ];
+  }, [connectedEnvironments, selectedThreadDetail, selectedThreadQueuedMessages, mergedActivities]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
-  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
@@ -348,7 +417,6 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
-    selectedThreadQueueCount,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
