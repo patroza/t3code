@@ -8,8 +8,9 @@ pingdotgg/t3code:main
     └── fork/tim                 selected Tim Smart PRs
             └── fork/candidates  selected open upstream PRs
                     └── fork/changes     our private changes
-                            ├── feature PRs
-                            └── fork/integration   tested and deployed tip
+                            ├── ordinary feature PRs
+                            ├── registered draft overlays
+                            └── fork/integration   changes + overlays, tested/deployed
 ```
 
 `main` mirrors `pingdotgg/t3code:main`. `fork/tim` is a linear provenance layer with one commit per
@@ -17,7 +18,32 @@ selected Tim Smart PR and a permanently open PR against `main`. `fork/candidates
 upstream-provenance layer with one commit per selected open upstream PR and a permanently open PR
 against `fork/tim`. `fork/changes` is the GitHub default branch and canonical private layer, with a
 permanently open PR against `fork/candidates`.
-`fork/integration` is generated from both reviewed layers and is used by running instances.
+`fork/integration` is generated from the reviewed layers plus registered integration overlays and
+is used by running instances.
+
+## Long-lived integration overlays
+
+An upstreamable feature may remain as an open PR instead of being merged into `fork/changes`.
+Register it under `integrationOverlays` in `.github/pr-stack.json`. Every overlay remains a
+**parallel draft PR based on `fork/changes`**; overlays are never based on each other. The stack
+workflow rebases overlays when `fork/changes` moves and composes their commits, in manifest order,
+only in `fork/integration`.
+
+Draft state is the merge lock. Normal Fork CI continues to run and can remain green, so health and
+merge permission remain separate signals. A trusted workflow automatically returns managed PRs
+(#1, #27, #2, and registered overlays) to draft if they are accidentally marked ready.
+
+```sh
+pnpm fork:stack overlay-add 10
+pnpm fork:stack overlay-start 10 feature/deep-link-follow-up
+pnpm fork:stack overlay-promote 10 upstream/desktop-deep-links
+```
+
+To change an overlay, commit directly to its branch or create a child PR with the overlay branch as
+its base and merge the child into the overlay PR. Do not put the same change into `fork/changes`.
+Landing an overlay is deliberate: remove its manifest entry in the same reviewed change that lands
+the implementation in `fork/changes`, then verify that the resulting `fork/integration` tree is
+unchanged.
 
 ## Updating from upstream
 
