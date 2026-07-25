@@ -19,6 +19,8 @@ import {
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  ThreadMessageQueuedPayload,
+  ThreadQueuedMessageRemovedPayload,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -38,6 +40,7 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -312,6 +315,8 @@ export function projectEvent(
             snoozedAt: null,
             deletedAt: null,
             messages: [],
+            queuedMessages: [],
+            pendingTurnStart: null,
             activities: [],
             checkpoints: [],
             session: null,
@@ -517,6 +522,93 @@ export function projectEvent(
         };
       });
 
+    case "thread.message-queued":
+      return decodeForEvent(ThreadMessageQueuedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = findThreadById(nextBase, payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          // No cap here: the decider refuses to emit `thread.message-queued`
+          // past its queue limit, so replaying the event stream stays in
+          // lockstep with the persisted projection.
+          const queuedMessages = [
+            ...thread.queuedMessages.filter((entry) => entry.messageId !== payload.messageId),
+            {
+              messageId: payload.messageId,
+              text: payload.text,
+              attachments: payload.attachments,
+              ...(payload.modelSelection !== undefined
+                ? { modelSelection: payload.modelSelection }
+                : {}),
+              ...(payload.sourceProposedPlan !== undefined
+                ? { sourceProposedPlan: payload.sourceProposedPlan }
+                : {}),
+              queuedAt: payload.queuedAt,
+            },
+          ];
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-message-removed":
+      return decodeForEvent(
+        ThreadQueuedMessageRemovedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = findThreadById(nextBase, payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages: thread.queuedMessages.filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.turn-start-requested":
+      return decodeForEvent(
+        ThreadTurnStartRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = findThreadById(nextBase, payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              pendingTurnStart: {
+                messageId: payload.messageId,
+                requestedAt: payload.createdAt,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
     case "thread.session-set":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -540,10 +632,23 @@ export function projectEvent(
         // Leaving the "running" session status is the turn-end signal: settle
         // a still-running latest turn so its duration reflects the whole turn.
         const settledTurnState = settledTurnStateForSessionStatus(session.status);
+        // Mirrors the SQL pipeline's pending-turn-start clearing: a running
+        // session with an active turn adopts the pending start; every settled
+        // or terminal status (ready/idle/error/stopped/interrupted) clears it
+        // — a mid-turn steer re-arms the flag without any adopting session
+        // transition, so the turn-end ready must release it or drains would
+        // be rejected forever. Only "starting" (and running while waiting on
+        // a turn id) keeps it pending.
+        const pendingTurnStart =
+          (session.status === "running" && session.activeTurnId !== null) ||
+          settledTurnStateForSessionStatus(session.status) !== null
+            ? null
+            : thread.pendingTurnStart;
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
+            pendingTurnStart,
             latestTurn:
               session.status === "running" && session.activeTurnId !== null
                 ? {
