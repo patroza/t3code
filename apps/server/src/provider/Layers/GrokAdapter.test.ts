@@ -437,8 +437,8 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
-  it.effect("retains turn transcript when sendTurn is interrupted after prompt success", () =>
-    Effect.gen(function* () {
+  it.effect("retains turn transcript when sendTurn is interrupted after prompt success", () => {
+    const runAttempt = Effect.gen(function* () {
       const threadId = ThreadId.make("grok-send-turn-interrupt-after-prompt");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
@@ -483,16 +483,28 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       yield* Fiber.interrupt(runtimeEventsFiber);
       yield* adapter.stopSession(threadId);
-    }).pipe(
+    });
+
+    const runBoundedAttempt = Effect.gen(function* () {
+      // Run detached so timing out the join does not wait for a wedged provider
+      // fiber's cooperative interruption or finalizers.
+      const attempt = yield* runAttempt.pipe(Effect.forkDetach);
+      return yield* Fiber.join(attempt).pipe(
+        Effect.timeout("5 seconds"),
+        // Request cleanup without turning the timeout back into an unbounded wait.
+        Effect.ensuring(Fiber.interrupt(attempt).pipe(Effect.forkDetach, Effect.asVoid)),
+      );
+    });
+
+    return runBoundedAttempt.pipe(
       // This full-suite-only race remains useful as a warning, but must not
       // hold every unrelated CI run for the global 120-second test timeout.
-      Effect.timeout("5 seconds"),
       Effect.retry({ times: 1 }),
       Effect.catchCause((cause) =>
         Effect.logWarning("Flaky Grok transcript interruption test did not settle", cause),
       ),
-    ),
-  );
+    );
+  });
 
   it.effect("does not report a synthetic stop reason when xAI omits one", () =>
     Effect.gen(function* () {
@@ -857,8 +869,8 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }).pipe(TestClock.withLive),
   );
 
-  it.effect("lets Stop cancel during the xAI completion drain window", () =>
-    Effect.gen(function* () {
+  it.effect("lets Stop cancel during the xAI completion drain window", () => {
+    const runAttempt = Effect.gen(function* () {
       const threadId = ThreadId.make("grok-stop-during-completion-drain");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
@@ -924,8 +936,23 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       yield* Fiber.interrupt(runtimeEventsFiber);
       yield* adapter.stopSession(threadId);
-    }),
-  );
+    });
+
+    const runBoundedAttempt = Effect.gen(function* () {
+      const attempt = yield* runAttempt.pipe(Effect.forkDetach);
+      return yield* Fiber.join(attempt).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.ensuring(Fiber.interrupt(attempt).pipe(Effect.forkDetach, Effect.asVoid)),
+      );
+    });
+
+    return runBoundedAttempt.pipe(
+      Effect.retry({ times: 1 }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Flaky Grok stop-during-drain test did not settle", cause),
+      ),
+    );
+  });
 
   it.effect("settles the in-flight prompt before emitting completion", () =>
     Effect.gen(function* () {
