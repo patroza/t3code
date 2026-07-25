@@ -2827,6 +2827,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="mx-auto w-full min-w-0 max-w-3xl"
       data-chat-composer-form="true"
     >
+      {/* Keep this above the collapsed/expanded mobile branches. Opening the
+          native iOS picker blurs and collapses the composer; remounting the
+          input before `change` arrives discards the selected files. */}
+      <input
+        ref={imageFileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={onImageFileInputChange}
+      />
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
@@ -3360,17 +3371,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     />
                   </>
                 )}
-                {/* Keep this outside the responsive footer branches. iOS can resize the
-                    viewport while its native picker is open; remounting the input then
-                    discards the pending change event. */}
-                <input
-                  ref={imageFileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={onImageFileInputChange}
-                />
                 <Button
                   type="button"
                   size="sm"
