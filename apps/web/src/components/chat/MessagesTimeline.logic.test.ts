@@ -1242,6 +1242,18 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-entry",
+      "turn-fold:turn-1",
+      "user-input-entry",
+      "assistant-final-entry",
+    ]);
+  });
+
   it("interleaves steer user messages between pre-steer and post-steer turn output", () => {
     clearSteerTimelineBoundaryStore();
     const boundaryStore = new Map<string, number>();
@@ -1378,11 +1390,6 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     expect(rows.map((row) => row.id)).toEqual([
-      "user-entry",
-      "turn-fold:turn-1",
-      "user-input-entry",
-      "assistant-final-entry",
-    ]);
       "settled-summary",
       "turn-start-user",
       "active-assistant::pre",
