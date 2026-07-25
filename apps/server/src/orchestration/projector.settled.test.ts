@@ -8,6 +8,7 @@ import {
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { findThreadById } from "./commandReadModel.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
 function makeEvent(input: {
@@ -60,8 +61,8 @@ it.effect("projects settled lifecycle events", () =>
         payload: { threadId: ThreadId.make("thread-1"), settledAt: now, updatedAt: now },
       }),
     );
-    expect(settled.threads[0]?.settledOverride).toBe("settled");
-    expect(settled.threads[0]?.settledAt).toBe(now);
+    expect(findThreadById(settled, ThreadId.make("thread-1"))?.settledOverride).toBe("settled");
+    expect(findThreadById(settled, ThreadId.make("thread-1"))?.settledAt).toBe(now);
 
     const userUnsettled = yield* projectEvent(
       settled,
@@ -71,8 +72,10 @@ it.effect("projects settled lifecycle events", () =>
         payload: { threadId: ThreadId.make("thread-1"), reason: "user", updatedAt: now },
       }),
     );
-    expect(userUnsettled.threads[0]?.settledOverride).toBe("active");
-    expect(userUnsettled.threads[0]?.settledAt).toBeNull();
+    expect(findThreadById(userUnsettled, ThreadId.make("thread-1"))?.settledOverride).toBe(
+      "active",
+    );
+    expect(findThreadById(userUnsettled, ThreadId.make("thread-1"))?.settledAt).toBeNull();
 
     const activityUnsettled = yield* projectEvent(
       userUnsettled,
@@ -82,7 +85,9 @@ it.effect("projects settled lifecycle events", () =>
         payload: { threadId: ThreadId.make("thread-1"), reason: "activity", updatedAt: now },
       }),
     );
-    expect(activityUnsettled.threads[0]?.settledOverride).toBeNull();
-    expect(activityUnsettled.threads[0]?.settledAt).toBeNull();
+    expect(
+      findThreadById(activityUnsettled, ThreadId.make("thread-1"))?.settledOverride,
+    ).toBeNull();
+    expect(findThreadById(activityUnsettled, ThreadId.make("thread-1"))?.settledAt).toBeNull();
   }),
 );
