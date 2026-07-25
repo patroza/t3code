@@ -25,6 +25,7 @@ import { presentTasks } from "./taskPresentation.ts";
 import { presentToolCalls } from "./toolPresentation.ts";
 import { presentResolvedUserInputs } from "./userInputPresentation.ts";
 import { deriveContextWindowUsage } from "./usagePresentation.ts";
+import { threadWebUrl } from "./threadWebUrl.ts";
 
 const HOST_RESOURCE_IDLE_INTERVAL_MS = 10_000;
 const HOST_RESOURCE_LIVE_INTERVAL_MS = 1_000;
@@ -303,6 +304,22 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     await this.#view?.webview.postMessage({ type: "focusComposer" });
   }
 
+  async openInT3(): Promise<void> {
+    const thread = this.client.activeThread;
+    const httpBaseUrl = this.client.httpBaseUrl;
+    if (thread === null || httpBaseUrl === null) {
+      await vscode.window.showInformationMessage("Select a T3 thread before opening it.");
+      return;
+    }
+    // The extension host can run remotely, where its connected server URL is
+    // only locally reachable. Let VS Code map that origin through its active
+    // SSH/tunnel/proxy, then add T3's browser-level thread selector.
+    const externalBase = await vscode.env.asExternalUri(vscode.Uri.parse(httpBaseUrl));
+    await vscode.env.openExternal(
+      vscode.Uri.parse(threadWebUrl(externalBase.toString(true), thread.id)),
+    );
+  }
+
   async #handle(message: WebviewRequest): Promise<void> {
     try {
       switch (message.type) {
@@ -317,13 +334,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           this.#syncHostResourcePolling();
           return;
         case "visitT3": {
-          const url = this.#threadUrl(this.client.activeThread);
-          if (url === null) return;
-          // The extension host runs where the server does (extensionKind:
-          // workspace), so the base URL is only reachable from there. asExternalUri
-          // maps it to something the browser on this machine can actually open.
-          const external = await vscode.env.asExternalUri(vscode.Uri.parse(url));
-          await vscode.env.openExternal(external);
+          await this.openInT3();
           return;
         }
         case "archiveThread": {
@@ -523,20 +534,6 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       this.#watchWorktreeVcsStatus();
       await this.actions.restoreThread();
     });
-  }
-
-  /**
-   * Deep link to this thread in the T3 web app, matching its
-   * `/$environmentId/$threadId` route. Null until a thread and a connection exist.
-   */
-  #threadUrl(thread: OrchestrationThread | null): string | null {
-    const httpBaseUrl = this.client.httpBaseUrl;
-    const environmentId = this.client.serverConfig?.environment.environmentId;
-    if (thread === null || httpBaseUrl === null || environmentId === undefined) return null;
-    return new URL(
-      `/${encodeURIComponent(environmentId)}/${encodeURIComponent(thread.id)}`,
-      httpBaseUrl,
-    ).toString();
   }
 
   #watchWorktreeVcsStatus(): void {
@@ -1028,7 +1025,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <select id="threads" aria-label="T3 Code thread"><option>Loading threads…</option></select>
       <button id="new" class="icon-button" title="New synchronized thread" aria-label="New synchronized thread"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7.5 2a.5.5 0 0 1 .5.5V7h4.5a.5.5 0 0 1 0 1H8v4.5a.5.5 0 0 1-1 0V8H2.5a.5.5 0 0 1 0-1H7V2.5a.5.5 0 0 1 .5-.5Z"/></svg></button>
       <button id="refresh" title="Refresh">↻</button>
-      <details id="thread-actions" class="toolbar-menu"><summary class="icon-button" title="Thread actions" aria-label="Thread actions">⋯</summary><div class="toolbar-menu-popup"><button id="visit-t3" type="button">Visit T3</button><hr class="toolbar-menu-separator" /><button id="archive-thread" type="button">Archive</button></div></details>
+      <details id="thread-actions" class="toolbar-menu"><summary class="icon-button" title="Thread actions" aria-label="Thread actions">⋯</summary><div class="toolbar-menu-popup"><button id="visit-t3" type="button">Open in T3</button><hr class="toolbar-menu-separator" /><button id="archive-thread" type="button">Archive</button></div></details>
     </div>
     <div class="messages-shell"><main id="messages"><div class="empty">Connecting to T3 Code…</div></main><button id="new-activity" type="button" hidden aria-label="Scroll to latest">↓ <span id="new-activity-dot" class="new-activity-dot" hidden></span><span id="new-activity-label">Scroll to latest</span></button></div>
     <div class="composer">
