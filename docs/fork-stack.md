@@ -6,14 +6,17 @@ runnable build:
 ```text
 pingdotgg/t3code:main
     └── fork/tim                 selected Tim Smart PRs
-            └── fork/changes     our private changes
-                    ├── feature PRs
-                    └── fork/integration   tested and deployed tip
+            └── fork/candidates  selected open upstream PRs
+                    └── fork/changes     our private changes
+                            ├── feature PRs
+                            └── fork/integration   tested and deployed tip
 ```
 
 `main` mirrors `pingdotgg/t3code:main`. `fork/tim` is a linear provenance layer with one commit per
-selected Tim Smart PR and a permanently open PR against `main`. `fork/changes` is the GitHub default
-branch and canonical private layer, with a permanently open PR against `fork/tim`.
+selected Tim Smart PR and a permanently open PR against `main`. `fork/candidates` is a temporary
+upstream-provenance layer with one commit per selected open upstream PR and a permanently open PR
+against `fork/tim`. `fork/changes` is the GitHub default branch and canonical private layer, with a
+permanently open PR against `fork/candidates`.
 `fork/integration` is generated from both reviewed layers and is used by running instances.
 
 ## Updating from upstream
@@ -30,7 +33,8 @@ gh workflow run rebase-pr-stack.yml --repo patroza/t3code --ref fork/changes
 ```
 
 The workflow fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged,
-and atomically updates `main`, `fork/tim`, `fork/changes`, and `fork/integration` with
+and atomically updates `main`, `fork/tim`, `fork/candidates`, `fork/changes`, and
+`fork/integration` with
 force-with-lease. A repository-scoped write deploy key stored as `FORK_STACK_DEPLOY_KEY` is the only
 automation actor allowed to bypass `main`'s PR and status-check requirements. It cannot access other
 repositories. Never expose or reuse it.
@@ -71,7 +75,7 @@ commit. Unknown paths are runtime-affecting by default. This preserves safe depl
 contains mixed changes or a new source directory appears, while avoiding fleet rebuilds and mobile
 OTA updates for tests, snapshots, documentation, agent instructions, and GitHub-only metadata.
 
-The manifest contains the permanent `fork/tim` PR followed by the permanent `fork/changes` PR. The
+The manifest contains the permanent `fork/tim`, `fork/candidates`, and `fork/changes` PRs. The
 synchronizer rebases that provenance chain onto the latest upstream `main` and rebuilds
 `fork/integration`. Other open repository PRs are ignored. Temporary state is retained after a
 conflict and can be resumed with the command printed in the error.
@@ -83,7 +87,8 @@ dependent integration chain:
 pnpm fork:stack register 201
 ```
 
-The permanent `fork/tim` and `fork/changes` PRs are never merged while this model is active.
+The permanent `fork/tim`, `fork/candidates`, and `fork/changes` PRs are never merged while this
+model is active.
 
 ### Multiple features
 
@@ -130,6 +135,35 @@ environment use a separate normal PR against `fork/changes`; never hide private 
 Tim layer. A later Tim update is compared against both the prior provenance commit and our
 adjustment, and automation never overwrites local decisions.
 
+## Running open upstream candidates
+
+An upstream PR may be production-worthy before `pingdotgg/t3code` accepts it. Import it from
+`fork/candidates`, never from `main`, `fork/tim`, or `fork/changes`:
+
+```sh
+git fetch origin fork/candidates
+git fetch upstream refs/pull/<number>/head:refs/remotes/upstream/pr/<number>
+git switch -c import/upstream-pr-<number> origin/fork/candidates
+git cherry-pick --no-commit upstream/pr/<number>
+# retain only the reviewed source PR behavior, update .github/upstream-candidates.json,
+# test, commit once, push, and open against fork/candidates
+```
+
+Each candidate PR must become exactly one provenance commit and document the upstream PR URL,
+source SHA, imported behavior, local adaptations, and exclusions. The registry
+`.github/upstream-candidates.json` records the same source SHA and lifecycle state. Product-specific
+follow-ups belong in `fork/changes`, not in the candidate commit.
+
+Before updating the upstream mirror, inspect every active candidate:
+
+- unchanged and open: retain it;
+- updated upstream: review and replace its provenance commit through a new candidate PR;
+- merged with equivalent behavior: remove the candidate commit while rebasing the layer;
+- merged differently or closed: stop automatic synchronization and reconcile deliberately.
+
+After reconciliation, compare the old and rebuilt `fork/integration` trees. Removing an accepted
+candidate must not remove adaptations that belong to `fork/changes`.
+
 ## Upstreamable changes
 
 Every feature lands in `fork/changes`; upstreamability is a clean projection, not an alternative
@@ -173,8 +207,9 @@ implementation while `fork/changes` remains canonical. Select `main` in T3, or u
 ## Splitting the consolidated fork
 
 The registered chain is ordered from upstream toward deployment. Its final PR must always use
-`fork/changes`; earlier permanent layers describe provenance such as `fork/tim`. Add another layer
-only when it has durable ownership and update the manifest, PR bases, and documentation together.
+`fork/changes`; earlier permanent layers describe provenance such as `fork/tim` and
+`fork/candidates`. Add another layer only when it has durable ownership and update the manifest, PR
+bases, and documentation together.
 
 ## Provenance rebuild archive
 
@@ -185,4 +220,5 @@ The pre-provenance woven graph is preserved locally and remotely at:
 - matching annotated tags prefixed with `archive-`
 
 The clean rebuild preserves the exact archived `fork/changes` tree while replacing its ancestry
-with `main → fork/tim → fork/changes`. Never delete or force-update the archive refs.
+with `main → fork/tim → fork/candidates → fork/changes`. Never delete or force-update the archive
+refs.
