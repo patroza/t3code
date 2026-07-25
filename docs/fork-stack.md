@@ -78,11 +78,16 @@ pnpm fork:stack update
 
 1. fetch latest `origin/fork/changes`;
 2. **rebase** when the branch already descends from that tip but is behind;
-3. **replay** only the PR’s own commits when the branch was cut from the wrong parent (e.g. stale
-   local `main` / upstream mirror) so the PR does not carry hundreds of unrelated commits;
+3. when history diverged (normal after a stack rewrite of `fork/changes`): transplant only commits
+   that `git cherry` marks **unique by patch-id**, oldest-first — not the full GitHub PR commit
+   list. Large conflicting commits (&gt;30 files) are treated as rewritten-layer noise and skipped;
+   small conflicts still fail loudly;
 4. **retarget** the PR base to `fork/changes` if it still points at `main` or another wrong branch;
 5. **force-with-lease push** when `--push` is set;
 6. print `gh pr view` mergeability JSON.
+
+The stack cascade uses the same strategy: prefer `rebase --onto` when the previous
+`fork/changes` tip is still an ancestor, otherwise fall back to patch-id unique cherry-picks.
 
 Do not use GitHub “Update branch” merge commits for these feature PRs; prefer this rebase/replay
 path so history stays linear and reviewable.
