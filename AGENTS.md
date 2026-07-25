@@ -18,6 +18,12 @@ branches.
 - Start new work with `pnpm fork:stack start <branch>` and open the PR against `fork/changes`.
   Ordinary feature/import PRs are not added to `.github/pr-stack.json`; they enter the runnable fork
   only after being reviewed and merged into `fork/changes`.
+- **Never open implementation PRs against `main`.** `main` is the upstream mirror; GitHub will
+  report conflicts and a huge unrelated diff. Always base and retarget feature PRs on `fork/changes`.
+- Before handoff (and whenever a PR is CONFLICTING / behind), run
+  `pnpm fork:stack update --push` (or `pnpm fork:stack update --push <pr-number>`). That rebases or
+  replays the feature commits onto latest `origin/fork/changes`, retargets a wrong PR base, and
+  force-with-lease pushes so the PR stays mergeable.
 - Independent features use parallel PRs based on `fork/changes`. Chain PRs only when one change
   genuinely depends on another, and merge that chain bottom-up.
 - Treat external forks and open upstream PRs as selective import sources. Tim Smart imports land as
@@ -53,13 +59,21 @@ branches.
 
 When implementation work for a user request is done (code, docs, config — not pure Q&A):
 
-1. **Commit** the changes on a feature branch.
-2. **Open or update a PR** against the parent required by the private fork stack before handing off.
-   Use `main` only before cutover or when the work intentionally changes the upstream mirror.
-3. **Before pushing follow-ups or saying “updated the PR”**, verify PR state with `gh pr view` (or equivalent):
-   - If the PR is **open** → push to that branch and update the PR.
-   - If the PR is **merged** or **closed** → do **not** keep committing on that branch. `git fetch origin main`, create a **new branch from `origin/main`**, re-apply unmerged work, and open a **new PR**.
-4. Never assume an earlier PR in the session is still open.
+1. **Commit** the changes on a feature branch created with `pnpm fork:stack start <branch>` (from
+   `fork/changes`).
+2. **Open or update a PR against `fork/changes`** before handing off. Do not target `main` unless
+   the change is intentionally an upstream-mirror / promote projection.
+3. **Keep the PR mergeable** before saying “updated the PR” or finishing:
+   - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>`
+   - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
+   - `baseRefName` must be `fork/changes` and `mergeable` should be `MERGEABLE` (CI may still be
+     `UNSTABLE` while checks run).
+4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
+   - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push.
+   - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
+     `pnpm fork:stack start <new-branch>`, re-apply unmerged work, and open a **new PR** against
+     `fork/changes`.
+5. Never assume an earlier PR in the session is still open.
 
 ## Discord-originated pull requests
 
