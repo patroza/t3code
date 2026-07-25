@@ -1476,8 +1476,8 @@ export function buildThreadFeed(
     });
   }
 
-  const entries = expanded
-    .toSorted((left, right) =>
+  const entries = [...expanded]
+    .sort((left, right) =>
       compareSteerTimelineSortable(
         { id: left.id, sortAt: left.createdAt, sortRank: left.sortRank },
         { id: right.id, sortAt: right.createdAt, sortRank: right.sortRank },
