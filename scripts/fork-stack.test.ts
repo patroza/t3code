@@ -4,11 +4,14 @@ import { parseManifest, StackError, type StackManifest } from "./rebase-pr-stack
 import {
   featurePullRequestBaseBranch,
   planFeatureBranchUpdate,
+  planLocalSyncWithRemote,
   registerPullRequest,
   shouldRetargetPullRequestBase,
   stackParentBranch,
+  uniqueLocalCommitsFromCherry,
   unregisterTopPullRequest,
 } from "./fork-stack.ts";
+import { selectOpenFeaturePullRequests } from "./rebase-pr-stack.ts";
 
 const manifest: StackManifest = {
   upstreamRemote: "upstream",
@@ -72,6 +75,82 @@ describe("fork stack helpers", () => {
         pullRequestCommitOids: [],
       }),
     ).toThrow(/not based on fork\/changes/);
+  });
+
+  it("resets local to remote when git cherry has no unique patches", () => {
+    expect(
+      planLocalSyncWithRemote({
+        uniqueLocalCommitOids: [],
+        remoteTipExists: true,
+      }),
+    ).toEqual({ action: "reset-to-remote", uniqueLocalCommitOids: [] });
+  });
+
+  it("rebases unique local patches onto a force-pushed remote", () => {
+    expect(
+      planLocalSyncWithRemote({
+        uniqueLocalCommitOids: ["local-only"],
+        remoteTipExists: true,
+      }),
+    ).toEqual({
+      action: "rebase-onto-remote",
+      uniqueLocalCommitOids: ["local-only"],
+    });
+  });
+
+  it("parses git cherry output for unique local commits", () => {
+    expect(
+      uniqueLocalCommitsFromCherry(`+ abc123
+- def456
++ ghi789
+`),
+    ).toEqual(["abc123", "ghi789"]);
+  });
+
+  it("selects only open feature PRs targeting fork/changes", () => {
+    const withStack: StackManifest = {
+      ...manifest,
+      pullRequests: [
+        { number: 1, branch: "fork/tim" },
+        { number: 27, branch: "fork/candidates" },
+        { number: 2, branch: "fork/changes" },
+      ],
+    };
+    expect(
+      selectOpenFeaturePullRequests({
+        openPulls: [
+          {
+            number: 41,
+            headBranch: "draft/restore-external-session-import",
+            baseBranch: "fork/changes",
+            headRepository: "patroza/t3code",
+          },
+          {
+            number: 2,
+            headBranch: "fork/changes",
+            baseBranch: "fork/candidates",
+            headRepository: "patroza/t3code",
+          },
+          {
+            number: 10,
+            headBranch: "t3-discord/f7d37879-desktop-deeplinks",
+            baseBranch: "fork/changes",
+            headRepository: "patroza/t3code",
+          },
+          {
+            number: 99,
+            headBranch: "someone/else",
+            baseBranch: "fork/changes",
+            headRepository: "other/t3code",
+          },
+        ],
+        manifest: withStack,
+        expectedRepository: "patroza/t3code",
+      }),
+    ).toEqual([
+      { number: 41, branch: "draft/restore-external-session-import" },
+      { number: 10, branch: "t3-discord/f7d37879-desktop-deeplinks" },
+    ]);
   });
 
   it("registers the permanent fork changes PR first", () => {
