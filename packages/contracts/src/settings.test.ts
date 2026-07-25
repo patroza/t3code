@@ -110,7 +110,12 @@ describe("ClientSettings sidebar", () => {
     });
     expect(patch.sidebarV2Enabled).toBe(false);
     expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+  });
+
+  it("allows the recent work queue to be disabled", () => {
+    expect(
       decodeClientSettings({ sidebarRecentThreadsEnabled: false }).sidebarRecentThreadsEnabled,
+    ).toBe(false);
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {
