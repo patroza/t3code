@@ -765,10 +765,16 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const resolved = deriveWorkLogEntries(activities).find(
-      (entry) => entry.id === "input-resolved",
+      (entry) => entry.id === "input-requested",
     );
-    expect(resolved?.detail).toBe("Make it sleep");
-    expect(resolved?.userInputTranscript).toBe("What is the goal?\nMake it sleep");
+    expect(resolved?.userInput).toMatchObject({
+      answered: true,
+      questions: [
+        {
+          customAnswer: "Make it sleep",
+        },
+      ],
+    });
   });
 
   it("omits tool started entries and keeps completed entries", () => {
