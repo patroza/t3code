@@ -151,6 +151,10 @@ export interface T3SessionService {
     readonly threadId: ThreadId;
     readonly messageId: MessageId;
   }) => Effect.Effect<void, T3SessionError>;
+  readonly removeQueuedMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<void, T3SessionError>;
   /**
    * Subscribe to thread events until disconnect/interrupt.
    * Runs `onThread` in the caller fiber context (must not be forked onto a bare T3 runtime).
@@ -768,6 +772,14 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       steerQueuedMessage: (input) =>
         dispatch({
           type: "thread.queue.steer",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          messageId: input.messageId,
+          createdAt: nowIso(),
+        }),
+      removeQueuedMessage: (input) =>
+        dispatch({
+          type: "thread.queue.remove",
           commandId: newCommandId(),
           threadId: input.threadId,
           messageId: input.messageId,

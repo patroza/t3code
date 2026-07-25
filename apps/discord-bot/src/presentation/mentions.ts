@@ -13,23 +13,22 @@ export interface ParsedMentionFlags {
   readonly plan: boolean;
   /**
    * Explicit mid-turn delivery override. When omitted, busy-thread follow-ups
-   * **steer** into the active turn (Discord default). `--queue` parks the
-   * message server-side until the turn finishes; `--steer` forces immediate
-   * injection.
+   * **queue** server-side (platform default) and are badged with 📥.
+   * `--steer` injects into the active turn immediately; `--queue` forces park.
    */
   readonly followUpDelivery?: DiscordFollowUpDelivery;
   readonly prompt: string;
 }
 
 /**
- * Resolve mid-turn delivery. Discord keeps historical steer-by-default
- * behavior; flags force either path. Idle threads ignore this (startTurn
+ * Resolve mid-turn delivery. Default is **queue** (server-aligned); `--steer`
+ * / `/omegent steer` force injection. Idle threads ignore this (startTurn
  * opens a normal turn).
  */
 export function resolveDiscordFollowUpDelivery(
   flags: Pick<ParsedMentionFlags, "followUpDelivery">,
 ): DiscordFollowUpDelivery {
-  return flags.followUpDelivery ?? "steer";
+  return flags.followUpDelivery ?? "queue";
 }
 
 export type ParsedMentionIntent =

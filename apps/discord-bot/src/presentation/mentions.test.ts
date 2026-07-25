@@ -133,8 +133,8 @@ describe("parseMentionFlags", () => {
 });
 
 describe("resolveDiscordFollowUpDelivery", () => {
-  it("defaults mid-turn Discord delivery to steer", () => {
-    expect(resolveDiscordFollowUpDelivery({})).toBe("steer");
+  it("defaults mid-turn Discord delivery to queue", () => {
+    expect(resolveDiscordFollowUpDelivery({})).toBe("queue");
     expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "steer" })).toBe("steer");
     expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "queue" })).toBe("queue");
   });

@@ -79,6 +79,10 @@ import { T3Session, T3SessionError } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
+import {
+  createDiscordQueuedPromptRegistry,
+  QUEUED_PROMPT_REACTION_EMOJI,
+} from "./DiscordQueuedPromptRegistry.ts";
 import { BridgeHub } from "./BridgeHub.ts";
 import { bridgeThreadToDiscord, getLiveDiscordBridge } from "./ResponseBridge.ts";
 import { upsertThreadInfoPin } from "./ThreadInfoPin.ts";
@@ -458,6 +462,44 @@ const make = (botConfig: DiscordBotConfig) =>
     const registry = yield* InteractionsRegistry;
     const bridgeHub = yield* BridgeHub;
     const turnCoordinator = yield* makeDiscordThreadTurnCoordinator;
+    const queuedPrompts = createDiscordQueuedPromptRegistry();
+
+    const markDiscordPromptQueued = (input: {
+      readonly discordChannelId: string;
+      readonly discordMessageId: string;
+      readonly t3ThreadId: ThreadId;
+      readonly t3MessageId: MessageId;
+      readonly authorUserId: string | null;
+    }) =>
+      Effect.gen(function* () {
+        queuedPrompts.remember(input);
+        yield* rest
+          .addMyMessageReaction(
+            input.discordChannelId,
+            input.discordMessageId,
+            QUEUED_PROMPT_REACTION_EMOJI,
+          )
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to add queued badge reaction", {
+                discordMessageId: input.discordMessageId,
+                error: String(error),
+              }),
+            ),
+          );
+      });
+
+    const clearQueuedBadge = (entry: {
+      readonly discordChannelId: string;
+      readonly discordMessageId: string;
+    }) =>
+      rest
+        .deleteMyMessageReaction(
+          entry.discordChannelId,
+          entry.discordMessageId,
+          QUEUED_PROMPT_REACTION_EMOJI,
+        )
+        .pipe(Effect.catch(() => Effect.void));
 
     // Mentions use the bot *user* id, not the application id.
     const me = yield* rest.getMyUser();
@@ -893,16 +935,16 @@ const make = (botConfig: DiscordBotConfig) =>
                 }),
               ),
             );
-          // Server queues busy-thread follow-ups by default. Discord keeps the
-          // historical mid-turn **steer** default: after startTurn parks the
-          // message, immediately inject it via thread.queue.steer unless the
-          // user opted into --queue.
+          // Server parks busy-thread follow-ups. Default Discord policy is **queue**
+          // (badge with 📥; delete user message to remove; /omegent steernow to flush).
+          // `--steer` / `/omegent steer` inject immediately after startTurn.
           const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags);
+          const t3MessageId = MessageId.make(startedTurn.messageId);
           if (followUpDelivery === "steer" && turnAlreadyRunning) {
             yield* t3
               .steerQueuedMessage({
                 threadId: existing.t3ThreadId,
-                messageId: MessageId.make(startedTurn.messageId),
+                messageId: t3MessageId,
               })
               .pipe(
                 Effect.tap(() =>
@@ -922,6 +964,22 @@ const make = (botConfig: DiscordBotConfig) =>
                   ),
                 ),
               );
+          } else if (followUpDelivery === "queue" && turnAlreadyRunning) {
+            const discordMessageId =
+              typeof input.mentionMessage?.id === "string" ? input.mentionMessage.id : null;
+            if (discordMessageId !== null) {
+              const authorUserId =
+                typeof input.mentionMessage?.author?.id === "string"
+                  ? input.mentionMessage.author.id
+                  : null;
+              yield* markDiscordPromptQueued({
+                discordChannelId: input.discordThreadId,
+                discordMessageId,
+                t3ThreadId: existing.t3ThreadId,
+                t3MessageId,
+                authorUserId,
+              });
+            }
           }
           yield* Effect.logInfo("startTurn dispatched", {
             t3ThreadId: existing.t3ThreadId,
@@ -1977,7 +2035,7 @@ const make = (botConfig: DiscordBotConfig) =>
             content:
               content.length === 0
                 ? "I saw your mention but message content is empty. Enable **Message Content Intent** for this bot in the Discord Developer Portal, then restart me."
-                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` `--provider` `--base` `--local` `--plan` `--steer` `--queue`. Mid-turn follow-ups steer by default; use `--queue` to park until the turn finishes.",
+                : "Send a prompt after mentioning me (or attach a file). Optional flags: `--model` `--provider` `--base` `--local` `--plan` `--steer` `--queue`. Mid-turn follow-ups **queue** by default (📥); delete your message to cancel, or `/omegent steernow` to inject the queue. Use `--steer` to inject immediately.",
             message_reference: { message_id: event.id },
           });
           return;
@@ -2287,6 +2345,41 @@ const make = (botConfig: DiscordBotConfig) =>
     const handleMessageUpdates = gateway.handleDispatch("MESSAGE_UPDATE", (event) =>
       handleInboundMessage(event as GatewayMessageEvent, "update"),
     );
+    // User deletes their parked prompt → drop it from the server queue (and badge).
+    const handleMessageDeletes = gateway.handleDispatch("MESSAGE_DELETE", (event) =>
+      Effect.gen(function* () {
+        const messageId =
+          typeof event === "object" &&
+          event !== null &&
+          "id" in event &&
+          typeof (event as { id?: unknown }).id === "string"
+            ? (event as { id: string }).id
+            : null;
+        if (messageId === null) return;
+        const pending = queuedPrompts.forgetDiscordMessage(messageId);
+        if (pending === null) return;
+        yield* Effect.logInfo("Discord user deleted queued prompt; removing from server queue", {
+          discordMessageId: messageId,
+          t3ThreadId: pending.t3ThreadId,
+          t3MessageId: pending.t3MessageId,
+        });
+        yield* t3
+          .removeQueuedMessage({
+            threadId: pending.t3ThreadId,
+            messageId: pending.t3MessageId,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Failed to remove queued prompt after Discord delete", {
+                t3ThreadId: pending.t3ThreadId,
+                t3MessageId: pending.t3MessageId,
+                error: String(error),
+              }),
+            ),
+          );
+        // Message is gone — reaction cleanup is unnecessary.
+      }).pipe(Effect.catchCause(Effect.logError)),
+    );
 
     const approvalButton = Ix.messageComponent(
       Ix.idStartsWith("t3_approve:"),
@@ -2552,8 +2645,8 @@ const make = (botConfig: DiscordBotConfig) =>
             };
           };
 
-          return ix.subCommands({
-            ask: Effect.gen(function* () {
+          const promptSlashHandler = (forcedDelivery?: "steer" | "queue") =>
+            Effect.gen(function* () {
               const interaction = yield* Ix.Interaction;
               const channelId = interaction.channel_id;
               if (channelId === undefined || channelId.length === 0) {
@@ -2574,13 +2667,14 @@ const make = (botConfig: DiscordBotConfig) =>
               const plan = optionBoolean("plan");
               const steer = optionBoolean("steer");
               const queue = optionBoolean("queue");
-              // Slash booleans: when both true, queue wins (explicit opt-out of default steer).
+              // Subcommand force wins; otherwise ask booleans (queue wins if both true).
               const followUpDelivery =
-                queue === true
+                forcedDelivery ??
+                (queue === true
                   ? ("queue" as const)
                   : steer === true
                     ? ("steer" as const)
-                    : undefined;
+                    : undefined);
               const flags = {
                 ...(model.length > 0 ? { model } : {}),
                 ...(provider.length > 0 ? { provider } : {}),
@@ -2710,6 +2804,83 @@ const make = (botConfig: DiscordBotConfig) =>
                     {
                       ephemeral: true,
                     },
+                  ),
+                ),
+              ),
+            );
+
+          return ix.subCommands({
+            ask: promptSlashHandler(),
+            steer: promptSlashHandler("steer"),
+            queue: promptSlashHandler("queue"),
+
+            steernow: Effect.gen(function* () {
+              const interaction = yield* Ix.Interaction;
+              const channelId = interaction.channel_id;
+              if (channelId === undefined || channelId.length === 0) {
+                return slashReply("steernow only works inside a linked Discord thread.", {
+                  ephemeral: true,
+                });
+              }
+              const channel = yield* rest.getChannel(channelId);
+              if (!isThreadChannel(channel.type)) {
+                return slashReply("steernow only works inside a linked Discord thread.", {
+                  ephemeral: true,
+                });
+              }
+              const link = yield* links.getByDiscordThreadId(channelId);
+              if (link === null) {
+                return slashReply("This thread is not linked to an Omegent session.", {
+                  ephemeral: true,
+                });
+              }
+
+              const detail = yield* t3.fetchThreadDetail(link.t3ThreadId);
+              const queued = detail?.thread.queuedMessages ?? [];
+              if (queued.length === 0) {
+                return slashReply("Nothing is queued on this thread.", { ephemeral: true });
+              }
+
+              let steered = 0;
+              const failures: string[] = [];
+              for (const message of queued) {
+                const result = yield* t3
+                  .steerQueuedMessage({
+                    threadId: link.t3ThreadId,
+                    messageId: message.messageId,
+                  })
+                  .pipe(Effect.result);
+                if (Result.isSuccess(result)) {
+                  steered += 1;
+                  const pending = queuedPrompts.forgetT3Message(link.t3ThreadId, message.messageId);
+                  if (pending !== null) {
+                    yield* clearQueuedBadge(pending);
+                  }
+                } else {
+                  failures.push(String(message.messageId));
+                  yield* Effect.logWarning("steernow failed for queued message", {
+                    t3ThreadId: link.t3ThreadId,
+                    messageId: message.messageId,
+                    error: String(result.failure),
+                  });
+                }
+              }
+
+              if (steered === 0) {
+                return slashReply(
+                  `Could not steer the queue (${failures.length} failed). Try again when the turn is running.`,
+                  { ephemeral: true },
+                );
+              }
+              const failNote =
+                failures.length > 0 ? ` (${failures.length} could not be steered yet)` : "";
+              return slashReply(`Steered ${steered} queued message(s)${failNote}.`);
+            }).pipe(
+              Effect.catch((error: unknown) =>
+                Effect.succeed(
+                  slashReply(
+                    `steernow failed: ${error instanceof Error ? error.message : String(error)}`,
+                    { ephemeral: true },
                   ),
                 ),
               ),
@@ -3084,6 +3255,7 @@ const make = (botConfig: DiscordBotConfig) =>
     );
     yield* Effect.forkScoped(handleMessages);
     yield* Effect.forkScoped(handleMessageUpdates);
+    yield* Effect.forkScoped(handleMessageDeletes);
     yield* Effect.logInfo("Discord mention router ready");
     return DiscordBotRunning.of({ botUserId });
   });

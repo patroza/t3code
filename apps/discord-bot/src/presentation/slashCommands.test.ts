@@ -18,7 +18,17 @@ describe("Omegent slash command definition", () => {
     expect(OMEGENT_SLASH_COMMAND_ALIAS).toBe("agent");
     expect(OMEGENT_SLASH_COMMAND.name).toBe("omegent");
     const names = OMEGENT_SLASH_COMMAND.options.map((option) => option.name);
-    expect(names).toEqual(["ask", "help", "stop", "thread-talk", "link", "refresh-indicators"]);
+    expect(names).toEqual([
+      "ask",
+      "steer",
+      "queue",
+      "steernow",
+      "help",
+      "stop",
+      "thread-talk",
+      "link",
+      "refresh-indicators",
+    ]);
   });
 
   it("uses Discord subcommand option types", () => {
