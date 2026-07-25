@@ -249,7 +249,7 @@ describe("thread outbox", () => {
 
   it("surfaces enqueue in memory before the durable write resolves", async () => {
     const registry = AtomRegistry.make();
-    let releaseWrite: (() => void) | null = null;
+    let releaseWrite!: () => void;
     const writeGate = new Promise<void>((resolve) => {
       releaseWrite = resolve;
     });
@@ -271,7 +271,7 @@ describe("thread outbox", () => {
       "environment-1:thread-1": [message],
     });
 
-    releaseWrite?.();
+    releaseWrite();
     await enqueuePromise;
     registry.dispose();
   });
