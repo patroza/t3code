@@ -11,7 +11,6 @@ import { authCommand } from "./cli/auth.ts";
 import { backfillGrokCommand } from "./cli/backfillGrok.ts";
 import { connectCommand } from "./cli/connect.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
-import { importSessionsCommand } from "./cli/importSessions.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
@@ -52,7 +51,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       serveCommand,
       authCommand,
       projectCommand,
-      importSessionsCommand,
       backfillGrokCommand,
       serviceCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,
