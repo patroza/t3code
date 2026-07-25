@@ -15,6 +15,11 @@ branches.
   contains selected open upstream PRs that we run before upstream accepts them, one provenance
   commit per source PR. The permanent `fork/changes` PR is based on `fork/candidates`, contains only
   our private layer, remains open, and is the GitHub/T3 default branch.
+- Long-lived upstreamable features may be registered as `integrationOverlays`. They remain parallel
+  draft PRs based on `fork/changes`; `fork/integration` composes them in manifest order. Never merge
+  a registered overlay directly. Update its branch, or use
+  `pnpm fork:stack overlay-start <pr> <branch>` and target the child PR at the overlay branch.
+  Draft state blocks merging while normal green CI remains meaningful.
 - Start new work with `pnpm fork:stack start <branch>` and open the PR against `fork/changes`.
   Ordinary feature/import PRs are not added to `.github/pr-stack.json`; they enter the runnable fork
   only after being reviewed and merged into `fork/changes`.
