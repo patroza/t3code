@@ -146,6 +146,10 @@ class GitCommandError extends StackError {
   }
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "");
+}
+
 function run(
   executable: string,
   args: ReadonlyArray<string>,
@@ -159,18 +163,17 @@ function run(
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
-    // Agent hosts often set FORCE_COLOR; that breaks `gh --json` parseability.
-    NO_COLOR: "1",
-    CLICOLOR: "0",
+    // Keep FORCE_COLOR as-is when set; force "0" breaks some t3 gh-wrapper list queries.
+    // Strip ANSI from stdout/stderr so callers can parse `gh --json`.
     ...options.env,
   };
-  delete baseEnv.FORCE_COLOR;
-  delete baseEnv.CLICOLOR_FORCE;
   const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd: options.cwd,
     encoding: "utf8",
     env: baseEnv,
   });
+  if (result.stdout) result.stdout = stripAnsi(result.stdout);
+  if (result.stderr) result.stderr = stripAnsi(result.stderr);
   if (result.error) {
     throw new StackError(`Unable to run ${executable}: ${result.error.message}`, {
       stateDir: options.stateDir,
@@ -838,6 +841,231 @@ async function finishRun(
   return result;
 }
 
+/**
+ * Open PRs that should ride along when `fork/changes` is rewritten.
+ * Excludes stack provenance branches (tim/candidates/changes) and other-repo heads.
+ */
+export function selectOpenFeaturePullRequests(input: {
+  readonly openPulls: ReadonlyArray<{
+    readonly number: number;
+    readonly headBranch: string;
+    readonly baseBranch: string;
+    readonly headRepository?: string | null;
+    readonly draft?: boolean;
+  }>;
+  readonly manifest: StackManifest;
+  readonly expectedRepository: string;
+}): ReadonlyArray<{ readonly number: number; readonly branch: string }> {
+  const stackBranches = new Set([
+    input.manifest.upstreamBranch,
+    input.manifest.integrationBranch,
+    ...input.manifest.pullRequests.map(({ branch }) => branch),
+  ]);
+  return input.openPulls
+    .filter((pull) => {
+      if (pull.baseBranch !== input.manifest.forkChangesBranch) return false;
+      if (stackBranches.has(pull.headBranch)) return false;
+      if (
+        pull.headRepository !== undefined &&
+        pull.headRepository !== null &&
+        pull.headRepository !== input.expectedRepository
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .map((pull) => ({ number: pull.number, branch: pull.headBranch }));
+}
+
+export interface FeaturePullRequestRebaseResult {
+  readonly updated: ReadonlyArray<{ readonly number: number; readonly branch: string }>;
+  readonly conflicts: ReadonlyArray<{
+    readonly number: number;
+    readonly branch: string;
+    readonly message: string;
+  }>;
+  readonly skipped: ReadonlyArray<{
+    readonly number: number;
+    readonly branch: string;
+    readonly reason: string;
+  }>;
+}
+
+/**
+ * After `fork/changes` is rewritten, rebase every open feature PR that targets it.
+ * Uses `git rebase --onto newBase oldBase` and force-with-lease pushes.
+ * Conflicts are recorded and skipped so the stack sync itself still succeeds.
+ */
+export async function rebaseOpenFeaturePullRequests(options: {
+  readonly sourceRoot?: string;
+  readonly manifest?: StackManifest;
+  readonly push: boolean;
+  readonly oldForkChangesTip: string;
+  readonly newForkChangesTip: string;
+  readonly openPulls?: ReadonlyArray<{
+    readonly number: number;
+    readonly headBranch: string;
+    readonly baseBranch: string;
+    readonly headRepository?: string | null;
+  }>;
+}): Promise<FeaturePullRequestRebaseResult> {
+  const sourceRoot = NodePath.resolve(options.sourceRoot ?? process.cwd());
+  const manifest = options.manifest ?? readManifest(sourceRoot);
+  if (options.oldForkChangesTip === options.newForkChangesTip) {
+    return { updated: [], conflicts: [], skipped: [] };
+  }
+
+  const openPulls =
+    options.openPulls ??
+    (await fetchPullRequestSnapshots(manifest)).map((snapshot) => ({
+      number: snapshot.number,
+      headBranch: snapshot.headBranch,
+      baseBranch: snapshot.baseBranch,
+      headRepository: snapshot.headOwner.includes("/")
+        ? snapshot.headOwner
+        : `${snapshot.headOwner}/${EXPECTED_REPOSITORY.split("/")[1] ?? "t3code"}`,
+    }));
+
+  const features = selectOpenFeaturePullRequests({
+    openPulls,
+    manifest,
+    expectedRepository: EXPECTED_REPOSITORY,
+  });
+
+  const updated: Array<{ number: number; branch: string }> = [];
+  const conflicts: Array<{ number: number; branch: string; message: string }> = [];
+  const skipped: Array<{ number: number; branch: string; reason: string }> = [];
+
+  if (features.length === 0) {
+    return { updated, conflicts, skipped };
+  }
+
+  const workDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "rebase-feature-prs-"));
+  const repoDir = NodePath.join(workDir, "repo");
+  NodeFS.mkdirSync(repoDir, { recursive: true });
+  const originUrl = resolveRemoteUrl(sourceRoot, "origin");
+  git(repoDir, ["init", "--quiet"]);
+  git(repoDir, ["config", "user.name", "T3 Code PR Stack"]);
+  git(repoDir, ["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"]);
+  git(repoDir, ["config", "commit.gpgsign", "false"]);
+  git(repoDir, ["remote", "add", "origin", originUrl]);
+
+  const branchesToFetch = [manifest.forkChangesBranch, ...features.map(({ branch }) => branch)];
+  git(repoDir, [
+    "fetch",
+    "--quiet",
+    "--no-tags",
+    "origin",
+    ...branchesToFetch.map((branch) => `+refs/heads/${branch}:refs/remotes/origin/${branch}`),
+  ]);
+
+  // Prefer the post-sync origin tip; fall back to the in-memory rewritten tip if present.
+  const fetchedForkTip = git(repoDir, [
+    "rev-parse",
+    `refs/remotes/origin/${manifest.forkChangesBranch}`,
+  ]);
+  const newBase =
+    fetchedForkTip === options.newForkChangesTip ||
+    run("git", ["cat-file", "-e", `${options.newForkChangesTip}^{commit}`], {
+      cwd: repoDir,
+      allowFailure: true,
+    }).status !== 0
+      ? fetchedForkTip
+      : options.newForkChangesTip;
+
+  for (const feature of features) {
+    const remoteTip = git(repoDir, ["rev-parse", `refs/remotes/origin/${feature.branch}`], {
+      allowFailure: true,
+    });
+    if (!remoteTip) {
+      skipped.push({
+        number: feature.number,
+        branch: feature.branch,
+        reason: "missing remote branch",
+      });
+      continue;
+    }
+
+    // Skip if feature does not contain old base (already rebased, or never based on it).
+    const hasOldBase = run(
+      "git",
+      ["merge-base", "--is-ancestor", options.oldForkChangesTip, remoteTip],
+      { cwd: repoDir, allowFailure: true },
+    );
+    if (hasOldBase.status !== 0) {
+      const hasNewBase = run("git", ["merge-base", "--is-ancestor", newBase, remoteTip], {
+        cwd: repoDir,
+        allowFailure: true,
+      });
+      skipped.push({
+        number: feature.number,
+        branch: feature.branch,
+        reason:
+          hasNewBase.status === 0
+            ? "already based on new fork/changes"
+            : "does not contain previous fork/changes tip; needs manual replay",
+      });
+      continue;
+    }
+
+    git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
+    const rebaseResult = run(
+      "git",
+      ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, options.oldForkChangesTip],
+      {
+        cwd: repoDir,
+        allowFailure: true,
+        env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+      },
+    );
+    if (rebaseResult.status !== 0) {
+      if (rebaseInProgress(repoDir)) {
+        run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
+      }
+      const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
+        allowFailure: true,
+      });
+      conflicts.push({
+        number: feature.number,
+        branch: feature.branch,
+        message: conflictPaths
+          ? `conflict: ${conflictPaths.split("\n").join(", ")}`
+          : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase failed"),
+      });
+      continue;
+    }
+
+    const newTip = git(repoDir, ["rev-parse", "HEAD"]);
+    if (newTip === remoteTip) {
+      skipped.push({
+        number: feature.number,
+        branch: feature.branch,
+        reason: "rebase produced identical tip",
+      });
+      continue;
+    }
+
+    if (options.push) {
+      git(repoDir, [
+        "push",
+        `--force-with-lease=refs/heads/${feature.branch}:${remoteTip}`,
+        "origin",
+        `${newTip}:refs/heads/${feature.branch}`,
+      ]);
+    }
+    updated.push({ number: feature.number, branch: feature.branch });
+  }
+
+  // Best-effort cleanup
+  try {
+    NodeFS.rmSync(workDir, { recursive: true, force: true });
+  } catch {
+    // ignore
+  }
+
+  return { updated, conflicts, skipped };
+}
+
 export async function syncStack(options: StackRunOptions): Promise<StackRunResult> {
   const sourceRoot = NodePath.resolve(options.sourceRoot ?? process.cwd());
   const manifest = readManifest(sourceRoot, options.manifestPath);
@@ -850,7 +1078,73 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
     options.initialBaseForAll === true,
   );
   const completed = continueOperations(stateDir, state);
-  return finishRun(stateDir, completed, options);
+  const result = await finishRun(stateDir, completed, options);
+
+  // When fork/changes moves, automatically rebase open feature PRs onto the new tip.
+  // Skipped in unit tests / environments without GitHub credentials.
+  if (options.push && (process.env.GH_TOKEN || process.env.GITHUB_TOKEN)) {
+    const oldTip = result.snapshots[manifest.forkChangesBranch];
+    const newTip = result.newTips[manifest.forkChangesBranch];
+    if (oldTip && newTip && oldTip !== newTip) {
+      try {
+        const featureResult = await rebaseOpenFeaturePullRequests({
+          sourceRoot,
+          manifest,
+          push: true,
+          oldForkChangesTip: oldTip,
+          newForkChangesTip: newTip,
+        });
+        appendFeatureRebaseSummary(featureResult);
+        console.log(
+          `Feature PRs: updated=${featureResult.updated.length} conflicts=${featureResult.conflicts.length} skipped=${featureResult.skipped.length}`,
+        );
+      } catch (error) {
+        console.error(
+          `Feature PR auto-rebase failed (stack sync already pushed): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  }
+
+  return result;
+}
+
+function appendFeatureRebaseSummary(result: FeaturePullRequestRebaseResult): void {
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+  const lines = [
+    "## Open feature PR rebases",
+    "",
+    `- Updated: ${result.updated.length}`,
+    `- Conflicts: ${result.conflicts.length}`,
+    `- Skipped: ${result.skipped.length}`,
+    "",
+  ];
+  if (result.updated.length > 0) {
+    lines.push("### Updated", ...result.updated.map((p) => `- #${p.number} (\`${p.branch}\`)`), "");
+  }
+  if (result.conflicts.length > 0) {
+    lines.push(
+      "### Conflicts (manual fix needed)",
+      ...result.conflicts.map((p) => `- #${p.number} (\`${p.branch}\`): ${p.message}`),
+      "",
+      "Fix with:",
+      "```sh",
+      "pnpm fork:stack update --push <pr-number>",
+      "```",
+      "",
+    );
+  }
+  if (result.skipped.length > 0) {
+    lines.push(
+      "### Skipped",
+      ...result.skipped.map((p) => `- #${p.number} (\`${p.branch}\`): ${p.reason}`),
+      "",
+    );
+  }
+  NodeFS.appendFileSync(summaryPath, `${lines.join("\n")}\n`, "utf8");
 }
 
 export async function resumeStack(

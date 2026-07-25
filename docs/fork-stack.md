@@ -87,6 +87,23 @@ pnpm fork:stack update
 Do not use GitHub “Update branch” merge commits for these feature PRs; prefer this rebase/replay
 path so history stays linear and reviewable.
 
+When the stack workflow rewrites `fork/changes`, it also force-with-lease rebases every open feature
+PR that targets `fork/changes` (conflicts are reported in the job summary and skipped). After that
+remote rewrite, update your local checkouts with:
+
+```sh
+# On the feature branch (or fork/changes / any tracking branch)
+pnpm fork:stack pull
+```
+
+`pull` fetches the remote tip and uses `git cherry` patch-ids:
+
+- if every local commit is patch-equivalent to something already on the remote → **hard reset** to
+  remote (safe when the only difference is a rewritten history you already pushed);
+- if you have unique unpushed patches → **rebase** those onto the remote tip.
+
+Require a clean working tree. This is the low-pain path after automation rebases open PRs.
+
 After review, merge the PR into `fork/changes`. That push automatically runs the stack synchronizer:
 
 ```sh
