@@ -24,6 +24,9 @@ branches.
   `pnpm fork:stack update --push` (or `pnpm fork:stack update --push <pr-number>`). That rebases or
   replays the feature commits onto latest `origin/fork/changes`, retargets a wrong PR base, and
   force-with-lease pushes so the PR stays mergeable.
+- After automation rebases your branch (or `fork/changes`), refresh a local checkout with
+  `pnpm fork:stack pull`. It hard-resets to remote when local commits are patch-equivalent, and only
+  rebases when you have unique unpushed work.
 - Independent features use parallel PRs based on `fork/changes`. Chain PRs only when one change
   genuinely depends on another, and merge that chain bottom-up.
 - Treat external forks and open upstream PRs as selective import sources. Tim Smart imports land as
@@ -48,7 +51,8 @@ branches.
   disabled at repository level so mirror updates do not run redundant CI or attempt upstream relay
   deployment. Do not re-enable or target those workflows for fork releases.
 - Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
-  the provenance layers, rebuilds `fork/integration`, and dispatches CI for its exact SHA.
+  the provenance layers, rebuilds `fork/integration`, force-with-lease rebases open feature PRs that
+  target `fork/changes`, and dispatches CI for the exact integration SHA.
 - Successful `fork/integration` CI classifies the complete tree diff from the previous approved
   integration tree. Runtime-affecting changes hand the exact tested SHA to the private operations
   repository; tests, documentation, agent metadata, and GitHub-only metadata do not deploy.
