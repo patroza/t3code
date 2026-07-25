@@ -156,14 +156,20 @@ function run(
     readonly stateDir?: string;
   },
 ): NodeChildProcess.SpawnSyncReturns<string> {
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    // Agent hosts often set FORCE_COLOR; that breaks `gh --json` parseability.
+    NO_COLOR: "1",
+    CLICOLOR: "0",
+    ...options.env,
+  };
+  delete baseEnv.FORCE_COLOR;
+  delete baseEnv.CLICOLOR_FORCE;
   const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd: options.cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_TERMINAL_PROMPT: "0",
-      ...options.env,
-    },
+    env: baseEnv,
   });
   if (result.error) {
     throw new StackError(`Unable to run ${executable}: ${result.error.message}`, {

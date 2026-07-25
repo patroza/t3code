@@ -53,10 +53,39 @@ The helper starts an independent branch from `fork/changes`:
 pnpm fork:stack start feature/my-change
 ```
 
-Commit and push normally, then open the PR against `fork/changes`. Updating that branch updates the
-same PR and reruns PR CI. Ordinary feature and import PRs are deliberately not registered in the
-stack manifest, so multiple independent PRs may be open concurrently without editing central
-metadata.
+Commit and push normally, then open the PR against `fork/changes` (never against `main`). Updating
+that branch updates the same PR and reruns PR CI. Ordinary feature and import PRs are deliberately
+not registered in the stack manifest, so multiple independent PRs may be open concurrently without
+editing central metadata.
+
+### Keeping feature PRs up to date
+
+Feature branches drift when `fork/changes` moves (upstream mirror sync or merged siblings). Agents
+must leave PRs mergeable at handoff:
+
+```sh
+# Current branch + its open PR
+pnpm fork:stack update --push
+
+# Explicit PR (checks out the head branch, updates, pushes)
+pnpm fork:stack update --push 48
+
+# Plan only (no push)
+pnpm fork:stack update
+```
+
+`update` will:
+
+1. fetch latest `origin/fork/changes`;
+2. **rebase** when the branch already descends from that tip but is behind;
+3. **replay** only the PR’s own commits when the branch was cut from the wrong parent (e.g. stale
+   local `main` / upstream mirror) so the PR does not carry hundreds of unrelated commits;
+4. **retarget** the PR base to `fork/changes` if it still points at `main` or another wrong branch;
+5. **force-with-lease push** when `--push` is set;
+6. print `gh pr view` mergeability JSON.
+
+Do not use GitHub “Update branch” merge commits for these feature PRs; prefer this rebase/replay
+path so history stays linear and reviewable.
 
 After review, merge the PR into `fork/changes`. That push automatically runs the stack synchronizer:
 
@@ -101,7 +130,8 @@ model is active.
 ### Multiple features
 
 Independent changes use parallel branches and PRs, all based on `fork/changes`. They can be reviewed
-and merged in any order; rebase a remaining branch if an earlier merge overlaps it.
+and merged in any order; run `pnpm fork:stack update --push` on a remaining branch if an earlier
+merge overlaps it or the PR becomes CONFLICTING.
 
 Related changes may use one cohesive PR. If separate review is valuable, chain only those PRs by
 basing the dependent PR on the preceding feature branch. Merge the chain from bottom to top into
