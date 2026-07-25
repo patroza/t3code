@@ -13,6 +13,52 @@ const EXPECTED_REPOSITORY = process.env.T3CODE_FORK_REPOSITORY ?? "patroza/t3cod
 const STATE_FILE = "rebase-pr-stack-state.json";
 const ZERO_SHA = "0000000000000000000000000000000000000000";
 
+/**
+ * Git ref (blob) listing historical `fork/changes` tips, newest first.
+ * Written by the stack cascade so feature PRs can recover the exact base they
+ * were built on after rewrites (`oldBase..head` is the PR's own commits).
+ */
+export const FORK_CHANGES_BASE_HISTORY_REF = "refs/t3/stack/base-history/fork-changes";
+export const FORK_CHANGES_BASE_HISTORY_MAX = 100 as const;
+
+export function parseBaseHistory(text: string): ReadonlyArray<string> {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^[0-9a-f]{7,40}$/i.test(line));
+}
+
+export function appendBaseHistory(
+  existingNewestFirst: ReadonlyArray<string>,
+  tipsNewestFirst: ReadonlyArray<string>,
+  max: number = FORK_CHANGES_BASE_HISTORY_MAX,
+): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tip of [...tipsNewestFirst, ...existingNewestFirst]) {
+    const key = tip.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tip);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/**
+ * Newest known historical base tip that is still an ancestor of `head`.
+ * Feature commits are exactly `recoveredBase..head`.
+ */
+export function recoverOldBaseTip(input: {
+  readonly historicalBaseTipsNewestFirst: ReadonlyArray<string>;
+  readonly isAncestorOfHead: (tip: string) => boolean;
+}): string | null {
+  for (const tip of input.historicalBaseTipsNewestFirst) {
+    if (input.isAncestorOfHead(tip)) return tip;
+  }
+  return null;
+}
+
 export interface StackPullRequest {
   readonly number: number;
   readonly branch: string;
@@ -958,6 +1004,21 @@ export async function rebaseOpenFeaturePullRequests(options: {
     "origin",
     ...branchesToFetch.map((branch) => `+refs/heads/${branch}:refs/remotes/origin/${branch}`),
   ]);
+  // Historical fork/changes tips for multi-generation recovery.
+  run(
+    "git",
+    [
+      "fetch",
+      "--quiet",
+      "origin",
+      `${FORK_CHANGES_BASE_HISTORY_REF}:${FORK_CHANGES_BASE_HISTORY_REF}`,
+    ],
+    { cwd: repoDir, allowFailure: true },
+  );
+  const historyBlob = git(repoDir, ["show", FORK_CHANGES_BASE_HISTORY_REF], {
+    allowFailure: true,
+  });
+  const baseHistoryTips = historyBlob ? parseBaseHistory(historyBlob) : [];
 
   // Prefer the post-sync origin tip; fall back to the in-memory rewritten tip if present.
   const fetchedForkTip = git(repoDir, [
@@ -999,128 +1060,60 @@ export async function rebaseOpenFeaturePullRequests(options: {
       continue;
     }
 
-    // Prefer one-step rebase --onto when the previous fork/changes tip is still an ancestor.
-    const hasOldBase = run(
+    // Recover the old fork/changes tip this PR was built on: newest known historical
+    // tip that is still an ancestor of the feature head. Feature commits are then
+    // exactly oldBase..head.
+    const historicalTips = appendBaseHistory(baseHistoryTips, [options.oldForkChangesTip, newBase]);
+    const recoveredOldBase = recoverOldBaseTip({
+      historicalBaseTipsNewestFirst: historicalTips.filter(
+        (tip) => tip.toLowerCase() !== newBase.toLowerCase(),
+      ),
+      isAncestorOfHead: (tip) =>
+        run("git", ["merge-base", "--is-ancestor", tip, remoteTip], {
+          cwd: repoDir,
+          allowFailure: true,
+        }).status === 0,
+    });
+
+    if (recoveredOldBase === null) {
+      skipped.push({
+        number: feature.number,
+        branch: feature.branch,
+        reason:
+          "cannot recover old fork/changes tip (no known historical base tip is an ancestor of this head)",
+      });
+      continue;
+    }
+
+    git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
+    const rebaseResult = run(
       "git",
-      ["merge-base", "--is-ancestor", options.oldForkChangesTip, remoteTip],
-      { cwd: repoDir, allowFailure: true },
+      ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, recoveredOldBase],
+      {
+        cwd: repoDir,
+        allowFailure: true,
+        env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+      },
     );
-
-    let newTip: string | null = null;
-
-    if (hasOldBase.status === 0) {
-      git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
-      const rebaseResult = run(
-        "git",
-        ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, options.oldForkChangesTip],
-        {
-          cwd: repoDir,
-          allowFailure: true,
-          env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
-        },
-      );
-      if (rebaseResult.status !== 0) {
-        if (rebaseInProgress(repoDir)) {
-          run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
-        }
-        // Fall through to patch-id transplant below.
-      } else {
-        newTip = git(repoDir, ["rev-parse", "HEAD"]);
+    if (rebaseResult.status !== 0) {
+      if (rebaseInProgress(repoDir)) {
+        run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
       }
+      const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
+        allowFailure: true,
+      });
+      conflicts.push({
+        number: feature.number,
+        branch: feature.branch,
+        message: conflictPaths
+          ? `conflict rebasing onto new base from ${recoveredOldBase.slice(0, 12)}: ${conflictPaths.split("\n").join(", ")}`
+          : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase --onto failed"),
+      });
+      continue;
     }
 
-    // Multi-generation / rewritten-base fallback: transplant only git-cherry unique patches.
-    if (newTip === null) {
-      const cherryOutput = git(repoDir, ["cherry", newBase, remoteTip], { allowFailure: true });
-      const uniqueLines = cherryOutput
-        ? cherryOutput
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.startsWith("+"))
-            .map(
-              (line) =>
-                line
-                  .replace(/^\+\s*/, "")
-                  .trim()
-                  .split(/\s+/)[0] ?? "",
-            )
-            .filter(Boolean)
-        : [];
-      const revOldestFirst = git(
-        repoDir,
-        ["rev-list", "--reverse", "--no-merges", `${newBase}..${remoteTip}`],
-        { allowFailure: true },
-      )
-        .split("\n")
-        .filter(Boolean);
-      const uniqueSet = new Set(uniqueLines);
-      const uniqueOldestFirst = revOldestFirst.filter((oid) => uniqueSet.has(oid));
-
-      if (uniqueOldestFirst.length === 0) {
-        skipped.push({
-          number: feature.number,
-          branch: feature.branch,
-          reason:
-            hasOldBase.status === 0
-              ? "rebase --onto failed and no unique patches vs new base"
-              : "no unique patches vs new fork/changes (already landed or empty)",
-        });
-        continue;
-      }
-
-      git(repoDir, ["checkout", "--quiet", "--detach", newBase]);
-      const applied: string[] = [];
-      let hardConflict: string | null = null;
-      for (const oid of uniqueOldestFirst) {
-        const pick = run("git", ["-c", "commit.gpgsign=false", "cherry-pick", oid], {
-          cwd: repoDir,
-          allowFailure: true,
-          env: { GIT_EDITOR: "true" },
-        });
-        if (pick.status === 0) {
-          applied.push(oid);
-          continue;
-        }
-        const cherryHead = git(repoDir, ["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"], {
-          allowFailure: true,
-        });
-        if (cherryHead || rebaseInProgress(repoDir)) {
-          run("git", ["cherry-pick", "--abort"], { cwd: repoDir, allowFailure: true });
-        }
-        const nameOnly = git(repoDir, ["show", "--pretty=format:", "--name-only", oid], {
-          allowFailure: true,
-        });
-        const fileCount = nameOnly
-          ? nameOnly.split("\n").filter((line) => line.trim() !== "").length
-          : 0;
-        // Match fork-stack FEATURE_TRANSPLANT_AUTO_SKIP_MAX_FILES (30).
-        if (fileCount > 30) {
-          continue;
-        }
-        hardConflict = oid;
-        break;
-      }
-
-      if (hardConflict !== null) {
-        conflicts.push({
-          number: feature.number,
-          branch: feature.branch,
-          message: `cherry-pick conflict on ${hardConflict.slice(0, 12)} (portable unique commit)`,
-        });
-        continue;
-      }
-      if (applied.length === 0) {
-        skipped.push({
-          number: feature.number,
-          branch: feature.branch,
-          reason: "only non-portable rewritten-layer commits remained unique",
-        });
-        continue;
-      }
-      newTip = git(repoDir, ["rev-parse", "HEAD"]);
-    }
-
-    if (newTip === null || newTip === remoteTip) {
+    const newTip = git(repoDir, ["rev-parse", "HEAD"]);
+    if (newTip === remoteTip) {
       skipped.push({
         number: feature.number,
         branch: feature.branch,
@@ -1164,13 +1157,14 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
   const completed = continueOperations(stateDir, state);
   const result = await finishRun(stateDir, completed, options);
 
-  // When fork/changes moves, automatically rebase open feature PRs onto the new tip.
+  // When fork/changes moves, record base-history and rebase open feature PRs onto the new tip.
   // Skipped in unit tests / environments without GitHub credentials.
   if (options.push && (process.env.GH_TOKEN || process.env.GITHUB_TOKEN)) {
     const oldTip = result.snapshots[manifest.forkChangesBranch];
     const newTip = result.newTips[manifest.forkChangesBranch];
     if (oldTip && newTip && oldTip !== newTip) {
       try {
+        pushForkChangesBaseHistory(sourceRoot, [newTip, oldTip]);
         const featureResult = await rebaseOpenFeaturePullRequests({
           sourceRoot,
           manifest,
@@ -1193,6 +1187,45 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
   }
 
   return result;
+}
+
+/**
+ * Append fork/changes tips to the durable base-history ref and push it.
+ * Newest tips first so multi-generation recovery prefers the most recent base
+ * still reachable from a feature head.
+ */
+function pushForkChangesBaseHistory(
+  sourceRoot: string,
+  tipsNewestFirst: ReadonlyArray<string>,
+): void {
+  const repoDir = sourceRoot;
+  run(
+    "git",
+    ["fetch", "origin", `${FORK_CHANGES_BASE_HISTORY_REF}:${FORK_CHANGES_BASE_HISTORY_REF}`],
+    { cwd: repoDir, allowFailure: true },
+  );
+  const existingBlob = git(repoDir, ["show", FORK_CHANGES_BASE_HISTORY_REF], {
+    allowFailure: true,
+  });
+  const existing = existingBlob ? parseBaseHistory(existingBlob) : [];
+  const next = appendBaseHistory(existing, tipsNewestFirst);
+  const body = `${next.join("\n")}\n`;
+  const tmp = NodePath.join(NodeOS.tmpdir(), `fork-changes-base-history-${process.pid}.txt`);
+  NodeFS.writeFileSync(tmp, body, "utf8");
+  try {
+    const blobOid = git(repoDir, ["hash-object", "-w", tmp]);
+    git(repoDir, ["update-ref", FORK_CHANGES_BASE_HISTORY_REF, blobOid]);
+    git(repoDir, ["push", "origin", FORK_CHANGES_BASE_HISTORY_REF]);
+    console.log(
+      `Updated ${FORK_CHANGES_BASE_HISTORY_REF} (${next.length} tip(s); newest ${next[0]?.slice(0, 12) ?? "none"}).`,
+    );
+  } finally {
+    try {
+      NodeFS.unlinkSync(tmp);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function appendFeatureRebaseSummary(result: FeaturePullRequestRebaseResult): void {
