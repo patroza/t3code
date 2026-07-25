@@ -11,18 +11,20 @@ branches.
   button, open a PR into `main`, or push it manually. The scheduled/manual workflow uses the
   repository-scoped `FORK_STACK_DEPLOY_KEY` to bypass `main` protection, preserve the exact upstream
   commit SHA, and atomically rebuild `fork/tim`, `fork/changes`, and `fork/integration`.
-- `fork/tim` contains only selected Tim Smart integrations above upstream. The permanent
-  `fork/changes` PR is based on `fork/tim`, contains only our private layer, remains open, and is the
-  GitHub/T3 default branch.
+- `fork/tim` contains only selected Tim Smart integrations above upstream. `fork/candidates`
+  contains selected open upstream PRs that we run before upstream accepts them, one provenance
+  commit per source PR. The permanent `fork/changes` PR is based on `fork/candidates`, contains only
+  our private layer, remains open, and is the GitHub/T3 default branch.
 - Start new work with `pnpm fork:stack start <branch>` and open the PR against `fork/changes`.
   Ordinary feature/import PRs are not added to `.github/pr-stack.json`; they enter the runnable fork
   only after being reviewed and merged into `fork/changes`.
 - Independent features use parallel PRs based on `fork/changes`. Chain PRs only when one change
   genuinely depends on another, and merge that chain bottom-up.
-- Treat external forks as selective import sources. Tim Smart imports land as one reviewed commit
-  per source PR on `fork/tim`; our adaptations land separately on `fork/changes`. Cherry-pick only
-  wanted commits, explicitly document imported, adapted, and excluded pieces, and never merge an
-  external fork branch wholesale.
+- Treat external forks and open upstream PRs as selective import sources. Tim Smart imports land as
+  one reviewed commit per source PR on `fork/tim`; selected unmerged upstream work lands as one
+  reviewed commit per source PR on `fork/candidates`; our adaptations land separately on
+  `fork/changes`. Cherry-pick only wanted commits, explicitly document imported, adapted, and
+  excluded pieces, and never merge a source branch wholesale.
 - Run and deploy from `fork/integration`, never from a temporary feature or import branch.
 - All features must land in `fork/changes`, including upstreamable work. After its private PR merges,
   use `pnpm fork:stack promote <private-pr> <upstream-branch>` to extract a clean projection onto
