@@ -36,20 +36,37 @@ function stripAnsi(text: string): string {
   return text.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "");
 }
 
-/** Subprocess env: force plain stdout so `gh --json` is parseable under FORCE_COLOR hosts. */
+/**
+ * Parse JSON that may be ANSI-colored by the t3 `gh` wrapper under FORCE_COLOR hosts.
+ */
+export function parsePossiblyColoredJson(text: string): unknown {
+  const cleaned = stripAnsi(text).trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (firstError) {
+    // Fallback: extract first JSON array/object if wrappers add log noise.
+    const match = cleaned.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+    if (match) {
+      try {
+        return JSON.parse(match[1]!);
+      } catch {
+        // fall through
+      }
+    }
+    throw firstError;
+  }
+}
+
 function subprocessEnv(): NodeJS.ProcessEnv {
+  // Keep FORCE_COLOR as-is: the t3 gh wrapper returns empty --head lists when
+  // FORCE_COLOR=0 / NO_COLOR is forced. Strip ANSI from stdout instead.
   return {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
-    NO_COLOR: "1",
-    CLICOLOR: "0",
-    FORCE_COLOR: "0",
-    CLICOLOR_FORCE: "0",
   };
 }
 
 function run(executable: string, args: ReadonlyArray<string>, cwd: string): string {
-  // Do not pass `gh --color=never`: the t3-github-app gh wrapper rejects that flag.
   const result = NodeChildProcess.spawnSync(executable, [...args], {
     cwd,
     encoding: "utf8",
@@ -61,7 +78,7 @@ function run(executable: string, args: ReadonlyArray<string>, cwd: string): stri
       `${executable} ${args.join(" ")} failed: ${stripAnsi(result.stderr.trim() || result.stdout.trim())}`,
     );
   }
-  return stripAnsi(result.stdout).trim();
+  return stripAnsi(result.stdout ?? "").trim();
 }
 
 export function stackParentBranch(manifest: StackManifest): string {
@@ -187,8 +204,7 @@ function readPullRequest(sourceRoot: string, number: number): PullRequestView {
     ],
     sourceRoot,
   );
-  const value = JSON.parse(output) as PullRequestView;
-  return value;
+  return parsePossiblyColoredJson(output) as PullRequestView;
 }
 
 function ensureClean(sourceRoot: string): void {
@@ -239,7 +255,7 @@ function resolveOpenPullRequestForBranch(
     ],
     sourceRoot,
   );
-  const rows = JSON.parse(listed) as ReadonlyArray<{
+  const rows = parsePossiblyColoredJson(listed) as ReadonlyArray<{
     readonly number: number;
     readonly baseRefName: string;
     readonly headRefName: string;
@@ -253,7 +269,7 @@ function pullRequestCommitOids(sourceRoot: string, number: number): ReadonlyArra
     ["pr", "view", String(number), "--repo", FORK_REPOSITORY, "--json", "commits"],
     sourceRoot,
   );
-  const value = JSON.parse(output) as {
+  const value = parsePossiblyColoredJson(output) as {
     readonly commits: ReadonlyArray<{ readonly oid: string }>;
   };
   return value.commits.map((commit) => commit.oid);
