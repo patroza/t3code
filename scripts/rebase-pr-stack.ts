@@ -1256,11 +1256,26 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
  * Newest tips first so multi-generation recovery prefers the most recent base
  * still reachable from a feature head.
  */
+export function baseHistoryPushArgs(remoteOid: string): ReadonlyArray<string> {
+  return [
+    "push",
+    `--force-with-lease=${FORK_CHANGES_BASE_HISTORY_REF}:${remoteOid}`,
+    "origin",
+    `${FORK_CHANGES_BASE_HISTORY_REF}:${FORK_CHANGES_BASE_HISTORY_REF}`,
+  ];
+}
+
 function pushForkChangesBaseHistory(
   sourceRoot: string,
   tipsNewestFirst: ReadonlyArray<string>,
 ): void {
   const repoDir = sourceRoot;
+  const remoteLine = git(
+    repoDir,
+    ["ls-remote", "--refs", "origin", FORK_CHANGES_BASE_HISTORY_REF],
+    { allowFailure: true },
+  );
+  const remoteOid = remoteLine.split(/\s+/u)[0] ?? "";
   run(
     "git",
     ["fetch", "origin", `${FORK_CHANGES_BASE_HISTORY_REF}:${FORK_CHANGES_BASE_HISTORY_REF}`],
@@ -1277,7 +1292,7 @@ function pushForkChangesBaseHistory(
   try {
     const blobOid = git(repoDir, ["hash-object", "-w", tmp]);
     git(repoDir, ["update-ref", FORK_CHANGES_BASE_HISTORY_REF, blobOid]);
-    git(repoDir, ["push", "origin", FORK_CHANGES_BASE_HISTORY_REF]);
+    git(repoDir, baseHistoryPushArgs(remoteOid));
     console.log(
       `Updated ${FORK_CHANGES_BASE_HISTORY_REF} (${next.length} tip(s); newest ${next[0]?.slice(0, 12) ?? "none"}).`,
     );
