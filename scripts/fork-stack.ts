@@ -40,7 +40,12 @@ function subprocessEnv(): NodeJS.ProcessEnv {
 }
 
 function run(executable: string, args: ReadonlyArray<string>, cwd: string): string {
-  const result = NodeChildProcess.spawnSync(executable, [...args], {
+  // gh may still colorize under some agent hosts; force plain output for parseable --json.
+  const finalArgs =
+    executable === "gh" && !args.includes("--color=never") && !args.includes("--color")
+      ? ["--color=never", ...args]
+      : args;
+  const result = NodeChildProcess.spawnSync(executable, finalArgs, {
     cwd,
     encoding: "utf8",
     env: subprocessEnv(),
@@ -51,7 +56,8 @@ function run(executable: string, args: ReadonlyArray<string>, cwd: string): stri
       `${executable} ${args.join(" ")} failed: ${result.stderr.trim() || result.stdout.trim()}`,
     );
   }
-  return result.stdout.trim();
+  // Strip any residual ANSI color in case a wrapper still injects it.
+  return result.stdout.replace(/\u001b\[[0-9;]*m/g, "").trim();
 }
 
 export function stackParentBranch(manifest: StackManifest): string {
