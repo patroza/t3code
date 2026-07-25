@@ -26,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -71,6 +72,12 @@ const isModelSelection = Schema.is(ModelSelection);
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  /**
+   * Maximum time the server gives all provider adapters, collectively, to
+   * stop during process shutdown. Recovery intent is persisted before this
+   * clock starts.
+   */
+  readonly shutdownGracePeriod?: Duration.Input;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -1188,7 +1195,36 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
       }),
     ).pipe(Effect.asVoid);
-    yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
+    const adapterStops = yield* Effect.forEach(
+      currentAdapters,
+      ([instanceId, adapter]) =>
+        adapter.stopAll().pipe(
+          Effect.exit,
+          Effect.map((exit) => ({ instanceId, exit })),
+        ),
+      { concurrency: "unbounded" },
+    ).pipe(
+      // Scope finalizers are uninterruptible by default. Restore
+      // interruptibility here so the timeout can release a provider whose
+      // protocol drain never completes.
+      Effect.interruptible,
+      Effect.timeoutOption(options?.shutdownGracePeriod ?? "1 minute"),
+    );
+    if (Option.isNone(adapterStops)) {
+      yield* Effect.logWarning("provider shutdown grace period elapsed", {
+        timeout: String(options?.shutdownGracePeriod ?? "1 minute"),
+        sessionCount: activeSessions.length,
+      });
+    } else {
+      yield* Effect.forEach(
+        adapterStops.value,
+        ({ instanceId, exit }) =>
+          exit._tag === "Failure"
+            ? Effect.logWarning("provider adapter failed during shutdown", { instanceId })
+            : Effect.void,
+        { discard: true },
+      );
+    }
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
     McpProviderSession.clearAllMcpProviderSessions();
     const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
