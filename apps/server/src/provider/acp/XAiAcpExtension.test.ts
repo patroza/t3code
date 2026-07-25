@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 
 import {
@@ -411,9 +412,7 @@ describe("XAiAcpExtension", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  // Real clock: the assertion is that the queued prompt does *not* resolve,
-  // which a TestClock would never let elapse.
-  it.live("keeps a non-steering prompt queued behind the running turn", () =>
+  it.effect("keeps a non-steering prompt queued behind the running turn", () =>
     Effect.gen(function* () {
       const runtime = yield* makePromptCompletionRuntime({ T3_ACP_XAI_SEND_NOW_QUEUE: "1" });
       yield* runtime.start();
@@ -422,10 +421,12 @@ describe("XAiAcpExtension", () => {
         .prompt({ prompt: [{ type: "text", text: "long task" }] })
         .pipe(Effect.forkChild({ startImmediately: true }));
 
-      const queued = yield* runtime
+      const queuedFiber = yield* runtime
         .prompt({ prompt: [{ type: "text", text: "follow-up" }] })
-        .pipe(Effect.timeout("1 second"), Effect.option);
+        .pipe(Effect.timeout("1 second"), Effect.option, Effect.forkChild);
 
+      yield* TestClock.adjust("1 second");
+      const queued = yield* Fiber.join(queuedFiber);
       expect(Option.isNone(queued)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
