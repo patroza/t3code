@@ -167,16 +167,21 @@ jobs:
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
         run: |
           deploy=true
-          if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]] &&
-             git fetch --quiet origin "${PREVIOUS_SHA}" &&
-             git cat-file -e "${PREVIOUS_SHA}^{commit}"; then
-            deploy="$(
-              scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${GITHUB_SHA}" |
-                tee /dev/stderr |
-                sed -n 's/^deploy=//p'
-            )"
+          if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              git fetch --quiet origin "${PREVIOUS_SHA}" || true
+            fi
+            if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              deploy="$(
+                scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${GITHUB_SHA}" |
+                  tee /dev/stderr |
+                  sed -n 's/^deploy=//p'
+              )"
+            else
+              echo "Previous successful integration SHA is unavailable; deployment remains enabled."
+            fi
           else
-            echo "No fetchable previous successful integration SHA; deployment remains enabled."
+            echo "No previous successful integration SHA; deployment remains enabled."
           fi
           echo "deploy=${deploy}" >>"${GITHUB_OUTPUT}"
 
