@@ -185,8 +185,8 @@ jobs:
           fi
           echo "deploy=${deploy}" >>"${GITHUB_OUTPUT}"
 
-  dispatch_mobile_ota:
-    name: Dispatch Mobile OTA
+  dispatch_mobile_releases:
+    name: Dispatch Mobile Releases
     needs: [check, test, mobile_native_static_analysis, release_smoke, deployment_scope]
     if: |
       github.event_name == 'workflow_dispatch' &&
@@ -209,3 +209,8 @@ jobs:
             -f platform=all \
             -f sha="$GITHUB_SHA" \
             -f message="Integration ${GITHUB_SHA}"
+          gh workflow run mobile-eas-development.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref fork/integration \
+            -f platform=ios \
+            -f sha="$GITHUB_SHA"
