@@ -141,6 +141,10 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  /** Older history beyond the live activity window can be lazy-loaded on scroll-up. */
+  readonly hasMoreOlder?: boolean;
+  readonly loadingOlder?: boolean;
+  readonly onLoadOlder?: () => void;
 }
 
 function MessageAttachmentImage(props: {
@@ -1498,6 +1502,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ? props.latestTurn.turnId
       : null;
 
+  // Reaching the top (oldest) lazy-loads older history. The hook keys an
+  // in-flight guard by thread, so repeated fires during scroll coalesce.
+  const { hasMoreOlder, loadingOlder, onLoadOlder } = props;
+  const onStartReachedOlderHistory = useCallback(() => {
+    if (hasMoreOlder && !loadingOlder) {
+      onLoadOlder?.();
+    }
+  }, [hasMoreOlder, loadingOlder, onLoadOlder]);
+
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
     previousLatestTurnRef.current = props.latestTurn;
@@ -1790,9 +1803,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             estimatedItemSize={180}
             initialScrollAtEnd
             onScroll={handleScroll}
+            onStartReached={onStartReachedOlderHistory}
+            onStartReachedThreshold={0.5}
             scrollEventThrottle={16}
             ListHeaderComponent={
-              usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />
+              usesNativeAutomaticInsets && !loadingOlder ? null : (
+                <View style={{ height: usesNativeAutomaticInsets ? undefined : topContentInset }}>
+                  {loadingOlder ? <ActivityIndicator style={{ marginTop: 8 }} /> : null}
+                </View>
+              )
             }
             contentContainerStyle={{
               paddingTop: 12,
