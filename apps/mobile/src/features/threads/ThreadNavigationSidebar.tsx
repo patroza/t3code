@@ -1074,7 +1074,6 @@ function ThreadNavigationSidebarPane(
         selectedEnvironmentIds={options.selectedEnvironmentIds}
         onClearEnvironments={clearSelectedEnvironments}
         onToggleEnvironment={toggleSelectedEnvironmentId}
-        hideFilterChrome
         onSelectThread={handleSelectThread}
         onArchiveThread={archiveThread}
         onDeleteThread={confirmDeleteThread}
@@ -1122,10 +1121,26 @@ function ThreadNavigationSidebarPane(
     return (
       <>
         <NativeStackScreenOptions
-          optionsVersion={nativeHeaderItems}
+          optionsVersion={[nativeHeaderItems, options.listMode]}
           options={{
             title: HOME_LIST_MODE_TITLES[options.listMode],
             headerTitle: HOME_LIST_MODE_TITLES[options.listMode],
+            // Board columns are not one UIKit-inset scroll view — solid bar
+            // so cards never underlap the glass nav (same as Board route / home).
+            ...(NATIVE_LIQUID_GLASS_SUPPORTED
+              ? options.listMode === "board"
+                ? {
+                    headerTransparent: false,
+                    headerStyle: {
+                      backgroundColor: backgroundColor as unknown as string,
+                    },
+                    scrollEdgeEffects: undefined,
+                  }
+                : {
+                    headerTransparent: true,
+                    headerStyle: { backgroundColor: "transparent" },
+                  }
+              : {}),
             headerSearchBarOptions:
               options.listMode === "board"
                 ? undefined
