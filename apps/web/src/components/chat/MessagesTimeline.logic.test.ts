@@ -637,6 +637,115 @@ describe("deriveMessagesTimelineRows", () => {
     ).toBeDefined();
   });
 
+  it("keeps a queue-drain final below the fold when the message turnId was flipped", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-1",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user" as const,
+            text: "Change the icons.",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-status",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:05Z",
+          message: {
+            id: "assistant-status" as never,
+            role: "assistant" as const,
+            text: "Replacing the segment bar…",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:05Z",
+            updatedAt: "2026-01-01T00:00:05Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:10Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:10Z",
+            turnId: "turn-1" as never,
+            label: "Changed files",
+            tone: "tool" as const,
+          },
+        },
+        {
+          id: "assistant-final-misstamped",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-final-misstamped" as never,
+            role: "assistant" as const,
+            text: "Done. No more segment bar.",
+            turnId: "turn-2" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:20Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "user-2",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "user-2" as never,
+            role: "user" as const,
+            text: "About the queue?",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:20Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant-next",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:28Z",
+          message: {
+            id: "assistant-next" as never,
+            role: "assistant" as const,
+            text: "Queue is chips now.",
+            turnId: "turn-2" as never,
+            createdAt: "2026-01-01T00:00:28Z",
+            updatedAt: "2026-01-01T00:00:30Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+      latestTurn: {
+        turnId: "turn-2" as never,
+        state: "completed",
+        startedAt: "2026-01-01T00:00:20Z",
+        completedAt: "2026-01-01T00:00:30Z",
+        assistantMessageId: "assistant-next" as never,
+      },
+    });
+
+    const ids = rows.map((row) => row.id);
+    expect(ids).toContain("turn-fold:turn-1");
+    expect(ids).toContain("assistant-final-misstamped");
+    expect(ids.indexOf("assistant-final-misstamped")).toBeGreaterThan(
+      ids.indexOf("turn-fold:turn-1"),
+    );
+    expect(ids).not.toContain("assistant-status");
+    expect(ids).not.toContain("work-1");
+  });
+
   it("derives a sane duration for a steer-superseded turn with one instant commentary message", () => {
     // A steer ends the previous turn early: its only message completes the
     // instant it is created, and trailing work entries land after it. The
