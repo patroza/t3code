@@ -2,7 +2,11 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { deleteThreadTargetsSequentially, ThreadArchiveBlockedError } from "./useThreadActions";
+import {
+  deleteThreadTargetsSequentially,
+  getWorktreeRemovalAction,
+  ThreadArchiveBlockedError,
+} from "./useThreadActions";
 
 const environmentId = EnvironmentId.make("environment-1");
 
@@ -60,5 +64,34 @@ describe("deleteThreadTargetsSequentially", () => {
     expect(result).toBe(failure);
     expect(deleteTarget).toHaveBeenCalledTimes(2);
     expect(deletedKeySnapshots).toEqual([[], [scopedThreadKey(targets[0])]]);
+  });
+});
+
+describe("getWorktreeRemovalAction", () => {
+  it("asks before removing an orphaned worktree when confirmation is enabled", () => {
+    expect(
+      getWorktreeRemovalAction({
+        canRemoveWorktree: true,
+        confirmWorktreeRemoval: true,
+      }),
+    ).toBe("confirm");
+  });
+
+  it("removes an orphaned worktree directly when confirmation is disabled", () => {
+    expect(
+      getWorktreeRemovalAction({
+        canRemoveWorktree: true,
+        confirmWorktreeRemoval: false,
+      }),
+    ).toBe("remove");
+  });
+
+  it("does not remove a worktree that is still in use", () => {
+    expect(
+      getWorktreeRemovalAction({
+        canRemoveWorktree: false,
+        confirmWorktreeRemoval: false,
+      }),
+    ).toBe("skip");
   });
 });
