@@ -787,6 +787,7 @@ function ThreadRouteContent(
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           activeThreadBusy={composer.activeThreadBusy}
+          isEditingQueuedMessage={composer.isEditingQueuedMessage}
           hasMoreOlderActivities={composer.hasMoreOlderActivities}
           loadingOlderActivities={composer.loadingOlderActivities}
           onLoadOlderActivities={composer.onLoadOlderActivities}
@@ -804,7 +805,7 @@ function ThreadRouteContent(
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
           onSteerQueuedMessage={composer.onSteerQueuedMessage}
-          onRemoveQueuedMessage={composer.onRemoveQueuedMessage}
+          onEditQueuedMessage={composer.onEditQueuedMessage}
           onStartNewThread={handleStartNewThread}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
