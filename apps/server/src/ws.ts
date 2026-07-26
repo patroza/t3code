@@ -48,7 +48,6 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
-  RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -58,7 +57,6 @@ import {
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
-import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -73,6 +71,7 @@ import {
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as WorktreeLifecycle from "./orchestration/Services/WorktreeLifecycle.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -98,12 +97,10 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
-import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -298,6 +295,10 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 
+// Authorization scopes for every RPC live only in
+// `auth/RpcAuthorization.ts` (`RPC_REQUIRED_SCOPES` / `requiredScopeForRpcMethod`).
+// Do not reintroduce a parallel Map here.
+
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,
@@ -355,6 +356,7 @@ const makeWsRpcLayer = (
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const worktreeLifecycle = yield* WorktreeLifecycle.WorktreeLifecycle;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -369,28 +371,10 @@ const makeWsRpcLayer = (
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-      const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-      const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
-      yield* Effect.addFinalizer(() =>
-        Ref.get(rpcClientIds).pipe(
-          Effect.flatMap((clientIds) =>
-            Effect.forEach(
-              clientIds,
-              (clientId) => backgroundPolicy.removeRpcClient(currentSessionId, clientId),
-              {
-                discard: true,
-              },
-            ),
-          ),
-          Effect.ignore,
-        ),
-      );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
-        Effect.map(
-          (settings) => resolveServerBackgroundActivitySettings(settings).automaticGitFetchInterval,
-        ),
+        Effect.map((settings) => settings.automaticGitFetchInterval),
         Effect.catch((cause) =>
           Effect.logWarning("Failed to read automatic Git fetch interval setting", {
             detail: cause.message,
@@ -403,7 +387,6 @@ const makeWsRpcLayer = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
-      const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -1031,7 +1014,26 @@ const makeWsRpcLayer = (
                         Effect.orElseSucceed(() => false),
                       )
                   : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              // Unarchive restores a missing worktree from the retained
+              // branch before the command commits; a failed restoration
+              // leaves the thread archived instead of silently detaching it
+              // to the main project checkout.
+              const result =
+                normalizedCommand.type === "thread.unarchive"
+                  ? yield* worktreeLifecycle
+                      .restoreThreadWorktree(
+                        { threadId: normalizedCommand.threadId },
+                        dispatchNormalizedCommand(normalizedCommand),
+                      )
+                      .pipe(
+                        Effect.mapError((error) =>
+                          toDispatchCommandError(
+                            error,
+                            "Failed to restore the thread's worktree before unarchive.",
+                          ),
+                        ),
+                      )
+                  : yield* dispatchNormalizedCommand(normalizedCommand);
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -1478,48 +1480,8 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverGetResourceTelemetryHistory,
-            resourceTelemetry.readHistory(input),
-            {
-              "rpc.aggregate": "server",
-            },
-          ),
-        [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverRetryResourceTelemetry, resourceTelemetry.retry, {
-            "rpc.aggregate": "server",
-          }),
         [WS_METHODS.serverSignalProcess]: (input) =>
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
-            "rpc.aggregate": "server",
-          }),
-        [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
-          Ref.update(rpcClientIds, (clientIds) => {
-            const next = new Set(clientIds);
-            next.add(RpcClientId.make(metadata.client.id));
-            return next;
-          }).pipe(
-            Effect.andThen(
-              observeRpcEffect(
-                WS_METHODS.serverReportClientActivity,
-                backgroundPolicy.reportClientActivity(
-                  currentSessionId,
-                  RpcClientId.make(metadata.client.id),
-                  input,
-                ),
-                { "rpc.aggregate": "server" },
-              ),
-            ),
-          ),
-        [WS_METHODS.serverReportHostPowerState]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverReportHostPowerState,
-            backgroundPolicy.reportHostPowerState(input),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverGetBackgroundPolicy]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetBackgroundPolicy, backgroundPolicy.snapshot, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
@@ -1811,6 +1773,18 @@ const makeWsRpcLayer = (
             gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
+        [WS_METHODS.vcsPreviewWorktreeCleanup]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsPreviewWorktreeCleanup,
+            worktreeLifecycle.previewCleanup(input),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.vcsCleanupThreadWorktree]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsCleanupThreadWorktree,
+            worktreeLifecycle.cleanupThreadWorktree(input),
+            { "rpc.aggregate": "vcs" },
+          ),
         [WS_METHODS.vcsCreateRef]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateRef,
@@ -2061,26 +2035,6 @@ const makeWsRpcLayer = (
               );
             }),
             { "rpc.aggregate": "auth" },
-          ),
-        [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.subscribeBackgroundPolicy,
-            Stream.unwrap(
-              Effect.map(backgroundPolicy.subscribe, ({ latest, changes }) =>
-                Stream.concat(Stream.make(latest), changes),
-              ),
-            ),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.subscribeResourceTelemetry]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.subscribeResourceTelemetry,
-            Stream.unwrap(
-              Effect.map(resourceTelemetry.subscribe, ({ latest, changes }) =>
-                Stream.concat(Stream.make(latest), changes),
-              ),
-            ),
-            { "rpc.aggregate": "server" },
           ),
       });
     }),

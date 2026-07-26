@@ -14,6 +14,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
+  OrchestrationSession,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
@@ -42,6 +43,11 @@ export interface ProjectionThreadCheckpointContext {
   readonly workspaceRoot: string;
   readonly worktreePath: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+}
+
+export interface ProjectionSessionStopContext {
+  readonly threadId: ThreadId;
+  readonly session: OrchestrationSession | null;
 }
 
 export interface ProjectionFullThreadDiffContext {
@@ -154,6 +160,18 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
     toTurnCount: number,
   ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
+
+  /**
+   * Read the narrow context needed to stop a thread's provider session.
+   *
+   * Unlike the shell/detail queries this includes archived, nondeleted
+   * threads: session-stop commands dispatched as part of archiving must
+   * still resolve the thread after `archivedAt` is set, or the provider
+   * session would never be stopped.
+   */
+  readonly getSessionStopContextById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionSessionStopContext>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread shell row by id.
