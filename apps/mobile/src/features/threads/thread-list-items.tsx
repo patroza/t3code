@@ -78,6 +78,40 @@ function PullRequestIcon(props: { readonly size: number; readonly color: string 
   );
 }
 
+/* ─── Section header (Recent) ────────────────────────────────────────── */
+
+/**
+ * Non-collapsible section label for the cross-project Recent block.
+ * Matches web sidebar's uppercase "Recent" chrome without project affordances.
+ */
+export const ThreadListSectionHeader = memo(function ThreadListSectionHeader(props: {
+  readonly variant: ThreadListVariant;
+  readonly title: string;
+}) {
+  const compact = props.variant === "compact";
+  return (
+    <View
+      className={compact ? "bg-screen" : undefined}
+      style={{
+        paddingLeft: compact ? THREAD_LIST_COMPACT_INSET : 12,
+        paddingRight: compact ? 18 : 12,
+        paddingTop: compact ? 8 : 4,
+        paddingBottom: compact ? 6 : 4,
+      }}
+    >
+      <Text
+        className={
+          compact
+            ? "text-xs font-t3-bold uppercase tracking-wider text-foreground-tertiary"
+            : "text-3xs font-t3-bold uppercase tracking-wider text-foreground-tertiary"
+        }
+      >
+        {props.title}
+      </Text>
+    </View>
+  );
+});
+
 /* ─── Project group header ───────────────────────────────────────────── */
 
 export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: {
@@ -192,21 +226,33 @@ export const ThreadListShowMoreRow = memo(function ThreadListShowMoreRow(props: 
   readonly variant: ThreadListVariant;
   readonly hiddenCount: number;
   readonly canShowLess: boolean;
-  readonly groupKey: string;
-  readonly onGroupAction: (key: string, action: HomeGroupDisplayAction) => void;
+  /** When set with `onGroupAction`, show-more / show-less dispatch group actions. */
+  readonly groupKey?: string;
+  readonly onGroupAction?: (key: string, action: HomeGroupDisplayAction) => void;
+  /**
+   * Binary expand/collapse for the Recent section (web-style). When provided,
+   * overrides group-key based actions.
+   */
+  readonly onToggleExpanded?: () => void;
 }) {
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const showsMore = props.hiddenCount > 0;
   const compact = props.variant === "compact";
-  const { groupKey, onGroupAction } = props;
-  const handleShowMore = useCallback(
-    () => onGroupAction(groupKey, "show-more"),
-    [groupKey, onGroupAction],
-  );
-  const handleShowLess = useCallback(
-    () => onGroupAction(groupKey, "show-less"),
-    [groupKey, onGroupAction],
-  );
+  const { groupKey, onGroupAction, onToggleExpanded } = props;
+  const handleShowMore = useCallback(() => {
+    if (onToggleExpanded) {
+      onToggleExpanded();
+      return;
+    }
+    if (groupKey && onGroupAction) onGroupAction(groupKey, "show-more");
+  }, [groupKey, onGroupAction, onToggleExpanded]);
+  const handleShowLess = useCallback(() => {
+    if (onToggleExpanded) {
+      onToggleExpanded();
+      return;
+    }
+    if (groupKey && onGroupAction) onGroupAction(groupKey, "show-less");
+  }, [groupKey, onGroupAction, onToggleExpanded]);
 
   const button = (label: string, icon: "chevron.down" | "chevron.up", onPress: () => void) => (
     <Pressable
@@ -425,6 +471,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
   readonly projectCwd: string | null;
+  /**
+   * Optional project title for cross-project contexts (Recent section).
+   * Shown ahead of environment / branch in the subtitle.
+   */
+  readonly projectTitle?: string | null;
   readonly isLast: boolean;
   /** Sidebar only: the thread currently open in the detail pane. */
   readonly selected?: boolean;
@@ -461,8 +512,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
   const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
-  const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
-    Boolean(part),
+  const subtitleParts = [props.projectTitle, props.environmentLabel, thread.branch].filter(
+    (part): part is string => Boolean(part),
   );
 
   const serverConfig = useEnvironmentServerConfig(thread.environmentId);
