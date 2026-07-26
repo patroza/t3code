@@ -78,11 +78,10 @@ function PullRequestIcon(props: { readonly size: number; readonly color: string 
   );
 }
 
-/* ─── Section header (Recent) ────────────────────────────────────────── */
+/* ─── Section header (Needs attention) ───────────────────────────────── */
 
 /**
- * Non-collapsible section label for the cross-project Recent block.
- * Matches web sidebar's uppercase "Recent" chrome without project affordances.
+ * Non-collapsible section label for the cross-project Needs attention block.
  */
 export const ThreadListSectionHeader = memo(function ThreadListSectionHeader(props: {
   readonly variant: ThreadListVariant;
@@ -230,7 +229,7 @@ export const ThreadListShowMoreRow = memo(function ThreadListShowMoreRow(props: 
   readonly groupKey?: string;
   readonly onGroupAction?: (key: string, action: HomeGroupDisplayAction) => void;
   /**
-   * Binary expand/collapse for the Recent section (web-style). When provided,
+   * Binary expand/collapse for Needs attention (preview ↔ all). When provided,
    * overrides group-key based actions.
    */
   readonly onToggleExpanded?: () => void;
@@ -472,7 +471,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly environmentLabel: string | null;
   readonly projectCwd: string | null;
   /**
-   * Optional project title for cross-project contexts (Recent section).
+   * Optional project title for cross-project contexts (Needs attention).
    * Shown ahead of environment / branch in the subtitle.
    */
   readonly projectTitle?: string | null;
