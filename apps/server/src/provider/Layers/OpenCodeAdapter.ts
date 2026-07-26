@@ -38,6 +38,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import { type DirenvEnvironment, resolveProviderSessionEnvironment } from "../DirenvEnvironment.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -240,6 +241,7 @@ interface OpenCodeSessionContext {
 export interface OpenCodeAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly resolveEnvironment?: DirenvEnvironment["Service"]["resolve"];
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -1189,7 +1191,25 @@ export function makeOpenCodeAdapter(
         const binaryPath = openCodeSettings.binaryPath;
         const serverUrl = openCodeSettings.serverUrl;
         const serverPassword = openCodeSettings.serverPassword;
-        const directory = input.cwd ?? serverConfig.cwd;
+        if (input.cwd !== undefined && !input.cwd.trim()) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: "cwd must be non-empty when provided.",
+          });
+        }
+        const directory =
+          input.cwd === undefined ? serverConfig.cwd : path.resolve(input.cwd.trim());
+        const environment =
+          input.cwd === undefined || serverUrl?.trim()
+            ? options?.environment
+            : yield* resolveProviderSessionEnvironment({
+                resolve: options?.resolveEnvironment,
+                provider: PROVIDER,
+                threadId: input.threadId,
+                cwd: directory,
+                environment: options?.environment ?? process.env,
+              });
         const resumeSessionId = parseOpenCodeResume(input.resumeCursor)?.sessionId;
         const existing = sessions.get(input.threadId);
         if (existing) {
@@ -1207,7 +1227,8 @@ export function makeOpenCodeAdapter(
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
                 serverUrl,
-                ...(options?.environment ? { environment: options.environment } : {}),
+                ...(environment ? { environment } : {}),
+                cwd: directory,
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
