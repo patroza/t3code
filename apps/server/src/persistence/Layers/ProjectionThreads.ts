@@ -12,6 +12,7 @@ import {
   ListProjectionThreadsByProjectInput,
   ProjectionThread,
   ProjectionThreadRepository,
+  ProjectionThreadWorktreeReference,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
 import { ModelSelection } from "@t3tools/contracts";
@@ -166,6 +167,23 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       `,
   });
 
+  const listProjectionThreadWorktreeReferenceRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadWorktreeReference,
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          worktree_path AS "worktreePath",
+          archived_at AS "archivedAt"
+        FROM projection_threads
+        WHERE deleted_at IS NULL
+          AND worktree_path IS NOT NULL
+        ORDER BY created_at ASC, thread_id ASC
+      `,
+  });
+
   const deleteProjectionThreadRow = SqlSchema.void({
     Request: DeleteProjectionThreadInput,
     execute: ({ threadId }) =>
@@ -195,11 +213,19 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:query")),
     );
 
+  const listWorktreeReferences: ProjectionThreadRepositoryShape["listWorktreeReferences"] = () =>
+    listProjectionThreadWorktreeReferenceRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadRepository.listWorktreeReferences:query"),
+      ),
+    );
+
   return {
     upsert,
     getById,
     listByProjectId,
     deleteById,
+    listWorktreeReferences,
   } satisfies ProjectionThreadRepositoryShape;
 });
 
