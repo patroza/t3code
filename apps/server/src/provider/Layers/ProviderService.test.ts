@@ -58,6 +58,7 @@ import {
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+import { readProviderRestartRecoveryMarker } from "../ProviderRestartRecovery.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 
@@ -364,6 +365,94 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
     assert.equal(Exit.isSuccess(closeExit), true);
     assert.equal(codex.stopAll.mock.calls.length, 1);
   }),
+);
+
+it.effect("graceful shutdown preserves recovery intent only for working sessions", () =>
+  Effect.gen(function* () {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-recovery-"));
+    const dbPath = NodePath.join(tempDir, "runtime.sqlite");
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(persistenceLayer),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const codex = makeFakeCodexAdapter();
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(
+        Layer.succeed(
+          ProviderAdapterRegistry.ProviderAdapterRegistry,
+          makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
+        ),
+      ),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+    const scope = yield* Scope.make();
+    const services = yield* Layer.build(
+      Layer.mergeAll(providerLayer, runtimeRepositoryLayer, directoryLayer),
+    ).pipe(Scope.provide(scope));
+    const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+
+    const runningThreadId = asThreadId("thread-running-on-shutdown");
+    const connectingThreadId = asThreadId("thread-connecting-on-shutdown");
+    const readyThreadId = asThreadId("thread-ready-on-shutdown");
+    const stoppedThreadId = asThreadId("thread-explicitly-stopped");
+    for (const threadId of [runningThreadId, connectingThreadId, readyThreadId, stoppedThreadId]) {
+      yield* provider.startSession(threadId, {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access",
+      });
+    }
+    yield* provider.sendTurn({
+      threadId: runningThreadId,
+      input: "keep working",
+      interactionMode: "plan",
+    });
+    codex.updateSession(runningThreadId, (session) => ({
+      ...session,
+      status: "running",
+      activeTurnId: asTurnId("provider-turn-running"),
+    }));
+    codex.updateSession(connectingThreadId, (session) => ({
+      ...session,
+      status: "connecting",
+    }));
+
+    yield* provider.stopSession({ threadId: stoppedThreadId });
+    yield* Scope.close(scope, Exit.void);
+
+    const rows = yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      return yield* repository.list();
+    }).pipe(Effect.provide(runtimeRepositoryLayer));
+    const byThreadId = new Map(rows.map((row) => [row.threadId, row]));
+
+    const runningMarker = readProviderRestartRecoveryMarker(
+      byThreadId.get(runningThreadId)?.runtimePayload,
+    );
+    assert.equal(runningMarker?.interruptedProviderTurnId, asTurnId("provider-turn-running"));
+    assert.isDefined(
+      readProviderRestartRecoveryMarker(byThreadId.get(connectingThreadId)?.runtimePayload),
+    );
+    assert.isUndefined(
+      readProviderRestartRecoveryMarker(byThreadId.get(readyThreadId)?.runtimePayload),
+    );
+    assert.isUndefined(
+      readProviderRestartRecoveryMarker(byThreadId.get(stoppedThreadId)?.runtimePayload),
+    );
+    assert.equal(byThreadId.get(runningThreadId)?.status, "stopped");
+
+    NodeFS.rmSync(tempDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("ProviderServiceLive rejects new sessions for disabled providers", () =>
@@ -1499,6 +1588,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+      yield* provider.sendTurn({ threadId: session.threadId, input: "hello" });
 
       const eventsRef = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
       const consumer = yield* Stream.runForEach(provider.streamEvents, (event) =>
@@ -1512,7 +1602,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         provider: ProviderDriverKind.make("codex"),
         createdAt: "2026-01-01T00:00:00.000Z",
         threadId: session.threadId,
-        turnId: asTurnId("turn-1"),
+        turnId: asTurnId("turn-thread-1"),
         status: "completed",
       };
 
@@ -1533,6 +1623,18 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         ),
         true,
       );
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const persistedRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(persistedRuntime), true);
+      if (Option.isSome(persistedRuntime)) {
+        assert.equal(persistedRuntime.value.status, "running");
+        assert.deepInclude(persistedRuntime.value.runtimePayload, {
+          activeTurnId: null,
+          lastRuntimeEvent: "turn.completed",
+        });
+      }
     }),
   );
 
