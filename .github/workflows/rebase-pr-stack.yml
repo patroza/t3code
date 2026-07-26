@@ -15,7 +15,10 @@ on:
 
 concurrency:
   group: fork-pr-stack
-  cancel-in-progress: true
+  # Every event is classified inside the workflow. Cancelling a managed-overlay
+  # rebuild because a later ordinary PR event arrived can drop the only
+  # integration refresh for that overlay. Serialize the events instead.
+  cancel-in-progress: false
 
 permissions:
   contents: write
