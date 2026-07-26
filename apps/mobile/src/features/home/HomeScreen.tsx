@@ -7,6 +7,7 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import type {
   EnvironmentId,
   SidebarProjectGroupingMode,
@@ -24,7 +25,7 @@ import { AppText as Text } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
-import { scopedProjectKey } from "../../lib/scopedEntities";
+import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -80,6 +81,11 @@ interface HomeScreenProps {
   readonly listMode: HomeListMode;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  /**
+   * When true, omit settled threads from the active list mode. Recent defaults
+   * on; Projects defaults off (call site). Toggle in the filter menu.
+   */
+  readonly hideSettledThreads: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
@@ -319,33 +325,6 @@ export function HomeScreen(props: HomeScreenProps) {
     [props.pendingTasks, selectedProjectRefKeys],
   );
 
-  const projectGroups = useMemo(
-    () =>
-      props.listMode === "projects"
-        ? buildHomeThreadGroups({
-            projects: scopedProjects,
-            threads: scopedThreads,
-            pendingTasks: scopedPendingTasks,
-            selectedEnvironmentIds: props.selectedEnvironmentIds,
-            searchQuery: props.searchQuery,
-            projectSortOrder: props.projectSortOrder,
-            threadSortOrder: props.threadSortOrder,
-            projectGroupingMode: props.projectGroupingMode,
-          })
-        : [],
-    [
-      props.listMode,
-      props.projectGroupingMode,
-      props.projectSortOrder,
-      props.searchQuery,
-      props.selectedEnvironmentIds,
-      props.threadSortOrder,
-      scopedPendingTasks,
-      scopedProjects,
-      scopedThreads,
-    ],
-  );
-
   const recentEntries = useMemo(
     () =>
       props.listMode === "recent"
@@ -497,6 +476,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleUnsettleThread = props.onUnsettleThread;
   // The settled tail renders in pages; expansion resets when the filter
   // context changes so environment/search flips never inherit a deep page.
+  // Thread List v2 only (classic Recent uses hide-settled filter instead).
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
@@ -518,15 +498,17 @@ export function HomeScreen(props: HomeScreenProps) {
   // next wake boundary re-runs the partition with a fresh clock so a woken
   // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
+  const needsSettlementClock =
+    threadListV2Enabled || props.listMode === "recent" || props.listMode === "projects";
   useEffect(() => {
-    if (!threadListV2Enabled) return;
+    if (!needsSettlementClock) return;
     // Refresh immediately on enable: the mount-time value can be hours old
     // by the time the beta is switched on, which would misclassify the
     // inactivity auto-settle boundary until the first tick.
     setNowMinute(new Date().toISOString().slice(0, 16));
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
-  }, [threadListV2Enabled]);
+  }, [needsSettlementClock]);
   // Threads on servers without the settlement capability never classify as
   // settled (the user could neither un-settle nor pin them).
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -549,14 +531,80 @@ export function HomeScreen(props: HomeScreenProps) {
     return supported;
   }, [serverConfigs]);
 
+  // Settled classification for menu state + hide filter. Keys are env:threadId.
+  const settledThreadKeys = useMemo(() => {
+    if (props.listMode === "board") {
+      return new Set<string>();
+    }
+    const now = `${nowMinute}:00.000Z`;
+    const keys = new Set<string>();
+    for (const thread of scopedThreads) {
+      if (thread.archivedAt !== null) continue;
+      if (!settlementEnvironmentIds.has(thread.environmentId)) continue;
+      if (
+        effectiveSettled(thread, {
+          now,
+          autoSettleAfterDays: 3,
+          changeRequestState: null,
+        })
+      ) {
+        keys.add(scopedThreadKey(thread.environmentId, thread.id));
+      }
+    }
+    return keys;
+  }, [nowMinute, props.listMode, scopedThreads, settlementEnvironmentIds]);
+
+  const threadsForProjectList = useMemo(() => {
+    if (!props.hideSettledThreads) return scopedThreads;
+    return scopedThreads.filter(
+      (thread) => !settledThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id)),
+    );
+  }, [props.hideSettledThreads, scopedThreads, settledThreadKeys]);
+
+  const projectGroups = useMemo(
+    () =>
+      props.listMode === "projects" && !threadListV2Enabled
+        ? buildHomeThreadGroups({
+            projects: scopedProjects,
+            threads: threadsForProjectList,
+            pendingTasks: scopedPendingTasks,
+            selectedEnvironmentIds: props.selectedEnvironmentIds,
+            searchQuery: props.searchQuery,
+            projectSortOrder: props.projectSortOrder,
+            threadSortOrder: props.threadSortOrder,
+            projectGroupingMode: props.projectGroupingMode,
+          })
+        : [],
+    [
+      props.listMode,
+      props.projectGroupingMode,
+      props.projectSortOrder,
+      props.searchQuery,
+      props.selectedEnvironmentIds,
+      props.threadSortOrder,
+      scopedPendingTasks,
+      scopedProjects,
+      threadListV2Enabled,
+      threadsForProjectList,
+    ],
+  );
+
+  const visibleRecentEntries = useMemo(() => {
+    if (props.listMode !== "recent") return [];
+    return recentEntries.flatMap((entry) => {
+      const key = scopedThreadKey(entry.thread.environmentId, entry.thread.id);
+      if (props.hideSettledThreads && settledThreadKeys.has(key)) {
+        return [];
+      }
+      return [{ thread: entry.thread, projectTitle: entry.project.title }];
+    });
+  }, [props.hideSettledThreads, props.listMode, recentEntries, settledThreadKeys]);
+
   const listLayout = useMemo(() => {
     if (props.listMode === "recent") {
       return buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
-        entries: recentEntries.map((entry) => ({
-          thread: entry.thread,
-          projectTitle: entry.project.title,
-        })),
+        entries: visibleRecentEntries,
       });
     }
     if (props.listMode !== "projects") {
@@ -572,15 +620,15 @@ export function HomeScreen(props: HomeScreenProps) {
     hasSearchQuery,
     projectGroups,
     props.listMode,
-    recentEntries,
     recentPendingEntries,
+    visibleRecentEntries,
   ]);
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
     // Settled threads are live shells; archived threads keep their original
     // "hidden from lists" meaning.
-    return buildThreadListV2Items({
+    const layout = buildThreadListV2Items({
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: props.selectedEnvironmentIds,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -588,10 +636,18 @@ export function HomeScreen(props: HomeScreenProps) {
       changeRequestStateByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      settledLimit: settledVisibleCount,
+      settledLimit: props.hideSettledThreads ? 0 : settledVisibleCount,
       now: `${nowMinute}:00.000Z`,
       snoozeNow: new Date().toISOString(),
     });
+    if (!props.hideSettledThreads) return layout;
+    // Drop settled-tail rows when hide is on (limit 0 still leaves the
+    // divider path empty; strip any slim rows for safety).
+    return {
+      ...layout,
+      items: layout.items.filter((item) => item.variant === "card"),
+      hiddenSettledCount: 0,
+    };
   }, [
     changeRequestStateByKey,
     nowMinute,
@@ -599,6 +655,7 @@ export function HomeScreen(props: HomeScreenProps) {
     settledVisibleCount,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
+    props.hideSettledThreads,
     props.searchQuery,
     props.selectedEnvironmentIds,
     props.threads,
@@ -728,6 +785,7 @@ export function HomeScreen(props: HomeScreenProps) {
           );
         case "thread": {
           const thread = item.thread;
+          const threadKey = scopedThreadKey(thread.environmentId, thread.id);
           return (
             <ThreadListRow
               variant="compact"
@@ -741,6 +799,10 @@ export function HomeScreen(props: HomeScreenProps) {
                 null
               }
               isLast={item.isLast}
+              settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+              isSettled={settledThreadKeys.has(threadKey)}
+              onSettleThread={handleSettleThread}
+              onUnsettleThread={handleUnsettleThread}
               onArchiveThread={props.onArchiveThread}
               onDeleteThread={props.onDeleteThread}
               onSelectThread={props.onSelectThread}
@@ -762,8 +824,10 @@ export function HomeScreen(props: HomeScreenProps) {
       }
     },
     [
+      handleSettleThread,
       handleSwipeableClose,
       handleSwipeableWillOpen,
+      handleUnsettleThread,
       projectCwdByKey,
       props.onArchiveThread,
       props.onDeletePendingTask,
@@ -772,6 +836,8 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
+      settledThreadKeys,
+      settlementEnvironmentIds,
       updateGroupDisplay,
     ],
   );
@@ -787,7 +853,7 @@ export function HomeScreen(props: HomeScreenProps) {
     props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
   const hasResults =
     props.listMode === "recent"
-      ? recentEntries.length > 0 || recentPendingEntries.length > 0
+      ? visibleRecentEntries.length > 0 || recentPendingEntries.length > 0
       : projectGroups.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentIds.length === 0
