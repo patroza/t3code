@@ -4,8 +4,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createHandledDiscordMessageTracker,
   findDiscordLinkForT3Target,
+  formatEditedDiscordPrompt,
   getContinuedConversationModelChangeError,
   isIncompleteDiscordLink,
+  normalizeDiscordPromptContent,
 } from "./MentionRouter.ts";
 
 describe("createHandledDiscordMessageTracker", () => {
@@ -34,6 +36,37 @@ describe("createHandledDiscordMessageTracker", () => {
 
     tracker.mark("message-2");
     expect(tracker.claim("message-2")).toBe(false);
+  });
+
+  it("treats same-content reclaims as duplicates and real edits as content_changed", () => {
+    const tracker = createHandledDiscordMessageTracker(8);
+
+    expect(tracker.claimOrUpdate("message-1", "  fix the  bug ")).toEqual({ kind: "claimed" });
+    expect(tracker.claimOrUpdate("message-1", "fix the bug")).toEqual({ kind: "duplicate" });
+    expect(tracker.claimOrUpdate("message-1", "fix the bug now")).toEqual({
+      kind: "content_changed",
+      previousContent: "fix the bug",
+    });
+    expect(tracker.getContent("message-1")).toBe("fix the bug now");
+  });
+});
+
+describe("normalizeDiscordPromptContent", () => {
+  it("collapses whitespace so typo-spaces do not re-route", () => {
+    expect(normalizeDiscordPromptContent("  a\n\tb  ")).toBe("a b");
+  });
+});
+
+describe("formatEditedDiscordPrompt", () => {
+  it("frames previous and updated prompt for the agent", () => {
+    const text = formatEditedDiscordPrompt({
+      previousContent: "old request",
+      newContent: "new request",
+    });
+    expect(text).toContain("Previous prompt:");
+    expect(text).toContain("old request");
+    expect(text).toContain("Updated prompt (authoritative):");
+    expect(text).toContain("new request");
   });
 });
 

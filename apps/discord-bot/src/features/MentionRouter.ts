@@ -112,37 +112,95 @@ class DiscordAttachmentStageError extends Schema.TaggedErrorClass<DiscordAttachm
 
 const MAX_HANDLED_MESSAGE_IDS = 2048;
 
+/** Normalize prompt text so whitespace-only edits do not re-route. */
+export function normalizeDiscordPromptContent(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+export type DiscordMessageClaimResult =
+  | { readonly kind: "claimed" }
+  | { readonly kind: "duplicate" }
+  | { readonly kind: "content_changed"; readonly previousContent: string };
+
+/**
+ * Tracks Discord message ids that already entered routing.
+ * Stores last normalized content so MESSAGE_UPDATE can distinguish:
+ * - create/update races and embed-only updates (duplicate)
+ * - real user edits (content_changed) that should re-route
+ */
 export function createHandledDiscordMessageTracker(limit = MAX_HANDLED_MESSAGE_IDS) {
-  const handled = new Set<string>();
+  const handled = new Map<string, string>();
   const insertionOrder: string[] = [];
 
-  const record = (messageId: string): boolean => {
-    if (handled.has(messageId)) return false;
-    handled.add(messageId);
-    insertionOrder.push(messageId);
+  const remember = (messageId: string, content: string) => {
+    if (!handled.has(messageId)) {
+      insertionOrder.push(messageId);
+    }
+    handled.set(messageId, content);
     while (insertionOrder.length > limit) {
       const oldest = insertionOrder.shift();
       if (oldest !== undefined) handled.delete(oldest);
     }
-    return true;
   };
 
   return {
     has(messageId: string) {
       return handled.has(messageId);
     },
-    /** Record that a message id was handled (idempotent). */
-    mark(messageId: string) {
-      record(messageId);
+    getContent(messageId: string): string | null {
+      return handled.get(messageId) ?? null;
     },
     /**
-     * Atomically claim a Discord message id for routing.
-     * Returns false when another create/update path already claimed it.
+     * First claim, same-content no-op, or content-change edit.
+     * Pass the stripped user prompt (not raw gateway content with mentions).
+     */
+    claimOrUpdate(messageId: string, content: string): DiscordMessageClaimResult {
+      const normalized = normalizeDiscordPromptContent(content);
+      const existing = handled.get(messageId);
+      if (existing === undefined) {
+        remember(messageId, normalized);
+        return { kind: "claimed" };
+      }
+      if (existing === normalized) {
+        return { kind: "duplicate" };
+      }
+      remember(messageId, normalized);
+      return { kind: "content_changed", previousContent: existing };
+    },
+    /** Idempotent first-claim without content (tests / simple call sites). */
+    mark(messageId: string) {
+      if (handled.has(messageId)) return;
+      remember(messageId, handled.get(messageId) ?? "");
+    },
+    /**
+     * Atomically claim without content comparison.
+     * Returns false when the id was already claimed (any content).
      */
     claim(messageId: string) {
-      return record(messageId);
+      if (handled.has(messageId)) return false;
+      remember(messageId, "");
+      return true;
     },
   };
+}
+
+/** Prompt prefix when a user edits a message that already started or queued a turn. */
+export function formatEditedDiscordPrompt(input: {
+  readonly previousContent: string;
+  readonly newContent: string;
+}): string {
+  const previous = input.previousContent.trim();
+  const next = input.newContent.trim();
+  if (previous.length === 0) return next;
+  return [
+    "The Discord user edited their earlier prompt. Discard work that only applied to the previous text.",
+    "",
+    "Previous prompt:",
+    previous,
+    "",
+    "Updated prompt (authoritative):",
+    next,
+  ].join("\n");
 }
 
 function isThreadChannel(type: number | undefined): boolean {
@@ -1781,19 +1839,21 @@ const make = (botConfig: DiscordBotConfig) =>
         | undefined;
     };
 
+    const waitForTurnIdle = Effect.fn("MentionRouter.waitForTurnIdle")(function* (
+      threadId: ThreadId,
+    ) {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const thread = yield* t3.getThreadShell(threadId);
+        if (!hasInterruptibleTurn(thread)) return;
+        yield* Effect.sleep("100 millis");
+      }
+      yield* Effect.logWarning("Interrupted Discord turn still looked busy before edit re-route", {
+        threadId,
+      });
+    });
+
     const handleInboundMessage = (rawEvent: GatewayMessageEvent, source: "create" | "update") =>
       Effect.gen(function* () {
-        // Cheap pre-filter: never re-enter routing for a message we already claimed.
-        // (CREATE and UPDATE share this tracker so edits cannot start a second turn.)
-        if (handledMessageIds.has(rawEvent.id)) {
-          yield* Effect.logInfo("Ignoring already-handled Discord message", {
-            source,
-            channelId: rawEvent.channel_id,
-            messageId: rawEvent.id,
-          });
-          return;
-        }
-
         const event: GatewayMessageEvent | null =
           source === "update"
             ? yield* rest.getMessage(rawEvent.channel_id, rawEvent.id).pipe(
@@ -1931,10 +1991,13 @@ const make = (botConfig: DiscordBotConfig) =>
         const inThread = isThreadChannel(channel.type);
         if (automaticThreadMessage && !inThread) return;
 
-        // Claim before image download / turn start. Late marking let MESSAGE_UPDATE race
-        // MESSAGE_CREATE and double-run prompts (especially noticeable on short edits).
-        if (!handledMessageIds.claim(event.id)) {
-          yield* Effect.logInfo("Ignoring concurrent Discord message routing race", {
+        const body = mentioned ? stripBotMention(content, botUserId, botRoleId) : content.trim();
+
+        // Content-aware claim: first route, race/no-op duplicate, or real prompt edit.
+        // Must run before image download so concurrent CREATE/UPDATE cannot double-start.
+        const claimResult = handledMessageIds.claimOrUpdate(event.id, body);
+        if (claimResult.kind === "duplicate") {
+          yield* Effect.logInfo("Ignoring duplicate Discord message routing", {
             source,
             channelId: event.channel_id,
             messageId: event.id,
@@ -1942,7 +2005,62 @@ const make = (botConfig: DiscordBotConfig) =>
           return;
         }
 
-        const body = mentioned ? stripBotMention(content, botUserId, botRoleId) : content.trim();
+        let previousPromptContent: string | null = null;
+        if (claimResult.kind === "content_changed") {
+          previousPromptContent = claimResult.previousContent;
+          yield* Effect.logInfo("Discord prompt edited; re-routing", {
+            channelId: event.channel_id,
+            messageId: event.id,
+            previousLen: claimResult.previousContent.length,
+            nextLen: body.length,
+          });
+
+          // If this message was parked mid-turn, drop the stale queue entry before re-submit.
+          const pendingQueued = queuedPrompts.forgetDiscordMessage(event.id);
+          if (pendingQueued !== null) {
+            yield* clearQueuedBadge(pendingQueued);
+            yield* t3
+              .removeQueuedMessage({
+                threadId: pendingQueued.t3ThreadId,
+                messageId: pendingQueued.t3MessageId,
+              })
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Failed to remove queued prompt after Discord edit", {
+                    t3ThreadId: pendingQueued.t3ThreadId,
+                    t3MessageId: pendingQueued.t3MessageId,
+                    error: String(error),
+                  }),
+                ),
+              );
+          }
+
+          // Edit during generation: interrupt first, wait until idle, then re-route.
+          // A new Working tip freezes/deletes empty orphan stream tips after the turn settles —
+          // never delete bot messages while the bridge is still writing them.
+          const editLink =
+            pendingQueued !== null ? null : yield* links.getByDiscordThreadId(event.channel_id);
+          const editThreadId = pendingQueued?.t3ThreadId ?? editLink?.t3ThreadId ?? null;
+          if (editThreadId !== null) {
+            const shell = yield* t3.getThreadShell(editThreadId);
+            if (hasInterruptibleTurn(shell)) {
+              yield* Effect.logInfo("Interrupting active turn after Discord prompt edit", {
+                t3ThreadId: editThreadId,
+                messageId: event.id,
+              });
+              yield* t3.interrupt(editThreadId).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("Failed to interrupt turn after Discord prompt edit", {
+                    t3ThreadId: editThreadId,
+                    error: String(error),
+                  }),
+                ),
+              );
+              yield* waitForTurnIdle(editThreadId);
+            }
+          }
+        }
+
         const threadTalkCommand = mentioned ? parseThreadTalkCommand(body) : null;
         if (threadTalkCommand !== null) {
           if (!inThread) {
@@ -2045,7 +2163,7 @@ const make = (botConfig: DiscordBotConfig) =>
               prompt: body,
             };
         const flags = intent.kind === "prompt" ? intent : parseMentionFlags(body);
-        const prompt =
+        const rawPrompt =
           intent.kind === "prompt" && intent.prompt.length > 0
             ? intent.prompt
             : uploadAttachments.length > 0
@@ -2053,7 +2171,7 @@ const make = (botConfig: DiscordBotConfig) =>
               : hasAnyAttachments
                 ? ATTACHMENT_ONLY_PROMPT
                 : "";
-        if (intent.kind === "prompt" && prompt.length === 0) {
+        if (intent.kind === "prompt" && rawPrompt.length === 0) {
           yield* rest.createMessage(event.channel_id, {
             content:
               content.length === 0
@@ -2063,6 +2181,13 @@ const make = (botConfig: DiscordBotConfig) =>
           });
           return;
         }
+        const prompt =
+          previousPromptContent !== null
+            ? formatEditedDiscordPrompt({
+                previousContent: previousPromptContent,
+                newContent: rawPrompt,
+              })
+            : rawPrompt;
         const effectivePrompt = automaticThreadMessage
           ? formatUnmentionedDiscordPrompt({
               content: prompt,
@@ -2071,7 +2196,13 @@ const make = (botConfig: DiscordBotConfig) =>
               messageId: event.id,
             })
           : prompt;
-        const flagsWithPrompt = { ...flags, prompt: effectivePrompt };
+        // Edits force a fresh turn (we interrupted above). Prefer steer so a still-busy
+        // race does not leave the correction parked as a silent 📥 queue entry.
+        const flagsWithPrompt = {
+          ...flags,
+          prompt: effectivePrompt,
+          ...(previousPromptContent !== null ? { followUpDelivery: "steer" as const } : {}),
+        };
 
         if (inThread) {
           const topicLookup = yield* resolveProjectTopic(channel);
