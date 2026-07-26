@@ -9,6 +9,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { runArchiveWithWorktreeCleanup } from "@t3tools/client-runtime/state/worktreeCleanup";
 import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -156,6 +157,12 @@ export function useThreadActions() {
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
   });
+  const previewWorktreeCleanup = useAtomCommand(vcsEnvironment.previewWorktreeCleanup, {
+    reportFailure: false,
+  });
+  const cleanupThreadWorktree = useAtomCommand(vcsEnvironment.cleanupThreadWorktree, {
+    reportFailure: false,
+  });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
     reportFailure: false,
   });
@@ -210,10 +217,82 @@ export function useThreadActions() {
       const shouldNavigateToDraft =
         currentRouteThreadRef?.threadId === threadRef.threadId &&
         currentRouteThreadRef.environmentId === threadRef.environmentId;
-      const archiveResult = await archiveThreadMutation({
-        environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId },
+      const localApi = readLocalApi();
+      const outcome = await runArchiveWithWorktreeCleanup({
+        // Server-authoritative preview: only prompt when archiving the final
+        // active thread that references a worktree. A preview failure (old
+        // server, transient error) degrades to a plain archive.
+        previewCandidate: async () => {
+          const previewResult = await previewWorktreeCleanup({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          return previewResult._tag === "Success" ? previewResult.value.candidate : null;
+        },
+        confirmRemoval: localApi
+          ? async ({ displayWorktreePath }) => {
+              const confirmationResult = await settlePromise(() =>
+                localApi.dialogs.confirm(
+                  [
+                    "This thread is the last active one linked to this worktree:",
+                    displayWorktreePath,
+                    "",
+                    "Remove the worktree too? The branch is kept.",
+                  ].join("\n"),
+                ),
+              );
+              if (confirmationResult._tag === "Failure") {
+                return { kind: "aborted", result: confirmationResult } as const;
+              }
+              return confirmationResult.value
+                ? ({ kind: "confirmed" } as const)
+                : ({ kind: "declined" } as const);
+            }
+          : null,
+        archive: () =>
+          archiveThreadMutation({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          }),
+        isArchiveSuccess: (result) => result._tag === "Success",
+        cleanup: async () => {
+          const cleanupResult = await cleanupThreadWorktree({
+            environmentId: threadRef.environmentId,
+            input: { threadId: threadRef.threadId },
+          });
+          if (cleanupResult._tag === "Failure") {
+            const error = squashAtomCommandFailure(cleanupResult);
+            return {
+              kind: "failed",
+              message: error instanceof Error ? error.message : "Unknown error removing worktree.",
+            } as const;
+          }
+          return { kind: "done", status: cleanupResult.value.status } as const;
+        },
+        // Cleanup problems are nonfatal: the archive itself succeeded.
+        onCleanupFailed: (displayWorktreePath, message) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Thread archived, but worktree removal failed",
+              description: `Could not remove ${displayWorktreePath}. ${message}`,
+            }),
+          );
+        },
+        onCleanupRetained: (displayWorktreePath) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Worktree kept",
+              description: `${displayWorktreePath} is still used by another active thread.`,
+            }),
+          );
+        },
       });
+      if (outcome.kind === "aborted") {
+        return outcome.result;
+      }
+      const archiveResult = outcome.result;
       if (archiveResult._tag === "Failure") {
         return archiveResult;
       }
@@ -232,7 +311,13 @@ export function useThreadActions() {
 
       return archiveResult;
     },
-    [archiveThreadMutation, getCurrentRouteThreadRef, resolveThreadTarget],
+    [
+      archiveThreadMutation,
+      cleanupThreadWorktree,
+      getCurrentRouteThreadRef,
+      previewWorktreeCleanup,
+      resolveThreadTarget,
+    ],
   );
 
   const unarchiveThread = useCallback(
