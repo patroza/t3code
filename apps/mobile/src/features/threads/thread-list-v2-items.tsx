@@ -15,6 +15,7 @@ import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadPr } from "../../state/use-thread-pr";
+import { prefetchEnvironmentThread } from "../../state/threads";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadListV2Status, type ThreadListV2Status } from "./threadListV2";
 
@@ -326,6 +327,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityLabel={thread.title}
         accessibilityRole="button"
         accessibilityState={{ selected }}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -365,6 +369,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={sidebarPane ? undefined : "bg-screen"}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
