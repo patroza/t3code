@@ -15,6 +15,7 @@ export interface EnvironmentOption {
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
+export type WorkspaceTarget = EnvMode | "current-worktree";
 
 const GENERIC_LOCAL_ENVIRONMENT_LABELS = new Set(["local", "local environment"]);
 
@@ -60,6 +61,16 @@ export function resolveEnvModeLabel(mode: EnvMode): string {
 
 export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null): string {
   return activeWorktreePath ? "Current worktree" : resolveEnvModeLabel("local");
+}
+
+export function resolveWorkspaceTarget(input: {
+  effectiveEnvMode: EnvMode;
+  activeWorktreePath: string | null;
+}): WorkspaceTarget {
+  if (input.effectiveEnvMode === "worktree") {
+    return "worktree";
+  }
+  return input.activeWorktreePath ? "current-worktree" : "local";
 }
 
 export function resolveLockedWorkspaceLabel(activeWorktreePath: string | null): string {
@@ -162,6 +173,7 @@ export function resolveBranchTriggerLabel(input: {
   resolvedActiveBranch: string | null;
   resolvedActiveBranchIsRemote: boolean | null;
   startFromOrigin: boolean;
+  reuseBaseBranch?: boolean;
 }): string {
   const {
     activeWorktreePath,
@@ -169,11 +181,17 @@ export function resolveBranchTriggerLabel(input: {
     resolvedActiveBranch,
     resolvedActiveBranchIsRemote,
     startFromOrigin,
+    reuseBaseBranch = false,
   } = input;
   if (!resolvedActiveBranch) {
     return "Select ref";
   }
+  // Reused base branch is checked out as-is (Tim #15); otherwise "From X" for
+  // new worktree branches, with optional origin/ prefix (upstream #4680).
   if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
+    if (reuseBaseBranch) {
+      return resolvedActiveBranch;
+    }
     const baseRef =
       startFromOrigin && resolvedActiveBranchIsRemote === false
         ? `origin/${resolvedActiveBranch}`
