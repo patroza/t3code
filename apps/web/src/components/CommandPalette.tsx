@@ -68,6 +68,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -531,6 +532,14 @@ function CommandPaletteDialog(props: {
       )}
     </CommandDialogPopup>
   );
+}
+
+function renderThreadLeadingContent(thread: EnvironmentThreadShell) {
+  return <ThreadRowLeadingStatus thread={thread} />;
+}
+
+function renderThreadTrailingContent(thread: EnvironmentThreadShell) {
+  return <ThreadRowTrailingStatus thread={thread} />;
 }
 
 function OpenCommandPaletteDialog(props: {
