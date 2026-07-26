@@ -3,7 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   NavigationContext,
@@ -36,7 +36,7 @@ import {
 } from "../../lib/layout";
 import { resolveThreadSelectionNavigationAction } from "../../lib/adaptive-navigation";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { mobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import {
   parseActiveThreadPath,
@@ -189,17 +189,36 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly pathname: string;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const storeEnvironmentIds = useCallback(
+    (ids: readonly EnvironmentId[]) => {
+      savePreferences({ selectedEnvironmentIds: [...ids] });
+    },
+    [savePreferences],
+  );
+
   if (!AsyncResult.isSuccess(preferencesResult)) {
     return AsyncResult.isFailure(preferencesResult) ? (
-      <AdaptiveWorkspaceLayoutContent {...props} projectGroupingMode="repository" />
+      <AdaptiveWorkspaceLayoutContent
+        {...props}
+        projectGroupingMode="repository"
+        storedEnvironmentIds={[]}
+        onStoreEnvironmentIds={storeEnvironmentIds}
+      />
     ) : null;
   }
+
+  const storedEnvironmentIds = (preferencesResult.value.selectedEnvironmentIds ??
+    []) as readonly EnvironmentId[];
+
   return (
     <AdaptiveWorkspaceLayoutContent
       {...props}
       projectGroupingMode={resolveProjectGroupingMode(
         preferencesResult.value.projectGroupingEnabled,
       )}
+      storedEnvironmentIds={storedEnvironmentIds}
+      onStoreEnvironmentIds={storeEnvironmentIds}
     />
   );
 }
@@ -210,6 +229,8 @@ function AdaptiveWorkspaceLayoutContent(
     readonly pathname: string;
   } & {
     readonly projectGroupingMode: SidebarProjectGroupingMode;
+    readonly storedEnvironmentIds: readonly EnvironmentId[];
+    readonly onStoreEnvironmentIds: (ids: readonly EnvironmentId[]) => void;
   },
 ) {
   const projectGroupingMode = props.projectGroupingMode;
@@ -506,7 +527,11 @@ function AdaptiveWorkspaceLayoutContent(
   );
 
   return (
-    <HomeListOptionsProvider projectGroupingMode={projectGroupingMode}>
+    <HomeListOptionsProvider
+      projectGroupingMode={projectGroupingMode}
+      storedEnvironmentIds={props.storedEnvironmentIds}
+      onStoreEnvironmentIds={props.onStoreEnvironmentIds}
+    >
       <AdaptiveWorkspaceContext.Provider value={contextValue}>
         <View testID="adaptive-workspace-layout" className="flex-1 flex-row">
           {shouldRenderPrimarySidebar && layout.listPaneWidth !== null ? (
