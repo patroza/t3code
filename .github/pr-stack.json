@@ -21,6 +21,14 @@
     {
       "number": 10,
       "branch": "t3-discord/f7d37879-desktop-deeplinks"
+    },
+    {
+      "number": 80,
+      "branch": "fork/discord"
+    },
+    {
+      "number": 79,
+      "branch": "fork/vscode"
     }
   ]
 }
