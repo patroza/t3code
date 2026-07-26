@@ -1,6 +1,6 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { it } from "@effect/vitest";
+import { it, vi } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -25,6 +25,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
+import { DirenvEnvironmentError } from "../DirenvEnvironment.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   OpenCodeRuntime,
@@ -45,6 +46,7 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
 type MessageEntry = {
   info: {
@@ -57,6 +59,11 @@ type MessageEntry = {
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    connectCalls: [] as Array<{
+      serverUrl?: string | null;
+      environment?: NodeJS.ProcessEnv;
+      cwd?: string;
+    }>,
     sessionCreateUrls: [] as string[],
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     authHeaders: [] as Array<string | null>,
@@ -77,6 +84,7 @@ const runtimeMock = {
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.connectCalls.length = 0;
     this.state.sessionCreateUrls.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.authHeaders.length = 0;
@@ -115,8 +123,13 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
+  connectToOpenCodeServer: ({ serverUrl, environment, cwd }) =>
     Effect.gen(function* () {
+      runtimeMock.state.connectCalls.push({
+        ...(serverUrl !== undefined ? { serverUrl } : {}),
+        ...(environment !== undefined ? { environment } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
+      });
       const url = serverUrl ?? "http://127.0.0.1:4301";
       // Always register a finalizer so the closeCalls/closeError probes fire;
       // production attaches none for external servers.
@@ -246,7 +259,7 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 // the layer graph reach for it — but the routing values the assertions
 // probe (serverUrl, serverPassword) must be threaded directly through the
 // decoded `OpenCodeSettings`.
-const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
+const openCodeAdapterTestSettings = decodeOpenCodeSettings({
   binaryPath: "fake-opencode",
   serverUrl: "http://127.0.0.1:9999",
   serverPassword: "secret-password",
@@ -280,7 +293,81 @@ beforeEach(() => {
 const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
+const makeDirenvAdapterLayer = (
+  settings: typeof openCodeAdapterTestSettings,
+  resolveEnvironment: NonNullable<
+    NonNullable<Parameters<typeof makeOpenCodeAdapter>[1]>["resolveEnvironment"]
+  >,
+) =>
+  Layer.effect(
+    OpenCodeAdapter,
+    makeOpenCodeAdapter(settings, {
+      environment: { PATH: process.env.PATH, PROVIDER_VALUE: "configured" },
+      resolveEnvironment,
+    }),
+  ).pipe(
+    Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
+  it.effect("passes the resolved environment and project cwd to a local OpenCode server", () => {
+    const resolvedEnvironment = { PATH: process.env.PATH, PROVIDER_VALUE: "from-direnv" };
+    const resolveEnvironment = vi.fn((_input: { readonly cwd: string }) =>
+      Effect.succeed(resolvedEnvironment),
+    );
+    const settings = decodeOpenCodeSettings({
+      binaryPath: "fake-opencode",
+      serverUrl: "",
+    });
+    const adapterLayer = makeDirenvAdapterLayer(settings, resolveEnvironment);
+
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-opencode-direnv"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+      NodeAssert.deepEqual(runtimeMock.state.connectCalls, [
+        {
+          serverUrl: "",
+          environment: resolvedEnvironment,
+          cwd: process.cwd(),
+        },
+      ]);
+    }).pipe(Effect.provide(adapterLayer));
+  });
+
+  it.effect("does not resolve direnv for a configured external OpenCode server", () => {
+    const resolveEnvironment = vi.fn(() =>
+      Effect.fail(
+        new DirenvEnvironmentError({
+          stage: "execution",
+          detail: "must not run for external servers",
+        }),
+      ),
+    );
+    const adapterLayer = makeDirenvAdapterLayer(openCodeAdapterTestSettings, resolveEnvironment);
+
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-opencode-external-direnv"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.equal(resolveEnvironment.mock.calls.length, 0);
+      NodeAssert.equal(runtimeMock.state.connectCalls[0]?.serverUrl, "http://127.0.0.1:9999");
+    }).pipe(Effect.provide(adapterLayer));
+  });
+
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
