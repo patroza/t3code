@@ -790,6 +790,7 @@ function ThreadRouteContent(
           threadSyncStatus={selectedThreadDetailState.status}
           activeThreadBusy={composer.activeThreadBusy}
           isEditingQueuedMessage={composer.isEditingQueuedMessage}
+          composerQueueItems={composer.composerQueueItems}
           hasMoreOlderActivities={composer.hasMoreOlderActivities}
           loadingOlderActivities={composer.loadingOlderActivities}
           onLoadOlderActivities={composer.onLoadOlderActivities}
