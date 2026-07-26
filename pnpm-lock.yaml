@@ -6281,8 +6281,8 @@ packages:
   dir-compare@4.2.0:
     resolution: {integrity: sha512-2xMCmOoMrdQIPHdsTawECdNPwlVFB9zGcz3kuhmBO6U3oU+UQjsue0i8ayLKpgBcm+hcXPMVSGUN9d+pvJ6+VQ==}
 
-  discord-api-types@0.38.51:
-    resolution: {integrity: sha512-SnaFHd+b8Z3HgjEIoSA1wkstXCt6J0Zrxvny0BJZZz7AhmFSetRY3DMrIdO3LFDMeeTxF7WKornnAGxaws5Adw==}
+  discord-api-types@0.38.50:
+    resolution: {integrity: sha512-J2n/bpIETX3DQ6AJ7/0xbsTLmYiJQtO/LKcXKC1YDbB56OUwtDbdXOFE8Q4g8jVGHBR2VAy1+D4ngaIgkMNV9w==}
 
   discord-verify@1.2.0:
     resolution: {integrity: sha512-8qlrMROW8DhpzWWzgNq9kpeLDxKanWa4EDVoj/ASVv2nr+dSr4JPmu2tFSydf3hAGI/OIJTnZyD0JulMYIxx4w==}
@@ -16499,7 +16499,7 @@ snapshots:
 
   dfx@1.0.14(effect@4.0.0-beta.78(patch_hash=42ee2fd1660956bc98cc62257fde43720373351585504d9fc17e7e3647dd421e)):
     dependencies:
-      discord-api-types: 0.38.51
+      discord-api-types: 0.38.50
       effect: 4.0.0-beta.78(patch_hash=42ee2fd1660956bc98cc62257fde43720373351585504d9fc17e7e3647dd421e)
     optionalDependencies:
       discord-verify: 1.2.0
@@ -16511,7 +16511,7 @@ snapshots:
       minimatch: 3.1.5
       p-limit: 3.1.0
 
-  discord-api-types@0.38.51: {}
+  discord-api-types@0.38.50: {}
 
   discord-verify@1.2.0:
     dependencies:
