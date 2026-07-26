@@ -25,8 +25,13 @@ import {
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
 import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
-import { HomeListModeSwitcher } from "./HomeListModeSwitcher";
-import type { HomeListMode } from "./homeListMode";
+import {
+  HOME_LIST_MODE_ICONS,
+  HOME_LIST_MODE_LABELS,
+  HOME_LIST_MODE_TITLES,
+  otherHomeListModes,
+  type HomeListMode,
+} from "./homeListMode";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
@@ -72,6 +77,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
   const listOrganization = usesListOrganization(props.listMode);
+  const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
@@ -224,6 +230,23 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               </View>
             </View>
 
+            {alternateModes.map((mode) => (
+              <Pressable
+                key={mode}
+                accessibilityLabel={HOME_LIST_MODE_LABELS[mode]}
+                accessibilityRole="button"
+                onPress={() => props.onListModeChange(mode)}
+                className="size-11 items-center justify-center rounded-full bg-subtle"
+              >
+                <SymbolView
+                  name={HOME_LIST_MODE_ICONS[mode] as never}
+                  size={18}
+                  tintColor={iconColor}
+                  type="monochrome"
+                />
+              </Pressable>
+            ))}
+
             <ControlPillMenu
               actions={menuActions}
               isAnchoredToRight
@@ -255,8 +278,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
             </Pressable>
           </View>
-
-          <HomeListModeSwitcher mode={props.listMode} onModeChange={props.onListModeChange} />
 
           {props.listMode === "board" ? null : (
             <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
@@ -301,6 +322,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
   const listOrganization = usesListOrganization(props.listMode);
+  const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
@@ -333,15 +355,29 @@ function IosHomeHeader(props: HomeHeaderProps) {
     showProjectFilter: props.listMode !== "board",
   });
 
+  const headerTitle = HOME_LIST_MODE_TITLES[props.listMode];
+
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, props.listMode, headerTitle]}
         options={{
+          title: headerTitle,
+          headerTitle,
           headerTintColor: iconColor,
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
+                  ...alternateModes.map((mode) =>
+                    withNativeGlassHeaderItem({
+                      accessibilityLabel: HOME_LIST_MODE_LABELS[mode],
+                      icon: { name: HOME_LIST_MODE_ICONS[mode], type: "sfSymbol" } as const,
+                      identifier: `home-mode-${mode}`,
+                      label: "",
+                      onPress: () => props.onListModeChange(mode),
+                      type: "button",
+                    }),
+                  ),
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -390,6 +426,15 @@ function IosHomeHeader(props: HomeHeaderProps) {
 
       {Platform.OS === "ios" ? null : (
         <NativeHeaderToolbar placement="right">
+          {alternateModes.map((mode) => (
+            <NativeHeaderToolbar.Button
+              key={mode}
+              accessibilityLabel={HOME_LIST_MODE_LABELS[mode]}
+              icon={HOME_LIST_MODE_ICONS[mode] as never}
+              onPress={() => props.onListModeChange(mode)}
+              separateBackground
+            />
+          ))}
           <NativeHeaderToolbar.Button
             accessibilityLabel="Open settings"
             icon="gearshape"
@@ -497,10 +542,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
           />
         </NativeHeaderToolbar>
       )}
-
-      <View className="border-b border-header-border bg-header px-4 py-2">
-        <HomeListModeSwitcher mode={props.listMode} onModeChange={props.onListModeChange} />
-      </View>
     </>
   );
 }
