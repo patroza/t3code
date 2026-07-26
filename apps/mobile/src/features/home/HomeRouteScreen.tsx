@@ -1,10 +1,17 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
-import { useEffect, useMemo, useState } from "react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
+import {
+  resolveHideSettledOnProjects,
+  resolveHideSettledOnRecent,
+} from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -61,6 +68,27 @@ export function HomeRouteScreen() {
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  // Recent defaults to hide settled; Projects defaults to show settled.
+  const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnRecent(preferencesResult.value)
+    : true;
+  const hideSettledOnProjects = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnProjects(preferencesResult.value)
+    : false;
+  const hideSettledThreads =
+    listOptions.listMode === "projects" ? hideSettledOnProjects : hideSettledOnRecent;
+  const setHideSettledThreads = useCallback(
+    (hide: boolean) => {
+      if (listOptions.listMode === "projects") {
+        savePreferences({ hideSettledOnProjects: hide });
+        return;
+      }
+      savePreferences({ hideSettledOnRecent: hide });
+    },
+    [listOptions.listMode, savePreferences],
+  );
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
@@ -118,12 +146,14 @@ export function HomeRouteScreen() {
           listMode={listOptions.listMode}
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
+          hideSettledThreads={hideSettledThreads}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
           onListModeChange={setListMode}
           onClearEnvironments={clearSelectedEnvironments}
           onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
+          onHideSettledThreadsChange={setHideSettledThreads}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
@@ -135,6 +165,7 @@ export function HomeRouteScreen() {
           catalogState={catalogState}
           environments={environments}
           listMode={listOptions.listMode}
+          hideSettledThreads={hideSettledThreads}
           onAddConnection={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
           }
