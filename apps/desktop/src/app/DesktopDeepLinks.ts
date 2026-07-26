@@ -20,6 +20,7 @@ export { buildDesktopThreadNavigationUrl };
 export const DESKTOP_EXTERNAL_PROTOCOL = "t3code";
 export const DESKTOP_THREAD_DEEP_LINK_HOST = "open";
 export const DESKTOP_THREAD_DEEP_LINK_PATH = "/thread";
+export const DESKTOP_PROJECT_DEEP_LINK_PATH = "/project";
 
 /** Reject oversized query values (connection labels and thread ids). */
 const MAX_DEEP_LINK_VALUE_LENGTH = 256;
@@ -31,6 +32,11 @@ export type DesktopThreadDeepLink = {
   readonly threadId: ThreadId;
 };
 
+export type DesktopProjectDeepLink = {
+  readonly project: string;
+  readonly action: "reveal" | "latest" | "new";
+};
+
 export type DesktopConnectionLabelResolution =
   | { readonly _tag: "resolved"; readonly environmentId: EnvironmentId }
   | { readonly _tag: "missing" }
@@ -39,7 +45,8 @@ export type DesktopConnectionLabelResolution =
 
 type PendingDeepLinkAction =
   | { readonly _tag: "reveal" }
-  | { readonly _tag: "openThread"; readonly deepLink: DesktopThreadDeepLink };
+  | { readonly _tag: "openThread"; readonly deepLink: DesktopThreadDeepLink }
+  | { readonly _tag: "openProject"; readonly deepLink: DesktopProjectDeepLink };
 
 const { logInfo: logDeepLinkInfo, logWarning: logDeepLinkWarning } =
   makeComponentLogger("desktop-deep-links");
@@ -116,6 +123,53 @@ export function parseDesktopThreadDeepLink(raw: string): Option.Option<DesktopTh
     connectionLabel,
     threadId,
   });
+}
+
+export function parseDesktopProjectDeepLink(raw: string): Option.Option<DesktopProjectDeepLink> {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 2_048) {
+    return Option.none();
+  }
+  if (CONTROL_CHARACTER_PATTERN.test(raw)) {
+    return Option.none();
+  }
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return Option.none();
+  }
+
+  const pathname =
+    url.pathname.length > 1 && url.pathname.endsWith("/")
+      ? url.pathname.slice(0, -1)
+      : url.pathname;
+  if (
+    url.protocol !== `${DESKTOP_EXTERNAL_PROTOCOL}:` ||
+    url.hostname !== DESKTOP_THREAD_DEEP_LINK_HOST ||
+    pathname !== DESKTOP_PROJECT_DEEP_LINK_PATH
+  ) {
+    return Option.none();
+  }
+
+  const projectValues = url.searchParams.getAll("project");
+  const actionValues = url.searchParams.getAll("action");
+  const project = projectValues[0]?.trim() ?? "";
+  if (
+    projectValues.length !== 1 ||
+    actionValues.length > 1 ||
+    project.length === 0 ||
+    project.length > MAX_DEEP_LINK_VALUE_LENGTH ||
+    CONTROL_CHARACTER_PATTERN.test(project)
+  ) {
+    return Option.none();
+  }
+
+  const action = actionValues[0] ?? "reveal";
+  if (action !== "reveal" && action !== "latest" && action !== "new") {
+    return Option.none();
+  }
+  return Option.some({ project, action });
 }
 
 /**
@@ -291,6 +345,15 @@ export const make = Effect.gen(function* () {
         case "openThread":
           yield* openResolvedThread(action.deepLink);
           return;
+        case "openProject":
+          yield* desktopWindow.navigateToProject(action.deepLink).pipe(
+            Effect.catch((error) =>
+              logDeepLinkWarning("failed to navigate to deep-linked project", {
+                message: error.message,
+              }),
+            ),
+          );
+          return;
       }
     }).pipe(Effect.withSpan("desktop.deepLinks.processAction"));
 
@@ -307,6 +370,13 @@ export const make = Effect.gen(function* () {
 
   const handleArgv = (argv: readonly string[]): Effect.Effect<void> =>
     Effect.gen(function* () {
+      for (const entry of argv) {
+        const projectDeepLink = parseDesktopProjectDeepLink(entry);
+        if (Option.isSome(projectDeepLink)) {
+          yield* enqueueOrProcess({ _tag: "openProject", deepLink: projectDeepLink.value });
+          return;
+        }
+      }
       const deepLink = findDesktopThreadDeepLinkInArgv(argv);
       if (Option.isSome(deepLink)) {
         yield* enqueueOrProcess({ _tag: "openThread", deepLink: deepLink.value });
@@ -317,6 +387,11 @@ export const make = Effect.gen(function* () {
 
   const handleUrl = (url: string): Effect.Effect<void> =>
     Effect.gen(function* () {
+      const projectDeepLink = parseDesktopProjectDeepLink(url);
+      if (Option.isSome(projectDeepLink)) {
+        yield* enqueueOrProcess({ _tag: "openProject", deepLink: projectDeepLink.value });
+        return;
+      }
       const deepLink = parseDesktopThreadDeepLink(url);
       if (Option.isSome(deepLink)) {
         yield* enqueueOrProcess({ _tag: "openThread", deepLink: deepLink.value });

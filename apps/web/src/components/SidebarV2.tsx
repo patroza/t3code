@@ -84,6 +84,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
+import { subscribeToProjectReveal } from "../projectJump";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -1168,6 +1169,20 @@ export default function SidebarV2() {
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
   const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  useEffect(
+    () =>
+      subscribeToProjectReveal(({ environmentId, projectId }) => {
+        const projectGroup = projectGroups.find((project) =>
+          project.memberProjectRefs.some(
+            (ref) => ref.environmentId === environmentId && ref.projectId === projectId,
+          ),
+        );
+        if (projectGroup !== undefined) {
+          setProjectScopeKey(projectGroup.projectKey);
+        }
+      }),
+    [projectGroups],
+  );
   const scopedProjectGroup = useMemo(
     () =>
       projectScopeKey === null
