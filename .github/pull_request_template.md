@@ -19,10 +19,10 @@ we may close it without merging it, or never review it.
 
 <!-- Explain the problem being solved and why this approach is the right one. -->
 
-## Private Fork Relationship
+## Downstream Fork Relationship
 
 <!--
-For private-fork work, name the base branch, affected areas, and whether this depends on another
+For downstream-fork work, name the base branch, affected areas, and whether this depends on another
 open PR. Delete this section for upstream contributions.
 -->
 
