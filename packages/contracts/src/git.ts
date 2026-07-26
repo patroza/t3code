@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
 import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
 import { VcsDriverKind } from "./vcs.ts";
@@ -28,6 +29,11 @@ export const GitActionProgressKind = Schema.Literals([
   "action_failed",
 ]);
 export type GitActionProgressKind = typeof GitActionProgressKind.Type;
+export const GitActionFailureKind = Schema.Literals(["unknown", "commit_signing_failed"]);
+export type GitActionFailureKind = typeof GitActionFailureKind.Type;
+const GitActionFailureKindWithDefault = GitActionFailureKind.pipe(
+  Schema.withDecodingDefaultKey(Effect.succeed("unknown" as const)),
+);
 export const GitActionProgressStream = Schema.Literals(["stdout", "stderr"]);
 export type GitActionProgressStream = typeof GitActionProgressStream.Type;
 const GitCommitStepStatus = Schema.Literals([
@@ -115,6 +121,7 @@ export const GitRunStackedActionInput = Schema.Struct({
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
+  disableCommitSigning: Schema.optional(Schema.Boolean),
   filePaths: Schema.optional(
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
@@ -329,6 +336,7 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   stdoutLength: Schema.optional(Schema.Number),
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
+  failureKind: GitActionFailureKindWithDefault,
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
@@ -432,6 +440,7 @@ const GitActionFailedEvent = Schema.Struct({
   kind: Schema.Literal("action_failed"),
   phase: Schema.NullOr(GitActionProgressPhase),
   message: TrimmedNonEmptyStringSchema,
+  failureKind: GitActionFailureKindWithDefault,
 });
 
 export const GitActionProgressEvent = Schema.Union([
