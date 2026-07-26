@@ -786,9 +786,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       style={{
         paddingTop: isExpanded ? 8 : 6,
         paddingBottom: (props.bottomInset ?? 0) + (isExpanded ? 8 : 6),
+        // Keep the top soft for a short blend into the feed, but make the
+        // lower band nearly opaque so timeline rows never read as sitting
+        // *inside* the composer chrome.
         experimental_backgroundImage: isDarkMode
-          ? "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 55%, rgba(0,0,0,0.9) 100%)"
-          : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.6) 55%, rgba(255,255,255,0.9) 100%)",
+          ? "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.82) 42%, rgba(0,0,0,0.96) 100%)"
+          : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.88) 42%, rgba(255,255,255,0.98) 100%)",
       }}
     >
       <Animated.View
