@@ -31,9 +31,10 @@ export interface Preferences {
    */
   readonly threadListV2Enabled?: boolean;
   /**
-   * Device-local mirror of web `sidebarRecentThreadsEnabled`. When true
-   * (default), the home list and iPad sidebar show a cross-project Recent
-   * section above project groups. Mobile has no client-settings sync.
+   * When true (default), the classic home list / iPad sidebar show a
+   * cross-project **Needs attention** section (Working ∪ blocked Review).
+   * Key name is historical from the earlier "Recent work" toggle — keep for
+   * device preference continuity. Mobile has no client-settings sync.
    */
   readonly recentWorkEnabled?: boolean;
 }
