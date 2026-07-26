@@ -20,6 +20,11 @@ branches.
   a registered overlay directly. Update its branch, or use
   `pnpm fork:stack overlay-start <pr> <branch>` and target the child PR at the overlay branch.
   Draft state blocks merging while normal green CI remains meaningful.
+- Before targeting `fork/changes`, inspect `.github/client-overlay-ownership.json` or run
+  `pnpm fork:overlay-owner <changed-path> [changed-path...]`. Changes owned by an extracted client
+  must update that draft overlay (or a child PR targeting it), not duplicate its implementation in
+  `fork/changes`. Read [docs/client-overlays.md](./docs/client-overlays.md) for mixed shared/client
+  changes and extraction cutovers.
 - Start new work with `pnpm fork:stack start <branch>` and open the PR against `fork/changes`.
   Ordinary feature/import PRs are not added to `.github/pr-stack.json`; they enter the runnable fork
   only after being reviewed and merged into `fork/changes`.
