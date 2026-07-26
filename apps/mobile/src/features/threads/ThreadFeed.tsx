@@ -1418,8 +1418,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ? navigationHeaderHeight || insets.top + 44
     : topContentInset;
 
+  const isDarkMode = useColorScheme() === "dark";
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const userBubbleColor = useThemeColor("--color-user-bubble");
+  const scrollToLatestBackground = useThemeColor("--color-card");
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
       const presentation = resolveMarkdownLinkPresentation(href);
@@ -1582,14 +1584,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     props.listRef.current?.scrollToEnd({ animated: true });
   }, [props.listRef]);
 
-  // The empty↔filled key below remounts the list, which resets its imperative
-  // content-inset override — and useKeyboardChatComposerInset (mounted above
-  // the remount boundary) deduplicates by height, so it never re-reports the
-  // composer inset to the fresh instance. Without this, the remounted list's
-  // initial scroll-to-end computes with a zero end inset and rests one
-  // composer-height short of the end. Layout effect: it must land before the
-  // list's first positioning tick or the one-shot initial scroll misses it.
-  const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
+  // Remount empty→filled once per thread open so initialScrollAtEnd lands under
+  // automatic insets. After the first filled mount for this threadId, keep the
+  // filled key even if the feed briefly empties during sync — remounting then
+  // feels like "conversation cleared and reloaded from scratch".
+  const listMountThreadIdRef = useRef(props.threadId);
+  const sawFilledFeedRef = useRef(props.feed.length > 0);
+  if (listMountThreadIdRef.current !== props.threadId) {
+    listMountThreadIdRef.current = props.threadId;
+    sawFilledFeedRef.current = props.feed.length > 0;
+  } else if (props.feed.length > 0) {
+    sawFilledFeedRef.current = true;
+  }
+  const listMountKey = `${props.threadId}:${sawFilledFeedRef.current ? "filled" : "empty"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
@@ -1963,7 +1970,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 }
                 accessibilityRole="button"
                 onPress={scrollToLatest}
-                className="flex-row items-center gap-1.5 rounded-full border border-border bg-background px-3 py-2 shadow-sm active:opacity-70"
+                // Use the real card token — `bg-background` is not defined in the
+                // mobile theme, so the chip rendered as a transparent outline and
+                // looked like floating text over the feed.
+                className="flex-row items-center gap-1.5 rounded-full border border-border bg-card px-3 py-2 active:opacity-70"
+                style={{
+                  backgroundColor: String(scrollToLatestBackground),
+                  shadowColor: "#000000",
+                  shadowOpacity: isDarkMode ? 0.35 : 0.14,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 4 },
+                  elevation: 6,
+                }}
               >
                 <SymbolView
                   name={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
