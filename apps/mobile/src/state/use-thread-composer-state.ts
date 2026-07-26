@@ -166,54 +166,47 @@ export function useThreadComposerState() {
     loadPage: loadOlderActivitiesPage,
   });
 
+  // Queued / outbox rows are composer chips (KeyboardStickyView), not feed
+  // bubbles — same model as web QueuedMessageChips + contracts.
   const selectedThreadFeed = useMemo(() => {
-    // Local outbox rows must still paint while detail is hydrating — otherwise
-    // send during "Loading messages…" produces no bubble until the snapshot lands.
-    const feed = selectedThreadDetail
-      ? buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities })
-      : [];
-    const timelineMessageIds = new Set(
-      selectedThreadDetail?.messages.map((message) => message.id) ?? [],
-    );
-    const optimisticByMessageId = new Map<
-      MessageId,
-      (typeof feed)[number] & { readonly type: "message" }
-    >();
+    if (!selectedThreadDetail) {
+      return [];
+    }
+    return buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities });
+  }, [selectedThreadDetail, mergedActivities]);
+
+  const composerQueueItems = useMemo(() => {
+    type QueueItem = {
+      readonly messageId: MessageId;
+      readonly text: string;
+      readonly attachmentCount: number;
+      readonly deliveryState: "waiting" | "sending" | "queued";
+      readonly queueSource: "local" | "server";
+      readonly sortAt: string;
+    };
+    const byId = new Map<MessageId, QueueItem>();
+    const timelineIds = new Set(selectedThreadDetail?.messages.map((message) => message.id) ?? []);
 
     for (const message of selectedThreadDetail?.queuedMessages ?? []) {
-      if (timelineMessageIds.has(message.messageId)) {
-        continue;
-      }
-      optimisticByMessageId.set(message.messageId, {
-        type: "message",
-        id: message.messageId,
-        createdAt: message.queuedAt,
+      if (timelineIds.has(message.messageId)) continue;
+      byId.set(message.messageId, {
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
         deliveryState: "queued",
         queueSource: "server",
-        message: {
-          id: message.messageId,
-          role: "user",
-          text: message.text,
-          attachments: message.attachments,
-          turnId: null,
-          streaming: false,
-          createdAt: message.queuedAt,
-          updatedAt: message.queuedAt,
-        },
+        sortAt: message.queuedAt,
       });
     }
 
-    // A local outbox entry wins over the matching server projection until the
-    // command acknowledgement removes it. That makes the bubble transition
-    // from "Sending" to "Queued" without rendering twice.
+    // Local outbox wins for the same id until the ack removes it (sending →
+    // queued transition without a double chip).
     for (const message of selectedThreadQueuedMessages) {
-      if (timelineMessageIds.has(message.messageId)) {
-        continue;
-      }
-      optimisticByMessageId.set(message.messageId, {
-        type: "message",
-        id: message.messageId,
-        createdAt: message.createdAt,
+      if (timelineIds.has(message.messageId)) continue;
+      byId.set(message.messageId, {
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
         queueSource: "local",
         deliveryState: connectedEnvironments.some(
           (environment) =>
@@ -222,31 +215,12 @@ export function useThreadComposerState() {
         )
           ? "sending"
           : "waiting",
-        previewAttachments: message.attachments,
-        message: {
-          id: message.messageId,
-          role: "user",
-          text: message.text,
-          attachments: [],
-          turnId: null,
-          streaming: false,
-          createdAt: message.createdAt,
-          updatedAt: message.createdAt,
-        },
+        sortAt: message.createdAt,
       });
     }
 
-    if (optimisticByMessageId.size === 0) {
-      return feed;
-    }
-
-    return [
-      ...feed,
-      ...Array.from(optimisticByMessageId.values()).sort((left, right) =>
-        left.createdAt.localeCompare(right.createdAt),
-      ),
-    ];
-  }, [connectedEnvironments, selectedThreadDetail, selectedThreadQueuedMessages, mergedActivities]);
+    return Array.from(byId.values()).sort((left, right) => left.sortAt.localeCompare(right.sortAt));
+  }, [connectedEnvironments, selectedThreadDetail, selectedThreadQueuedMessages]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -528,6 +502,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    composerQueueItems,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
