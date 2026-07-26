@@ -1,12 +1,12 @@
 # AGENTS.md
 
-## Private fork branches and pull requests
+## Downstream fork branches and pull requests
 
 Read [docs/fork-stack.md](./docs/fork-stack.md) before creating, rebasing, merging, or retargeting
 branches.
 
 - Before the documented one-time cutover, implementation PRs continue to target `main`.
-- After cutover, `main` is an upstream mirror. Never merge private product work into it.
+- After cutover, `main` is an upstream mirror. Never merge downstream fork work into it.
 - Update `main` only through the `Rebase fork PR stack` workflow. Do not use GitHub's **Sync fork**
   button, open a PR into `main`, or push it manually. The scheduled/manual workflow uses the
   repository-scoped `FORK_STACK_DEPLOY_KEY` to bypass `main` protection, preserve the exact upstream
@@ -14,7 +14,7 @@ branches.
 - `fork/tim` contains only selected Tim Smart integrations above upstream. `fork/candidates`
   contains selected open upstream PRs that we run before upstream accepts them, one provenance
   commit per source PR. The permanent `fork/changes` PR is based on `fork/candidates`, contains only
-  our private layer, remains open, and is the GitHub/T3 default branch.
+  our downstream layer, remains open, and is the GitHub/T3 default branch.
 - Long-lived upstreamable features may be registered as `integrationOverlays`. They remain parallel
   draft PRs based on `fork/changes`; `fork/integration` composes them in manifest order. Never merge
   a registered overlay directly. Update its branch, or use
@@ -45,10 +45,11 @@ branches.
   `fork/changes`. Cherry-pick only wanted commits, explicitly document imported, adapted, and
   excluded pieces, and never merge a source branch wholesale.
 - Run and deploy from `fork/integration`, never from a temporary feature or import branch.
-- All features must land in `fork/changes`, including upstreamable work. After its private PR merges,
-  use `pnpm fork:stack promote <private-pr> <upstream-branch>` to extract a clean projection onto
+- All features must land in `fork/changes`, including upstreamable work. After its downstream PR
+  merges, use `pnpm fork:stack promote <downstream-pr> <upstream-branch>` to extract a clean
+  projection onto
   upstream `main`. Use `adopt` only for work that began upstream-first, and `demote` to close an
-  upstream projection without removing the canonical private implementation.
+  upstream projection without removing the canonical downstream implementation.
 
 ### Automatic integration and deployment
 
