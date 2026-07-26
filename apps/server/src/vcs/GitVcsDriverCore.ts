@@ -28,6 +28,7 @@ import {
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { DirenvEnvironment } from "../provider/DirenvEnvironment.ts";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import {
@@ -640,6 +641,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const direnvEnvironment = yield* DirenvEnvironment;
+
+  const approveWorktreeEnvironment = (cwd: string) =>
+    direnvEnvironment.allow({ cwd, environment: process.env }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Failed to approve direnv for a newly created worktree.", {
+          cwd,
+          detail: error.message,
+        }),
+      ),
+    );
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -2275,6 +2287,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
     });
+
+    yield* approveWorktreeEnvironment(worktreePath);
 
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));

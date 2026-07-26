@@ -25,6 +25,7 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeCursorTextGeneration } from "../../textGeneration/CursorTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { DirenvEnvironment } from "../DirenvEnvironment.ts";
 import { makeCursorAdapter } from "../Layers/CursorAdapter.ts";
 import {
   buildInitialCursorProviderSnapshot,
@@ -68,6 +69,7 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
 export type CursorDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
+  | DirenvEnvironment
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
@@ -108,6 +110,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const direnvEnvironment = yield* DirenvEnvironment;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -127,6 +130,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
 
       const adapter = yield* makeCursorAdapter(effectiveConfig, {
         environment: processEnv,
+        resolveEnvironment: direnvEnvironment.resolve,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
       });
