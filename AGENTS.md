@@ -79,6 +79,8 @@ When implementation work for a user request is done (code, docs, config — not 
 2. **Open or update a PR against `fork/changes`** before handing off. Do not target `main` unless
    the change is intentionally an upstream-mirror / promote projection.
 3. **Keep the PR mergeable** before saying “updated the PR” or finishing:
+   - Run **local package typechecks** for the changed scope (see Task Completion Requirements) and
+     focused tests **before** push — do not discover type errors only after Fork CI fails.
    - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>`
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
    - `baseRefName` must be `fork/changes` and `mergeable` should be `MERGEABLE` (CI may still be
@@ -105,8 +107,13 @@ If Discord turn context lists **Linked work items** / Jira issues for the thread
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.
   - Use `vp test run <test-files>` for focused built-in Vite+ tests. Use `vp run test` only when the affected package specifically requires its `test` script.
   - Backend changes must include and run focused tests for the changed behavior.
-  - Run targeted formatting, lint, and type checks for the affected scope when available.
-- Do not run repo-wide `vp check`, `vp run typecheck`, `vp run test`, or equivalent full-suite commands locally unless the user explicitly requests them. CI is responsible for the full verification suite.
+  - **Before every push / PR handoff**, run **local** typecheck for every package whose types can break from the change (not “wait for CI”):
+    - Touched package scripts when available, e.g. `pnpm --filter @t3tools/client-runtime exec tsgo --noEmit`, `apps/web` → `tsgo --noEmit`, `apps/mobile` → `tsc --noEmit` (from package dir or via workspace filter).
+    - Prefer the package’s own typecheck binary over relying on Fork CI **Check** to discover import-extension, exactOptionalPropertyTypes, or cross-package errors.
+    - If `pnpm` prepare/hooks block `pnpm exec`, invoke the workspace binary directly (`node_modules/.bin/tsgo` / `tsc`) from the package directory.
+  - Run targeted formatting and lint for the affected scope when available.
+- Do **not** treat CI as the first typecheck. CI remains the full-suite gate; agents must not open or update a PR knowing only unit tests passed while package typecheck was skipped.
+- Do not run repo-wide `vp check`, `vp run typecheck`, `vp run test`, or equivalent full-suite commands locally unless the user explicitly requests them.
 - After frontend feature development or any user-visible frontend behavior change, the primary agent must run one integrated verification pass for each affected client surface after integrating the work:
   - Web: use the `test-t3-app` skill. Launch one isolated environment, authenticate through the printed pairing URL, and verify the affected flow in the controlled browser.
   - Mobile: use the `test-t3-mobile` skill. Connect one representative iOS Simulator or Android Emulator available on the host to one isolated environment and verify the affected flow. On compatible macOS hosts, prefer iOS for cross-platform changes and stream it through serve-sim in the T3 Code in-app browser or another available agent browser; use Android when it is the affected or viable platform.
