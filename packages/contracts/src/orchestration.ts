@@ -772,6 +772,15 @@ const ThreadQueueRemoveCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueueUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -824,6 +833,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnInterruptCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -851,6 +861,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadTurnInterruptCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
