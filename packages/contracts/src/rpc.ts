@@ -43,6 +43,11 @@ import {
   VcsStatusInput,
   VcsStatusResult,
   VcsStatusStreamEvent,
+  WorktreeCleanupInput,
+  WorktreeCleanupPreviewInput,
+  WorktreeCleanupPreviewResult,
+  WorktreeCleanupResult,
+  WorktreeLifecycleError,
 } from "./git.ts";
 import {
   ReviewDiffPreviewError,
@@ -186,6 +191,8 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
+  vcsPreviewWorktreeCleanup: "vcs.previewWorktreeCleanup",
+  vcsCleanupThreadWorktree: "vcs.cleanupThreadWorktree",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
@@ -538,6 +545,18 @@ export const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsPreviewWorktreeCleanupRpc = Rpc.make(WS_METHODS.vcsPreviewWorktreeCleanup, {
+  payload: WorktreeCleanupPreviewInput,
+  success: WorktreeCleanupPreviewResult,
+  error: Schema.Union([WorktreeLifecycleError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsCleanupThreadWorktreeRpc = Rpc.make(WS_METHODS.vcsCleanupThreadWorktree, {
+  payload: WorktreeCleanupInput,
+  success: WorktreeCleanupResult,
+  error: Schema.Union([WorktreeLifecycleError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
   payload: VcsCreateRefInput,
   success: VcsCreateRefResult,
@@ -826,6 +845,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsPreviewWorktreeCleanupRpc,
+  WsVcsCleanupThreadWorktreeRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
