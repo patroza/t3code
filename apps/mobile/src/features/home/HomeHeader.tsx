@@ -10,7 +10,6 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
@@ -25,6 +24,9 @@ import {
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
+import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
+import { HomeListModeSwitcher } from "./HomeListModeSwitcher";
+import type { HomeListMode } from "./homeListMode";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
@@ -32,17 +34,19 @@ export function HomeHeader(props: {
   readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly searchQuery: string;
-  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly listMode: HomeListMode;
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+  readonly onListModeChange: (mode: HomeListMode) => void;
+  readonly onClearEnvironments: () => void;
+  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
-  readonly onOpenBoard: () => void;
   readonly onStartNewTask: () => void;
 }) {
   if (Platform.OS === "android") {
@@ -58,17 +62,27 @@ function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
 }
 
+/** Sort controls only apply in Projects mode. */
+function usesListOrganization(listMode: HomeListMode) {
+  return listMode === "projects";
+}
+
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
-  // key the "customized" icon state off the environment filter alone.
-  const threadListV2Enabled = useThreadListV2Enabled();
-  const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
-    : hasCustomHomeListOptions(props);
+  const listOrganization = usesListOrganization(props.listMode);
+  const hasCustomListOptions =
+    props.selectedEnvironmentIds.length > 0 ||
+    props.selectedProjectKey !== null ||
+    (listOrganization &&
+      hasCustomHomeListOptions({
+        selectedEnvironmentIds: props.selectedEnvironmentIds,
+        listMode: props.listMode,
+        projectSortOrder: props.projectSortOrder,
+        threadSortOrder: props.threadSortOrder,
+        selectedProjectKey: props.selectedProjectKey,
+      }));
   const menuActions = useMemo<MenuAction[]>(
     () => [
       {
@@ -78,16 +92,18 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
           {
             id: "environment:all",
             title: "All environments",
-            state: checkedMenuState(props.selectedEnvironmentId === null),
+            state: checkedMenuState(isAllEnvironmentsSelected(props.selectedEnvironmentIds)),
           },
           ...props.environments.map((environment) => ({
             id: `environment:${environment.environmentId}`,
             title: environment.label,
-            state: checkedMenuState(props.selectedEnvironmentId === environment.environmentId),
+            state: checkedMenuState(
+              isEnvironmentSelected(props.selectedEnvironmentIds, environment.environmentId),
+            ),
           })),
         ],
       },
-      ...(props.projects.length === 0
+      ...(props.projects.length === 0 || props.listMode === "board"
         ? []
         : ([
             {
@@ -107,9 +123,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
-      ...(threadListV2Enabled
-        ? []
-        : ([
+      ...(listOrganization
+        ? ([
             {
               id: "project-sort",
               title: "Sort projects",
@@ -128,34 +143,31 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 state: checkedMenuState(props.threadSortOrder === option.value),
               })),
             },
-          ] satisfies MenuAction[])),
+          ] satisfies MenuAction[])
+        : []),
     ],
     [
+      listOrganization,
       props.environments,
+      props.listMode,
       props.projectSortOrder,
       props.projects,
-      props.selectedEnvironmentId,
+      props.selectedEnvironmentIds,
       props.selectedProjectKey,
       props.threadSortOrder,
-      threadListV2Enabled,
     ],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
       if (id === "environment:all") {
-        props.onEnvironmentChange(null);
+        props.onClearEnvironments();
         return;
       }
 
       if (id.startsWith("environment:")) {
-        const environmentId = id.slice("environment:".length);
-        const environment = props.environments.find(
-          (candidate) => candidate.environmentId === environmentId,
-        );
-        if (environment) {
-          props.onEnvironmentChange(environment.environmentId);
-        }
+        const environmentId = id.slice("environment:".length) as EnvironmentId;
+        props.onToggleEnvironment(environmentId);
         return;
       }
 
@@ -201,7 +213,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         <View className="w-full max-w-[720px] self-center gap-3">
           <View className="flex-row items-center gap-2.5">
             <View className="flex-1 flex-row items-center gap-2">
-              {/* Mirrors the desktop SidebarBrand: T3 mark + muted "Code". */}
               <T3Wordmark color={iconColor} height={15} />
               <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
                 Code
@@ -235,22 +246,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 />
               </Pressable>
             </ControlPillMenu>
-            {/* Built identically to the filter button so the two circles
-                match exactly (ControlPill sizes via Tailwind classes and
-                resolves to a different box). */}
-            <Pressable
-              accessibilityLabel="Open board"
-              accessibilityRole="button"
-              onPress={props.onOpenBoard}
-              className="size-11 items-center justify-center rounded-full bg-subtle"
-            >
-              <SymbolView
-                name="square.split.2x1"
-                size={18}
-                tintColor={iconColor}
-                type="monochrome"
-              />
-            </Pressable>
             <Pressable
               accessibilityLabel="Open settings"
               accessibilityRole="button"
@@ -261,32 +256,41 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
             </Pressable>
           </View>
 
-          <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
-            <SymbolView name="magnifyingglass" size={17} tintColor={mutedColor} type="monochrome" />
-            <TextInput
-              accessibilityLabel="Search threads"
-              autoCapitalize="none"
-              onChangeText={props.onSearchQueryChange}
-              placeholder="Search threads"
-              placeholderTextColorClassName="accent-placeholder"
-              className="flex-1 py-2.5 text-base font-sans text-foreground"
-              value={props.searchQuery}
-            />
-            {props.searchQuery.length > 0 ? (
-              <Pressable
-                accessibilityLabel="Clear search"
-                hitSlop={10}
-                onPress={() => props.onSearchQueryChange("")}
-              >
-                <SymbolView
-                  name="xmark.circle.fill"
-                  size={17}
-                  tintColor={mutedColor}
-                  type="monochrome"
-                />
-              </Pressable>
-            ) : null}
-          </View>
+          <HomeListModeSwitcher mode={props.listMode} onModeChange={props.onListModeChange} />
+
+          {props.listMode === "board" ? null : (
+            <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
+              <SymbolView
+                name="magnifyingglass"
+                size={17}
+                tintColor={mutedColor}
+                type="monochrome"
+              />
+              <TextInput
+                accessibilityLabel="Search threads"
+                autoCapitalize="none"
+                onChangeText={props.onSearchQueryChange}
+                placeholder="Search threads"
+                placeholderTextColorClassName="accent-placeholder"
+                className="flex-1 py-2.5 text-base font-sans text-foreground"
+                value={props.searchQuery}
+              />
+              {props.searchQuery.length > 0 ? (
+                <Pressable
+                  accessibilityLabel="Clear search"
+                  hitSlop={10}
+                  onPress={() => props.onSearchQueryChange("")}
+                >
+                  <SymbolView
+                    name="xmark.circle.fill"
+                    size={17}
+                    tintColor={mutedColor}
+                    type="monochrome"
+                  />
+                </Pressable>
+              ) : null}
+            </View>
+          )}
         </View>
       </View>
     </>
@@ -296,21 +300,37 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
-  // key the "customized" icon state off the environment filter alone.
-  const threadListV2Enabled = useThreadListV2Enabled();
-  const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
-    : hasCustomHomeListOptions(props);
+  const listOrganization = usesListOrganization(props.listMode);
+  const hasCustomListOptions =
+    props.selectedEnvironmentIds.length > 0 ||
+    props.selectedProjectKey !== null ||
+    (listOrganization &&
+      hasCustomHomeListOptions({
+        selectedEnvironmentIds: props.selectedEnvironmentIds,
+        listMode: props.listMode,
+        projectSortOrder: props.projectSortOrder,
+        threadSortOrder: props.threadSortOrder,
+        selectedProjectKey: props.selectedProjectKey,
+      }));
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
   }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const filterMenu = buildHomeListFilterMenu({
-    ...props,
-    listOrganization: !threadListV2Enabled,
+    environments: props.environments,
+    projects: props.projects,
+    selectedEnvironmentIds: props.selectedEnvironmentIds,
+    selectedProjectKey: props.selectedProjectKey,
+    projectSortOrder: props.projectSortOrder,
+    threadSortOrder: props.threadSortOrder,
+    onClearEnvironments: props.onClearEnvironments,
+    onToggleEnvironment: props.onToggleEnvironment,
+    onProjectChange: props.onProjectChange,
+    onProjectSortOrderChange: props.onProjectSortOrderChange,
+    onThreadSortOrderChange: props.onThreadSortOrderChange,
+    listOrganization,
+    showProjectFilter: props.listMode !== "board",
   });
 
   return (
@@ -318,20 +338,10 @@ function IosHomeHeader(props: HomeHeaderProps) {
       <NativeStackScreenOptions
         optionsVersion={filterMenu.items}
         options={{
-          // Static header config (glass, title, fonts) lives in Stack.tsx
-          // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
-                  withNativeGlassHeaderItem({
-                    accessibilityLabel: "Open board",
-                    icon: { name: "square.split.2x1", type: "sfSymbol" } as const,
-                    identifier: "home-board",
-                    label: "",
-                    onPress: props.onOpenBoard,
-                    type: "button",
-                  }),
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -381,12 +391,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
       {Platform.OS === "ios" ? null : (
         <NativeHeaderToolbar placement="right">
           <NativeHeaderToolbar.Button
-            accessibilityLabel="Open board"
-            icon="square.split.2x1"
-            onPress={props.onOpenBoard}
-            separateBackground
-          />
-          <NativeHeaderToolbar.Button
             accessibilityLabel="Open settings"
             icon="gearshape"
             onPress={props.onOpenSettings}
@@ -410,8 +414,8 @@ function IosHomeHeader(props: HomeHeaderProps) {
             <NativeHeaderToolbar.Menu title="Environment">
               <NativeHeaderToolbar.Label>Environment</NativeHeaderToolbar.Label>
               <NativeHeaderToolbar.MenuAction
-                isOn={props.selectedEnvironmentId === null}
-                onPress={() => props.onEnvironmentChange(null)}
+                isOn={isAllEnvironmentsSelected(props.selectedEnvironmentIds)}
+                onPress={() => props.onClearEnvironments()}
                 subtitle="Show threads from every environment"
               >
                 <NativeHeaderToolbar.Label>All environments</NativeHeaderToolbar.Label>
@@ -419,15 +423,18 @@ function IosHomeHeader(props: HomeHeaderProps) {
               {props.environments.map((environment) => (
                 <NativeHeaderToolbar.MenuAction
                   key={environment.environmentId}
-                  isOn={props.selectedEnvironmentId === environment.environmentId}
-                  onPress={() => props.onEnvironmentChange(environment.environmentId)}
+                  isOn={isEnvironmentSelected(
+                    props.selectedEnvironmentIds,
+                    environment.environmentId,
+                  )}
+                  onPress={() => props.onToggleEnvironment(environment.environmentId)}
                 >
                   <NativeHeaderToolbar.Label>{environment.label}</NativeHeaderToolbar.Label>
                 </NativeHeaderToolbar.MenuAction>
               ))}
             </NativeHeaderToolbar.Menu>
 
-            {props.projects.length > 0 ? (
+            {props.projects.length > 0 && props.listMode !== "board" ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>
                 <NativeHeaderToolbar.MenuAction
@@ -449,31 +456,35 @@ function IosHomeHeader(props: HomeHeaderProps) {
               </NativeHeaderToolbar.Menu>
             ) : null}
 
-            <NativeHeaderToolbar.Menu title="Sort projects">
-              <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
-              {PROJECT_SORT_OPTIONS.map((option) => (
-                <NativeHeaderToolbar.MenuAction
-                  key={option.value}
-                  isOn={props.projectSortOrder === option.value}
-                  onPress={() => props.onProjectSortOrderChange(option.value)}
-                >
-                  <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-              ))}
-            </NativeHeaderToolbar.Menu>
+            {listOrganization ? (
+              <>
+                <NativeHeaderToolbar.Menu title="Sort projects">
+                  <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
+                  {PROJECT_SORT_OPTIONS.map((option) => (
+                    <NativeHeaderToolbar.MenuAction
+                      key={option.value}
+                      isOn={props.projectSortOrder === option.value}
+                      onPress={() => props.onProjectSortOrderChange(option.value)}
+                    >
+                      <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
+                    </NativeHeaderToolbar.MenuAction>
+                  ))}
+                </NativeHeaderToolbar.Menu>
 
-            <NativeHeaderToolbar.Menu title="Sort threads">
-              <NativeHeaderToolbar.Label>Sort threads</NativeHeaderToolbar.Label>
-              {THREAD_SORT_OPTIONS.map((option) => (
-                <NativeHeaderToolbar.MenuAction
-                  key={option.value}
-                  isOn={props.threadSortOrder === option.value}
-                  onPress={() => props.onThreadSortOrderChange(option.value)}
-                >
-                  <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-              ))}
-            </NativeHeaderToolbar.Menu>
+                <NativeHeaderToolbar.Menu title="Sort threads">
+                  <NativeHeaderToolbar.Label>Sort threads</NativeHeaderToolbar.Label>
+                  {THREAD_SORT_OPTIONS.map((option) => (
+                    <NativeHeaderToolbar.MenuAction
+                      key={option.value}
+                      isOn={props.threadSortOrder === option.value}
+                      onPress={() => props.onThreadSortOrderChange(option.value)}
+                    >
+                      <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
+                    </NativeHeaderToolbar.MenuAction>
+                  ))}
+                </NativeHeaderToolbar.Menu>
+              </>
+            ) : null}
           </NativeHeaderToolbar.Menu>
           <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
           <NativeHeaderToolbar.SearchBarSlot />
@@ -486,6 +497,10 @@ function IosHomeHeader(props: HomeHeaderProps) {
           />
         </NativeHeaderToolbar>
       )}
+
+      <View className="border-b border-header-border bg-header px-4 py-2">
+        <HomeListModeSwitcher mode={props.listMode} onModeChange={props.onListModeChange} />
+      </View>
     </>
   );
 }
