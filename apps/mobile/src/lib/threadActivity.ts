@@ -1,5 +1,6 @@
 import { ApprovalRequestId, isToolLifecycleItemType } from "@t3tools/contracts";
 import type {
+  MessageId,
   OrchestrationLatestTurn,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -156,7 +157,10 @@ export function deriveQueuedMessageControls(
 export type ThreadFeedLatestTurn = Pick<
   OrchestrationLatestTurn,
   "turnId" | "state" | "startedAt" | "completedAt"
->;
+> & {
+  /** When set, preferred terminal assistant for this turn (fold visibility). */
+  readonly assistantMessageId?: MessageId | null;
+};
 
 function requestKindFromRequestType(requestType: unknown): PendingApproval["requestKind"] | null {
   switch (requestType) {
@@ -1036,22 +1040,104 @@ interface ThreadFeedTurnFold {
   readonly label: string;
 }
 
+interface MutableTurnGroup {
+  entries: ThreadFeedEntry[];
+  startBoundary: string | null;
+}
+
+/**
+ * When a queued follow-up starts the next turn at the same instant the previous
+ * turn completes, the final assistant message is often stamped with the *new*
+ * turn id while `turns.assistant_message_id` still points at it for the old
+ * turn. That leaves fold logic treating a mid-turn status line as "terminal"
+ * and burying the real answer.
+ *
+ * Re-home: if the first assistant message of turn N is at or before the first
+ * user message that follows turn N-1, it is a leftover final for turn N-1.
+ * (Genuine first tokens of turn N always land *after* that user message.)
+ */
+function rehomeOrphanTurnFinals(
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  groupsByTurnId: Map<TurnId, MutableTurnGroup>,
+): void {
+  const userCreatedAts = feed
+    .filter(
+      (entry): entry is Extract<ThreadFeedEntry, { type: "message" }> =>
+        entry.type === "message" && entry.message.role === "user",
+    )
+    .map((entry) => entry.createdAt);
+
+  const ordered = [...groupsByTurnId.entries()].sort((left, right) => {
+    const leftAt = left[1].entries[0]?.createdAt ?? left[1].startBoundary ?? "";
+    const rightAt = right[1].entries[0]?.createdAt ?? right[1].startBoundary ?? "";
+    return leftAt.localeCompare(rightAt);
+  });
+
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    if (!previous || !current) continue;
+    const [, previousGroup] = previous;
+    const [, currentGroup] = current;
+
+    const previousLastAt =
+      previousGroup.entries.at(-1)?.createdAt ?? previousGroup.startBoundary ?? null;
+    if (previousLastAt === null) continue;
+
+    // First user message at or after the previous turn's last entry — the
+    // follow-up that opens the next turn (often same ms as the orphan final).
+    const nextUserAt = userCreatedAts.find((createdAt) => createdAt >= previousLastAt) ?? null;
+    if (nextUserAt === null) continue;
+
+    const firstAssistantIndex = currentGroup.entries.findIndex(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
+    if (firstAssistantIndex < 0) continue;
+    const firstAssistant = currentGroup.entries[firstAssistantIndex];
+    if (!firstAssistant || firstAssistant.type !== "message") continue;
+    if (firstAssistant.createdAt > nextUserAt) continue;
+
+    currentGroup.entries.splice(firstAssistantIndex, 1);
+    previousGroup.entries.push(firstAssistant);
+  }
+}
+
+function resolveTurnTerminalEntryId(
+  turnId: TurnId,
+  entries: ReadonlyArray<ThreadFeedEntry>,
+  latestTurn: ThreadFeedLatestTurn | null,
+): string | null {
+  if (
+    latestTurn?.turnId === turnId &&
+    latestTurn.assistantMessageId !== null &&
+    latestTurn.assistantMessageId !== undefined
+  ) {
+    const preferredId = String(latestTurn.assistantMessageId);
+    const preferred = entries.find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        (entry.id === preferredId || String(entry.message.id) === preferredId),
+    );
+    if (preferred) {
+      return preferred.id;
+    }
+  }
+
+  let lastAssistantId: string | null = null;
+  for (const entry of entries) {
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      lastAssistantId = entry.id;
+    }
+  }
+  return lastAssistantId;
+}
+
 function deriveThreadFeedTurnFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestTurn: ThreadFeedLatestTurn | null,
 ): ReadonlyMap<string, ThreadFeedTurnFold> {
-  const terminalAssistantMessageIdByTurn = new Map<TurnId, string>();
-  for (const entry of feed) {
-    if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
-      terminalAssistantMessageIdByTurn.set(entry.message.turnId, entry.id);
-    }
-  }
-
-  interface TurnGroup {
-    readonly entries: ThreadFeedEntry[];
-    readonly startBoundary: string | null;
-  }
-  const groupsByTurnId = new Map<TurnId, TurnGroup>();
+  const groupsByTurnId = new Map<TurnId, MutableTurnGroup>();
   let pendingUserBoundary: string | null = null;
   for (const entry of feed) {
     if (entry.type === "message" && entry.message.role === "user") {
@@ -1079,6 +1165,48 @@ function deriveThreadFeedTurnFolds(
     group.entries.push(entry);
   }
 
+  // Pull mis-stamped finals (queue drain / turn flip) back onto the prior turn.
+  rehomeOrphanTurnFinals(feed, groupsByTurnId);
+
+  // If latestTurn names a terminal message still stamped with another turn id,
+  // force it into the latest turn's group for fold membership.
+  if (latestTurn?.assistantMessageId != null) {
+    const preferredId = String(latestTurn.assistantMessageId);
+    let ownedBy: TurnId | null = null;
+    let ownedEntry: ThreadFeedEntry | null = null;
+    for (const [turnId, group] of groupsByTurnId) {
+      const found = group.entries.find(
+        (entry) =>
+          entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          (entry.id === preferredId || String(entry.message.id) === preferredId),
+      );
+      if (found) {
+        ownedBy = turnId;
+        ownedEntry = found;
+        break;
+      }
+    }
+    if (ownedBy !== null && ownedBy !== latestTurn.turnId && ownedEntry !== null) {
+      const source = groupsByTurnId.get(ownedBy);
+      const target = groupsByTurnId.get(latestTurn.turnId);
+      if (source) {
+        source.entries = source.entries.filter((entry) => entry.id !== ownedEntry.id);
+      }
+      if (target) {
+        if (!target.entries.some((entry) => entry.id === ownedEntry.id)) {
+          target.entries.push(ownedEntry);
+        }
+      } else if (source) {
+        // Latest turn may not have had any entries yet under its id.
+        groupsByTurnId.set(latestTurn.turnId, {
+          entries: [ownedEntry],
+          startBoundary: source.startBoundary,
+        });
+      }
+    }
+  }
+
   const unsettledTurnId = deriveUnsettledTurnId(latestTurn);
   const foldsByAnchorId = new Map<string, ThreadFeedTurnFold>();
   for (const [turnId, group] of groupsByTurnId) {
@@ -1090,7 +1218,7 @@ function deriveThreadFeedTurnFolds(
       continue;
     }
 
-    const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
+    const terminalAssistantMessageId = resolveTurnTerminalEntryId(turnId, entries, latestTurn);
     const hiddenEntryIds = new Set(
       entries.filter((entry) => entry.id !== terminalAssistantMessageId).map((entry) => entry.id),
     );
