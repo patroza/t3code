@@ -7,6 +7,7 @@ import {
   navigateComposerInputHistory,
   normalizeComposerInputHistoryEntries,
   pushComposerInputHistory,
+  recallComposerInputHistory,
   resolveComposerInputHistoryKeyAction,
   seedComposerInputHistoryFromConversation,
   shouldNavigateComposerInputHistory,
@@ -41,6 +42,27 @@ describe("pushComposerInputHistory", () => {
     state = pushComposerInputHistory(state, "two", { maxEntries: 2 });
     state = pushComposerInputHistory(state, "three", { maxEntries: 2 });
     expect(state.entries).toEqual(["two", "three"]);
+  });
+});
+
+describe("recallComposerInputHistory", () => {
+  it("edits the recalled value and restores the existing draft on ArrowDown", () => {
+    const recalled = recallComposerInputHistory(
+      {
+        entries: ["older"],
+        browsingIndex: null,
+        stashedDraft: "",
+      },
+      "queued follow-up",
+      "unfinished draft",
+    );
+    expect(recalled.entries).toEqual(["older", "queued follow-up"]);
+    expect(recalled.browsingIndex).toBe(1);
+    expect(navigateComposerInputHistory(recalled, "down", "edited follow-up")).toMatchObject({
+      handled: true,
+      value: "unfinished draft",
+      state: { browsingIndex: null },
+    });
   });
 });
 
