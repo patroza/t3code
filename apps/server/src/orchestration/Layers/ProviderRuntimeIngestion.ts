@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { isDefaultThreadTitle, sanitizeTitle } from "@t3tools/shared/threadTitle";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -1744,12 +1745,17 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.meta.update",
-          commandId: yield* providerCommandId(event, "thread-meta-update"),
-          threadId: thread.id,
-          title: event.payload.name,
-        });
+        if (isDefaultThreadTitle(thread.title)) {
+          const sanitized = sanitizeTitle(event.payload.name);
+          if (sanitized.length > 0) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.meta.update",
+              commandId: yield* providerCommandId(event, "thread-meta-update"),
+              threadId: thread.id,
+              title: sanitized,
+            });
+          }
+        }
       }
 
       if (event.type === "turn.diff.updated") {
