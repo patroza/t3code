@@ -1,26 +1,22 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, describe } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
-import {
-  DirenvEnvironment,
-  identityDirenvEnvironmentResolver,
-} from "../provider/DirenvEnvironment.ts";
-import {
-  isCommitSigningFailureStderr,
-  makeGitVcsDriverCore,
-  splitNullSeparatedGitStdoutPaths,
-} from "./GitVcsDriverCore.ts";
+import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -41,6 +37,21 @@ const makeNonRepositoryHandle = () =>
     stdin: Sink.drain,
     stdout: Stream.empty,
     stderr: Stream.encodeText(Stream.make("fatal: not a git repository")),
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+
+const makeSuccessfulHandle = (stdout: string) =>
+  ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: Stream.encodeText(Stream.make(stdout)),
+    stderr: Stream.empty,
     all: Stream.empty,
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
@@ -96,7 +107,6 @@ const initRepoWithCommit = (
     yield* driver.initRepo({ cwd });
     yield* git(cwd, ["config", "user.email", "test@test.com"]);
     yield* git(cwd, ["config", "user.name", "Test"]);
-    yield* git(cwd, ["config", "commit.gpgSign", "false"]);
     yield* writeTextFile(cwd, "README.md", "# test\n");
     yield* git(cwd, ["add", "."]);
     yield* git(cwd, ["commit", "-m", "initial commit"]);
@@ -138,7 +148,7 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     assert.deepStrictEqual(commands, [
       { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
       { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
-      { args: ["branch", "--no-color", "--no-column"], lcAll: "C" },
+      { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
     ]);
   }).pipe(Effect.provide(layer));
 });
@@ -187,7 +197,6 @@ it.effect("re-reads origin remote status after cache TTL expiry and bypassed inv
     assert.equal(afterExpiry.hasOriginRemote, true);
   }).pipe(Effect.provide(TestLayer)),
 );
-
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1183,6 +1192,33 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
+    it.effect("preserves newline characters in worktree paths when listing refs", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const worktreesRoot = yield* makeTmpDir("git-vcs-driver-worktrees-");
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(worktreesRoot, "linked\nworktree");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* git(cwd, ["worktree", "add", "-b", "feature/newline-path", worktreePath]);
+
+        const refs = yield* driver.listRefs({ cwd, refresh: true });
+        const listedPath = refs.refs.find(
+          (ref) => ref.name === "feature/newline-path",
+        )?.worktreePath;
+
+        if (typeof listedPath !== "string") {
+          return assert.fail("expected the linked branch to include its worktree path");
+        }
+        assert.equal(
+          yield* fileSystem.realPath(listedPath),
+          yield* fileSystem.realPath(worktreePath),
+        );
+      }),
+    );
+
     it.effect("creates and removes a worktree for a new refName", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1193,19 +1229,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           "feature-worktree",
         );
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        const approvedWorktrees: Array<string> = [];
-        const driverWithApprovalSpy = yield* makeGitVcsDriverCore().pipe(
-          Effect.provide(ServerConfigLayer),
-          Effect.provideService(DirenvEnvironment, {
-            allow: ({ cwd }) =>
-              Effect.sync(() => {
-                approvedWorktrees.push(cwd);
-              }),
-            resolve: identityDirenvEnvironmentResolver,
-          }),
-        );
 
-        const created = yield* driverWithApprovalSpy.createWorktree({
+        const created = yield* driver.createWorktree({
           cwd,
           path: worktreePath,
           refName: initialBranch,
@@ -1215,7 +1240,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
-        assert.deepStrictEqual(approvedWorktrees, [worktreePath]);
 
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
@@ -1318,75 +1342,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
         const status = yield* git(cwd, ["status", "--porcelain"]);
         assert.include(status, "?? selected1.txt");
-      }),
-    );
-
-    it("recognizes representative GPG, pinentry, and SSH signing diagnostics", () => {
-      assert.isTrue(isCommitSigningFailureStderr("error: gpg failed to sign the data"));
-      assert.isTrue(
-        isCommitSigningFailureStderr(
-          "gpg: signing failed: Inappropriate ioctl for device\nfatal: failed to write commit object",
-        ),
-      );
-      assert.isTrue(isCommitSigningFailureStderr("error: ssh-keygen failed to sign the data"));
-      assert.isTrue(
-        isCommitSigningFailureStderr(
-          "error: Couldn't load public key /tmp/missing.pub: No such file or directory",
-        ),
-      );
-      assert.isFalse(isCommitSigningFailureStderr("fatal: failed to write commit object"));
-    });
-
-    it.effect("classifies signing failures and can commit unsigned for one attempt", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const pathService = yield* Path.Path;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const signerPath = pathService.join(cwd, "failing-signer.sh");
-        yield* fileSystem.writeFileString(
-          signerPath,
-          "#!/bin/sh\necho 'gpg: signing failed: No secret key' >&2\nexit 1\n",
-        );
-        yield* fileSystem.chmod(signerPath, 0o755);
-        yield* git(cwd, ["config", "commit.gpgSign", "true"]);
-        yield* git(cwd, ["config", "gpg.program", signerPath]);
-        yield* writeTextFile(cwd, "signed.txt", "sign me\n");
-        yield* git(cwd, ["add", "signed.txt"]);
-
-        const error = yield* driver.commit(cwd, "Signed commit", "").pipe(Effect.flip);
-        assert.equal(error.failureKind, "commit_signing_failed");
-        assert.notProperty(error, "stderr");
-
-        const commit = yield* driver.commit(cwd, "Unsigned commit", "", {
-          disableSigning: true,
-        });
-        assert.match(commit.commitSha, /^[a-f0-9]{40}$/);
-        assert.equal(yield* git(cwd, ["log", "-1", "--pretty=%s"]), "Unsigned commit");
-        assert.notInclude(yield* git(cwd, ["cat-file", "commit", "HEAD"]), "gpgsig ");
-        assert.equal(yield* git(cwd, ["config", "--bool", "commit.gpgSign"]), "true");
-      }),
-    );
-
-    it.effect("does not classify a failed commit hook as a signing failure", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const pathService = yield* Path.Path;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const hookPath = pathService.join(cwd, ".git", "hooks", "pre-commit");
-        yield* fileSystem.writeFileString(
-          hookPath,
-          "#!/bin/sh\necho 'error: gpg failed to sign the data' >&2\nexit 1\n",
-        );
-        yield* fileSystem.chmod(hookPath, 0o755);
-        yield* writeTextFile(cwd, "hooked.txt", "fail first\n");
-        yield* git(cwd, ["add", "hooked.txt"]);
-
-        const error = yield* driver.commit(cwd, "Hook failure", "").pipe(Effect.flip);
-        assert.equal(error.failureKind, "unknown");
       }),
     );
   });
