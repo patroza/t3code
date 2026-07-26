@@ -58,7 +58,86 @@ export const OMEGENT_SLASH_COMMAND = {
           description: "Run in plan mode",
           required: false,
         },
+        {
+          type: Discord.ApplicationCommandOptionType.BOOLEAN,
+          name: "steer",
+          description: "Mid-turn: inject this prompt now (default is queue)",
+          required: false,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.BOOLEAN,
+          name: "queue",
+          description: "Mid-turn: park until the turn finishes (default)",
+          required: false,
+        },
       ],
+    },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "steer",
+      description: "Continue work and inject mid-turn (steer into the active turn)",
+      options: [
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "prompt",
+          description: "What you want Omegent to do",
+          required: true,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "model",
+          description: "Model slug (e.g. gpt-5.4)",
+          required: false,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "provider",
+          description: "Provider instance id (e.g. codex)",
+          required: false,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.BOOLEAN,
+          name: "plan",
+          description: "Run in plan mode",
+          required: false,
+        },
+      ],
+    },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "queue",
+      description: "Continue work and park mid-turn until the active turn finishes",
+      options: [
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "prompt",
+          description: "What you want Omegent to do",
+          required: true,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "model",
+          description: "Model slug (e.g. gpt-5.4)",
+          required: false,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "provider",
+          description: "Provider instance id (e.g. codex)",
+          required: false,
+        },
+        {
+          type: Discord.ApplicationCommandOptionType.BOOLEAN,
+          name: "plan",
+          description: "Run in plan mode",
+          required: false,
+        },
+      ],
+    },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "steernow",
+      description: "Inject every parked follow-up into the active turn (FIFO)",
     },
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
@@ -167,10 +246,17 @@ export function formatAskSlashAck(input: {
   readonly prompt: string;
   readonly plan: boolean;
   readonly local: boolean;
+  readonly followUpDelivery?: "steer" | "queue";
 }): string {
-  const flags = [input.plan ? "`--plan`" : null, input.local ? "`--local`" : null].filter(
-    (value): value is string => value !== null,
-  );
+  const flags = [
+    input.plan ? "`--plan`" : null,
+    input.local ? "`--local`" : null,
+    input.followUpDelivery === "queue"
+      ? "`--queue`"
+      : input.followUpDelivery === "steer"
+        ? "`--steer`"
+        : null,
+  ].filter((value): value is string => value !== null);
   const flagSuffix = flags.length > 0 ? ` (${flags.join(" ")})` : "";
   const preview =
     input.prompt.length > 280 ? `${input.prompt.slice(0, 277).trimEnd()}…` : input.prompt;

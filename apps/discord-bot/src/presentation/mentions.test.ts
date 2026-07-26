@@ -9,6 +9,7 @@ import {
   parseTopicShortName,
   projectTopicFromParentLookup,
   readChannelTopic,
+  resolveDiscordFollowUpDelivery,
 } from "./mentions.ts";
 import {
   chunkDiscordContent,
@@ -120,6 +121,22 @@ describe("parseMentionFlags", () => {
       plan: true,
       prompt: "fix the flaky test",
     });
+  });
+
+  it("parses --steer and --queue with last-wins when both appear", () => {
+    expect(parseMentionFlags("--steer also check the race").followUpDelivery).toBe("steer");
+    expect(parseMentionFlags("--queue park this for later").followUpDelivery).toBe("queue");
+    expect(parseMentionFlags("--steer --queue prefer queue").followUpDelivery).toBe("queue");
+    expect(parseMentionFlags("--queue --steer prefer steer").followUpDelivery).toBe("steer");
+    expect(parseMentionFlags("plain follow-up").followUpDelivery).toBeUndefined();
+  });
+});
+
+describe("resolveDiscordFollowUpDelivery", () => {
+  it("defaults mid-turn Discord delivery to queue", () => {
+    expect(resolveDiscordFollowUpDelivery({})).toBe("queue");
+    expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "steer" })).toBe("steer");
+    expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "queue" })).toBe("queue");
   });
 });
 
