@@ -1158,4 +1158,32 @@ describe("DesktopWindow", () => {
       }).pipe(Effect.provide(layer));
     }),
   );
+
+  it.effect("navigates an existing main window to a project jump route", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        fakeWindow.loadURL.mockClear();
+
+        yield* desktopWindow.navigateToProject({
+          project: "macs-holding/scanner",
+          action: "latest",
+        });
+
+        assert.deepEqual(fakeWindow.loadURL.mock.calls, [
+          ["t3code-dev://app/#/jump?project=macs-holding%2Fscanner&action=latest"],
+        ]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 });

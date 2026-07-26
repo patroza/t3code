@@ -23,7 +23,10 @@ function projectNames(project: EnvironmentProject): ReadonlySet<string> {
   const identity = project.repositoryIdentity;
   const names = [
     project.title,
-    project.workspaceRoot.split(/[\\/]/u).filter(Boolean).at(-1),
+    project.workspaceRoot
+      .replace(/[\\/]+$/u, "")
+      .split(/[\\/]/u)
+      .at(-1),
     identity?.canonicalKey,
     identity?.displayName,
     identity?.name,

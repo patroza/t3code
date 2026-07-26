@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import { vi } from "vite-plus/test";
 
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopConnectionCatalogStore from "./DesktopConnectionCatalogStore.ts";
@@ -52,6 +51,37 @@ describe("DesktopDeepLinks parsing", () => {
     );
     assert.isTrue(Option.isSome(parsed));
     assert.equal(parsed._tag === "Some" ? parsed.value.connectionLabel : null, "t3/vm");
+  });
+
+  it("parses project jumps with short or full repository names", () => {
+    const latest = DesktopDeepLinks.parseDesktopProjectDeepLink(
+      "t3code://open/project?project=macs-holding%2Fscanner&action=latest",
+    );
+    assert.deepEqual(Option.getOrNull(latest), {
+      project: "macs-holding/scanner",
+      action: "latest",
+    });
+    const reveal = DesktopDeepLinks.parseDesktopProjectDeepLink(
+      "t3code://open/project?project=scanner",
+    );
+    assert.deepEqual(Option.getOrNull(reveal), { project: "scanner", action: "reveal" });
+  });
+
+  it("rejects invalid project jump actions and duplicate project values", () => {
+    assert.isTrue(
+      Option.isNone(
+        DesktopDeepLinks.parseDesktopProjectDeepLink(
+          "t3code://open/project?project=scanner&action=remove",
+        ),
+      ),
+    );
+    assert.isTrue(
+      Option.isNone(
+        DesktopDeepLinks.parseDesktopProjectDeepLink(
+          "t3code://open/project?project=scanner&project=configurator",
+        ),
+      ),
+    );
   });
 
   it("parses URL-like environment hosts in short and FQDN forms", () => {
@@ -193,6 +223,9 @@ describe("DesktopDeepLinks catalog resolution", () => {
 describe("DesktopDeepLinks service delivery", () => {
   const makeHarness = Effect.gen(function* () {
     const navigations = yield* Ref.make<Array<{ environmentId: string; threadId: string }>>([]);
+    const projectNavigations = yield* Ref.make<
+      Array<{ project: string; action: "reveal" | "latest" | "new" }>
+    >([]);
     const activations = yield* Ref.make(0);
     const catalogJsonRef = yield* Ref.make(
       Option.some(
@@ -222,6 +255,10 @@ describe("DesktopDeepLinks service delivery", () => {
           ...items,
           { environmentId: input.environmentId, threadId: input.threadId },
         ]),
+      navigateToProject: (input: {
+        readonly project: string;
+        readonly action: "reveal" | "latest" | "new";
+      }) => Ref.update(projectNavigations, (items) => [...items, input]),
     } as unknown as DesktopWindow.DesktopWindow["Service"]);
 
     const catalogLayer = Layer.succeed(
@@ -238,7 +275,7 @@ describe("DesktopDeepLinks service delivery", () => {
       Layer.provide(catalogLayer),
     );
 
-    return { layer, navigations, activations, catalogJsonRef } as const;
+    return { layer, navigations, projectNavigations, activations, catalogJsonRef } as const;
   });
 
   it.effect("queues initial-launch delivery until start, then opens the thread", () =>
@@ -274,6 +311,22 @@ describe("DesktopDeepLinks service delivery", () => {
             environmentId: "db6d1813-ace4-42bd-9bce-e04ee27e97ff",
             threadId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
           },
+        ]);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("delivers a project jump without resolving an environment in Desktop", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      yield* Effect.gen(function* () {
+        const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
+        yield* deepLinks.start;
+        yield* deepLinks.handleUrl(
+          "t3code://open/project?project=macs-holding%2Fscanner&action=new",
+        );
+        assert.deepEqual(yield* Ref.get(harness.projectNavigations), [
+          { project: "macs-holding/scanner", action: "new" },
         ]);
       }).pipe(Effect.provide(harness.layer));
     }),

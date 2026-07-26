@@ -3,9 +3,9 @@
 T3 Code accepts project jump links in Desktop and on the web:
 
 ```text
-t3code://app/jump?project=scanner
-t3code://app/jump?project=macs-holding%2Fscanner&action=latest
-t3code://app/jump?project=configurator&action=new
+t3code://open/project?project=scanner
+t3code://open/project?project=macs-holding%2Fscanner&action=latest
+t3code://open/project?project=configurator&action=new
 https://<t3-code-host>/jump?project=t3code&action=new
 ```
 
@@ -25,7 +25,7 @@ environments, T3 Code selects the environment with the most recently updated thr
 For launchers such as wlr-which-key, invoke the URI through the desktop URL opener:
 
 ```sh
-xdg-open 't3code://app/jump?project=scanner&action=latest'
+xdg-open 't3code://open/project?project=scanner&action=latest'
 ```
 
 Percent-encode repository slashes (`macs-holding%2Fscanner`) when assembling the URI manually.
