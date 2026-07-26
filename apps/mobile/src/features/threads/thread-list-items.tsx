@@ -18,6 +18,7 @@ import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useEnvironmentServerConfig } from "../../state/entities";
+import { prefetchEnvironmentThread } from "../../state/threads";
 import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
@@ -561,6 +562,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         className="bg-screen"
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -618,6 +622,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         accessibilityState={{ selected }}
         onHoverIn={() => setHovered(true)}
         onHoverOut={() => setHovered(false)}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
