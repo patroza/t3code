@@ -14,8 +14,27 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
-import * as NetService from "@t3tools/shared/Net";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+// Support `t3code --version` (and -v) early so directory ("dir") installs can
+// query the version of the *files on disk* at the install location. The deploy
+// scripts rsync new builds into place; a running instance can then detect that
+// a newer version is present without relying on network auto-updates.
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  try {
+    process.stdout.write(Electron.app.getVersion() + "\n");
+  } finally {
+    process.exit(0);
+  }
+}
+
+const hostProcessPlatform = Effect.runSync(HostProcessPlatform);
+
+if (hostProcessPlatform === "linux") {
+  Electron.app.commandLine.appendSwitch("password-store", "gnome-libsecret");
+}
+
+import * as NetService from "@t3tools/shared/Net";
 import { resolveRemoteT3CliPackageSpec } from "@t3tools/ssh/command";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
@@ -35,6 +54,7 @@ import * as DesktopApp from "./app/DesktopApp.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
 import * as DesktopClerk from "./app/DesktopClerk.ts";
+import * as DesktopDeepLinks from "./app/DesktopDeepLinks.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
 import * as DesktopBackendConfiguration from "./backend/DesktopBackendConfiguration.ts";
@@ -91,7 +111,7 @@ const resolveDesktopSshCliRunner = (
   }
   return {
     packageSpec: resolveRemoteT3CliPackageSpec({
-      appVersion: environment.appVersion,
+      appVersion: serverPackageJson.version,
       updateChannel: settings.updateChannel,
       isDevelopment: environment.isDevelopment,
     }),
@@ -153,6 +173,11 @@ const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopPreviewLayer),
 );
 
+const desktopDeepLinksLayer = DesktopDeepLinks.layer.pipe(
+  Layer.provideMerge(desktopWindowLayer),
+  Layer.provideMerge(desktopFoundationLayer),
+);
+
 // Pool layer instantiates the backend factory once for the Windows
 // primary instance and exposes it via pool.primary. Consumers go through
 // the pool now; the legacy DesktopBackendManager service is gone. The
@@ -183,6 +208,7 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopOpenWith.layer,
   desktopSshLayer,
 ).pipe(
+  Layer.provideMerge(desktopDeepLinksLayer),
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(desktopWslBackendLayer),
   Layer.provideMerge(desktopLocalEnvironmentAuthLayer),
