@@ -196,6 +196,27 @@ export function pushComposerInputHistory(
 }
 
 /**
+ * Place an editable value at the newest history position while preserving the
+ * current live draft on the forward side. ArrowDown restores that draft.
+ */
+export function recallComposerInputHistory(
+  state: ComposerInputHistoryState,
+  recalledValue: string,
+  currentDraft: string,
+  options?: { readonly maxEntries?: number },
+): ComposerInputHistoryState {
+  const maxEntries = options?.maxEntries ?? DEFAULT_COMPOSER_INPUT_HISTORY_MAX_ENTRIES;
+  const entries = [...state.entries, recalledValue].slice(
+    Math.max(0, state.entries.length + 1 - maxEntries),
+  );
+  return {
+    entries,
+    browsingIndex: entries.length - 1,
+    stashedDraft: currentDraft,
+  };
+}
+
+/**
  * Navigate one step through history.
  * Returns `handled: false` when the key should fall through (e.g. Down at live draft).
  */
