@@ -19,10 +19,17 @@ import {
   type SetStateAction,
 } from "react";
 
+import { resolveSelectedEnvironmentIds, toggleEnvironmentId } from "./homeEnvironmentFilter";
+import { DEFAULT_HOME_LIST_MODE, type HomeListMode } from "./homeListMode";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export interface HomeListOptions {
-  readonly selectedEnvironmentId: EnvironmentId | null;
+  /**
+   * Multi-select environment filter. Empty means all environments.
+   * Applies to Recent, Projects, and Board modes.
+   */
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
+  readonly listMode: HomeListMode;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
 }
@@ -55,7 +62,8 @@ export const THREAD_SORT_OPTIONS: ReadonlyArray<{
 
 function defaultHomeListOptions(): HomeListOptions {
   return {
-    selectedEnvironmentId: null,
+    selectedEnvironmentIds: [],
+    listMode: DEFAULT_HOME_LIST_MODE,
     projectSortOrder:
       DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
         ? "updated_at"
@@ -95,7 +103,7 @@ export function hasCustomHomeListOptions(
       ? "updated_at"
       : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER;
   return (
-    options.selectedEnvironmentId !== null ||
+    options.selectedEnvironmentIds.length > 0 ||
     (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
     options.projectSortOrder !== defaultProjectSortOrder ||
     options.threadSortOrder !== DEFAULT_SIDEBAR_THREAD_SORT_ORDER
@@ -107,32 +115,61 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
   const [localOptions, setLocalOptions] = useState<HomeListOptions>(defaultHomeListOptions);
   const options = shared?.options ?? localOptions;
   const setOptions = shared?.setOptions ?? setLocalOptions;
-  const selectedEnvironmentId =
-    options.selectedEnvironmentId !== null &&
-    availableEnvironmentIds.has(options.selectedEnvironmentId)
-      ? options.selectedEnvironmentId
-      : null;
+  const selectedEnvironmentIds = resolveSelectedEnvironmentIds(
+    options.selectedEnvironmentIds,
+    availableEnvironmentIds,
+  );
   const availableOptions =
-    selectedEnvironmentId === options.selectedEnvironmentId
+    selectedEnvironmentIds === options.selectedEnvironmentIds
       ? options
-      : { ...options, selectedEnvironmentId };
+      : { ...options, selectedEnvironmentIds };
   const resolvedOptions: ResolvedHomeListOptions = {
     ...availableOptions,
     projectGroupingMode: shared?.projectGroupingMode ?? "repository",
   };
 
-  const setSelectedEnvironmentId = useCallback((value: EnvironmentId | null) => {
-    setOptions((current) => ({ ...current, selectedEnvironmentId: value }));
-  }, []);
-  const setProjectSortOrder = useCallback((value: HomeProjectSortOrder) => {
-    setOptions((current) => ({ ...current, projectSortOrder: value }));
-  }, []);
-  const setThreadSortOrder = useCallback((value: SidebarThreadSortOrder) => {
-    setOptions((current) => ({ ...current, threadSortOrder: value }));
-  }, []);
+  const setSelectedEnvironmentIds = useCallback(
+    (value: readonly EnvironmentId[]) => {
+      setOptions((current) => ({ ...current, selectedEnvironmentIds: value }));
+    },
+    [setOptions],
+  );
+  const toggleSelectedEnvironmentId = useCallback(
+    (environmentId: EnvironmentId) => {
+      setOptions((current) => ({
+        ...current,
+        selectedEnvironmentIds: toggleEnvironmentId(current.selectedEnvironmentIds, environmentId),
+      }));
+    },
+    [setOptions],
+  );
+  const clearSelectedEnvironments = useCallback(() => {
+    setOptions((current) => ({ ...current, selectedEnvironmentIds: [] }));
+  }, [setOptions]);
+  const setListMode = useCallback(
+    (value: HomeListMode) => {
+      setOptions((current) => ({ ...current, listMode: value }));
+    },
+    [setOptions],
+  );
+  const setProjectSortOrder = useCallback(
+    (value: HomeProjectSortOrder) => {
+      setOptions((current) => ({ ...current, projectSortOrder: value }));
+    },
+    [setOptions],
+  );
+  const setThreadSortOrder = useCallback(
+    (value: SidebarThreadSortOrder) => {
+      setOptions((current) => ({ ...current, threadSortOrder: value }));
+    },
+    [setOptions],
+  );
   return {
     options: resolvedOptions,
-    setSelectedEnvironmentId,
+    setSelectedEnvironmentIds,
+    toggleSelectedEnvironmentId,
+    clearSelectedEnvironments,
+    setListMode,
     setProjectSortOrder,
     setThreadSortOrder,
   } as const;
