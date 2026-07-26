@@ -44,6 +44,7 @@ export function HomeHeader(props: {
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
+  readonly onOpenBoard: () => void;
   readonly onStartNewTask: () => void;
 }) {
   if (Platform.OS === "android") {
@@ -247,6 +248,19 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 match exactly (ControlPill sizes via Tailwind classes and
                 resolves to a different box). */}
             <Pressable
+              accessibilityLabel="Open board"
+              accessibilityRole="button"
+              onPress={props.onOpenBoard}
+              className="size-11 items-center justify-center rounded-full bg-subtle"
+            >
+              <SymbolView
+                name="square.split.2x1"
+                size={18}
+                tintColor={iconColor}
+                type="monochrome"
+              />
+            </Pressable>
+            <Pressable
               accessibilityLabel="Open settings"
               accessibilityRole="button"
               onPress={props.onOpenSettings}
@@ -317,6 +331,14 @@ function IosHomeHeader(props: HomeHeaderProps) {
             Platform.OS === "ios"
               ? () => [
                   withNativeGlassHeaderItem({
+                    accessibilityLabel: "Open board",
+                    icon: { name: "square.split.2x1", type: "sfSymbol" } as const,
+                    identifier: "home-board",
+                    label: "",
+                    onPress: props.onOpenBoard,
+                    type: "button",
+                  }),
+                  withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
                     identifier: "home-settings",
@@ -364,6 +386,12 @@ function IosHomeHeader(props: HomeHeaderProps) {
 
       {Platform.OS === "ios" ? null : (
         <NativeHeaderToolbar placement="right">
+          <NativeHeaderToolbar.Button
+            accessibilityLabel="Open board"
+            icon="square.split.2x1"
+            onPress={props.onOpenBoard}
+            separateBackground
+          />
           <NativeHeaderToolbar.Button
             accessibilityLabel="Open settings"
             icon="gearshape"
