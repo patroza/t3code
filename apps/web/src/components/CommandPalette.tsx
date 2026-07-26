@@ -37,6 +37,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   SettingsIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
 } from "lucide-react";
 import {
@@ -1390,6 +1391,18 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:board",
+    searchTerms: ["board", "kanban", "overview", "dashboard"],
+    title: "Open board",
+    icon: <SquareKanbanIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "board.open",
+    run: async () => {
+      await navigate({ to: "/board" });
+    },
+  });
 
   actionItems.push({
     kind: "action",
