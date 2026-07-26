@@ -26,6 +26,7 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -37,11 +38,15 @@ import { TextGenerationError } from "@t3tools/contracts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
+import type { ProviderRuntimeBindingWithMetadata } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
 import { TextGeneration, type TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
@@ -51,8 +56,10 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import {
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
+  RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
+import { makeProviderRestartRecoveryMarker } from "../../provider/ProviderRestartRecovery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -91,7 +98,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | ProjectionTurnRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -146,18 +156,24 @@ describe("ProviderCommandReactor", () => {
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
-    readonly titleRegenerationCompletionDispatchFailures?: number;
-    readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    readonly deferReactorStart?: boolean;
+    readonly providerBindings?: ReadonlyArray<ProviderRuntimeBindingWithMetadata>;
+    readonly providerBindingsMap?: Map<ThreadId, ProviderRuntimeBindingWithMetadata>;
+    readonly skipDefaultSetup?: boolean;
+    readonly providerInstanceEnabled?: boolean;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
       input?.baseDir ?? NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-"));
     createdBaseDirs.add(baseDir);
-    const { stateDir } = deriveServerPathsSync(baseDir, undefined);
+    const { stateDir, dbPath } = deriveServerPathsSync(baseDir, undefined);
     createdStateDirs.add(stateDir);
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath).pipe(
+      Layer.provide(NodeServices.layer),
+    );
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
@@ -304,6 +320,30 @@ describe("ProviderCommandReactor", () => {
           : {}),
       },
     ];
+    const providerBindings =
+      input?.providerBindingsMap ??
+      new Map((input?.providerBindings ?? []).map((binding) => [binding.threadId, binding]));
+    const directoryUpsert = vi.fn(
+      (binding: Parameters<ProviderSessionDirectory["Service"]["upsert"]>[0]) =>
+        Effect.sync(() => {
+          const existing = providerBindings.get(binding.threadId);
+          providerBindings.set(binding.threadId, {
+            ...existing,
+            ...binding,
+            providerInstanceId: binding.providerInstanceId,
+            lastSeenAt: existing?.lastSeenAt ?? now,
+            runtimePayload:
+              existing?.runtimePayload &&
+              typeof existing.runtimePayload === "object" &&
+              !Array.isArray(existing.runtimePayload) &&
+              binding.runtimePayload &&
+              typeof binding.runtimePayload === "object" &&
+              !Array.isArray(binding.runtimePayload)
+                ? { ...existing.runtimePayload, ...binding.runtimePayload }
+                : (binding.runtimePayload ?? existing?.runtimePayload ?? null),
+          } as ProviderRuntimeBindingWithMetadata);
+        }),
+    );
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
@@ -327,7 +367,7 @@ describe("ProviderCommandReactor", () => {
           instanceId,
           driverKind,
           displayName: undefined,
-          enabled: true,
+          enabled: input?.providerInstanceEnabled ?? true,
           continuationIdentity: {
             driverKind,
             continuationKey:
@@ -349,42 +389,26 @@ describe("ProviderCommandReactor", () => {
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(persistenceLayer),
     );
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(persistenceLayer),
     );
-    let titleRegenerationCompletionDispatchAttempts = 0;
-    const reactorOrchestrationLayer = Layer.effect(
-      OrchestrationEngineService,
-      Effect.gen(function* () {
-        const engine = yield* OrchestrationEngineService;
-        return {
-          readEvents: engine.readEvents,
-          dispatch: (command) => {
-            if (command.type === "thread.title.regeneration.complete") {
-              titleRegenerationCompletionDispatchAttempts += 1;
-              if (
-                titleRegenerationCompletionDispatchAttempts <=
-                (input?.titleRegenerationCompletionDispatchFailures ?? 0)
-              ) {
-                return Effect.die(new Error("Injected title regeneration completion failure"));
-              }
-            }
-            return engine.dispatch(command);
-          },
-          get streamDomainEvents() {
-            return engine.streamDomainEvents;
-          },
-          latestSequence: engine.latestSequence,
-        } satisfies OrchestrationEngineService["Service"];
-      }),
-    ).pipe(Layer.provide(orchestrationLayer));
     const layer = ProviderCommandReactorLive.pipe(
-      Layer.provideMerge(reactorOrchestrationLayer),
+      Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(
+        Layer.succeed(ProviderSessionDirectory, {
+          upsert: directoryUpsert,
+          getProvider: () => Effect.die("getProvider should not be called in this test"),
+          getBinding: (threadId) =>
+            Effect.succeed(Option.fromNullishOr(providerBindings.get(threadId))),
+          listThreadIds: () => Effect.succeed(Array.from(providerBindings.keys())),
+          listBindings: () => Effect.succeed(Array.from(providerBindings.values())),
+        }),
+      ),
       Layer.provideMerge(makeProviderRegistryLayer(providerSnapshots as never)),
       Layer.provideMerge(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
@@ -409,48 +433,46 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(persistenceLayer),
+      Layer.provideMerge(ProjectionTurnRepositoryLive.pipe(Layer.provide(persistenceLayer))),
     );
     runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
-    const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    const turnRepository = await runtime.runPromise(Effect.service(ProjectionTurnRepository));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    let reactorStarted = false;
+    const startReactor = async () => {
+      if (reactorStarted) return;
+      reactorStarted = true;
+      await Effect.runPromise(reactor.start().pipe(Scope.provide(scope!)));
+    };
+    if (input?.deferReactorStart !== true) {
+      await startReactor();
+    }
+    const drain = () => Effect.runPromise(reactor.drain);
 
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.make("cmd-project-create"),
-        projectId: asProjectId("project-1"),
-        title: "Provider Project",
-        workspaceRoot: "/tmp/provider-project",
-        defaultModelSelection: modelSelection,
-        createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("cmd-thread-create"),
-        threadId: ThreadId.make("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Thread",
-        modelSelection: modelSelection,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt: now,
-      }),
-    );
-    if (input?.titleRegenerationBeforeStart === "two") {
+    if (input?.skipDefaultSetup !== true) {
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-project-create"),
+          projectId: asProjectId("project-1"),
+          title: "Provider Project",
+          workspaceRoot: "/tmp/provider-project",
+          defaultModelSelection: modelSelection,
+          createdAt: now,
+        }),
+      );
       await Effect.runPromise(
         engine.dispatch({
           type: "thread.create",
-          commandId: CommandId.make("cmd-thread-create-2"),
-          threadId: ThreadId.make("thread-2"),
+          commandId: CommandId.make("cmd-thread-create"),
+          threadId: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
-          title: "Thread 2",
+          title: "Thread",
           modelSelection: modelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
@@ -460,32 +482,12 @@ describe("ProviderCommandReactor", () => {
         }),
       );
     }
-    const titleRegenerationThreadIds =
-      input?.titleRegenerationBeforeStart === "two"
-        ? [ThreadId.make("thread-1"), ThreadId.make("thread-2")]
-        : input?.titleRegenerationBeforeStart === "one"
-          ? [ThreadId.make("thread-1")]
-          : [];
-    for (const [index, threadId] of titleRegenerationThreadIds.entries()) {
-      await Effect.runPromise(
-        engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.make(
-            `cmd-thread-title-regeneration-before-reactor-start-${index + 1}`,
-          ),
-          threadId,
-          regenerateTitle: true,
-        }),
-      );
-    }
-
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
-    const drain = () => Effect.runPromise(reactor.drain);
 
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readTurns: (threadId: ThreadId) =>
+        Effect.runPromise(turnRepository.listByThreadId({ threadId })),
       startSession,
       sendTurn,
       interruptTurn,
@@ -497,12 +499,11 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      directoryUpsert,
+      providerBindings,
       stateDir,
       drain,
-      runEffect,
-      get titleRegenerationCompletionDispatchAttempts() {
-        return titleRegenerationCompletionDispatchAttempts;
-      },
+      startReactor,
     };
   }
 
@@ -655,6 +656,584 @@ describe("ProviderCommandReactor", () => {
       expect(thread?.session?.lastError).toBeNull();
     }),
   );
+  it("replays a persisted pending turn start exactly once on startup", async () => {
+    const harness = await createHarness({ deferReactorStart: true });
+    const now = "2026-01-01T00:00:00.000Z";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: CommandId.make("cmd-plan-before-pending"),
+        threadId: ThreadId.make("thread-1"),
+        interactionMode: "plan",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-pending-before-restart"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("pending-user-message"),
+          role: "user",
+          text: "resume this exact pending request",
+          attachments: [],
+        },
+        interactionMode: "plan",
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await harness.startReactor();
+    await harness.drain();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.make("thread-1"),
+      input: "resume this exact pending request",
+      interactionMode: "plan",
+    });
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues an interrupted running turn without replaying its user message", async () => {
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-recovery",
+    };
+    const threadId = ThreadId.make("thread-1");
+    const harness = await createHarness({
+      deferReactorStart: true,
+      threadModelSelection: modelSelection,
+      providerBindings: [
+        {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          adapterKey: "codex",
+          runtimeMode: "full-access",
+          status: "stopped",
+          resumeCursor: { threadId: "provider-thread-resume" },
+          runtimePayload: {
+            cwd: "/tmp/persisted-recovery-cwd",
+            modelSelection,
+            interactionMode: "plan",
+            activeTurnId: null,
+            restartRecovery: makeProviderRestartRecoveryMarker({
+              interruptedProviderTurnId: asTurnId("provider-turn-before-restart"),
+              shutdownAt: "2026-01-01T00:00:01.000Z",
+            }),
+          },
+          lastSeenAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-before-restart"),
+        threadId,
+        message: {
+          messageId: asMessageId("running-user-message"),
+          role: "user",
+          text: "the original request must not be replayed",
+          attachments: [],
+        },
+        modelSelection,
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("server:running-before-restart"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: asTurnId("orchestration-turn-before-restart"),
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:00.500Z",
+        },
+        createdAt: "2026-01-01T00:00:00.500Z",
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      cwd: "/tmp/persisted-recovery-cwd",
+      modelSelection,
+      resumeCursor: { threadId: "provider-thread-resume" },
+      runtimeMode: "full-access",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+      attachments: [],
+      modelSelection,
+      interactionMode: "plan",
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const oldTurn = (await harness.readTurns(threadId)).find(
+      (turn) => turn.turnId === asTurnId("orchestration-turn-before-restart"),
+    );
+    expect(oldTurn?.state).toBe("interrupted");
+    expect(thread?.messages.map((message) => message.text)).toEqual([
+      "the original request must not be replayed",
+    ]);
+    expect(harness.providerBindings.get(threadId)?.runtimePayload).toMatchObject({
+      restartRecovery: null,
+      interactionMode: "plan",
+    });
+  });
+
+  it("does not resume settled turns from stale recovery bindings", async () => {
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const markerThreadId = ThreadId.make("thread-1");
+    const legacyThreadId = ThreadId.make("thread-settled-legacy");
+    const markerTurnId = asTurnId("turn-settled-marker");
+    const legacyTurnId = asTurnId("turn-settled-legacy");
+    const harness = await createHarness({
+      deferReactorStart: true,
+      providerBindings: [
+        {
+          threadId: markerThreadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          status: "stopped",
+          resumeCursor: { threadId: "provider-thread-marker" },
+          runtimePayload: {
+            modelSelection,
+            restartRecovery: makeProviderRestartRecoveryMarker({
+              interruptedProviderTurnId: markerTurnId,
+              shutdownAt: "2026-01-01T00:00:02.000Z",
+            }),
+          },
+          lastSeenAt: "2026-01-01T00:00:02.000Z",
+        },
+        {
+          threadId: legacyThreadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          status: "running",
+          resumeCursor: { threadId: "provider-thread-legacy" },
+          runtimePayload: {
+            modelSelection,
+            activeTurnId: legacyTurnId,
+          },
+          lastSeenAt: "2026-01-01T00:00:02.000Z",
+        },
+      ],
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-settled-legacy-thread"),
+        threadId: legacyThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Settled legacy thread",
+        modelSelection,
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const settleTurn = async (threadId: ThreadId, turnId: TurnId, suffix: string) => {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-settled-turn-${suffix}`),
+          threadId,
+          message: {
+            messageId: asMessageId(`message-settled-${suffix}`),
+            role: "user",
+            text: "already finished",
+            attachments: [],
+          },
+          modelSelection,
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          createdAt: "2026-01-01T00:00:00.500Z",
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`server:settled-running-${suffix}`),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:01.000Z",
+          },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`server:settled-ready-${suffix}`),
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:01.500Z",
+          },
+          createdAt: "2026-01-01T00:00:01.500Z",
+        }),
+      );
+    };
+
+    await settleTurn(markerThreadId, markerTurnId, "marker");
+    await settleTurn(legacyThreadId, legacyTurnId, "legacy");
+    expect(
+      (await harness.readTurns(markerThreadId)).find((turn) => turn.turnId === markerTurnId)?.state,
+    ).toBe("completed");
+    expect(
+      (await harness.readTurns(legacyThreadId)).find((turn) => turn.turnId === legacyTurnId)?.state,
+    ).toBe("completed");
+
+    await harness.startReactor();
+    await harness.drain();
+
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    for (const threadId of [markerThreadId, legacyThreadId]) {
+      expect(harness.providerBindings.get(threadId)).toMatchObject({
+        status: "stopped",
+        runtimePayload: {
+          activeTurnId: null,
+          restartRecovery: null,
+          lastRuntimeEvent: "provider.restartRecovery.skipped",
+        },
+      });
+    }
+  });
+
+  it("recovers across temporary-SQLite runtimes and does not repeat a completed recovery", async () => {
+    const baseDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-reactor-two-runtime-"),
+    );
+    const threadId = ThreadId.make("thread-1");
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const persistedBindings = new Map<ThreadId, ProviderRuntimeBindingWithMetadata>();
+    const first = await createHarness({ baseDir, providerBindingsMap: persistedBindings });
+    await Effect.runPromise(
+      first.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-two-runtime-original-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("two-runtime-user-message"),
+          role: "user",
+          text: "finish this after the server restarts",
+          attachments: [],
+        },
+        modelSelection,
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await waitFor(() => first.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      first.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("server:two-runtime-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("orchestration-turn-two-runtime"),
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      first.directoryUpsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required",
+        status: "stopped",
+        resumeCursor: { threadId: "durable-provider-thread" },
+        runtimePayload: {
+          cwd: "/tmp/provider-project",
+          modelSelection,
+          interactionMode: "default",
+          restartRecovery: makeProviderRestartRecoveryMarker({
+            interruptedProviderTurnId: asTurnId("provider-turn-two-runtime"),
+            shutdownAt: "2026-01-01T00:00:02.000Z",
+          }),
+        },
+      }),
+    );
+
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    scope = null;
+    await runtime!.dispose();
+    runtime = null;
+
+    const second = await createHarness({
+      baseDir,
+      providerBindingsMap: persistedBindings,
+      skipDefaultSetup: true,
+    });
+    await second.drain();
+    await waitFor(() => second.sendTurn.mock.calls.length === 1);
+    expect(second.startSession.mock.calls[0]?.[1]).toMatchObject({
+      resumeCursor: { threadId: "durable-provider-thread" },
+      cwd: "/tmp/provider-project",
+      modelSelection,
+      runtimeMode: "approval-required",
+    });
+    expect(second.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+    });
+    const secondReadModel = await second.readModel();
+    expect(
+      secondReadModel.threads
+        .find((thread) => thread.id === threadId)
+        ?.messages.map((message) => message.text),
+    ).toEqual(["finish this after the server restarts"]);
+
+    await Effect.runPromise(
+      second.directoryUpsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "approval-required",
+        status: "running",
+        runtimePayload: { activeTurnId: null, restartRecovery: null },
+      }),
+    );
+    await Effect.runPromise(
+      second.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("server:two-runtime-recovery-complete"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:03.000Z",
+        },
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await Effect.runPromise(Scope.close(scope!, Exit.void));
+    scope = null;
+    await runtime!.dispose();
+    runtime = null;
+
+    const third = await createHarness({
+      baseDir,
+      providerBindingsMap: persistedBindings,
+      skipDefaultSetup: true,
+    });
+    await third.drain();
+    expect(third.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("isolates restart recovery failures and continues unrelated threads", async () => {
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const failedThreadId = ThreadId.make("thread-1");
+    const healthyThreadId = ThreadId.make("thread-2");
+    const marker = makeProviderRestartRecoveryMarker({
+      interruptedProviderTurnId: asTurnId("provider-turn-before-restart"),
+      shutdownAt: "2026-01-01T00:00:01.000Z",
+    });
+    const makeBinding = (
+      threadId: ThreadId,
+      resumeCursor: unknown | null,
+    ): ProviderRuntimeBindingWithMetadata => ({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      adapterKey: "codex",
+      runtimeMode: "approval-required",
+      status: "stopped",
+      resumeCursor,
+      runtimePayload: {
+        cwd: "/tmp/provider-project",
+        modelSelection,
+        interactionMode: "default",
+        restartRecovery: marker,
+      },
+      lastSeenAt: "2026-01-01T00:00:01.000Z",
+    });
+    const harness = await createHarness({
+      deferReactorStart: true,
+      providerBindings: [
+        makeBinding(failedThreadId, null),
+        makeBinding(healthyThreadId, { threadId: "healthy-provider-thread" }),
+      ],
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-recovery-thread-2"),
+        threadId: healthyThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Healthy recovery",
+        modelSelection,
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: healthyThreadId,
+      input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+    });
+
+    const readModel = await harness.readModel();
+    const failedThread = readModel.threads.find((thread) => thread.id === failedThreadId);
+    expect(failedThread?.session?.status).toBe("error");
+    expect(
+      failedThread?.activities.some(
+        (activity) => activity.kind === "provider.turn.recovery.failed",
+      ),
+    ).toBe(true);
+  });
+
+  it("surfaces a disabled provider instance without starting recovery work", async () => {
+    const threadId = ThreadId.make("thread-1");
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const harness = await createHarness({
+      deferReactorStart: true,
+      providerInstanceEnabled: false,
+      providerBindings: [
+        {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          status: "stopped",
+          resumeCursor: { threadId: "disabled-provider-thread" },
+          runtimePayload: {
+            modelSelection,
+            restartRecovery: makeProviderRestartRecoveryMarker({
+              interruptedProviderTurnId: asTurnId("disabled-provider-turn"),
+              shutdownAt: "2026-01-01T00:00:01.000Z",
+            }),
+          },
+          lastSeenAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    });
+
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("error");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.recovery.failed")
+        ?.payload,
+    ).toMatchObject({ detail: expect.stringContaining("disabled") });
+  });
+
+  it("skips archived recovery candidates", async () => {
+    const threadId = ThreadId.make("thread-1");
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const harness = await createHarness({
+      deferReactorStart: true,
+      providerBindings: [
+        {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          status: "stopped",
+          resumeCursor: { threadId: "archived-provider-thread" },
+          runtimePayload: {
+            modelSelection,
+            restartRecovery: makeProviderRestartRecoveryMarker({
+              interruptedProviderTurnId: asTurnId("archived-provider-turn"),
+              shutdownAt: "2026-01-01T00:00:01.000Z",
+            }),
+          },
+          lastSeenAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("cmd-archive-before-recovery"),
+        threadId,
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.providerBindings.get(threadId)?.runtimePayload).toMatchObject({
+      restartRecovery: expect.objectContaining({ version: 1 }),
+    });
+  });
 
   it("generates a thread title on the first turn", async () => {
     const harness = await createHarness();
@@ -704,533 +1283,6 @@ describe("ProviderCommandReactor", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.title).toBe("Generated title");
-  });
-
-  it("regenerates a thread title from the current conversation", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-    harness.generateThreadTitle.mockReturnValue(
-      Effect.succeed({ title: "Resolve stale reconnect state" }),
-    );
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-existing"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Investigate reconnect regressions",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-title-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-title-regeneration"),
-          role: "user",
-          text: "Please investigate reconnect regressions after restarting the session.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.delta",
-        commandId: CommandId.make("cmd-assistant-before-title-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        messageId: asMessageId("assistant-message-before-title-regeneration"),
-        delta: "The remaining issue is stale reconnect state.",
-        createdAt: "2026-01-01T00:00:01.000Z",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: CommandId.make("cmd-assistant-complete-before-title-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        messageId: asMessageId("assistant-message-before-title-regeneration"),
-        createdAt: "2026-01-01T00:00:02.000Z",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-regenerate"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-
-    await harness.drain();
-
-    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
-    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
-      cwd: "/tmp/provider-project",
-      previousTitle: "Investigate reconnect regressions",
-      message: [
-        "USER:",
-        "Please investigate reconnect regressions after restarting the session.",
-        "",
-        "ASSISTANT:",
-        "The remaining issue is stale reconnect state.",
-      ].join("\n"),
-    });
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Resolve stale reconnect state");
-    expect(thread?.titleRegeneration).toBeNull();
-  });
-
-  it("clears title regeneration state left pending across reactor startup", async () => {
-    const harness = await createHarness({
-      titleRegenerationBeforeStart: "one",
-    });
-
-    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
-    expect(harness.titleRegenerationCompletionDispatchAttempts).toBe(1);
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Thread");
-    expect(thread?.titleRegeneration).toBeNull();
-  });
-
-  it("continues clearing startup title regeneration state after one completion fails", async () => {
-    const harness = await createHarness({
-      titleRegenerationBeforeStart: "two",
-      titleRegenerationCompletionDispatchFailures: 1,
-    });
-
-    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
-    expect(harness.titleRegenerationCompletionDispatchAttempts).toBe(2);
-    const readModel = await harness.readModel();
-    expect(
-      readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.titleRegeneration,
-    ).not.toBeNull();
-    expect(
-      readModel.threads.find((entry) => entry.id === ThreadId.make("thread-2"))?.titleRegeneration,
-    ).toBeNull();
-  });
-
-  it("keeps the current title when regeneration returns the fallback", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "New thread" }));
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-before-fallback-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Keep meaningful title",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-fallback-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-fallback-regeneration"),
-          role: "user",
-          text: "Investigate the reconnect state.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-fallback-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-
-    await harness.drain();
-
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Keep meaningful title");
-    expect(thread?.titleRegeneration).toBeNull();
-  });
-
-  it("clears title regeneration state when generation fails", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-before-failed-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Keep title after failure",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-failed-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-failed-regeneration"),
-          role: "user",
-          text: "Investigate the reconnect state.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-failed-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-
-    await harness.drain();
-
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Keep title after failure");
-    expect(thread?.titleRegeneration).toBeNull();
-  });
-
-  it("retries a failed completion and continues regenerating", async () => {
-    const harness = await createHarness({
-      titleRegenerationCompletionDispatchFailures: 1,
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-    harness.generateThreadTitle
-      .mockReturnValueOnce(Effect.succeed({ title: "Title lost to completion failure" }))
-      .mockReturnValueOnce(Effect.succeed({ title: "Recovered regeneration worker" }));
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-before-completion-failure"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Existing title",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-completion-failure"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-completion-failure"),
-          role: "user",
-          text: "Investigate the reconnect state.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-regeneration-completion-failure"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-    await harness.drain();
-
-    let readModel = await harness.readModel();
-    let thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Title lost to completion failure");
-    expect(thread?.titleRegeneration).toBeNull();
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-regeneration-after-completion-failure"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-    await harness.drain();
-
-    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(2);
-    expect(harness.titleRegenerationCompletionDispatchAttempts).toBe(3);
-    readModel = await harness.readModel();
-    thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Recovered regeneration worker");
-    expect(thread?.titleRegeneration).toBeNull();
-  });
-
-  it("keeps the full retained context and excludes attachments outside it", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-    const retainedContext = "x".repeat(8_000);
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-before-truncated-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Existing title",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-truncated-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-truncated-regeneration"),
-          role: "user",
-          text: "Old visual issue",
-          attachments: [
-            {
-              type: "image",
-              id: "old-title-context-image",
-              name: "old-issue.png",
-              mimeType: "image/png",
-              sizeBytes: 5,
-            },
-          ],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.delta",
-        commandId: CommandId.make("cmd-assistant-truncated-regeneration-context"),
-        threadId: ThreadId.make("thread-1"),
-        messageId: asMessageId("assistant-truncated-regeneration-context"),
-        delta: `content before retained tail${"x".repeat(8_100)}`,
-        createdAt: "2026-01-01T00:00:01.000Z",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: CommandId.make("cmd-assistant-truncated-regeneration-context-complete"),
-        threadId: ThreadId.make("thread-1"),
-        messageId: asMessageId("assistant-truncated-regeneration-context"),
-        createdAt: "2026-01-01T00:00:02.000Z",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-regenerate-truncated-context"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-
-    await harness.drain();
-
-    expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(
-      `[Earlier content truncated]\n\n${retainedContext}`,
-    );
-    expect(harness.generateThreadTitle.mock.calls[0]?.[0].attachments).toBeUndefined();
-  });
-
-  it("does not overwrite a manual rename while title regeneration is running", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-    const generatedTitle = await harness.runEffect(
-      Deferred.make<{ readonly title: string }, never>(),
-    );
-    harness.generateThreadTitle.mockReturnValue(Deferred.await(generatedTitle));
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-before-regeneration-race"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Existing thread title",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-regeneration-race"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-regeneration-race"),
-          role: "user",
-          text: "Investigate the reconnect state.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-regeneration-race"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
-    const pendingReadModel = await harness.readModel();
-    expect(
-      pendingReadModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))
-        ?.titleRegeneration?.requestId,
-    ).toBe(CommandId.make("cmd-thread-title-regeneration-race"));
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-manual-rename-during-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Keep manual rename",
-      }),
-    );
-    await harness.runEffect(
-      Deferred.succeed(generatedTitle, { title: "Generated title should not win" }),
-    );
-    await harness.drain();
-
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Keep manual rename");
-    expect(thread?.titleRegeneration).toBeNull();
-  });
-
-  it("does not overwrite a manual rename while title regeneration is queued", async () => {
-    let releaseStart = () => {};
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
-    const harness = await createHarness({
-      startSessionEffect: (session) => Effect.promise(() => startGate).pipe(Effect.as(session)),
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-    harness.generateThreadTitle.mockReturnValue(
-      Effect.succeed({ title: "Generated title should not win" }),
-    );
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-before-queued-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Existing thread title",
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-queued-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-queued-regeneration"),
-          role: "user",
-          text: "Investigate the reconnect state.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-queued-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-manual-rename-before-regeneration-starts"),
-        threadId: ThreadId.make("thread-1"),
-        title: "Keep queued manual rename",
-      }),
-    );
-    releaseStart();
-    await harness.drain();
-
-    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Keep queued manual rename");
-  });
-
-  it("skips superseded title regeneration before generation starts", async () => {
-    let releaseStart = () => {};
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
-    const harness = await createHarness({
-      startSessionEffect: (session) => Effect.promise(() => startGate).pipe(Effect.as(session)),
-    });
-    const now = "2026-01-01T00:00:00.000Z";
-    harness.generateThreadTitle.mockReturnValue(
-      Effect.succeed({ title: "Latest regenerated title" }),
-    );
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-before-superseded-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-before-superseded-regeneration"),
-          role: "user",
-          text: "Investigate the reconnect state.",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-superseded-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-latest-regeneration"),
-        threadId: ThreadId.make("thread-1"),
-        regenerateTitle: true,
-      }),
-    );
-    releaseStart();
-    await harness.drain();
-
-    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
-    expect(harness.titleRegenerationCompletionDispatchAttempts).toBe(1);
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Latest regenerated title");
-    expect(thread?.titleRegeneration).toBeNull();
   });
 
   it("does not overwrite an existing custom thread title on the first turn", async () => {
@@ -2774,7 +2826,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await harness.runEffect(
+    await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-for-stop"),
@@ -2793,7 +2845,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await harness.runEffect(
+    await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.stop",
         commandId: CommandId.make("cmd-session-stop"),
