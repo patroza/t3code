@@ -5,13 +5,14 @@ import { useThemeColor } from "../../lib/useThemeColor";
 
 export interface SidebarHeaderActionsProps {
   readonly onOpenSettings: () => void;
+  readonly onOpenBoard?: () => void;
   /** Rendered inside a shared capsule group — buttons drop their own chrome. */
   readonly grouped?: boolean;
 }
 
 function FallbackHeaderButton(props: {
   readonly accessibilityLabel: string;
-  readonly icon: "gearshape" | "square.and.pencil";
+  readonly icon: "gearshape" | "square.and.pencil" | "square.split.2x1";
   readonly grouped?: boolean;
   readonly onPress: () => void;
 }) {
@@ -47,6 +48,14 @@ function FallbackHeaderButton(props: {
 export function SidebarHeaderActions(props: SidebarHeaderActionsProps) {
   return (
     <View className="flex-row items-center gap-0.5">
+      {props.onOpenBoard ? (
+        <FallbackHeaderButton
+          accessibilityLabel="Open board"
+          grouped={props.grouped}
+          icon="square.split.2x1"
+          onPress={props.onOpenBoard}
+        />
+      ) : null}
       <FallbackHeaderButton
         accessibilityLabel="Open settings"
         grouped={props.grouped}
