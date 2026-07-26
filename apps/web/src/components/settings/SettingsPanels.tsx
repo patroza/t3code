@@ -425,10 +425,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
-      ...(settings.sidebarRecentThreadsEnabled !==
-      DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled
-        ? ["Needs attention"]
-        : []),
       ...(settings.sidebarProjectGroupingMode !==
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
@@ -492,7 +488,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarProjectGroupingMode,
-      settings.sidebarRecentThreadsEnabled,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
       settings.wordWrap,
@@ -518,7 +513,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
-      sidebarRecentThreadsEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
@@ -750,34 +744,6 @@ export function GeneralSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
-        <SettingsRow
-          title="Needs attention"
-          description="Show working and blocked threads (approval, input, plan ready, wake) across projects at the top of the sidebar."
-          resetAction={
-            settings.sidebarRecentThreadsEnabled !==
-            DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled ? (
-              <SettingResetButton
-                label="needs attention"
-                onClick={() =>
-                  updateSettings({
-                    sidebarRecentThreadsEnabled:
-                      DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.sidebarRecentThreadsEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ sidebarRecentThreadsEnabled: Boolean(checked) })
-              }
-              aria-label="Show needs attention"
-            />
-          }
-        />
-
         <SettingsRow
           title="Project Grouping"
           description="Combine matching repositories across environments."

@@ -1,11 +1,6 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
-import {
-  HOME_NEEDS_ATTENTION_GROUP_KEY,
-  HOME_NEEDS_ATTENTION_PREVIEW_COUNT,
-  type HomeNeedsAttentionEntry,
-} from "./homeNeedsAttention";
 import type { HomeThreadGroup } from "./homeThreadList";
 
 /** Threads shown per project before the "Show more" affordance appears. */
@@ -37,6 +32,8 @@ export interface HomeThreadListItem {
   readonly key: string;
   readonly thread: EnvironmentThreadShell;
   readonly isLast: boolean;
+  /** Optional project title for cross-project contexts (Recent mode). */
+  readonly projectTitle?: string;
 }
 
 export interface HomePendingTaskListItem {
@@ -56,42 +53,11 @@ export interface HomeShowMoreListItem {
   readonly canShowLess: boolean;
 }
 
-/** Cross-project Needs attention section label. */
-export interface HomeAttentionHeaderListItem {
-  readonly type: "attention-header";
-  readonly key: string;
-}
-
-/** Thread row inside the Needs attention section. */
-export interface HomeAttentionThreadListItem {
-  readonly type: "attention-thread";
-  readonly key: string;
-  readonly thread: EnvironmentThreadShell;
-  readonly projectTitle: string;
-  /** Optional status chip text (e.g. Pending Approval, Working). */
-  readonly statusLabel: string | null;
-  readonly isLast: boolean;
-}
-
-/**
- * Needs attention show-more uses a binary expand (preview ↔ all).
- * Reuses the project show-more row UI via {@link HOME_NEEDS_ATTENTION_GROUP_KEY}.
- */
-export interface HomeAttentionShowMoreListItem {
-  readonly type: "attention-show-more";
-  readonly key: string;
-  readonly hiddenCount: number;
-  readonly canShowLess: boolean;
-}
-
 export type HomeListItem =
   | HomeHeaderListItem
   | HomePendingTaskListItem
   | HomeThreadListItem
-  | HomeShowMoreListItem
-  | HomeAttentionHeaderListItem
-  | HomeAttentionThreadListItem
-  | HomeAttentionShowMoreListItem;
+  | HomeShowMoreListItem;
 
 export interface HomeListLayout {
   readonly items: ReadonlyArray<HomeListItem>;
@@ -140,28 +106,13 @@ export function homeListItemsAreEqual(previous: HomeListItem, item: HomeListItem
       return (
         previous.type === "thread" &&
         previous.thread === item.thread &&
-        previous.isLast === item.isLast
+        previous.isLast === item.isLast &&
+        previous.projectTitle === item.projectTitle
       );
     case "show-more":
       return (
         previous.type === "show-more" &&
         previous.groupKey === item.groupKey &&
-        previous.hiddenCount === item.hiddenCount &&
-        previous.canShowLess === item.canShowLess
-      );
-    case "attention-header":
-      return previous.type === "attention-header";
-    case "attention-thread":
-      return (
-        previous.type === "attention-thread" &&
-        previous.thread === item.thread &&
-        previous.projectTitle === item.projectTitle &&
-        previous.statusLabel === item.statusLabel &&
-        previous.isLast === item.isLast
-      );
-    case "attention-show-more":
-      return (
-        previous.type === "attention-show-more" &&
         previous.hiddenCount === item.hiddenCount &&
         previous.canShowLess === item.canShowLess
       );
@@ -175,50 +126,9 @@ export function buildHomeListLayout(input: {
    * When searching, pagination is suspended so every match stays visible.
    */
   readonly showAllThreads?: boolean;
-  /**
-   * Cross-project Needs attention section (Working ∪ blocked Review). When
-   * null/undefined or empty, the section is omitted. Expansion is binary:
-   * preview count vs all.
-   */
-  readonly needsAttention?: {
-    readonly entries: ReadonlyArray<HomeNeedsAttentionEntry>;
-    readonly expanded: boolean;
-    readonly previewCount?: number;
-  } | null;
 }): HomeListLayout {
   const items: HomeListItem[] = [];
   const stickyHeaderIndices: number[] = [];
-
-  const attentionEntries = input.needsAttention?.entries ?? [];
-  if (attentionEntries.length > 0 && input.needsAttention) {
-    const previewCount = input.needsAttention.previewCount ?? HOME_NEEDS_ATTENTION_PREVIEW_COUNT;
-    const showAll = input.showAllThreads === true || input.needsAttention.expanded;
-    const hasOverflow = attentionEntries.length > previewCount;
-    const visibleEntries =
-      showAll || !hasOverflow ? attentionEntries : attentionEntries.slice(0, previewCount);
-    const hiddenCount = attentionEntries.length - visibleEntries.length;
-    const hasShowMoreRow = !input.showAllThreads && hasOverflow;
-
-    items.push({ type: "attention-header", key: "attention-header" });
-    for (const [index, entry] of visibleEntries.entries()) {
-      items.push({
-        type: "attention-thread",
-        key: `attention-thread:${entry.thread.environmentId}:${entry.thread.id}`,
-        thread: entry.thread,
-        projectTitle: entry.project.title,
-        statusLabel: entry.statusLabel,
-        isLast: index === visibleEntries.length - 1 && !hasShowMoreRow,
-      });
-    }
-    if (hasShowMoreRow) {
-      items.push({
-        type: "attention-show-more",
-        key: `attention-show-more:${HOME_NEEDS_ATTENTION_GROUP_KEY}`,
-        hiddenCount,
-        canShowLess: input.needsAttention.expanded,
-      });
-    }
-  }
 
   for (const [groupIndex, group] of input.groups.entries()) {
     const display = input.displayStates.get(group.key) ?? DEFAULT_GROUP_DISPLAY_STATE;
@@ -230,8 +140,7 @@ export function buildHomeListLayout(input: {
       key: `header:${group.key}`,
       group,
       collapsed,
-      // First project group is no longer visually first when Needs attention sits above.
-      isFirst: groupIndex === 0 && attentionEntries.length === 0,
+      isFirst: groupIndex === 0,
     });
 
     if (collapsed) {
@@ -298,4 +207,41 @@ export function buildHomeListLayout(input: {
   }
 
   return { items, stickyHeaderIndices };
+}
+
+/**
+ * Flat Recent mode layout: pending tasks first, then threads by recency.
+ * Each thread row can carry a project title for multi-project context.
+ */
+export function buildHomeRecentListLayout(input: {
+  readonly pendingTasks: ReadonlyArray<PendingNewTask>;
+  readonly entries: ReadonlyArray<{
+    readonly thread: EnvironmentThreadShell;
+    readonly projectTitle: string;
+  }>;
+}): HomeListLayout {
+  const items: HomeListItem[] = [];
+  const total = input.pendingTasks.length + input.entries.length;
+
+  for (const [index, pendingTask] of input.pendingTasks.entries()) {
+    items.push({
+      type: "pending-task",
+      key: `pending-task:${pendingTask.message.messageId}`,
+      pendingTask,
+      isLast: index === total - 1,
+    });
+  }
+
+  for (const [index, entry] of input.entries.entries()) {
+    const absoluteIndex = input.pendingTasks.length + index;
+    items.push({
+      type: "thread",
+      key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
+      thread: entry.thread,
+      projectTitle: entry.projectTitle,
+      isLast: absoluteIndex === total - 1,
+    });
+  }
+
+  return { items, stickyHeaderIndices: [] };
 }

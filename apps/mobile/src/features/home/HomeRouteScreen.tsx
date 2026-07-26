@@ -54,23 +54,25 @@ export function HomeRouteScreen() {
   );
   const {
     options: listOptions,
-    setSelectedEnvironmentId,
+    toggleSelectedEnvironmentId,
+    clearSelectedEnvironments,
+    setListMode,
     setProjectSortOrder,
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
-  const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
       buildHomeProjectScopes({
         projects,
-        environmentId: selectedEnvironmentId,
+        selectedEnvironmentIds,
         projectGroupingMode: listOptions.projectGroupingMode,
       }).map((scope) => ({
         key: scope.key,
         label: scope.title,
       })),
-    [listOptions.projectGroupingMode, projects, selectedEnvironmentId],
+    [listOptions.projectGroupingMode, projects, selectedEnvironmentIds],
   );
   useEffect(() => {
     if (
@@ -114,13 +116,15 @@ export function HomeRouteScreen() {
           environments={environments}
           projects={projectFilterOptions}
           searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
+          listMode={listOptions.listMode}
+          selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
-          onEnvironmentChange={setSelectedEnvironmentId}
+          onListModeChange={setListMode}
+          onClearEnvironments={clearSelectedEnvironments}
+          onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
-          onOpenBoard={() => navigation.navigate("Board")}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
@@ -131,6 +135,7 @@ export function HomeRouteScreen() {
         <HomeScreen
           catalogState={catalogState}
           environments={environments}
+          listMode={listOptions.listMode}
           onAddConnection={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
           }
@@ -138,7 +143,8 @@ export function HomeRouteScreen() {
           onDeleteThread={confirmDeleteThread}
           onSettleThread={settleThread}
           onUnsettleThread={unsettleThread}
-          onEnvironmentChange={setSelectedEnvironmentId}
+          onClearEnvironments={clearSelectedEnvironments}
+          onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
@@ -178,7 +184,7 @@ export function HomeRouteScreen() {
           projectSortOrder={listOptions.projectSortOrder}
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
-          selectedEnvironmentId={selectedEnvironmentId}
+          selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
           threads={threads}
           threadSortOrder={listOptions.threadSortOrder}
