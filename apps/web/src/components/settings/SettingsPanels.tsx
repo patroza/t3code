@@ -427,7 +427,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.sidebarRecentThreadsEnabled !==
       DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled
-        ? ["Recent work"]
+        ? ["Needs attention"]
         : []),
       ...(settings.sidebarProjectGroupingMode !==
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
@@ -751,13 +751,13 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection title="General">
         <SettingsRow
-          title="Recent work"
-          description="Show recently active threads across projects at the top of the sidebar."
+          title="Needs attention"
+          description="Show working and blocked threads (approval, input, plan ready, wake) across projects at the top of the sidebar."
           resetAction={
             settings.sidebarRecentThreadsEnabled !==
             DEFAULT_UNIFIED_SETTINGS.sidebarRecentThreadsEnabled ? (
               <SettingResetButton
-                label="recent work"
+                label="needs attention"
                 onClick={() =>
                   updateSettings({
                     sidebarRecentThreadsEnabled:
@@ -773,7 +773,7 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarRecentThreadsEnabled: Boolean(checked) })
               }
-              aria-label="Show recent work"
+              aria-label="Show needs attention"
             />
           }
         />
