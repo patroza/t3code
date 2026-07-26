@@ -1418,8 +1418,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ? navigationHeaderHeight || insets.top + 44
     : topContentInset;
 
+  const isDarkMode = useColorScheme() === "dark";
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const userBubbleColor = useThemeColor("--color-user-bubble");
+  const scrollToLatestBackground = useThemeColor("--color-card");
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
       const presentation = resolveMarkdownLinkPresentation(href);
@@ -1963,7 +1965,18 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 }
                 accessibilityRole="button"
                 onPress={scrollToLatest}
-                className="flex-row items-center gap-1.5 rounded-full border border-border bg-background px-3 py-2 shadow-sm active:opacity-70"
+                // Use the real card token — `bg-background` is not defined in the
+                // mobile theme, so the chip rendered as a transparent outline and
+                // looked like floating text over the feed.
+                className="flex-row items-center gap-1.5 rounded-full border border-border bg-card px-3 py-2 active:opacity-70"
+                style={{
+                  backgroundColor: String(scrollToLatestBackground),
+                  shadowColor: "#000000",
+                  shadowOpacity: isDarkMode ? 0.35 : 0.14,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 4 },
+                  elevation: 6,
+                }}
               >
                 <SymbolView
                   name={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
