@@ -34,6 +34,11 @@ export interface Preferences {
    * Kept only so older device preference payloads still decode.
    */
   readonly recentWorkEnabled?: boolean;
+  /**
+   * Multi-select home/board environment filter. Empty or omitted = all
+   * environments. Device-local (no client-settings sync).
+   */
+  readonly selectedEnvironmentIds?: readonly string[];
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -86,6 +91,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingEnabled?: boolean;
     threadListV2Enabled?: boolean;
     recentWorkEnabled?: boolean;
+    selectedEnvironmentIds?: readonly string[];
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -120,6 +126,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.recentWorkEnabled === "boolean") {
     preferences.recentWorkEnabled = parsed.recentWorkEnabled;
+  }
+  if (Array.isArray(parsed.selectedEnvironmentIds)) {
+    preferences.selectedEnvironmentIds = parsed.selectedEnvironmentIds.filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
   }
   return preferences;
 }
