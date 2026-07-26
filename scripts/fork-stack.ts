@@ -101,7 +101,7 @@ export function stackParentBranch(manifest: StackManifest): string {
 }
 
 /**
- * Ordinary feature/import PRs always target the private default branch, not the
+ * Ordinary feature/import PRs always target the downstream default branch, not the
  * upstream mirror (`main`) and not intermediate stack provenance branches.
  */
 export function featurePullRequestBaseBranch(manifest: StackManifest): string {
@@ -601,9 +601,9 @@ function usage(): string {
   node scripts/fork-stack.ts start-upstream <branch>
   node scripts/fork-stack.ts update [--push] [pr-number]
   node scripts/fork-stack.ts pull
-  node scripts/fork-stack.ts promote <private-pr-number> <upstream-branch>
-  node scripts/fork-stack.ts adopt <upstream-branch> <private-branch>
-  node scripts/fork-stack.ts demote <upstream-pr-number> <private-pr-number>
+  node scripts/fork-stack.ts promote <downstream-pr-number> <upstream-branch>
+  node scripts/fork-stack.ts adopt <upstream-branch> <downstream-branch>
+  node scripts/fork-stack.ts demote <upstream-pr-number> <downstream-pr-number>
   node scripts/fork-stack.ts overlay-add <pr-number>
   node scripts/fork-stack.ts overlay-start <overlay-pr-number> <branch>
   node scripts/fork-stack.ts overlay-remove <pr-number>
@@ -720,7 +720,7 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
       pullRequest.commits.length === 0
     ) {
       throw new StackError(
-        `Private PR #${number} must be merged into ${manifest.forkChangesBranch} before promotion.`,
+        `Downstream PR #${number} must be merged into ${manifest.forkChangesBranch} before promotion.`,
       );
     }
     run(
@@ -748,7 +748,7 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
       sourceRoot,
     );
     console.log(
-      `Extracted private PR #${number} onto ${upstreamBranch}. Remove private assumptions, test, commit, and open it to pingdotgg/t3code:${manifest.upstreamBranch}.`,
+      `Extracted downstream PR #${number} onto ${upstreamBranch}. Remove downstream-only assumptions, test, commit, and open it to pingdotgg/t3code:${manifest.upstreamBranch}.`,
     );
     return;
   }
@@ -874,7 +874,7 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
         "--repo",
         "pingdotgg/t3code",
         "--comment",
-        `Keeping this implementation private in ${FORK_REPOSITORY}#${privateNumber}.`,
+        `Keeping this downstream implementation in ${FORK_REPOSITORY}#${privateNumber}.`,
       ],
       sourceRoot,
     );
@@ -887,12 +887,12 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
         "--repo",
         FORK_REPOSITORY,
         "--body",
-        `Upstream projection pingdotgg/t3code#${upstreamNumber} was closed; this private implementation remains canonical.`,
+        `Upstream projection pingdotgg/t3code#${upstreamNumber} was closed; this downstream implementation remains canonical.`,
       ],
       sourceRoot,
     );
     console.log(
-      `Demoted pingdotgg/t3code#${upstreamNumber}; private PR #${privateNumber} remains canonical.`,
+      `Demoted pingdotgg/t3code#${upstreamNumber}; downstream PR #${privateNumber} remains canonical.`,
     );
     return;
   }
