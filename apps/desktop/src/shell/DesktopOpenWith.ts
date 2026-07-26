@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - macOS bundle paths use the host path grammar.
 import {
-  OpenWithBundleResolutionError,
   OpenWithEnvironmentError,
   OpenWithInvalidTargetError,
   OpenWithMissingEntryError,
@@ -70,65 +69,6 @@ const entryIsAvailable = Effect.fn("desktop.openWith.entryIsAvailable")(function
   return Option.isSome(stat) && stat.value.type === "Directory";
 });
 
-export const resolveMacBundleExecutable = Effect.fn("desktop.openWith.resolveMacBundleExecutable")(
-  function* (applicationPath: string) {
-    if (!isMacApplicationPath(applicationPath)) {
-      return yield* new OpenWithBundleResolutionError({
-        applicationPath,
-        reason: "invalid-application-path",
-      });
-    }
-    const infoPlistPath = NodePath.join(applicationPath, "Contents", "Info.plist");
-    const plistStat = yield* statPath(infoPlistPath);
-    if (Option.isNone(plistStat) || plistStat.value.type !== "File") {
-      return yield* new OpenWithBundleResolutionError({
-        applicationPath,
-        reason: "missing-info-plist",
-      });
-    }
-
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const executableName = yield* spawner
-      .string(
-        ChildProcess.make(
-          "/usr/bin/plutil",
-          ["-extract", "CFBundleExecutable", "raw", "-o", "-", infoPlistPath],
-          { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-        ),
-      )
-      .pipe(
-        Effect.map((output) => output.trim()),
-        Effect.mapError(
-          (cause) =>
-            new OpenWithBundleResolutionError({
-              applicationPath,
-              reason: "malformed-info-plist",
-              cause,
-            }),
-        ),
-      );
-    if (
-      executableName.length === 0 ||
-      executableName.includes("/") ||
-      executableName.includes("\\")
-    ) {
-      return yield* new OpenWithBundleResolutionError({
-        applicationPath,
-        reason: "malformed-info-plist",
-      });
-    }
-    const executablePath = NodePath.join(applicationPath, "Contents", "MacOS", executableName);
-    const executableStat = yield* statPath(executablePath);
-    if (Option.isNone(executableStat) || executableStat.value.type !== "File") {
-      return yield* new OpenWithBundleResolutionError({
-        applicationPath,
-        reason: "missing-executable",
-      });
-    }
-    return executablePath;
-  },
-);
-
 const expandDirectoryArguments = (args: readonly string[], directory: string): string[] =>
   args.map((argument) => argument.replaceAll("{directory}", directory));
 
@@ -169,8 +109,8 @@ export const resolveOpenWithLaunch = Effect.fn("desktop.openWith.resolveLaunch")
   if (entry.directoryMode === "working-directory") {
     if (entry.invocation.type === "mac-application") {
       return {
-        command: yield* resolveMacBundleExecutable(entry.invocation.applicationPath),
-        args: [...entry.arguments],
+        command: "/usr/bin/open",
+        args: ["-a", entry.invocation.applicationPath, "--args", ...entry.arguments],
         cwd: directory,
       };
     }
@@ -187,8 +127,8 @@ export const resolveOpenWithLaunch = Effect.fn("desktop.openWith.resolveLaunch")
   const args = expandDirectoryArguments(entry.arguments, directory);
   if (entry.invocation.type === "mac-application") {
     return {
-      command: yield* resolveMacBundleExecutable(entry.invocation.applicationPath),
-      args,
+      command: "/usr/bin/open",
+      args: ["-a", entry.invocation.applicationPath, "--args", ...args],
       cwd: null,
     };
   }
