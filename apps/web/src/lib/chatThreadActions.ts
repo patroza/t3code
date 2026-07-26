@@ -15,6 +15,7 @@ interface NewThreadHandler {
       worktreePath?: string | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
     },
   ): Promise<void>;
 }
