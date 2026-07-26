@@ -101,7 +101,10 @@ jobs:
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
-          cache: true
+          # Saving the complete macOS node_modules cache takes ~95 seconds and
+          # loses the cache reservation whenever parallel PR runs overlap.
+          # A clean install is faster and has deterministic completion time.
+          cache: false
           run-install: true
 
       - name: Ensure Electron runtime is installed
