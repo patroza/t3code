@@ -62,6 +62,29 @@ const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
 } satisfies NodeJS.ProcessEnv);
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
+
+const COMMIT_SIGNING_FAILURE_PATTERNS = [
+  /gpg(?:2)?(?:\.exe)?: .*failed to sign/i,
+  /gpg failed to sign the data/i,
+  /signing failed:/i,
+  /failed to sign the data/i,
+  /pinentry.*(?:failed|error|not found|no such file|cancell?ed)/i,
+  /(?:failed|error|no such file|cancell?ed).*pinentry/i,
+  /inappropriate ioctl for device/i,
+  /cannot open \/dev\/tty/i,
+  /no secret key/i,
+  /secret key not available/i,
+  /ssh-keygen(?:\.exe)?:?.*(?:failed|error|couldn['’]t).*sign/i,
+  /couldn['’]t sign (?:message|data)/i,
+  /couldn['’]t load public key/i,
+  /no private key found for public key/i,
+  /load key .*: (?:invalid format|no such file or directory|permission denied)/i,
+  /agent refused operation/i,
+] as const;
+
+export function isCommitSigningFailureStderr(stderr: string): boolean {
+  return COMMIT_SIGNING_FAILURE_PATTERNS.some((pattern) => pattern.test(stderr));
+}
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
   hasOriginRemote: false,
@@ -326,6 +349,7 @@ function gitCommandContext(
     command: "git",
     cwd: input.cwd,
     argumentCount: input.args.length,
+    failureKind: "unknown" as const,
   } as const;
 }
 
@@ -438,16 +462,15 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
       return;
     }
 
-    if (traceRecord.success.child_class !== "hook") {
-      return;
-    }
-
     const event = traceRecord.success.event;
     const childKey = trace2ChildKey(traceRecord.success);
     if (childKey === null) {
       return;
     }
     const started = hookStartByChildKey.get(childKey);
+    if (traceRecord.success.child_class !== "hook" && started === undefined) {
+      return;
+    }
     const hookNameFromEvent =
       typeof traceRecord.success.hook_name === "string" ? traceRecord.success.hook_name.trim() : "";
     const hookName = hookNameFromEvent.length > 0 ? hookNameFromEvent : (started?.hookName ?? "");
@@ -469,7 +492,7 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
 
     if (event === "child_exit") {
       hookStartByChildKey.delete(childKey);
-      const code = traceRecord.success.exitCode;
+      const code = traceRecord.success.code ?? traceRecord.success.exitCode;
       const exitCode = typeof code === "number" && Number.isInteger(code) ? code : null;
       const now = yield* DateTime.now;
       const durationMs = started
@@ -1583,25 +1606,52 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     body,
     options?: GitVcsDriver.GitCommitOptions,
   ) {
-    const args = ["commit", "-m", subject];
+    const args = ["commit"];
+    if (options?.disableSigning) {
+      args.push("--no-gpg-sign");
+    }
+    args.push("-m", subject);
     const trimmedBody = body.trim();
     if (trimmedBody.length > 0) {
       args.push("-m", trimmedBody);
     }
-    const progress =
-      options?.progress?.onOutputLine === undefined
-        ? options?.progress
-        : {
-            ...options.progress,
+    let hookFailed = false;
+    const progress: GitVcsDriver.ExecuteGitProgress = {
+      ...(options?.progress?.onOutputLine
+        ? {
             onStdoutLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stdout", text: line }) ?? Effect.void,
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
-          };
-    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+          }
+        : {}),
+      ...(options?.progress?.onHookStarted
+        ? { onHookStarted: options.progress.onHookStarted }
+        : {}),
+      onHookFinished: (input) => {
+        if (input.exitCode !== null && input.exitCode !== 0) {
+          hookFailed = true;
+        }
+        return options?.progress?.onHookFinished?.(input) ?? Effect.void;
+      },
+    };
+    const result = yield* executeGitWithStableDiagnostics("GitVcsDriver.commit.commit", cwd, args, {
+      allowNonZeroExit: true,
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-      ...(progress ? { progress } : {}),
-    }).pipe(Effect.asVoid);
+      progress,
+    });
+    if (result.exitCode !== 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.commit.commit", cwd, args }),
+        detail: "Git command exited with a non-zero status.",
+        ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+        ...(!options?.disableSigning && !hookFailed && isCommitSigningFailureStderr(result.stderr)
+          ? { failureKind: "commit_signing_failed" as const }
+          : {}),
+      });
+    }
     const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
       "rev-parse",
       "HEAD",
@@ -1953,6 +2003,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               operation: "GitVcsDriver.getReviewDiffPreview.hash",
               command: "crypto.digest SHA-256",
               cwd: input.cwd,
+              failureKind: "unknown",
               detail: "Failed to hash review diff.",
               cause,
             }),
