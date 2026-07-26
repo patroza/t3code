@@ -35,7 +35,6 @@ import { parsePullRequestReference } from "../pullRequestReference";
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import {
   deriveLocalBranchNameFromRemoteRef,
-  resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
   resolveBranchToolbarValue,
@@ -74,12 +73,48 @@ interface BranchToolbarBranchSelectorProps {
   onActiveThreadBranchOverrideChange?: (refName: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  reuseBaseBranch: boolean;
+  onReuseBaseBranchChange: (reuseBaseBranch: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
 }
 
 function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
+}
+
+function getBranchTriggerLabel(input: {
+  activeWorktreePath: string | null;
+  effectiveEnvMode: "local" | "worktree";
+  resolvedActiveBranch: string | null;
+  resolvedActiveBranchIsRemote: boolean | null;
+  startFromOrigin: boolean;
+  reuseBaseBranch: boolean;
+}): string {
+  const {
+    activeWorktreePath,
+    effectiveEnvMode,
+    resolvedActiveBranch,
+    resolvedActiveBranchIsRemote,
+    startFromOrigin,
+    reuseBaseBranch,
+  } = input;
+  if (!resolvedActiveBranch) {
+    return "Select ref";
+  }
+  // Reused base branch is checked out as-is (Tim #15); otherwise "From X" for
+  // new worktree branches, with optional origin/ prefix (upstream #4680).
+  if (effectiveEnvMode === "worktree" && !activeWorktreePath) {
+    if (reuseBaseBranch) {
+      return resolvedActiveBranch;
+    }
+    const baseRef =
+      startFromOrigin && resolvedActiveBranchIsRemote === false
+        ? `origin/${resolvedActiveBranch}`
+        : resolvedActiveBranch;
+    return `From ${baseRef}`;
+  }
+  return resolvedActiveBranch;
 }
 
 export function BranchToolbarBranchSelector({
@@ -93,10 +128,13 @@ export function BranchToolbarBranchSelector({
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
+  reuseBaseBranch,
+  onReuseBaseBranchChange,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
 }: BranchToolbarBranchSelectorProps) {
   const startFromOriginSwitchId = useId();
+  const reuseBaseBranchSwitchId = useId();
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession, "thread session stop");
   const updateThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
@@ -593,12 +631,13 @@ export function BranchToolbarBranchSelector({
     maybeFetchNextBranchPage();
   }, [refs.length, maybeFetchNextBranchPage]);
 
-  const triggerLabel = resolveBranchTriggerLabel({
+  const triggerLabel = getBranchTriggerLabel({
     activeWorktreePath,
     effectiveEnvMode,
     resolvedActiveBranch,
     resolvedActiveBranchIsRemote,
     startFromOrigin,
+    reuseBaseBranch,
   });
 
   // PR pill shown next to the branch selector when the active branch has one.
@@ -814,32 +853,65 @@ export function BranchToolbarBranchSelector({
             </ComboboxListVirtualized>
           </div>
           {isSelectingWorktreeBase ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <label
-                    htmlFor={startFromOriginSwitchId}
-                    className="flex cursor-pointer items-center justify-between gap-3 border-t border-border/60 px-3 py-2 text-xs"
-                  >
-                    <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
-                      <RefreshCwIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
-                      <span className="truncate">Start from origin</span>
-                    </span>
-                    <Switch
-                      id={startFromOriginSwitchId}
-                      checked={startFromOrigin}
-                      className="[--thumb-size:--spacing(3.5)]"
-                      aria-label="Start worktree from origin"
-                      onCheckedChange={(checked) => onStartFromOriginChange(Boolean(checked))}
-                    />
-                  </label>
-                }
-              />
-              <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
-                Creates the worktree from the latest matching branch on origin instead of your local
-                branch.
-              </TooltipPopup>
-            </Tooltip>
+            <div className="border-t border-border/60 py-1">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <label
+                      htmlFor={reuseBaseBranchSwitchId}
+                      className="flex cursor-pointer items-center justify-between gap-3 px-3 py-1 text-xs"
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
+                        <GitBranchIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+                        <span className="truncate">Reuse selected branch</span>
+                      </span>
+                      <Switch
+                        id={reuseBaseBranchSwitchId}
+                        checked={reuseBaseBranch}
+                        className="[--thumb-size:--spacing(3.5)]"
+                        aria-label="Reuse the selected branch in the worktree"
+                        onCheckedChange={(checked) => onReuseBaseBranchChange(Boolean(checked))}
+                      />
+                    </label>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
+                  Checks out the selected branch in the worktree instead of creating a new branch
+                  from it.
+                </TooltipPopup>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <label
+                      htmlFor={startFromOriginSwitchId}
+                      className={cn(
+                        "flex cursor-pointer items-center justify-between gap-3 px-3 py-1 text-xs",
+                        reuseBaseBranch && "cursor-default opacity-50",
+                      )}
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
+                        <RefreshCwIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+                        <span className="truncate">Start from origin</span>
+                      </span>
+                      <Switch
+                        id={startFromOriginSwitchId}
+                        checked={startFromOrigin}
+                        disabled={reuseBaseBranch}
+                        className="[--thumb-size:--spacing(3.5)]"
+                        aria-label="Start worktree from origin"
+                        onCheckedChange={(checked) => onStartFromOriginChange(Boolean(checked))}
+                      />
+                    </label>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
+                  {reuseBaseBranch
+                    ? "Not available when reusing the selected branch."
+                    : "Creates the worktree from the latest matching branch on origin instead of your local branch."}
+                </TooltipPopup>
+              </Tooltip>
+            </div>
           ) : null}
           {branchStatusText ? <ComboboxStatus>{branchStatusText}</ComboboxStatus> : null}
         </div>
