@@ -539,8 +539,9 @@ function GeneralSettingsSection() {
   const projectGroupingEnabled = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.projectGroupingEnabled !== false
     : true;
-  // Default on — mirrors web `sidebarRecentThreadsEnabled`.
-  const recentWorkEnabled = AsyncResult.isSuccess(preferencesResult)
+  // Default on. Storage key remains recentWorkEnabled for migration from the
+  // earlier "Recent work" toggle; the section is now Needs attention.
+  const needsAttentionEnabled = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.recentWorkEnabled !== false
     : true;
 
@@ -553,9 +554,9 @@ function GeneralSettingsSection() {
         onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
       />
       <SettingsSwitchRow
-        icon="clock"
-        label="Recent work"
-        value={recentWorkEnabled}
+        icon="exclamationmark.triangle"
+        label="Needs attention"
+        value={needsAttentionEnabled}
         onValueChange={(value) => savePreferences({ recentWorkEnabled: value })}
       />
     </SettingsSection>

@@ -47,7 +47,7 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "../home/homeListItems";
-import { buildHomeRecentWorkEntries } from "../home/homeRecentWork";
+import { buildHomeNeedsAttentionEntries } from "../home/homeNeedsAttention";
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -198,11 +198,11 @@ function ThreadNavigationSidebarPane(
   const threadListV2Enabled =
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
-  // Default on — mirrors web `sidebarRecentThreadsEnabled`. Classic list only.
-  const recentWorkEnabled = AsyncResult.isSuccess(preferencesResult)
+  // Default on. Classic list only — preference key stays recentWorkEnabled.
+  const needsAttentionEnabled = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.recentWorkEnabled !== false
     : true;
-  const [recentWorkExpanded, setRecentWorkExpanded] = useState(false);
+  const [needsAttentionExpanded, setNeedsAttentionExpanded] = useState(false);
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -337,56 +337,6 @@ function ThreadNavigationSidebarPane(
     });
   }, []);
   const hasSearchQuery = props.searchQuery.trim().length > 0;
-  const recentWorkEntries = useMemo(() => {
-    if (!recentWorkEnabled || threadListV2Enabled) return [];
-    return buildHomeRecentWorkEntries({
-      projects: scopedProjects,
-      threads: scopedThreads,
-      environmentId: options.selectedEnvironmentId,
-      projectRefKeys: selectedProjectRefs,
-      searchQuery: props.searchQuery,
-    });
-  }, [
-    options.selectedEnvironmentId,
-    props.searchQuery,
-    recentWorkEnabled,
-    scopedProjects,
-    scopedThreads,
-    selectedProjectRefs,
-    threadListV2Enabled,
-  ]);
-  const recentExpandResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
-  const lastRecentExpandResetKeyRef = useRef(recentExpandResetKey);
-  if (lastRecentExpandResetKeyRef.current !== recentExpandResetKey) {
-    lastRecentExpandResetKeyRef.current = recentExpandResetKey;
-    if (recentWorkExpanded) {
-      setRecentWorkExpanded(false);
-    }
-  }
-  const toggleRecentWorkExpanded = useCallback(() => {
-    setRecentWorkExpanded((current) => !current);
-  }, []);
-  const listLayout = useMemo(
-    () =>
-      buildHomeListLayout({
-        groups,
-        displayStates: groupDisplayStates,
-        showAllThreads: hasSearchQuery,
-        recentWork:
-          recentWorkEnabled && !threadListV2Enabled && recentWorkEntries.length > 0
-            ? { entries: recentWorkEntries, expanded: recentWorkExpanded }
-            : null,
-      }),
-    [
-      groups,
-      groupDisplayStates,
-      hasSearchQuery,
-      recentWorkEnabled,
-      recentWorkEntries,
-      recentWorkExpanded,
-      threadListV2Enabled,
-    ],
-  );
   const projectCwdByKey = useMemo(() => {
     const map = new Map<string, string>();
     for (const project of projects) {
@@ -477,6 +427,62 @@ function ThreadNavigationSidebarPane(
     }
     return supported;
   }, [serverConfigs]);
+
+  const needsAttentionEntries = useMemo(() => {
+    if (!needsAttentionEnabled || threadListV2Enabled) return [];
+    return buildHomeNeedsAttentionEntries({
+      projects: scopedProjects,
+      threads: scopedThreads,
+      environmentId: options.selectedEnvironmentId,
+      projectRefKeys: selectedProjectRefs,
+      searchQuery: props.searchQuery,
+      settlementEnvironmentIds,
+      snoozeEnvironmentIds,
+    });
+  }, [
+    needsAttentionEnabled,
+    options.selectedEnvironmentId,
+    props.searchQuery,
+    scopedProjects,
+    scopedThreads,
+    selectedProjectRefs,
+    settlementEnvironmentIds,
+    snoozeEnvironmentIds,
+    threadListV2Enabled,
+  ]);
+  const attentionExpandResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const lastAttentionExpandResetKeyRef = useRef(attentionExpandResetKey);
+  if (lastAttentionExpandResetKeyRef.current !== attentionExpandResetKey) {
+    lastAttentionExpandResetKeyRef.current = attentionExpandResetKey;
+    if (needsAttentionExpanded) {
+      setNeedsAttentionExpanded(false);
+    }
+  }
+  const toggleNeedsAttentionExpanded = useCallback(() => {
+    setNeedsAttentionExpanded((current) => !current);
+  }, []);
+  const listLayout = useMemo(
+    () =>
+      buildHomeListLayout({
+        groups,
+        displayStates: groupDisplayStates,
+        showAllThreads: hasSearchQuery,
+        needsAttention:
+          needsAttentionEnabled && !threadListV2Enabled && needsAttentionEntries.length > 0
+            ? { entries: needsAttentionEntries, expanded: needsAttentionExpanded }
+            : null,
+      }),
+    [
+      groups,
+      groupDisplayStates,
+      hasSearchQuery,
+      needsAttentionEnabled,
+      needsAttentionEntries,
+      needsAttentionExpanded,
+      threadListV2Enabled,
+    ],
+  );
+
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
@@ -883,9 +889,9 @@ function ThreadNavigationSidebarPane(
               </Text>
             </Pressable>
           );
-        case "recent-header":
-          return <ThreadListSectionHeader variant="sidebar" title="Recent" />;
-        case "recent-thread": {
+        case "attention-header":
+          return <ThreadListSectionHeader variant="sidebar" title="Needs attention" />;
+        case "attention-thread": {
           const thread = item.thread;
           return (
             <ThreadListRow
@@ -913,13 +919,13 @@ function ThreadNavigationSidebarPane(
             />
           );
         }
-        case "recent-show-more":
+        case "attention-show-more":
           return (
             <ThreadListShowMoreRow
               variant="sidebar"
               hiddenCount={item.hiddenCount}
               canShowLess={item.canShowLess}
-              onToggleExpanded={toggleRecentWorkExpanded}
+              onToggleExpanded={toggleNeedsAttentionExpanded}
             />
           );
         case "header":
@@ -1014,7 +1020,7 @@ function ThreadNavigationSidebarPane(
       settlementEnvironmentIds,
       showMoreSettled,
       sidebarScrollGesture,
-      toggleRecentWorkExpanded,
+      toggleNeedsAttentionExpanded,
       unsettleThread,
       updateGroupDisplay,
     ],

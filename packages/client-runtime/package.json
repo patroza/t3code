@@ -151,6 +151,10 @@
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
     },
+    "./state/needs-attention": {
+      "types": "./src/state/needsAttention.ts",
+      "default": "./src/state/needsAttention.ts"
+    },
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"

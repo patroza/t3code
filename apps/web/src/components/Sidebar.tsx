@@ -49,6 +49,7 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
+  type EnvironmentId,
   ProjectId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
@@ -190,6 +191,7 @@ import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   getSidebarThreadIdsToPrewarm,
+  hasUnseenCompletion,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
@@ -204,6 +206,7 @@ import {
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
+import { buildNeedsAttentionEntries } from "@t3tools/client-runtime/state/needs-attention";
 import { sortThreads } from "../lib/threadSort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -3504,7 +3507,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   return (
     <SidebarGroup className="px-2 pt-2 pb-1">
       <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-        Recent
+        Needs attention
       </div>
       <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
         {renderedThreads.map((entry) => {
@@ -3800,8 +3803,11 @@ export default function Sidebar() {
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
-  const sidebarRecentThreadsEnabled = useClientSettings((s) => s.sidebarRecentThreadsEnabled);
+  // Settings key is historical; section is Needs attention (Working ∪ blocked).
+  const sidebarNeedsAttentionEnabled = useClientSettings((s) => s.sidebarRecentThreadsEnabled);
+  const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const updateSettings = useUpdateClientSettings();
+  const serverConfigs = useServerConfigs();
   const handleNewThread = useNewThreadHandler();
   const { archiveThread, deleteThread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -4097,32 +4103,58 @@ export default function Sidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
-  const pinnedThreadKeys = useUiStateStore((state) => state.pinnedThreadKeys);
+  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
+  const settlementEnvironmentIds = useMemo(() => {
+    const supported = new Set<EnvironmentId>();
+    for (const [environmentId, config] of serverConfigs) {
+      if (config.environment.capabilities.threadSettlement === true) {
+        supported.add(environmentId);
+      }
+    }
+    return supported;
+  }, [serverConfigs]);
+  const snoozeEnvironmentIds = useMemo(() => {
+    const supported = new Set<EnvironmentId>();
+    for (const [environmentId, config] of serverConfigs) {
+      if (config.environment.capabilities.threadSnooze === true) {
+        supported.add(environmentId);
+      }
+    }
+    return supported;
+  }, [serverConfigs]);
+  /** Needs attention: Working ∪ blocked Review (parity with mobile home strip). */
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
-    const pinnedKeySet = new Set(pinnedThreadKeys);
-    const entries = sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
-      const physicalKey =
-        projectPhysicalKeyByScopedRef.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-      const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-      const project = sidebarProjectByKey.get(projectKey);
-      return project ? [{ thread, project }] : [];
-    });
-    return [
-      ...entries.filter(({ thread }) =>
-        pinnedKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-      ),
-      ...entries.filter(
-        ({ thread }) =>
-          !pinnedKeySet.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-      ),
-    ];
+    return buildNeedsAttentionEntries({
+      threads: visibleThreads,
+      now: new Date().toISOString(),
+      autoSettleAfterDays,
+      settlementEnvironmentIds,
+      snoozeEnvironmentIds,
+      resolveProject: (thread) => {
+        const physicalKey =
+          projectPhysicalKeyByScopedRef.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+        const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+        return sidebarProjectByKey.get(projectKey) ?? null;
+      },
+      hasUnseenCompletion: (thread) =>
+        hasUnseenCompletion({
+          ...thread,
+          lastVisitedAt:
+            threadLastVisitedAtById[
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+            ],
+        }),
+    }).map((entry) => ({ thread: entry.thread, project: entry.project }));
   }, [
+    autoSettleAfterDays,
     physicalToLogicalKey,
-    pinnedThreadKeys,
     projectPhysicalKeyByScopedRef,
+    settlementEnvironmentIds,
     sidebarProjectByKey,
+    snoozeEnvironmentIds,
+    threadLastVisitedAtById,
     visibleThreads,
   ]);
   const recentThreadKeys = useMemo(
@@ -4478,7 +4510,7 @@ export default function Sidebar() {
             archiveThread={archiveThread}
             deleteThread={deleteThread}
             sortedProjects={sortedProjects}
-            recentThreads={sidebarRecentThreadsEnabled ? recentThreads : []}
+            recentThreads={sidebarNeedsAttentionEnabled ? recentThreads : []}
             threadByKey={sidebarThreadByKey}
             navigateToThread={navigateToThread}
             expandedThreadListsByProject={expandedThreadListsByProject}
