@@ -32,6 +32,12 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { environmentServerConfigsAtom } from "../../state/server";
 import {
+  isAllEnvironmentsSelected,
+  isEnvironmentSelected,
+  matchesEnvironmentFilter,
+  toggleEnvironmentId,
+} from "../home/homeEnvironmentFilter";
+import {
   BOARD_COLUMN_IDS,
   BOARD_COLUMN_LABELS,
   boardGitKey,
@@ -56,11 +62,21 @@ export interface BoardScreenProps {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly environmentLabelById: ReadonlyMap<string, string>;
+  /**
+   * Shared multi-select environment filter. Empty = all environments.
+   * When provided with on*Environment callbacks, the board uses the parent
+   * filter (home list modes). Otherwise the board keeps a local multi-select.
+   */
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  readonly onClearEnvironments?: () => void;
+  readonly onToggleEnvironment?: (environmentId: EnvironmentId) => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
+  /** Hide the in-board filter chrome when the parent header already owns it. */
+  readonly hideFilterChrome?: boolean;
 }
 
 interface BoardProjectFilterOption {
@@ -268,17 +284,52 @@ export function BoardScreen(props: BoardScreenProps) {
   const columnWidth = Math.min(Math.max(windowWidth * 0.78, 260), 320);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const [projectFilterKey, setProjectFilterKey] = useState<string | null>(null);
+  const [localEnvironmentIds, setLocalEnvironmentIds] = useState<readonly EnvironmentId[]>([]);
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_INITIAL_COUNT);
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
+
+  const selectedEnvironmentIds = props.selectedEnvironmentIds ?? localEnvironmentIds;
+  const clearEnvironments = props.onClearEnvironments ?? (() => setLocalEnvironmentIds([]));
+  const toggleEnvironment =
+    props.onToggleEnvironment ??
+    ((environmentId: EnvironmentId) => {
+      setLocalEnvironmentIds((current) => toggleEnvironmentId(current, environmentId));
+    });
 
   useEffect(() => {
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
   }, []);
 
+  const environmentFilterOptions = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const [environmentId, label] of props.environmentLabelById) {
+      labels.set(environmentId, label);
+    }
+    for (const project of props.projects) {
+      if (!labels.has(project.environmentId)) {
+        labels.set(project.environmentId, project.environmentId);
+      }
+    }
+    return [...labels.entries()]
+      .map(([environmentId, label]) => ({
+        environmentId: environmentId as EnvironmentId,
+        label,
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [props.environmentLabelById, props.projects]);
+
+  const envFilteredProjects = useMemo(
+    () =>
+      props.projects.filter((project) =>
+        matchesEnvironmentFilter(project.environmentId, selectedEnvironmentIds),
+      ),
+    [props.projects, selectedEnvironmentIds],
+  );
+
   const projectFilterOptions = useMemo<ReadonlyArray<BoardProjectFilterOption>>(() => {
     const groups = new Map<string, EnvironmentProject[]>();
-    for (const project of props.projects) {
+    for (const project of envFilteredProjects) {
       const key = deriveLogicalProjectKey(project, {
         groupingMode: props.projectGroupingMode,
       });
@@ -300,7 +351,7 @@ export function BoardScreen(props: BoardScreenProps) {
         };
       })
       .sort((left, right) => left.label.localeCompare(right.label));
-  }, [props.projectGroupingMode, props.projects]);
+  }, [envFilteredProjects, props.projectGroupingMode]);
 
   useEffect(() => {
     if (
@@ -324,8 +375,13 @@ export function BoardScreen(props: BoardScreenProps) {
   );
 
   const liveThreads = useMemo(
-    () => props.threads.filter((thread) => thread.archivedAt === null),
-    [props.threads],
+    () =>
+      props.threads.filter(
+        (thread) =>
+          thread.archivedAt === null &&
+          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
+      ),
+    [props.threads, selectedEnvironmentIds],
   );
   const filteredThreads = useMemo(
     () => liveThreads.filter(filterPredicate),
@@ -478,7 +534,7 @@ export function BoardScreen(props: BoardScreenProps) {
     ],
   );
 
-  const settledResetKey = projectFilterKey ?? "all";
+  const settledResetKey = `${selectedEnvironmentIds.join(",") || "all"}:${projectFilterKey ?? "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -499,22 +555,55 @@ export function BoardScreen(props: BoardScreenProps) {
   const filterMenuActions = useMemo<MenuAction[]>(
     () => [
       {
-        id: "project:all",
-        title: "All projects",
-        state: projectFilterKey === null ? "on" : "off",
+        id: "environment",
+        title: "Environment",
+        subactions: [
+          {
+            id: "environment:all",
+            title: "All environments",
+            state: isAllEnvironmentsSelected(selectedEnvironmentIds) ? "on" : "off",
+          },
+          ...environmentFilterOptions.map((environment) => ({
+            id: `environment:${environment.environmentId}`,
+            title: environment.label,
+            state: (isEnvironmentSelected(selectedEnvironmentIds, environment.environmentId)
+              ? "on"
+              : "off") as "on" | "off",
+          })),
+        ],
       },
-      ...projectFilterOptions.map((option) => ({
-        id: `project:${option.key}`,
-        title: option.label,
-        state: (projectFilterKey === option.key ? "on" : "off") as "on" | "off",
-      })),
+      {
+        id: "project",
+        title: "Project",
+        subactions: [
+          {
+            id: "project:all",
+            title: "All projects",
+            state: projectFilterKey === null ? "on" : "off",
+          },
+          ...projectFilterOptions.map((option) => ({
+            id: `project:${option.key}`,
+            title: option.label,
+            state: (projectFilterKey === option.key ? "on" : "off") as "on" | "off",
+          })),
+        ],
+      },
     ],
-    [projectFilterKey, projectFilterOptions],
+    [environmentFilterOptions, projectFilterKey, projectFilterOptions, selectedEnvironmentIds],
   );
 
   const handleFilterAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       const id = nativeEvent.event;
+      if (id === "environment:all") {
+        clearEnvironments();
+        return;
+      }
+      if (id.startsWith("environment:")) {
+        const environmentId = id.slice("environment:".length) as EnvironmentId;
+        toggleEnvironment(environmentId);
+        return;
+      }
       if (id === "project:all") {
         setProjectFilterKey(null);
         return;
@@ -523,14 +612,24 @@ export function BoardScreen(props: BoardScreenProps) {
         setProjectFilterKey(id.slice("project:".length));
       }
     },
-    [],
+    [clearEnvironments, toggleEnvironment],
   );
 
-  const selectedFilterLabel =
-    projectFilterKey === null
-      ? "All projects"
-      : (projectFilterOptions.find((option) => option.key === projectFilterKey)?.label ??
-        "All projects");
+  const selectedFilterLabel = (() => {
+    const envPart = isAllEnvironmentsSelected(selectedEnvironmentIds)
+      ? "All environments"
+      : selectedEnvironmentIds.length === 1
+        ? (environmentFilterOptions.find(
+            (environment) => environment.environmentId === selectedEnvironmentIds[0],
+          )?.label ?? "1 environment")
+        : `${selectedEnvironmentIds.length} environments`;
+    const projectPart =
+      projectFilterKey === null
+        ? "All projects"
+        : (projectFilterOptions.find((option) => option.key === projectFilterKey)?.label ??
+          "All projects");
+    return `${envPart} · ${projectPart}`;
+  })();
 
   if (liveThreads.length === 0) {
     return (
@@ -542,41 +641,43 @@ export function BoardScreen(props: BoardScreenProps) {
 
   return (
     <View className="flex-1 bg-screen">
-      <View
-        className="flex-row items-center gap-2 border-b border-border px-4 pb-2"
-        style={{ paddingTop: 8 }}
-      >
-        <ControlPillMenu actions={filterMenuActions} onPressAction={handleFilterAction}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Filter board by project, ${selectedFilterLabel}`}
-            className="flex-row items-center gap-1.5 rounded-full bg-subtle px-3 py-1.5"
-            style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
-          >
-            <SymbolView
-              name="line.3.horizontal.decrease.circle"
-              size={14}
-              tintColor={iconColor}
-              type="monochrome"
-            />
-            <Text
-              className="max-w-[220px] text-sm font-t3-medium text-foreground"
-              numberOfLines={1}
+      {props.hideFilterChrome ? null : (
+        <View
+          className="flex-row items-center gap-2 border-b border-border px-4 pb-2"
+          style={{ paddingTop: 8 }}
+        >
+          <ControlPillMenu actions={filterMenuActions} onPressAction={handleFilterAction}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Filter board, ${selectedFilterLabel}`}
+              className="flex-row items-center gap-1.5 rounded-full bg-subtle px-3 py-1.5"
+              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
             >
-              {selectedFilterLabel}
-            </Text>
-          </Pressable>
-        </ControlPillMenu>
-        <Text className="text-xs text-foreground-tertiary">
-          {filteredThreads.length} thread{filteredThreads.length === 1 ? "" : "s"}
-        </Text>
-      </View>
+              <SymbolView
+                name="line.3.horizontal.decrease.circle"
+                size={14}
+                tintColor={iconColor}
+                type="monochrome"
+              />
+              <Text
+                className="max-w-[220px] text-sm font-t3-medium text-foreground"
+                numberOfLines={1}
+              >
+                {selectedFilterLabel}
+              </Text>
+            </Pressable>
+          </ControlPillMenu>
+          <Text className="text-xs text-foreground-tertiary">
+            {filteredThreads.length} thread{filteredThreads.length === 1 ? "" : "s"}
+          </Text>
+        </View>
+      )}
 
       {filteredThreads.length === 0 ? (
         <View className="flex-1 items-center justify-center px-8">
           <EmptyState
-            title="No threads in this project"
-            detail="Choose another project filter or create a new task."
+            title="No matching threads"
+            detail="Adjust the environment or project filter, or create a new task."
           />
         </View>
       ) : (

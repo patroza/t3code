@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildHomeListLayout,
+  buildHomeRecentListLayout,
   DEFAULT_GROUP_DISPLAY_STATE,
   HOME_INITIAL_VISIBLE_THREADS,
   HOME_SHOW_MORE_STEP,
@@ -240,75 +241,16 @@ describe("buildHomeListLayout", () => {
     expect(layout.items[8]).toMatchObject({ type: "header", isFirst: false });
   });
 
-  it("prepends a Needs attention section with project titles and binary show-more", () => {
-    const alpha = makeProject("alpha", "Alpha");
-    const beta = makeProject("beta", "Beta");
-    const attentionEntries = Array.from({ length: 8 }, (_, index) => {
-      const project = index % 2 === 0 ? alpha : beta;
-      const blocked = index % 2 === 0;
-      return {
-        thread: makeThread(`attention-${index}`, project.id),
-        project,
-        kind: blocked ? ("blocked" as const) : ("working" as const),
-        statusLabel: blocked ? ("Pending Approval" as const) : ("Working" as const),
-      };
+  it("builds a flat recent layout with project titles", () => {
+    const layout = buildHomeRecentListLayout({
+      pendingTasks: [],
+      entries: [
+        { thread: makeThread("t1", ProjectId.make("alpha")), projectTitle: "Alpha" },
+        { thread: makeThread("t2", ProjectId.make("beta")), projectTitle: "Beta" },
+      ],
     });
-
-    const collapsed = buildHomeListLayout({
-      groups: [makeGroup("alpha", 2)],
-      displayStates: displayStates({}),
-      needsAttention: { entries: attentionEntries, expanded: false },
-    });
-
-    expect(itemTypes(collapsed.items).slice(0, 3)).toEqual([
-      "attention-header",
-      "attention-thread",
-      "attention-thread",
-    ]);
-    expect(collapsed.items.filter((item) => item.type === "attention-thread")).toHaveLength(6);
-    expect(collapsed.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "attention-show-more",
-          hiddenCount: 2,
-          canShowLess: false,
-        }),
-      ]),
-    );
-    // Project groups shift down; sticky index accounts for attention rows
-    // (header + 6 threads + show-more = 8).
-    expect(collapsed.stickyHeaderIndices).toEqual([8]);
-    expect(collapsed.items[8]).toMatchObject({ type: "header", isFirst: false });
-    expect(collapsed.items[1]).toMatchObject({
-      type: "attention-thread",
-      projectTitle: "Alpha",
-      statusLabel: "Pending Approval",
-    });
-
-    const expanded = buildHomeListLayout({
-      groups: [makeGroup("alpha", 2)],
-      displayStates: displayStates({}),
-      needsAttention: { entries: attentionEntries, expanded: true },
-    });
-    expect(expanded.items.filter((item) => item.type === "attention-thread")).toHaveLength(8);
-    expect(expanded.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "attention-show-more",
-          hiddenCount: 0,
-          canShowLess: true,
-        }),
-      ]),
-    );
-  });
-
-  it("omits the Needs attention section when entries are empty", () => {
-    const layout = buildHomeListLayout({
-      groups: [makeGroup("alpha", 1)],
-      displayStates: displayStates({}),
-      needsAttention: { entries: [], expanded: false },
-    });
-    expect(itemTypes(layout.items)).toEqual(["header", "thread"]);
-    expect(layout.items[0]).toMatchObject({ type: "header", isFirst: true });
+    expect(itemTypes(layout.items)).toEqual(["thread", "thread"]);
+    expect(layout.items[0]).toMatchObject({ type: "thread", projectTitle: "Alpha" });
+    expect(layout.stickyHeaderIndices).toEqual([]);
   });
 });
