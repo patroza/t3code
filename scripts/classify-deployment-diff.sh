@@ -40,11 +40,71 @@ done < <(git diff --name-only -z "${base_sha}" "${head_sha}")
 printf 'Changed paths: %d runtime, %d non-runtime\n' \
   "${#runtime_paths[@]}" "${#non_runtime_paths[@]}"
 
-if ((${#runtime_paths[@]} > 0)); then
+server=false
+discord=false
+vscode=false
+mobile=false
+desktop=false
+
+select_all() {
+  server=true
+  discord=true
+  vscode=true
+  mobile=true
+  desktop=true
+}
+
+for path in "${runtime_paths[@]}"; do
+  case "${path}" in
+    apps/discord-bot/*)
+      discord=true
+      ;;
+    apps/vscode/*)
+      vscode=true
+      ;;
+    apps/mobile/*)
+      mobile=true
+      ;;
+    apps/desktop/*)
+      desktop=true
+      ;;
+    apps/server/*)
+      server=true
+      ;;
+    apps/web/*)
+      # The web application is served by both standalone servers and packaged
+      # desktop clients.
+      server=true
+      desktop=true
+      ;;
+    packages/contracts/* | packages/shared/* | packages/client-runtime/*)
+      # These packages cross every client/server boundary in the private fleet.
+      select_all
+      ;;
+    *)
+      # Root manifests, lockfiles, build tooling, and newly introduced runtime
+      # paths are deliberately conservative until assigned a narrower owner.
+      select_all
+      ;;
+  esac
+done
+
+deploy=false
+if [[ "${server}" == "true" || "${discord}" == "true" || "${vscode}" == "true" ||
+      "${mobile}" == "true" || "${desktop}" == "true" ]]; then
+  deploy=true
+fi
+
+if [[ "${deploy}" == "true" ]]; then
   printf 'Runtime-affecting paths:\n'
   printf '  %s\n' "${runtime_paths[@]}"
-  printf 'deploy=true\n'
 else
   printf 'Only tests, documentation, agent metadata, or CI metadata changed.\n'
-  printf 'deploy=false\n'
 fi
+
+printf 'deploy=%s\n' "${deploy}"
+printf 'server=%s\n' "${server}"
+printf 'discord=%s\n' "${discord}"
+printf 'vscode=%s\n' "${vscode}"
+printf 'mobile=%s\n' "${mobile}"
+printf 'desktop=%s\n' "${desktop}"
