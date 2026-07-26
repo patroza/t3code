@@ -23,6 +23,7 @@ import serverPackageJson from "../../server/package.json" with { type: "json" };
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
+import * as MacApplicationIcon from "./electron/MacApplicationIcon.ts";
 import * as ElectronMenu from "./electron/ElectronMenu.ts";
 import * as ElectronPowerMonitor from "./electron/ElectronPowerMonitor.ts";
 import * as ElectronProtocol from "./electron/ElectronProtocol.ts";
@@ -50,6 +51,7 @@ import * as DesktopClientSettings from "./settings/DesktopClientSettings.ts";
 import * as DesktopSavedEnvironments from "./settings/DesktopSavedEnvironments.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
+import * as DesktopOpenWith from "./shell/DesktopOpenWith.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopState from "./app/DesktopState.ts";
@@ -123,7 +125,7 @@ const electronLayer = Layer.mergeAll(
   ElectronUpdater.layer,
   ElectronWindow.layer,
   DesktopIpc.layer(Electron.ipcMain),
-);
+).pipe(Layer.provideMerge(MacApplicationIcon.layer));
 
 const desktopFoundationLayer = Layer.mergeAll(
   DesktopState.layer,
@@ -182,6 +184,7 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopLifecycle.layer,
   DesktopApplicationMenu.layer,
   DesktopShellEnvironment.layer,
+  DesktopOpenWith.layer,
   desktopSshLayer,
 ).pipe(
   Layer.provideMerge(DesktopUpdates.layer),
@@ -199,10 +202,10 @@ const desktopRuntimeLayer = desktopClerkLayer.pipe(
   Layer.flatMap((clerkContext) =>
     desktopApplicationLayer.pipe(
       Layer.provideMerge(Layer.succeedContext(clerkContext)),
-      Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(NodeHttpClient.layerUndici),
       Layer.provideMerge(NetService.layer),
       Layer.provideMerge(electronLayer),
+      Layer.provideMerge(NodeServices.layer),
     ),
   ),
 );

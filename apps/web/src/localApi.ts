@@ -19,6 +19,10 @@ function createBrowserLocalApi(): LocalApi {
         }
         return window.confirm(message);
       },
+      pickOpenWithApplication: async () => {
+        if (!window.desktopBridge) return Promise.reject(unavailableLocalBackendError());
+        return window.desktopBridge.pickOpenWithApplication();
+      },
     },
     shell: {
       openExternal: async (url) => {
@@ -31,6 +35,14 @@ function createBrowserLocalApi(): LocalApi {
         }
 
         window.open(url, "_blank", "noopener,noreferrer");
+      },
+      resolveOpenWithPresentations: async () => {
+        if (!window.desktopBridge) return Promise.reject(unavailableLocalBackendError());
+        return window.desktopBridge.resolveOpenWithPresentations();
+      },
+      openWith: async (input) => {
+        if (!window.desktopBridge) return Promise.reject(unavailableLocalBackendError());
+        return window.desktopBridge.openWith(input);
       },
     },
     contextMenu: {
