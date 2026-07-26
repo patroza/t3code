@@ -1405,11 +1405,26 @@ export const OrchestrationRpcSchemas = {
   },
 } as const;
 
+/**
+ * Why a thread snapshot could not be produced. Lets subscribers distinguish a
+ * permanently unavailable thread ("thread-deleted"/"thread-archived" — stop
+ * retrying) from a potentially transient miss ("thread-missing" — the
+ * projection row may simply not be written yet, so retrying is correct).
+ */
+export const OrchestrationSnapshotUnavailableReason = Schema.Literals([
+  "thread-deleted",
+  "thread-archived",
+  "thread-missing",
+]);
+export type OrchestrationSnapshotUnavailableReason =
+  typeof OrchestrationSnapshotUnavailableReason.Type;
+
 export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<OrchestrationGetSnapshotError>()(
   "OrchestrationGetSnapshotError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
+    reason: Schema.optional(OrchestrationSnapshotUnavailableReason),
   },
 ) {}
 

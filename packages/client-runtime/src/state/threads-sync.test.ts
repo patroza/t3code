@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   EventId,
   ORCHESTRATION_WS_METHODS,
+  OrchestrationGetSnapshotError,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -580,6 +581,84 @@ describe("EnvironmentThreads", () => {
       expect(Option.isNone(recovered.error)).toBe(true);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.retryCount)).toBe(0);
+    }),
+  );
+
+  it.effect("marks the thread deleted and stops retrying on a permanent deleted failure", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: "Thread thread-1 was deleted",
+          reason: "thread-deleted",
+        }),
+      );
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted",
+      );
+      expect(Option.isNone(state.data)).toBe(true);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+
+      yield* TestClock.adjust("2 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("keeps cached data and stops retrying when the thread is archived", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: "Thread thread-1 is archived",
+          reason: "thread-archived",
+        }),
+      );
+
+      const state = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(Option.getOrThrow(state.data)).toEqual(BASE_THREAD);
+      expect(state.status).toBe("cached");
+      expect(Option.getOrThrow(state.error)).toBe("Thread thread-1 is archived");
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+
+      yield* TestClock.adjust("2 seconds");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("keeps retrying when the thread row is missing but not permanently gone", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Queue.offer(
+        harness.inputs,
+        new OrchestrationGetSnapshotError({
+          message: "Thread thread-1 was not found",
+          reason: "thread-missing",
+        }),
+      );
+
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(1);
+
+      yield* TestClock.adjust("250 millis");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) {
+          break;
+        }
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
     }),
   );
 
