@@ -109,6 +109,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -203,6 +204,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -287,6 +289,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -356,6 +359,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -410,6 +414,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getSessionStopContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
           }),
         ),
       );
