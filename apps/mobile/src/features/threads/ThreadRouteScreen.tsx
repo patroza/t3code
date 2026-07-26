@@ -308,6 +308,24 @@ function ThreadRouteContent(
     [knownTerminalSessions, selectedThreadProject?.workspaceRoot],
   );
   const selectedThreadDetailWorktreePath = selectedThreadDetail?.worktreePath ?? null;
+  const handleStartNewThread = useCallback(() => {
+    if (!selectedThread || !selectedThreadProject) return;
+    const worktreePath = resolvePreferredThreadWorktreePath({
+      threadShellWorktreePath: selectedThread.worktreePath ?? null,
+      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
+    });
+    navigation.navigate("NewTaskSheet", {
+      screen: "NewTaskDraft",
+      params: {
+        environmentId: String(selectedThread.environmentId),
+        projectId: String(selectedThread.projectId),
+        title: selectedThreadProject.title,
+        workspaceMode: "local",
+        branch: selectedThread.branch ?? undefined,
+        worktreePath: worktreePath ?? undefined,
+      },
+    });
+  }, [navigation, selectedThread, selectedThreadDetailWorktreePath, selectedThreadProject]);
   const handleReconnectEnvironment = useCallback(() => {
     if (!environmentId) {
       return;
@@ -781,6 +799,7 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onStartNewThread={handleStartNewThread}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}

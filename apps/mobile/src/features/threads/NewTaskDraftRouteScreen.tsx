@@ -1,6 +1,7 @@
 import type { StaticScreenProps } from "@react-navigation/native";
 import { useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
+import type { ComposerDraftWorkspaceSelection } from "../../state/use-composer-drafts";
 
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
 
@@ -10,7 +11,14 @@ type NewTaskDraftRouteParams = {
   readonly title?: string | string[];
   readonly pendingTaskId?: string | string[];
   readonly incomingShareId?: string | string[];
+  readonly workspaceMode?: string | string[];
+  readonly branch?: string | string[];
+  readonly worktreePath?: string | string[];
 };
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
   const params = route.params ?? {};
@@ -27,6 +35,15 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     }),
     [route.params],
   );
+  const initialWorkspaceSelection = useMemo<ComposerDraftWorkspaceSelection | undefined>(() => {
+    const mode = firstParam(params.workspaceMode);
+    if (mode !== "local" && mode !== "worktree") return undefined;
+    return {
+      mode,
+      branch: firstParam(params.branch) ?? null,
+      worktreePath: firstParam(params.worktreePath) ?? null,
+    };
+  }, [route.params]);
 
   return (
     <>
@@ -37,6 +54,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       />
       <NewTaskDraftScreen
         initialProjectRef={initialProjectRef}
+        initialWorkspaceSelection={initialWorkspaceSelection}
         incomingShareId={
           Array.isArray(params.incomingShareId) ? params.incomingShareId[0] : params.incomingShareId
         }

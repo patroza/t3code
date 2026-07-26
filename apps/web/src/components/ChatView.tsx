@@ -112,6 +112,7 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
+import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
@@ -168,7 +169,6 @@ import { getProviderModelCapabilities, resolveSelectableProvider } from "../prov
 import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
@@ -1322,6 +1322,10 @@ function ChatViewContent(props: ChatViewProps) {
   const [
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
+  ] = useState<Record<string, boolean>>({});
+  const [
+    pendingServerThreadReuseBaseBranchByThreadId,
+    setPendingServerThreadReuseBaseBranchByThreadId,
   ] = useState<Record<string, boolean>>({});
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -3942,6 +3946,29 @@ function ChatViewContent(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         primaryServerSettings.newWorktreesStartFromOrigin)
       : false;
+  const reuseBaseBranch = isLocalDraftThread
+    ? (draftThread?.reuseBaseBranch ?? false)
+    : canOverrideServerThreadEnvMode
+      ? (pendingServerThreadReuseBaseBranchByThreadId[activeThread?.id ?? ""] ?? false)
+      : false;
+  const handleStartNewThread = useCallback(() => {
+    if (!activeProjectRef) return;
+    void handleNewThread(activeProjectRef, {
+      branch: activeThreadBranch,
+      worktreePath: activeWorktreePath,
+      envMode,
+      reuseBaseBranch,
+      startFromOrigin,
+    });
+  }, [
+    activeProjectRef,
+    activeThreadBranch,
+    activeWorktreePath,
+    envMode,
+    handleNewThread,
+    reuseBaseBranch,
+    startFromOrigin,
+  ]);
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
@@ -4624,10 +4651,14 @@ function ChatViewContent(props: ChatViewProps) {
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
-      handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      if (standaloneSlashCommand === "new") {
+        handleStartNewThread();
+      } else {
+        handleInteractionModeChange(standaloneSlashCommand);
+      }
       return;
     }
     if (!hasSendableContent) {
@@ -4864,8 +4895,12 @@ function ChatViewContent(props: ChatViewProps) {
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
                       baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                      ...(reuseBaseBranch
+                        ? { reuseBaseBranch: true }
+                        : {
+                            branch: buildTemporaryWorktreeBranchName(randomHex),
+                            ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                          }),
                     },
                     runSetupScript: true,
                   }
@@ -5567,6 +5602,7 @@ function ChatViewContent(props: ChatViewProps) {
             envMode: mode,
             newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
           }),
+          reuseBaseBranch: false,
           ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
         });
       }
@@ -5596,6 +5632,22 @@ function ChatViewContent(props: ChatViewProps) {
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, {
         startFromOrigin: nextStartFromOrigin,
+      });
+    }
+  };
+
+  const onReuseBaseBranchChange = (nextReuseBaseBranch: boolean) => {
+    if (canOverrideServerThreadEnvMode && activeThread) {
+      setPendingServerThreadReuseBaseBranchByThreadId((current) =>
+        current[activeThread.id] === nextReuseBaseBranch
+          ? current
+          : { ...current, [activeThread.id]: nextReuseBaseBranch },
+      );
+      return;
+    }
+    if (isLocalDraftThread) {
+      setDraftThreadContext(composerDraftTarget, {
+        reuseBaseBranch: nextReuseBaseBranch,
       });
     }
   };
@@ -5964,6 +6016,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
+                            onStartNewThread={handleStartNewThread}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
@@ -6004,6 +6057,8 @@ function ChatViewContent(props: ChatViewProps) {
                                 onEnvModeChange={onEnvModeChange}
                                 startFromOrigin={startFromOrigin}
                                 onStartFromOriginChange={onStartFromOriginChange}
+                                reuseBaseBranch={reuseBaseBranch}
+                                onReuseBaseBranchChange={onReuseBaseBranchChange}
                                 {...(canOverrideServerThreadEnvMode
                                   ? { effectiveEnvModeOverride: envMode }
                                   : {})}
