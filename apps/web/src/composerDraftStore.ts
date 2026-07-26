@@ -216,6 +216,7 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  reuseBaseBranch: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -295,6 +296,7 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  reuseBaseBranch: boolean;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -357,6 +359,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
     },
@@ -372,6 +375,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
     },
@@ -386,6 +390,7 @@ interface ComposerDraftStoreState {
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
+      reuseBaseBranch?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
     },
@@ -1336,6 +1341,7 @@ function createDraftThreadState(
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
+    reuseBaseBranch?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
   },
@@ -1362,6 +1368,12 @@ function createDraftThreadState(
         ? false
         : (existingThread?.startFromOrigin ?? false)
       : options.startFromOrigin;
+  const nextReuseBaseBranch =
+    options?.reuseBaseBranch === undefined
+      ? projectChanged
+        ? false
+        : (existingThread?.reuseBaseBranch ?? false)
+      : options.reuseBaseBranch;
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1381,6 +1393,7 @@ function createDraftThreadState(
           ? "local"
           : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    reuseBaseBranch: nextReuseBaseBranch,
     promotedTo: null,
   };
 }
@@ -1413,6 +1426,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    left.reuseBaseBranch === right.reuseBaseBranch &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1508,6 +1522,7 @@ function normalizePersistedDraftThreads(
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
       const startFromOrigin = candidateDraftThread.startFromOrigin === true;
+      const reuseBaseBranch = candidateDraftThread.reuseBaseBranch === true;
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const promotedToCandidate = candidateDraftThread.promotedTo;
       const promotedToRecord =
@@ -1556,6 +1571,7 @@ function normalizePersistedDraftThreads(
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
+        reuseBaseBranch,
         promotedTo,
       };
     }
@@ -1602,6 +1618,7 @@ function normalizePersistedDraftThreads(
           worktreePath: null,
           envMode: "local",
           startFromOrigin: false,
+          reuseBaseBranch: false,
           promotedTo: null,
         };
       } else if (
@@ -2173,6 +2190,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    reuseBaseBranch: persistedDraftThread.reuseBaseBranch,
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2364,6 +2382,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   ? false
                   : existing.startFromOrigin
                 : options.startFromOrigin;
+            const nextReuseBaseBranch =
+              options.reuseBaseBranch === undefined
+                ? projectChanged
+                  ? false
+                  : existing.reuseBaseBranch
+                : options.reuseBaseBranch;
             const nextDraftThread: DraftThreadState = {
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
@@ -2385,6 +2409,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                     ? "local"
                     : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              reuseBaseBranch: nextReuseBaseBranch,
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -2398,6 +2423,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              nextDraftThread.reuseBaseBranch === existing.reuseBaseBranch &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;
