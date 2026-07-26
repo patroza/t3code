@@ -534,7 +534,10 @@ export function BoardScreen(props: BoardScreenProps) {
 
   if (liveThreads.length === 0) {
     return (
-      <View className="flex-1 items-center justify-center bg-screen px-8">
+      <View
+        className="flex-1 items-center justify-center bg-screen px-8"
+        style={{ paddingBottom: Math.max(insets.bottom, 16) }}
+      >
         <EmptyState title="No threads yet" detail="Create a task to start filling the board." />
       </View>
     );
@@ -542,10 +545,12 @@ export function BoardScreen(props: BoardScreenProps) {
 
   return (
     <View className="flex-1 bg-screen">
-      <View
-        className="flex-row items-center gap-2 border-b border-border px-4 pb-2"
-        style={{ paddingTop: 8 }}
-      >
+      {/*
+        Filter sits under the stack header (solid on iOS Board). Do not rely on
+        a transparent glass header — horizontal columns are not one scroll view
+        UIKit can inset, so cards used to paint under the nav bar.
+      */}
+      <View className="flex-row items-center gap-2 border-b border-border px-4 pb-2.5 pt-2">
         <ControlPillMenu actions={filterMenuActions} onPressAction={handleFilterAction}>
           <Pressable
             accessibilityRole="button"

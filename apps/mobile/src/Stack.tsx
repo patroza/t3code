@@ -391,7 +391,9 @@ export const RootStack = createNativeStackNavigator({
       screen: BoardRouteScreen,
       linking: "board",
       options: {
-        ...GLASS_HEADER_OPTIONS,
+        // Solid header: board columns scroll under the bar and glass has no
+        // single scroll edge to sample — transparent chrome overlaid the cards.
+        ...SOLID_HEADER_OPTIONS,
         contentStyle: { backgroundColor: "transparent" },
         title: "Board",
       },
