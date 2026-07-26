@@ -12,6 +12,7 @@ import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
@@ -20,6 +21,7 @@ import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import { readLiveExistingBackend } from "../backend/DesktopExistingBackend.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -151,7 +153,18 @@ const bootstrap = Effect.gen(function* () {
     return yield* new DesktopDevelopmentBackendPortRequiredError();
   }
 
-  const backendPortSelection = yield* resolveDesktopBackendPort(environment.configuredBackendPort);
+  const existingBackend = readLiveExistingBackend(environment.stateDir);
+  const existingBackendPort = existingBackend
+    ? Option.some(new URL(existingBackend.httpBaseUrl).port).pipe(
+        Option.flatMap((port) => {
+          const parsed = Number.parseInt(port, 10);
+          return Number.isSafeInteger(parsed) ? Option.some(parsed) : Option.none();
+        }),
+      )
+    : Option.none<number>();
+  const backendPortSelection = yield* resolveDesktopBackendPort(
+    Option.orElse(existingBackendPort, () => environment.configuredBackendPort),
+  );
   const backendPort = backendPortSelection.port;
   yield* logBootstrapInfo(
     backendPortSelection.selectedByScan
@@ -162,6 +175,13 @@ const bootstrap = Effect.gen(function* () {
       ...(backendPortSelection.selectedByScan ? { startPort: DEFAULT_DESKTOP_BACKEND_PORT } : {}),
     },
   );
+  if (existingBackend) {
+    yield* logBootstrapInfo("reusing existing backend for shared T3 home", {
+      pid: existingBackend.pid,
+      httpBaseUrl: existingBackend.httpBaseUrl,
+      stateDir: existingBackend.stateDir,
+    });
+  }
 
   const settings = yield* desktopSettings.get;
   if (settings.serverExposureMode !== environment.defaultDesktopSettings.serverExposureMode) {
@@ -213,6 +233,12 @@ const bootstrap = Effect.gen(function* () {
     // slow first wsl.exe spawn.
     yield* Effect.forkScoped(wslBackend.reconcile);
   }
+
+  // Catalog + window services are usable; flush any deep link captured from
+  // initial argv / open-url during single-instance setup.
+  const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
+  yield* deepLinks.start;
+  yield* logBootstrapInfo("bootstrap deep links ready");
 }).pipe(Effect.withSpan("desktop.bootstrap"));
 
 const startup = Effect.gen(function* () {
