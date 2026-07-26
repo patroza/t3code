@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo } from "react";
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
+  buildUnsignedCommitRetryInput,
+  isCommitSigningFailure,
   type GitActionRequestInput,
   type VcsActionOperation,
   type VcsRef,
@@ -14,6 +16,7 @@ import {
 } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
+import { Alert } from "react-native";
 
 import { useBranches } from "../state/queries";
 import { threadEnvironment } from "../state/threads";
@@ -131,7 +134,10 @@ export function useSelectedThreadGitActions() {
         readonly project: EnvironmentProject;
         readonly cwd: string;
       }) => Promise<AtomCommandResult<T, E>>,
-      options?: { readonly managedExternally?: boolean },
+      options?: {
+        readonly managedExternally?: boolean;
+        readonly onFailure?: (error: unknown) => boolean;
+      },
     ): Promise<T | null> => {
       if (!selectedThread || !selectedThreadProject || !selectedThreadCwd) {
         return null;
@@ -154,6 +160,9 @@ export function useSelectedThreadGitActions() {
           : await vcsActionManager.track(appAtomRegistry, target, { operation, label }, run);
       if (AsyncResult.isFailure(result)) {
         const error = Cause.squash(result.cause);
+        if (options?.onFailure?.(error) === true) {
+          return null;
+        }
         const message = error instanceof Error ? error.message : "Git action failed.";
         setPendingConnectionError(message);
         showGitActionResult({ type: "error", title: "Git action failed", description: message });
@@ -319,49 +328,95 @@ export function useSelectedThreadGitActions() {
 
   const onRunSelectedThreadGitAction = useCallback(
     async (input: GitActionRequestInput): Promise<GitRunStackedActionResult | null> => {
-      const actionId = uuidv4();
-      return await runSelectedThreadGitMutation(
-        "run_change_request",
-        "Running source control action",
-        async ({ thread, cwd }) => {
-          const result = await runStackedAction({
-            actionId,
-            action: input.action,
-            ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
-            ...(input.featureBranch ? { featureBranch: input.featureBranch } : {}),
-            ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
-          });
-          if (AsyncResult.isFailure(result)) {
-            return result;
-          }
-
-          showGitActionResult({
-            type: "success",
-            title: result.value.toast.title,
-            description: result.value.toast.description,
-            prUrl:
-              result.value.toast.cta.kind === "open_pr" ? result.value.toast.cta.url : undefined,
-          });
-
-          if (result.value.branch.status === "created" && result.value.branch.name) {
-            const syncResult = await syncSelectedThreadBranchState({
-              thread,
-              cwd,
-              nextThreadState: {
-                branch: result.value.branch.name,
-                worktreePath: selectedThreadWorktreePath,
-              },
+      async function runAction(
+        actionInput: GitActionRequestInput,
+        options?: { readonly syncCurrentBranchOnSuccess?: boolean },
+      ): Promise<GitRunStackedActionResult | null> {
+        const actionId = uuidv4();
+        return await runSelectedThreadGitMutation(
+          "run_change_request",
+          "Running source control action",
+          async ({ thread, cwd }) => {
+            const result = await runStackedAction({
+              actionId,
+              action: actionInput.action,
+              ...(actionInput.commitMessage ? { commitMessage: actionInput.commitMessage } : {}),
+              ...(actionInput.featureBranch ? { featureBranch: actionInput.featureBranch } : {}),
+              ...(actionInput.disableCommitSigning ? { disableCommitSigning: true } : {}),
+              ...(actionInput.filePaths?.length ? { filePaths: [...actionInput.filePaths] } : {}),
             });
-            if (AsyncResult.isFailure(syncResult)) {
-              return AsyncResult.failure(syncResult.cause);
+            if (AsyncResult.isFailure(result)) {
+              return result;
             }
-          } else {
-            await refreshSelectedThreadGitStatus({ quiet: true, cwd });
-          }
-          return result;
-        },
-        { managedExternally: true },
-      );
+
+            showGitActionResult({
+              type: "success",
+              title: result.value.toast.title,
+              description: result.value.toast.description,
+              prUrl:
+                result.value.toast.cta.kind === "open_pr" ? result.value.toast.cta.url : undefined,
+            });
+
+            if (result.value.branch.status === "created" && result.value.branch.name) {
+              const syncResult = await syncSelectedThreadBranchState({
+                thread,
+                cwd,
+                nextThreadState: {
+                  branch: result.value.branch.name,
+                  worktreePath: selectedThreadWorktreePath,
+                },
+              });
+              if (AsyncResult.isFailure(syncResult)) {
+                return AsyncResult.failure(syncResult.cause);
+              }
+            } else if (options?.syncCurrentBranchOnSuccess) {
+              const status = await refreshSelectedThreadGitStatus({ quiet: true, cwd });
+              if (status?.refName) {
+                const syncResult = await syncSelectedThreadBranchState({
+                  thread,
+                  cwd,
+                  nextThreadState: {
+                    branch: status.refName,
+                    worktreePath: selectedThreadWorktreePath,
+                  },
+                });
+                if (AsyncResult.isFailure(syncResult)) {
+                  return AsyncResult.failure(syncResult.cause);
+                }
+              }
+            } else {
+              await refreshSelectedThreadGitStatus({ quiet: true, cwd });
+            }
+            return result;
+          },
+          {
+            managedExternally: true,
+            onFailure: (error) => {
+              if (actionInput.disableCommitSigning || !isCommitSigningFailure(error)) {
+                return false;
+              }
+              Alert.alert(
+                "Commit signing failed",
+                "Git couldn’t sign the commit. Retry this commit without signing?",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Retry without signing",
+                    onPress: () => {
+                      void runAction(buildUnsignedCommitRetryInput(actionInput), {
+                        syncCurrentBranchOnSuccess: actionInput.featureBranch === true,
+                      });
+                    },
+                  },
+                ],
+              );
+              return true;
+            },
+          },
+        );
+      }
+
+      return await runAction(input);
     },
     [
       runStackedAction,
