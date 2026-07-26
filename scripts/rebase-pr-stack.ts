@@ -945,6 +945,8 @@ async function finishRun(
 /**
  * Open PRs that should ride along when `fork/changes` is rewritten.
  * Excludes stack provenance branches (tim/candidates/changes) and other-repo heads.
+ * Registered integration overlays are ordered first so a later ordinary-feature
+ * push failure cannot block the compose step that depends on them.
  */
 export function selectOpenFeaturePullRequests(input: {
   readonly openPulls: ReadonlyArray<{
@@ -962,7 +964,8 @@ export function selectOpenFeaturePullRequests(input: {
     input.manifest.integrationBranch,
     ...input.manifest.pullRequests.map(({ branch }) => branch),
   ]);
-  return input.openPulls
+  const overlayBranches = new Set(input.manifest.integrationOverlays.map(({ branch }) => branch));
+  const selected = input.openPulls
     .filter((pull) => {
       if (pull.baseBranch !== input.manifest.forkChangesBranch) return false;
       if (stackBranches.has(pull.headBranch)) return false;
@@ -976,6 +979,27 @@ export function selectOpenFeaturePullRequests(input: {
       return true;
     })
     .map((pull) => ({ number: pull.number, branch: pull.headBranch }));
+
+  const overlays: Array<{ readonly number: number; readonly branch: string }> = [];
+  const features: Array<{ readonly number: number; readonly branch: string }> = [];
+  for (const entry of selected) {
+    if (overlayBranches.has(entry.branch)) {
+      overlays.push(entry);
+    } else {
+      features.push(entry);
+    }
+  }
+  // Preserve manifest overlay order for deterministic composition inputs.
+  overlays.sort((left, right) => {
+    const leftIndex = input.manifest.integrationOverlays.findIndex(
+      (overlay) => overlay.branch === left.branch,
+    );
+    const rightIndex = input.manifest.integrationOverlays.findIndex(
+      (overlay) => overlay.branch === right.branch,
+    );
+    return leftIndex - rightIndex;
+  });
+  return [...overlays, ...features];
 }
 
 export interface FeaturePullRequestRebaseResult {
@@ -993,9 +1017,13 @@ export interface FeaturePullRequestRebaseResult {
 }
 
 /**
- * After `fork/changes` is rewritten, rebase every open feature PR that targets it.
- * Uses `git rebase --onto newBase oldBase` and force-with-lease pushes.
- * Conflicts are recorded and skipped so the stack sync itself still succeeds.
+ * After `fork/changes` is rewritten, rebase every open feature PR that targets it
+ * (including registered integration overlays). Uses `git rebase --onto newBase oldBase`
+ * and force-with-lease pushes.
+ *
+ * Per-PR isolation: a conflict or stale lease on one branch is recorded and the
+ * loop continues. That is required so a racing ordinary feature push cannot
+ * strand integration overlays and fail the subsequent compose step.
  */
 export async function rebaseOpenFeaturePullRequests(options: {
   readonly sourceRoot?: string;
@@ -1090,102 +1118,160 @@ export async function rebaseOpenFeaturePullRequests(options: {
       : options.newForkChangesTip;
 
   for (const feature of features) {
-    const remoteTip = git(repoDir, ["rev-parse", `refs/remotes/origin/${feature.branch}`], {
-      allowFailure: true,
-    });
-    if (!remoteTip) {
-      skipped.push({
-        number: feature.number,
-        branch: feature.branch,
-        reason: "missing remote branch",
+    try {
+      const remoteTip = git(repoDir, ["rev-parse", `refs/remotes/origin/${feature.branch}`], {
+        allowFailure: true,
       });
-      continue;
-    }
+      if (!remoteTip) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason: "missing remote branch",
+        });
+        continue;
+      }
 
-    const hasNewBase = run("git", ["merge-base", "--is-ancestor", newBase, remoteTip], {
-      cwd: repoDir,
-      allowFailure: true,
-    });
-    if (hasNewBase.status === 0) {
-      skipped.push({
-        number: feature.number,
-        branch: feature.branch,
-        reason: "already based on new fork/changes",
-      });
-      continue;
-    }
-
-    // Recover the old fork/changes tip this PR was built on: newest known historical
-    // tip that is still an ancestor of the feature head. Feature commits are then
-    // exactly oldBase..head.
-    const historicalTips = appendBaseHistory(baseHistoryTips, [options.oldForkChangesTip, newBase]);
-    const recoveredOldBase = recoverOldBaseTip({
-      historicalBaseTipsNewestFirst: historicalTips.filter(
-        (tip) => tip.toLowerCase() !== newBase.toLowerCase(),
-      ),
-      isAncestorOfHead: (tip) =>
-        run("git", ["merge-base", "--is-ancestor", tip, remoteTip], {
-          cwd: repoDir,
-          allowFailure: true,
-        }).status === 0,
-    });
-
-    if (recoveredOldBase === null) {
-      skipped.push({
-        number: feature.number,
-        branch: feature.branch,
-        reason:
-          "cannot recover old fork/changes tip (no known historical base tip is an ancestor of this head)",
-      });
-      continue;
-    }
-
-    git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
-    const rebaseResult = run(
-      "git",
-      ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, recoveredOldBase],
-      {
+      const hasNewBase = run("git", ["merge-base", "--is-ancestor", newBase, remoteTip], {
         cwd: repoDir,
         allowFailure: true,
-        env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
-      },
-    );
-    if (rebaseResult.status !== 0) {
+      });
+      if (hasNewBase.status === 0) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason: "already based on new fork/changes",
+        });
+        continue;
+      }
+
+      // Recover the old fork/changes tip this PR was built on: newest known historical
+      // tip that is still an ancestor of the feature head. Feature commits are then
+      // exactly oldBase..head. Multi-generation recovery walks base-history so a
+      // PR that missed several fork/changes merges still replays only its own
+      // commits (cherry-equivalent of rebase --onto).
+      const historicalTips = appendBaseHistory(baseHistoryTips, [
+        options.oldForkChangesTip,
+        newBase,
+      ]);
+      const recoveredOldBase = recoverOldBaseTip({
+        historicalBaseTipsNewestFirst: historicalTips.filter(
+          (tip) => tip.toLowerCase() !== newBase.toLowerCase(),
+        ),
+        isAncestorOfHead: (tip) =>
+          run("git", ["merge-base", "--is-ancestor", tip, remoteTip], {
+            cwd: repoDir,
+            allowFailure: true,
+          }).status === 0,
+      });
+
+      if (recoveredOldBase === null) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason:
+            "cannot recover old fork/changes tip (no known historical base tip is an ancestor of this head)",
+        });
+        continue;
+      }
+
+      git(repoDir, ["checkout", "--quiet", "--detach", remoteTip]);
+      const rebaseResult = run(
+        "git",
+        ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, recoveredOldBase],
+        {
+          cwd: repoDir,
+          allowFailure: true,
+          env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+        },
+      );
+      if (rebaseResult.status !== 0) {
+        if (rebaseInProgress(repoDir)) {
+          run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
+        }
+        const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
+          allowFailure: true,
+        });
+        conflicts.push({
+          number: feature.number,
+          branch: feature.branch,
+          message: conflictPaths
+            ? `conflict rebasing onto new base from ${recoveredOldBase.slice(0, 12)}: ${conflictPaths.split("\n").join(", ")}`
+            : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase --onto failed"),
+        });
+        continue;
+      }
+
+      const newTip = git(repoDir, ["rev-parse", "HEAD"]);
+      if (newTip === remoteTip) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason: "rebase produced identical tip",
+        });
+        continue;
+      }
+
+      if (options.push) {
+        const pushResult = run(
+          "git",
+          [
+            "push",
+            `--force-with-lease=refs/heads/${feature.branch}:${remoteTip}`,
+            "origin",
+            `${newTip}:refs/heads/${feature.branch}`,
+          ],
+          { cwd: repoDir, allowFailure: true },
+        );
+        if (pushResult.status !== 0) {
+          // Concurrent automation may have already rebased this branch onto the
+          // new base; re-fetch and treat that as success-equivalent rather than
+          // aborting remaining PRs (especially registered overlays).
+          git(repoDir, [
+            "fetch",
+            "--quiet",
+            "origin",
+            `+refs/heads/${feature.branch}:refs/remotes/origin/${feature.branch}`,
+          ]);
+          const latestRemote = git(
+            repoDir,
+            ["rev-parse", `refs/remotes/origin/${feature.branch}`],
+            { allowFailure: true },
+          );
+          const alreadyBased =
+            latestRemote !== "" &&
+            run("git", ["merge-base", "--is-ancestor", newBase, latestRemote], {
+              cwd: repoDir,
+              allowFailure: true,
+            }).status === 0;
+          if (alreadyBased) {
+            skipped.push({
+              number: feature.number,
+              branch: feature.branch,
+              reason: "remote already based on new fork/changes after concurrent update",
+            });
+            continue;
+          }
+          conflicts.push({
+            number: feature.number,
+            branch: feature.branch,
+            message: `push failed: ${stripAnsi(
+              pushResult.stderr || pushResult.stdout || "force-with-lease rejected",
+            )}`,
+          });
+          continue;
+        }
+      }
+      updated.push({ number: feature.number, branch: feature.branch });
+    } catch (error) {
       if (rebaseInProgress(repoDir)) {
         run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
       }
-      const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
-        allowFailure: true,
-      });
       conflicts.push({
         number: feature.number,
         branch: feature.branch,
-        message: conflictPaths
-          ? `conflict rebasing onto new base from ${recoveredOldBase.slice(0, 12)}: ${conflictPaths.split("\n").join(", ")}`
-          : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase --onto failed"),
+        message: error instanceof Error ? error.message : String(error),
       });
-      continue;
     }
-
-    const newTip = git(repoDir, ["rev-parse", "HEAD"]);
-    if (newTip === remoteTip) {
-      skipped.push({
-        number: feature.number,
-        branch: feature.branch,
-        reason: "rebase produced identical tip",
-      });
-      continue;
-    }
-
-    if (options.push) {
-      git(repoDir, [
-        "push",
-        `--force-with-lease=refs/heads/${feature.branch}:${remoteTip}`,
-        "origin",
-        `${newTip}:refs/heads/${feature.branch}`,
-      ]);
-    }
-    updated.push({ number: feature.number, branch: feature.branch });
   }
 
   // Best-effort cleanup
@@ -1238,7 +1324,44 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
         console.log(
           `Feature PRs: updated=${featureResult.updated.length} conflicts=${featureResult.conflicts.length} skipped=${featureResult.skipped.length}`,
         );
+        // Integration overlays must be based on the new tip for compose. Surface a
+        // hard error when a registered overlay could not be rebased, instead of
+        // failing later with a less actionable compose-time message.
+        if (manifest.integrationOverlays.length > 0) {
+          const overlayBranches = new Set(manifest.integrationOverlays.map(({ branch }) => branch));
+          const failedOverlays = featureResult.conflicts.filter((entry) =>
+            overlayBranches.has(entry.branch),
+          );
+          const skippedOverlays = featureResult.skipped.filter(
+            (entry) =>
+              overlayBranches.has(entry.branch) &&
+              entry.reason !== "already based on new fork/changes" &&
+              entry.reason !== "remote already based on new fork/changes after concurrent update" &&
+              entry.reason !== "rebase produced identical tip",
+          );
+          if (failedOverlays.length > 0 || skippedOverlays.length > 0) {
+            const details = [
+              ...failedOverlays.map(
+                (entry) => `#${entry.number} (${entry.branch}): ${entry.message}`,
+              ),
+              ...skippedOverlays.map(
+                (entry) => `#${entry.number} (${entry.branch}): ${entry.reason}`,
+              ),
+            ].join("; ");
+            throw new StackError(
+              `Integration overlay auto-rebase incomplete after fork/changes advanced: ${details}`,
+            );
+          }
+        }
       } catch (error) {
+        // Stack layer refs are already pushed. Overlay incompleteness is fatal for
+        // the job (compose cannot proceed); ordinary feature PR failures are not.
+        if (
+          error instanceof StackError &&
+          error.message.startsWith("Integration overlay auto-rebase incomplete")
+        ) {
+          throw error;
+        }
         console.error(
           `Feature PR auto-rebase failed (stack sync already pushed): ${
             error instanceof Error ? error.message : String(error)
