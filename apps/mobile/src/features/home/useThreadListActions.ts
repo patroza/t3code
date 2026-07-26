@@ -213,6 +213,7 @@ export function useThreadListActions(): {
           });
           return preview._tag === "Success" ? preview.value.candidate : null;
         },
+        removalPolicy: "confirm",
         confirmRemoval: ({ displayWorktreePath }) =>
           presentWorktreeCleanupConfirmation({
             isIos: process.env.EXPO_OS === "ios",
