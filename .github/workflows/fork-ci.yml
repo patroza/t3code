@@ -144,6 +144,11 @@ jobs:
       contents: read
     outputs:
       deploy: ${{ steps.classify.outputs.deploy }}
+      server: ${{ steps.classify.outputs.server }}
+      discord: ${{ steps.classify.outputs.discord }}
+      vscode: ${{ steps.classify.outputs.vscode }}
+      mobile: ${{ steps.classify.outputs.mobile }}
+      desktop: ${{ steps.classify.outputs.desktop }}
     steps:
       - name: Checkout integration source
         uses: actions/checkout@v6
@@ -172,16 +177,26 @@ jobs:
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
         run: |
           deploy=true
+          server=true
+          discord=true
+          vscode=true
+          mobile=true
+          desktop=true
           if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
               git fetch --quiet origin "${PREVIOUS_SHA}" || true
             fi
             if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
-              deploy="$(
-                scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${GITHUB_SHA}" |
-                  tee /dev/stderr |
-                  sed -n 's/^deploy=//p'
+              classification="$(
+                scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${GITHUB_SHA}"
               )"
+              printf '%s\n' "${classification}" >&2
+              deploy="$(sed -n 's/^deploy=//p' <<<"${classification}")"
+              server="$(sed -n 's/^server=//p' <<<"${classification}")"
+              discord="$(sed -n 's/^discord=//p' <<<"${classification}")"
+              vscode="$(sed -n 's/^vscode=//p' <<<"${classification}")"
+              mobile="$(sed -n 's/^mobile=//p' <<<"${classification}")"
+              desktop="$(sed -n 's/^desktop=//p' <<<"${classification}")"
             else
               echo "Previous successful integration SHA is unavailable; deployment remains enabled."
             fi
@@ -189,6 +204,11 @@ jobs:
             echo "No previous successful integration SHA; deployment remains enabled."
           fi
           echo "deploy=${deploy}" >>"${GITHUB_OUTPUT}"
+          echo "server=${server}" >>"${GITHUB_OUTPUT}"
+          echo "discord=${discord}" >>"${GITHUB_OUTPUT}"
+          echo "vscode=${vscode}" >>"${GITHUB_OUTPUT}"
+          echo "mobile=${mobile}" >>"${GITHUB_OUTPUT}"
+          echo "desktop=${desktop}" >>"${GITHUB_OUTPUT}"
 
   dispatch_mobile_releases:
     name: Dispatch Mobile Releases
@@ -196,7 +216,7 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/fork/integration' &&
-      needs.deployment_scope.outputs.deploy == 'true'
+      needs.deployment_scope.outputs.mobile == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
