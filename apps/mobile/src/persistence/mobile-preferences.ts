@@ -39,6 +39,19 @@ export interface Preferences {
    * environments. Device-local (no client-settings sync).
    */
   readonly selectedEnvironmentIds?: readonly string[];
+  /**
+   * @deprecated Prefer hideSettledOnRecent. Older payloads used a single flag
+   * for Recent only; kept so device prefs still decode.
+   */
+  readonly hideSettledThreads?: boolean;
+  /**
+   * Recent list: hide settled threads. Default true when omitted (cleaner inbox).
+   */
+  readonly hideSettledOnRecent?: boolean;
+  /**
+   * Projects list: hide settled threads. Default false when omitted (full history).
+   */
+  readonly hideSettledOnProjects?: boolean;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -92,6 +105,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListV2Enabled?: boolean;
     recentWorkEnabled?: boolean;
     selectedEnvironmentIds?: readonly string[];
+    hideSettledThreads?: boolean;
+    hideSettledOnRecent?: boolean;
+    hideSettledOnProjects?: boolean;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -132,7 +148,32 @@ function sanitizePreferences(parsed: Preferences): Preferences {
       (id): id is string => typeof id === "string" && id.length > 0,
     );
   }
+  if (typeof parsed.hideSettledThreads === "boolean") {
+    preferences.hideSettledThreads = parsed.hideSettledThreads;
+  }
+  if (typeof parsed.hideSettledOnRecent === "boolean") {
+    preferences.hideSettledOnRecent = parsed.hideSettledOnRecent;
+  }
+  if (typeof parsed.hideSettledOnProjects === "boolean") {
+    preferences.hideSettledOnProjects = parsed.hideSettledOnProjects;
+  }
   return preferences;
+}
+
+/** Recent: default hide settled. Honors legacy hideSettledThreads when set. */
+export function resolveHideSettledOnRecent(preferences: Preferences): boolean {
+  if (typeof preferences.hideSettledOnRecent === "boolean") {
+    return preferences.hideSettledOnRecent;
+  }
+  if (typeof preferences.hideSettledThreads === "boolean") {
+    return preferences.hideSettledThreads;
+  }
+  return true;
+}
+
+/** Projects: default show settled (hide = false). */
+export function resolveHideSettledOnProjects(preferences: Preferences): boolean {
+  return preferences.hideSettledOnProjects === true;
 }
 
 export const make = Effect.fn("MobilePreferencesStore.make")(function* () {

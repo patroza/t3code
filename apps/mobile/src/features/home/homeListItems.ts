@@ -212,6 +212,7 @@ export function buildHomeListLayout(input: {
 /**
  * Flat Recent mode layout: pending tasks first, then threads by recency.
  * Each thread row can carry a project title for multi-project context.
+ * Callers apply hide-settled / project filters before building entries.
  */
 export function buildHomeRecentListLayout(input: {
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
