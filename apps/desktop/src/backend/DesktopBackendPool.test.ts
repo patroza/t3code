@@ -87,6 +87,7 @@ function makePoolLayer(
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
           syncAppearance: Effect.void,
           navigateToThread: () => Effect.void,
+          navigateToProject: () => Effect.void,
         } satisfies DesktopWindow.DesktopWindow["Service"]),
       ),
     ),
