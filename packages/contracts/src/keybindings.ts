@@ -64,6 +64,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "preview.resetZoom",
   "commandPalette.toggle",
   "composer.stash",
+  "board.open",
   "chat.new",
   "chat.newLocal",
   "editor.openFavorite",
