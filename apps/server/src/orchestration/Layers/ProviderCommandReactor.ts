@@ -1028,28 +1028,34 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
+    // Session stops are resolved through an archived-inclusive context query:
+    // the archive flow dispatches the stop after the thread disappears from
+    // the active-only shell/detail queries, so resolving through those would
+    // silently leak the provider session.
+    const context = yield* projectionSnapshotQuery
+      .getSessionStopContextById(event.payload.threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    if (!context) {
       return;
     }
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+    if (context.session && context.session.status !== "stopped") {
+      yield* providerService.stopSession({ threadId: context.threadId });
     }
 
     yield* setThreadSession({
-      threadId: thread.id,
+      threadId: context.threadId,
       session: {
-        threadId: thread.id,
+        threadId: context.threadId,
         status: "stopped",
-        providerName: thread.session?.providerName ?? null,
-        ...(thread.session?.providerInstanceId !== undefined
-          ? { providerInstanceId: thread.session.providerInstanceId }
+        providerName: context.session?.providerName ?? null,
+        ...(context.session?.providerInstanceId !== undefined
+          ? { providerInstanceId: context.session.providerInstanceId }
           : {}),
-        runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        runtimeMode: context.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
-        lastError: thread.session?.lastError ?? null,
+        lastError: context.session?.lastError ?? null,
         updatedAt: now,
       },
       createdAt: now,
