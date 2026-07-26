@@ -80,6 +80,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const httpSnapshotLoadAttempted = yield* Ref.make(false);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
@@ -267,10 +268,20 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
-          if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
-            current = yield* SubscriptionRef.get(state);
+          // The socket subscription may retry an expected domain failure (for
+          // example, while a newly-created thread is still being projected).
+          // Do not repeat the HTTP fallback on each socket retry: a missing
+          // snapshot otherwise produces a new 404 every 250ms.
+          const alreadyAttemptedHttpSnapshotLoad = yield* Ref.getAndSet(
+            httpSnapshotLoadAttempted,
+            true,
+          );
+          if (!alreadyAttemptedHttpSnapshotLoad) {
+            const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+            if (Option.isSome(httpSnapshot)) {
+              yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+              current = yield* SubscriptionRef.get(state);
+            }
           }
         }
 
