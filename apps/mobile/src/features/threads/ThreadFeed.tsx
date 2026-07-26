@@ -1584,14 +1584,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     props.listRef.current?.scrollToEnd({ animated: true });
   }, [props.listRef]);
 
-  // The empty↔filled key below remounts the list, which resets its imperative
-  // content-inset override — and useKeyboardChatComposerInset (mounted above
-  // the remount boundary) deduplicates by height, so it never re-reports the
-  // composer inset to the fresh instance. Without this, the remounted list's
-  // initial scroll-to-end computes with a zero end inset and rests one
-  // composer-height short of the end. Layout effect: it must land before the
-  // list's first positioning tick or the one-shot initial scroll misses it.
-  const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
+  // Remount empty→filled once per thread open so initialScrollAtEnd lands under
+  // automatic insets. After the first filled mount for this threadId, keep the
+  // filled key even if the feed briefly empties during sync — remounting then
+  // feels like "conversation cleared and reloaded from scratch".
+  const listMountThreadIdRef = useRef(props.threadId);
+  const sawFilledFeedRef = useRef(props.feed.length > 0);
+  if (listMountThreadIdRef.current !== props.threadId) {
+    listMountThreadIdRef.current = props.threadId;
+    sawFilledFeedRef.current = props.feed.length > 0;
+  } else if (props.feed.length > 0) {
+    sawFilledFeedRef.current = true;
+  }
+  const listMountKey = `${props.threadId}:${sawFilledFeedRef.current ? "filled" : "empty"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {

@@ -37,6 +37,7 @@ import {
 import { resolveThreadSelectionNavigationAction } from "../../lib/adaptive-navigation";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { mobilePreferencesAtom } from "../../state/preferences";
+import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
@@ -478,6 +479,9 @@ function AdaptiveWorkspaceLayoutContent(
         environmentId: String(thread.environmentId),
         threadId: String(thread.id),
       };
+      // Overlap SQLite/HTTP detail hydrate with navigation / setParams.
+      prefetchEnvironmentThread(thread.environmentId, thread.id);
+      warmSelectedEnvironmentThread(thread.environmentId, thread.id);
       const navigationAction = resolveThreadSelectionNavigationAction({
         usesSplitView: layout.usesSplitView,
         pathname,
