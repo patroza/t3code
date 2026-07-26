@@ -65,14 +65,67 @@ const buildSourcemap: boolean | "hidden" =
       ? "hidden"
       : true;
 
+const isolatedUnitTestFiles = [
+  "src/authBootstrap.test.ts",
+  "src/browser/browserRecording.test.ts",
+  "src/browser/browserTargetResolver.test.ts",
+  "src/browser/desktopTabLifetime.test.ts",
+  "src/branding.test.ts",
+  "src/clientPersistenceStorage.test.ts",
+  "src/cloud/dpop.test.ts",
+  "src/cloud/linkEnvironment.test.ts",
+  "src/cloud/managedAuth.test.ts",
+  "src/components/ComposerPromptEditor.test.ts",
+  "src/components/ProviderUpdateEnvironmentRows.test.tsx",
+  "src/components/ServerUpdateAction.test.tsx",
+  "src/components/chat/MessagesTimeline.test.tsx",
+  "src/components/chat/draftHeroTransition.test.ts",
+  "src/components/files/projectFilesQueryState.test.ts",
+  "src/components/preview/PreviewView.test.tsx",
+  "src/components/preview/openPreviewSession.test.ts",
+  "src/components/preview/openTerminalLinkInPreview.test.ts",
+  "src/connection/storage.test.ts",
+  "src/contextMenuFallback.test.ts",
+  "src/environments/primary/bootstrap.test.ts",
+  "src/environments/primary/httpLayer.test.ts",
+  "src/hooks/useCopyToClipboard.test.ts",
+  "src/hooks/useLocalStorage.test.ts",
+  "src/hooks/useTheme.test.ts",
+  "src/lib/elementContext.test.ts",
+  "src/localApi.test.ts",
+  "src/providerUpdateDismissal.test.ts",
+  "src/uiStateStore.test.ts",
+  "src/versionSkew.test.ts",
+] as const;
+
 const unitTestProject = {
   extends: true,
   test: {
     name: "unit",
+    // Reuse each worker's transformed module graph across test files. The suite
+    // resets its stores explicitly; process isolation was spending most of CI
+    // time re-importing the same React/Effect graph for every file.
+    isolate: false,
+    fileParallelism: true,
+    maxWorkers: 4,
     include: ["src/**/*.test.{ts,tsx}"],
+    exclude: [...isolatedUnitTestFiles],
     // The web runtime suite exercises auth bootstrap, saved environments,
     // and websocket subscription lifecycles. Under the full monorepo test
     // run, those async tests can exceed Vitest's default 5s budget.
+    hookTimeout: 15_000,
+    testTimeout: 15_000,
+  },
+} satisfies TestProjectInlineConfiguration;
+
+const isolatedUnitTestProject = {
+  extends: true,
+  test: {
+    name: "unit-isolated",
+    isolate: true,
+    fileParallelism: true,
+    maxWorkers: 4,
+    include: [...isolatedUnitTestFiles],
     hookTimeout: 15_000,
     testTimeout: 15_000,
   },
@@ -227,7 +280,7 @@ export default defineConfig(() => {
       sourcemap: buildSourcemap,
     },
     test: {
-      projects: [defineProject(unitTestProject)],
+      projects: [defineProject(unitTestProject), defineProject(isolatedUnitTestProject)],
     },
   };
 });
