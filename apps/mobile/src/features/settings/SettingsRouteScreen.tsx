@@ -528,11 +528,6 @@ function GeneralSettingsSection() {
   const projectGroupingEnabled = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.projectGroupingEnabled !== false
     : true;
-  // Default on. Storage key remains recentWorkEnabled for migration from the
-  // earlier "Recent work" toggle; the section is now Needs attention.
-  const needsAttentionEnabled = AsyncResult.isSuccess(preferencesResult)
-    ? preferencesResult.value.recentWorkEnabled !== false
-    : true;
 
   return (
     <SettingsSection title="General">
@@ -541,12 +536,6 @@ function GeneralSettingsSection() {
         label="Project Grouping"
         value={projectGroupingEnabled}
         onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
-      />
-      <SettingsSwitchRow
-        icon="exclamationmark.triangle"
-        label="Needs attention"
-        value={needsAttentionEnabled}
-        onValueChange={(value) => savePreferences({ recentWorkEnabled: value })}
       />
     </SettingsSection>
   );
