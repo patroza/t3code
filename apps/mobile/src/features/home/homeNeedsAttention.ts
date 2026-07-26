@@ -65,7 +65,7 @@ export function buildHomeNeedsAttentionEntries(input: {
     threads: input.threads,
     settlementEnvironmentIds: input.settlementEnvironmentIds,
     snoozeEnvironmentIds: input.snoozeEnvironmentIds,
-    now: input.now,
+    now: input.now ?? new Date().toISOString(),
     includeThread: (thread) => {
       if (input.environmentId !== null && thread.environmentId !== input.environmentId) {
         return false;

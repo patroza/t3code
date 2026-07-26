@@ -60,7 +60,11 @@ function makeThread(
       options.sessionStatus == null
         ? null
         : {
+            threadId: ThreadId.make(id),
             status: options.sessionStatus,
+            providerName: null,
+            runtimeMode: "full-access",
+            lastError: null,
             updatedAt: options.updatedAt ?? "2026-06-01T00:00:00.000Z",
             activeTurnId: null,
             providerInstanceId: ProviderInstanceId.make("codex"),

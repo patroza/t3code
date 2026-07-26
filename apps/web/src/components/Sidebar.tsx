@@ -4124,6 +4124,7 @@ export default function Sidebar() {
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
     return buildNeedsAttentionEntries({
       threads: visibleThreads,
+      now: new Date().toISOString(),
       autoSettleAfterDays,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,

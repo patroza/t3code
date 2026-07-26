@@ -1,8 +1,12 @@
-import type { EnvironmentId, OrchestrationThreadShell } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationThreadShell,
+  ProviderInteractionMode,
+} from "@t3tools/contracts";
 import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 
-import { effectiveSettled, effectiveSnoozed } from "./threadSettled";
-import { getThreadSortTimestamp } from "./threadSort";
+import { effectiveSettled, effectiveSnoozed } from "./threadSettled.ts";
+import { getThreadSortTimestamp } from "./threadSort.ts";
 
 /** Status labels aligned with web `resolveThreadStatusPill` / board derivation. */
 export type NeedsAttentionStatusLabel =
@@ -27,35 +31,19 @@ const KIND_RANK: Record<NeedsAttentionKind, number> = {
   working: 1,
 };
 
-export type NeedsAttentionThreadInput = Pick<
-  OrchestrationThreadShell,
-  | "id"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "hasActionableProposedPlan"
-  | "interactionMode"
-  | "latestTurn"
-  | "session"
-  | "createdAt"
-  | "updatedAt"
-  | "latestUserMessageAt"
-  | "archivedAt"
-  | "settledOverride"
-  | "settledAt"
-  | "snoozedUntil"
-  | "snoozedAt"
-  | "environmentId"
-  | "projectId"
->;
+/** Environment-scoped shell row used by web + mobile attention strips. */
+export type NeedsAttentionThreadInput = OrchestrationThreadShell & {
+  readonly environmentId: EnvironmentId;
+};
 
 /**
  * Resolves a board/sidebar-compatible status label for attention classification.
  * Mirrors web `resolveThreadStatusPill` priority (without last-visited Completed
- * when `lastVisitedAt` is omitted — callers can pass Completed via status override).
+ * when callers do not pass `hasUnseenCompletion`).
  */
 export function resolveNeedsAttentionStatusLabel(
   thread: Pick<
-    NeedsAttentionThreadInput,
+    OrchestrationThreadShell,
     | "hasPendingApprovals"
     | "hasPendingUserInput"
     | "hasActionableProposedPlan"
@@ -71,7 +59,7 @@ export function resolveNeedsAttentionStatusLabel(
     return "Awaiting Input";
   }
   if (
-    thread.interactionMode === "plan" &&
+    thread.interactionMode === ("plan" satisfies ProviderInteractionMode) &&
     thread.hasActionableProposedPlan &&
     !thread.hasPendingUserInput
   ) {
@@ -107,7 +95,7 @@ export function resolveNeedsAttentionStatusLabel(
  */
 export function classifyNeedsAttention(
   thread: Pick<
-    NeedsAttentionThreadInput,
+    OrchestrationThreadShell,
     | "hasPendingApprovals"
     | "hasPendingUserInput"
     | "hasActionableProposedPlan"
@@ -162,6 +150,9 @@ export interface NeedsAttentionEntry<TThread extends NeedsAttentionThreadInput, 
 /**
  * Builds Needs attention entries: board Working ∪ blocked Review signals,
  * attention-first sort. Shared by web classic sidebar and mobile home list.
+ *
+ * Callers must pass `now` (ISO) so this stays pure and free of wall-clock
+ * construction — same contract as {@link effectiveSettled}.
  */
 export function buildNeedsAttentionEntries<
   TThread extends NeedsAttentionThreadInput,
@@ -177,11 +168,12 @@ export function buildNeedsAttentionEntries<
   readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly autoSettleAfterDays?: number | null;
-  readonly now?: string;
+  /** Required clock for settle/snooze classification. */
+  readonly now: string;
   /** Per-thread unseen completion (web last-visited). */
   readonly hasUnseenCompletion?: (thread: TThread) => boolean;
 }): ReadonlyArray<NeedsAttentionEntry<TThread, TProject>> {
-  const now = input.now ?? new Date().toISOString();
+  const now = input.now;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
   const entries: NeedsAttentionEntry<TThread, TProject>[] = [];
 

@@ -245,11 +245,12 @@ describe("buildHomeListLayout", () => {
     const beta = makeProject("beta", "Beta");
     const attentionEntries = Array.from({ length: 8 }, (_, index) => {
       const project = index % 2 === 0 ? alpha : beta;
+      const blocked = index % 2 === 0;
       return {
         thread: makeThread(`attention-${index}`, project.id),
         project,
-        kind: (index % 2 === 0 ? "blocked" : "working") as const,
-        statusLabel: (index % 2 === 0 ? "Pending Approval" : "Working") as const,
+        kind: blocked ? ("blocked" as const) : ("working" as const),
+        statusLabel: blocked ? ("Pending Approval" as const) : ("Working" as const),
       };
     });
 
