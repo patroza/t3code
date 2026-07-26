@@ -1474,9 +1474,29 @@ const makeWsRpcLayer = (
                 );
 
               if (Option.isNone(snapshot)) {
+                // Distinguish permanently unavailable threads from a row that
+                // may not be projected yet, so clients can stop resubscribing
+                // to deleted/archived threads instead of retrying forever.
+                const lifecycle = yield* projectionSnapshotQuery
+                  .getThreadLifecycleById(input.threadId)
+                  .pipe(Effect.orElseSucceed(() => Option.none()));
+                const reason = Option.match(lifecycle, {
+                  onNone: () => "thread-missing" as const,
+                  onSome: (row) =>
+                    row.deletedAt !== null
+                      ? ("thread-deleted" as const)
+                      : row.archivedAt !== null
+                        ? ("thread-archived" as const)
+                        : ("thread-missing" as const),
+                });
                 return yield* new OrchestrationGetSnapshotError({
-                  message: `Thread ${input.threadId} was not found`,
-                  cause: input.threadId,
+                  message:
+                    reason === "thread-deleted"
+                      ? `Thread ${input.threadId} was deleted`
+                      : reason === "thread-archived"
+                        ? `Thread ${input.threadId} is archived`
+                        : `Thread ${input.threadId} was not found`,
+                  reason,
                 });
               }
 
