@@ -10,7 +10,7 @@ import { useProjects, useThreadShells } from "../../state/entities";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
-import { resolveProjectGroupingMode } from "../home/home-list-options";
+import { resolveProjectGroupingMode, useHomeListOptions } from "../home/home-list-options";
 import { useThreadListActions } from "../home/useThreadListActions";
 import { BoardScreen } from "./BoardScreen";
 
@@ -28,6 +28,16 @@ export function BoardRouteScreen() {
       ? preferencesResult.value.projectGroupingEnabled
       : undefined,
   );
+
+  const availableEnvironmentIds = useMemo(
+    () => new Set(Object.values(savedConnectionsById).map((c) => c.environmentId)),
+    [savedConnectionsById],
+  );
+  const {
+    options: listOptions,
+    clearSelectedEnvironments,
+    toggleSelectedEnvironmentId,
+  } = useHomeListOptions(availableEnvironmentIds);
 
   const environmentLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -52,6 +62,9 @@ export function BoardRouteScreen() {
         threads={threads}
         projectGroupingMode={projectGroupingMode}
         environmentLabelById={environmentLabelById}
+        selectedEnvironmentIds={listOptions.selectedEnvironmentIds}
+        onClearEnvironments={clearSelectedEnvironments}
+        onToggleEnvironment={toggleSelectedEnvironmentId}
         onSelectThread={(thread) => {
           prefetchEnvironmentThread(thread.environmentId, thread.id);
           warmSelectedEnvironmentThread(thread.environmentId, thread.id);
