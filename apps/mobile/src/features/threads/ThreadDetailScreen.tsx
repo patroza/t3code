@@ -32,6 +32,7 @@ import type {
   PendingUserInputDraftAnswer,
   ThreadFeedEntry,
 } from "../../lib/threadActivity";
+import { ComposerQueuedMessages } from "./ComposerQueuedMessages";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
@@ -80,6 +81,13 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly composerQueueItems: ReadonlyArray<{
+    readonly messageId: MessageId;
+    readonly text: string;
+    readonly attachmentCount: number;
+    readonly deliveryState: "waiting" | "sending" | "queued";
+    readonly queueSource: "local" | "server";
+  }>;
   readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
   readonly onEditQueuedMessage: (messageId: MessageId, source: "local" | "server") => Promise<void>;
   readonly onStartNewThread: () => void;
@@ -378,8 +386,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             hasMoreOlder={props.hasMoreOlderActivities}
             loadingOlder={props.loadingOlderActivities}
             onLoadOlder={props.onLoadOlderActivities}
-            onSteerQueuedMessage={props.onSteerQueuedMessage}
-            onEditQueuedMessage={props.onEditQueuedMessage}
           />
         </View>
       ) : (
@@ -428,6 +434,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     ) : null}
                   </Animated.View>
                 ) : null}
+                <ComposerQueuedMessages
+                  items={props.composerQueueItems}
+                  disabled={props.connectionStateLabel !== "connected"}
+                  onSteer={(messageId) => {
+                    void props.onSteerQueuedMessage(messageId);
+                  }}
+                  onEdit={(messageId, source) => {
+                    void props.onEditQueuedMessage(messageId, source);
+                  }}
+                />
               </View>
 
               <ThreadComposer
