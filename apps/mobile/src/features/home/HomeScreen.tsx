@@ -33,6 +33,7 @@ import {
   PendingTaskListRow,
   ThreadListGroupHeader,
   ThreadListRow,
+  ThreadListSectionHeader,
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import { ThreadListV2Row } from "../threads/thread-list-v2-items";
@@ -52,6 +53,7 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "./homeListItems";
+import { buildHomeRecentWorkEntries } from "./homeRecentWork";
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
@@ -184,6 +186,12 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Enabled =
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
+  // Default on — mirrors web `sidebarRecentThreadsEnabled`. Classic list only;
+  // Thread List v2 is already a recency-first flat list.
+  const recentWorkEnabled = AsyncResult.isSuccess(preferencesResult)
+    ? preferencesResult.value.recentWorkEnabled !== false
+    : true;
+  const [recentWorkExpanded, setRecentWorkExpanded] = useState(false);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -335,15 +343,58 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const hasSearchQuery = props.searchQuery.trim().length > 0;
+  const recentWorkEntries = useMemo(() => {
+    if (!recentWorkEnabled || threadListV2Enabled) return [];
+    return buildHomeRecentWorkEntries({
+      projects: scopedProjects,
+      threads: scopedThreads,
+      environmentId: props.selectedEnvironmentId,
+      projectRefKeys: selectedProjectRefKeys,
+      searchQuery: props.searchQuery,
+    });
+  }, [
+    props.searchQuery,
+    props.selectedEnvironmentId,
+    recentWorkEnabled,
+    scopedProjects,
+    scopedThreads,
+    selectedProjectRefKeys,
+    threadListV2Enabled,
+  ]);
+  // Reset expand when the filter context changes so a deep expand never
+  // carries across environment / project / search flips.
+  const recentExpandResetKey = `${props.selectedEnvironmentId ?? "all"}:${props.selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const lastRecentExpandResetKeyRef = useRef(recentExpandResetKey);
+  if (lastRecentExpandResetKeyRef.current !== recentExpandResetKey) {
+    lastRecentExpandResetKeyRef.current = recentExpandResetKey;
+    if (recentWorkExpanded) {
+      setRecentWorkExpanded(false);
+    }
+  }
   const listLayout = useMemo(
     () =>
       buildHomeListLayout({
         groups: projectGroups,
         displayStates: effectiveGroupDisplayStates,
         showAllThreads: hasSearchQuery,
+        recentWork:
+          recentWorkEnabled && !threadListV2Enabled && recentWorkEntries.length > 0
+            ? { entries: recentWorkEntries, expanded: recentWorkExpanded }
+            : null,
       }),
-    [projectGroups, effectiveGroupDisplayStates, hasSearchQuery],
+    [
+      projectGroups,
+      effectiveGroupDisplayStates,
+      hasSearchQuery,
+      recentWorkEnabled,
+      recentWorkEntries,
+      recentWorkExpanded,
+      threadListV2Enabled,
+    ],
   );
+  const toggleRecentWorkExpanded = useCallback(() => {
+    setRecentWorkExpanded((current) => !current);
+  }, []);
 
   const projectCwdByKey = useMemo(() => {
     const map = new Map<string, string>();
@@ -624,6 +675,40 @@ export function HomeScreen(props: HomeScreenProps) {
   const renderItem = useCallback(
     ({ item }: LegendListRenderItemProps<HomeListItem>) => {
       switch (item.type) {
+        case "recent-header":
+          return <ThreadListSectionHeader variant="compact" title="Recent" />;
+        case "recent-thread": {
+          const thread = item.thread;
+          return (
+            <ThreadListRow
+              variant="compact"
+              thread={thread}
+              projectTitle={item.projectTitle}
+              environmentLabel={
+                props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
+              }
+              projectCwd={
+                projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
+                null
+              }
+              isLast={item.isLast}
+              onArchiveThread={props.onArchiveThread}
+              onDeleteThread={props.onDeleteThread}
+              onSelectThread={props.onSelectThread}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
+            />
+          );
+        }
+        case "recent-show-more":
+          return (
+            <ThreadListShowMoreRow
+              variant="compact"
+              hiddenCount={item.hiddenCount}
+              canShowLess={item.canShowLess}
+              onToggleExpanded={toggleRecentWorkExpanded}
+            />
+          );
         case "header":
           return (
             <ThreadListGroupHeader
@@ -702,6 +787,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
+      toggleRecentWorkExpanded,
       updateGroupDisplay,
     ],
   );
