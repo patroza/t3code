@@ -49,6 +49,11 @@ export function HomeHeader(props: {
   readonly listMode: HomeListMode;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  /**
+   * Hide settled threads for the active list mode. Recent defaults on;
+   * Projects defaults off. Toggle is offered in Recent and Projects filters.
+   */
+  readonly hideSettledThreads: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
@@ -56,6 +61,7 @@ export function HomeHeader(props: {
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onHideSettledThreadsChange: (hide: boolean) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
@@ -88,6 +94,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
+    ((props.listMode === "recent" || props.listMode === "projects") &&
+      props.hideSettledThreads !== (props.listMode === "recent")) ||
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
@@ -136,6 +144,15 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
+      ...(props.listMode === "recent" || props.listMode === "projects"
+        ? ([
+            {
+              id: "hide-settled",
+              title: "Hide settled",
+              state: checkedMenuState(props.hideSettledThreads),
+            },
+          ] satisfies MenuAction[])
+        : []),
       ...(listOrganization
         ? ([
             {
@@ -162,6 +179,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     [
       listOrganization,
       props.environments,
+      props.hideSettledThreads,
       props.listMode,
       props.projectSortOrder,
       props.projects,
@@ -194,6 +212,11 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         if (props.projects.some((project) => project.key === projectKey)) {
           props.onProjectChange(projectKey);
         }
+        return;
+      }
+
+      if (id === "hide-settled") {
+        props.onHideSettledThreadsChange(!props.hideSettledThreads);
         return;
       }
 
@@ -339,6 +362,8 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
+    ((props.listMode === "recent" || props.listMode === "projects") &&
+      props.hideSettledThreads !== (props.listMode === "recent")) ||
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
@@ -366,6 +391,12 @@ function IosHomeHeader(props: HomeHeaderProps) {
     onThreadSortOrderChange: props.onThreadSortOrderChange,
     listOrganization,
     showProjectFilter: props.listMode !== "board",
+    ...(props.listMode === "recent" || props.listMode === "projects"
+      ? {
+          hideSettledThreads: props.hideSettledThreads,
+          onHideSettledThreadsChange: props.onHideSettledThreadsChange,
+        }
+      : {}),
   });
 
   const headerTitle = HOME_LIST_MODE_TITLES[props.listMode];
