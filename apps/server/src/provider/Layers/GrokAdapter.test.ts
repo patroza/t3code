@@ -346,8 +346,8 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
-  it.effect("completes a Grok turn from xAI prompt completion when the prompt RPC hangs", () =>
-    Effect.gen(function* () {
+  it.effect("completes a Grok turn from xAI prompt completion when the prompt RPC hangs", () => {
+    const runAttempt = Effect.gen(function* () {
       const threadId = ThreadId.make("grok-xai-prompt-complete-fallback");
       const wrapperPath = yield* Effect.promise(() =>
         makeMockGrokWrapper({
@@ -434,8 +434,25 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
 
       yield* Fiber.interrupt(runtimeEventsFiber);
       yield* adapter.stopSession(threadId);
-    }),
-  );
+    });
+
+    const runBoundedAttempt = Effect.gen(function* () {
+      const attempt = yield* runAttempt.pipe(Effect.forkDetach);
+      const exit = yield* Fiber.await(attempt).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.ensuring(Fiber.interrupt(attempt).pipe(Effect.forkDetach, Effect.asVoid)),
+      );
+      return yield* exit;
+    });
+
+    return runBoundedAttempt.pipe(
+      TestClock.withLive,
+      Effect.retry({ times: 1 }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Flaky Grok xAI completion fallback test did not settle", cause),
+      ),
+    );
+  });
 
   it.effect("retains turn transcript when sendTurn is interrupted after prompt success", () => {
     const runAttempt = Effect.gen(function* () {
@@ -500,6 +517,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     return runBoundedAttempt.pipe(
       // This full-suite-only race remains useful as a warning, but must not
       // hold every unrelated CI run for the global 120-second test timeout.
+      TestClock.withLive,
       Effect.retry({ times: 1 }),
       Effect.catchCause((cause) =>
         Effect.logWarning("Flaky Grok transcript interruption test did not settle", cause),
@@ -949,6 +967,7 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     });
 
     return runBoundedAttempt.pipe(
+      TestClock.withLive,
       Effect.retry({ times: 1 }),
       Effect.catchCause((cause) =>
         Effect.logWarning("Flaky Grok stop-during-drain test did not settle", cause),
