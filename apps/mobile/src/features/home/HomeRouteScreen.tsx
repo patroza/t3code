@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
+import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -147,6 +148,10 @@ export function HomeRouteScreen() {
           onSelectThread={(thread) => {
             // Settled threads are live shells: opening one is plain
             // navigation, and sending a message un-settles server-side.
+            // Warm detail (SQLite/HTTP) before the route mounts so open
+            // latency overlaps the stack transition.
+            prefetchEnvironmentThread(thread.environmentId, thread.id);
+            warmSelectedEnvironmentThread(thread.environmentId, thread.id);
             navigation.navigate("Thread", {
               environmentId: thread.environmentId,
               threadId: thread.id,
