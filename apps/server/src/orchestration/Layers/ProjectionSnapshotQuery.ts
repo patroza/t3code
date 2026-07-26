@@ -924,6 +924,23 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getThreadLifecycleRowById = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({
+      deletedAt: Schema.NullOr(IsoDateTime),
+      archivedAt: Schema.NullOr(IsoDateTime),
+    }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          deleted_at AS "deletedAt",
+          archived_at AS "archivedAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+        LIMIT 1
+      `,
+  });
+
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -2313,6 +2330,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       );
 
+  const getThreadLifecycleById: ProjectionSnapshotQueryShape["getThreadLifecycleById"] = (
+    threadId,
+  ) =>
+    getThreadLifecycleRowById({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadLifecycleById:query",
+          "ProjectionSnapshotQuery.getThreadLifecycleById:decodeRow",
+        ),
+      ),
+    );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -2329,6 +2358,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getSessionStopContextById,
     getThreadShellById,
     getThreadDetailById,
+    getThreadLifecycleById,
     getThreadDetailSnapshot,
   } satisfies ProjectionSnapshotQueryShape;
 });
