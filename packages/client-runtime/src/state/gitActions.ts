@@ -41,8 +41,17 @@ export type DefaultBranchConfirmableAction =
 
 export type GitActionRequestInput = Pick<
   GitRunStackedActionInput,
-  "action" | "commitMessage" | "featureBranch" | "filePaths"
+  "action" | "commitMessage" | "featureBranch" | "disableCommitSigning" | "filePaths"
 >;
+
+export function buildUnsignedCommitRetryInput(input: GitActionRequestInput): GitActionRequestInput {
+  return {
+    action: input.action,
+    ...(input.commitMessage !== undefined ? { commitMessage: input.commitMessage } : {}),
+    ...(input.filePaths !== undefined ? { filePaths: input.filePaths } : {}),
+    disableCommitSigning: true,
+  };
+}
 
 export function buildGitActionProgressStages(input: {
   action: GitStackedAction;
