@@ -4,16 +4,29 @@ import {
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
 import type { VcsStatusResult } from "@t3tools/contracts";
-import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CloudIcon,
+  FolderGit2Icon,
+  GitPullRequestIcon,
+  PencilRulerIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { useMemo } from "react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { useProject } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
+import { cn } from "../lib/utils";
 import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
-import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
+import {
+  resolveThreadStatusPill,
+  type SidebarV2TopStatus,
+  type ThreadStatusPill,
+} from "./Sidebar.logic";
 import type { SidebarThreadSummary } from "../types";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -175,6 +188,91 @@ export function ThreadWorktreeIndicator({
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>
+  );
+}
+
+export function ThreadPlanModeIndicator({
+  thread,
+}: {
+  thread: Pick<SidebarThreadSummary, "id" | "interactionMode">;
+}) {
+  if (thread.interactionMode !== "plan") {
+    return null;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            role="img"
+            aria-label="Plan-only thread"
+            data-testid={`thread-plan-mode-${thread.id}`}
+            className="inline-flex items-center justify-center"
+          />
+        }
+      >
+        <PencilRulerIcon className="size-3 text-blue-600 dark:text-blue-400" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Plan-only thread</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
+ * Renders in the status pill slot with the same visual language as
+ * `ThreadStatusLabel`. Settled-ness is context-dependent (auto-settle window,
+ * PR state, server capability), so callers decide when to render this instead
+ * of the indicator re-deriving it from the thread.
+ */
+export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadSummary, "id"> }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            aria-label="Settled thread"
+            data-testid={`thread-settled-${thread.id}`}
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground/60"
+          />
+        }
+      >
+        <CircleCheckIcon className="size-4 shrink-0" />
+        <span className="hidden md:inline">Settled</span>
+      </TooltipTrigger>
+      <TooltipPopup side="top">Settled</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
+ * The sidebar-v2 status indicator: colored label text, with an icon only for
+ * the working and done states. Shared by the v2 sidebar rows and board cards
+ * so both surfaces speak the same status language.
+ */
+export function ThreadStatusV2Indicator({
+  status,
+  className,
+}: {
+  status: SidebarV2TopStatus;
+  className?: string;
+}) {
+  return (
+    <span
+      role="status"
+      className={cn(
+        "inline-flex items-center gap-1 text-xs font-medium",
+        status.className,
+        className,
+      )}
+    >
+      {status.icon === "working" ? (
+        <CircleDashedIcon aria-hidden className="size-4 shrink-0" />
+      ) : status.icon === "done" ? (
+        <CircleCheckIcon aria-hidden className="size-4 shrink-0" />
+      ) : null}
+      {status.label}
+    </span>
   );
 }
 
