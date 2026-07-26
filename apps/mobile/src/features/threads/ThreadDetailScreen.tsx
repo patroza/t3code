@@ -394,7 +394,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         scrolling behind it.
       */}
       {showContent ? (
-        <View pointerEvents="box-none" style={StyleSheet.absoluteFillObject}>
+        <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
           <View pointerEvents="none" style={{ flex: 1 }} />
           <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
             {/* No paddingTop here: the overlay's measured height becomes the
