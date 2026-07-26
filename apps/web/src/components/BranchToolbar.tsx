@@ -51,6 +51,8 @@ interface BranchToolbarProps {
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  reuseBaseBranch: boolean;
+  onReuseBaseBranchChange: (reuseBaseBranch: boolean) => void;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -125,7 +127,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
 
   if (isLocked) {
     return (
-      <span className="inline-flex min-w-0 max-w-[48%] flex-1 items-center justify-start gap-1 rounded-md border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 md:hidden">
+      <span className="inline-flex min-w-0 max-w-[48%] items-center justify-start gap-1 rounded-md border border-transparent px-[calc(--spacing(2)-1px)] text-sm font-medium text-muted-foreground/70 md:hidden">
         {triggerContent}
       </span>
     );
@@ -135,7 +137,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     <Menu>
       <MenuTrigger
         render={<Button variant="ghost" size="xs" />}
-        className="min-w-0 max-w-[48%] flex-1 justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden"
+        className="min-w-0 max-w-[48%] justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden"
       >
         {triggerContent}
         <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
@@ -224,6 +226,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
   onStartFromOriginChange,
+  reuseBaseBranch,
+  onReuseBaseBranchChange,
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -355,6 +359,8 @@ export const BranchToolbar = memo(function BranchToolbar({
         {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
         startFromOrigin={startFromOrigin}
         onStartFromOriginChange={onStartFromOriginChange}
+        reuseBaseBranch={reuseBaseBranch}
+        onReuseBaseBranchChange={onReuseBaseBranchChange}
         {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
         {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
       />
