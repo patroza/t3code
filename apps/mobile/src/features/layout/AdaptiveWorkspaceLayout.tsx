@@ -525,6 +525,7 @@ function AdaptiveWorkspaceLayoutContent(
                 visible={panes.primarySidebarVisible}
                 onRequestVisibility={revealPrimarySidebar}
                 selectedThreadKey={selectedThreadKey}
+                onOpenBoard={() => navigation.navigate("Board")}
                 onOpenSettings={handleOpenSettings}
                 onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                 onNewThreadInProject={handleNewThreadInProject}
