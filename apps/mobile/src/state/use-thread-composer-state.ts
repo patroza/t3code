@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CommandId,
@@ -50,7 +50,11 @@ import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
 import { threadEnvironment } from "./threads";
-import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "./thread-outbox";
+import {
+  enqueueThreadOutboxMessage,
+  removeThreadOutboxMessage,
+  updateThreadOutboxMessage,
+} from "./thread-outbox";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
@@ -117,6 +121,14 @@ export function useThreadComposerState() {
   const removeServerQueuedMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
     label: "remove queued message",
   });
+  const updateServerQueuedMessage = useAtomCommand(threadEnvironment.updateQueuedMessage, {
+    label: "update queued message",
+  });
+  const [editingQueuedMessage, setEditingQueuedMessage] = useState<{
+    readonly messageId: MessageId;
+    readonly source: "local" | "server";
+    readonly previousDraftText: string;
+  } | null>(null);
   const selectedEnvironmentIdForActivities = selectedThreadShell?.environmentId ?? null;
   const selectedThreadIdForActivities = selectedThreadShell?.id ?? null;
   const loadOlderActivitiesPage = useCallback(
@@ -283,6 +295,40 @@ export function useThreadComposerState() {
     const thread = selectedThreadDetail ?? selectedThreadShell;
     const text = draft.text.trim();
     const attachments = draft.attachments;
+    if (editingQueuedMessage !== null) {
+      if (editingQueuedMessage.source === "local") {
+        const message = selectedThreadQueuedMessages.find(
+          (candidate) => candidate.messageId === editingQueuedMessage.messageId,
+        );
+        if (message) {
+          if (text.length === 0) {
+            await removeThreadOutboxMessage(message);
+          } else {
+            const updated = await updateThreadOutboxMessage({ ...message, text });
+            if (!updated) return null;
+          }
+        }
+      } else if (text.length === 0) {
+        const result = await removeServerQueuedMessage({
+          environmentId: selectedThreadShell.environmentId,
+          input: { threadId: selectedThreadShell.id, messageId: editingQueuedMessage.messageId },
+        });
+        if (result._tag !== "Success") return null;
+      } else {
+        const result = await updateServerQueuedMessage({
+          environmentId: selectedThreadShell.environmentId,
+          input: {
+            threadId: selectedThreadShell.id,
+            messageId: editingQueuedMessage.messageId,
+            text,
+          },
+        });
+        if (result._tag !== "Success") return null;
+      }
+      setComposerDraftText(threadKey, editingQueuedMessage.previousDraftText);
+      setEditingQueuedMessage(null);
+      return editingQueuedMessage.messageId;
+    }
     if (text.length === 0 && attachments.length === 0) {
       return null;
     }
@@ -315,7 +361,14 @@ export function useThreadComposerState() {
     });
     clearComposerDraftContent(threadKey);
     return messageId;
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [
+    editingQueuedMessage,
+    removeServerQueuedMessage,
+    selectedThreadDetail,
+    selectedThreadQueuedMessages,
+    selectedThreadShell,
+    updateServerQueuedMessage,
+  ]);
 
   const onSteerQueuedMessage = useCallback(
     async (messageId: MessageId) => {
@@ -330,26 +383,29 @@ export function useThreadComposerState() {
     [selectedThreadShell, steerQueuedMessage],
   );
 
-  const onRemoveQueuedMessage = useCallback(
+  const onEditQueuedMessage = useCallback(
     async (messageId: MessageId, source: "local" | "server") => {
       if (!selectedThreadShell) {
         return;
       }
-      if (source === "local") {
-        const message = selectedThreadQueuedMessages.find(
-          (candidate) => candidate.messageId === messageId,
-        );
-        if (message) {
-          await removeThreadOutboxMessage(message);
-        }
-        return;
-      }
-      await removeServerQueuedMessage({
-        environmentId: selectedThreadShell.environmentId,
-        input: { threadId: selectedThreadShell.id, messageId },
+      const message =
+        source === "local"
+          ? selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId)
+          : selectedThreadDetail?.queuedMessages.find(
+              (candidate) => candidate.messageId === messageId,
+            );
+      if (!message) return;
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      const previousDraftText =
+        editingQueuedMessage?.previousDraftText ?? getComposerDraftSnapshot(threadKey).text;
+      setEditingQueuedMessage({
+        messageId,
+        source,
+        previousDraftText,
       });
+      setComposerDraftText(threadKey, message.text);
     },
-    [removeServerQueuedMessage, selectedThreadQueuedMessages, selectedThreadShell],
+    [editingQueuedMessage, selectedThreadDetail, selectedThreadQueuedMessages, selectedThreadShell],
   );
 
   const onChangeDraftMessage = useCallback(
@@ -479,6 +535,7 @@ export function useThreadComposerState() {
     runtimeMode,
     interactionMode,
     activeThreadBusy,
+    isEditingQueuedMessage: editingQueuedMessage !== null,
     // Lazy-loaded older pages + the live window — the full loaded activity set.
     // Request derivations must run over this (not the windowed live set alone)
     // so prompts pulled in by scroll-up still surface, matching web.
@@ -493,7 +550,7 @@ export function useThreadComposerState() {
     onRemoveDraftImage,
     onSendMessage,
     onSteerQueuedMessage,
-    onRemoveQueuedMessage,
+    onEditQueuedMessage,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,

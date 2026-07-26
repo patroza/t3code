@@ -384,7 +384,37 @@ it.layer(NodeServices.layer)("decider queue flows", (it) => {
     }),
   );
 
-  it.effect("steer and remove reject unknown queued messages", () =>
+  it.effect("update edits queued text while preserving its durable payload", () =>
+    Effect.gen(function* () {
+      let readModel = yield* withSessionStatus(yield* seedReadModel, "running", 3);
+      readModel = yield* applyPlanned(
+        readModel,
+        yield* decideOrchestrationCommand({ command: turnStartCommand("edit"), readModel }),
+      );
+      const before = findThreadById(readModel, THREAD_ID)?.queuedMessages[0];
+
+      const planned = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.queue.update",
+          commandId: asCommandId("cmd-edit"),
+          threadId: THREAD_ID,
+          messageId: asMessageId("message-edit"),
+          text: "Edited follow-up",
+          createdAt: NOW,
+        },
+        readModel,
+      });
+      const projected = yield* applyPlanned(readModel, planned);
+      const after = findThreadById(projected, THREAD_ID)?.queuedMessages[0];
+
+      expect(after?.text).toBe("Edited follow-up");
+      expect(after?.attachments).toEqual(before?.attachments);
+      expect(after?.modelSelection).toEqual(before?.modelSelection);
+      expect(after?.queuedAt).toBe(before?.queuedAt);
+    }),
+  );
+
+  it.effect("steer, update, and remove reject unknown queued messages", () =>
     Effect.gen(function* () {
       const readModel = yield* seedReadModel;
       for (const type of ["thread.queue.steer", "thread.queue.remove"] as const) {
@@ -402,6 +432,20 @@ it.layer(NodeServices.layer)("decider queue flows", (it) => {
         );
         expect(error.message).toContain("does not exist");
       }
+      const updateError = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.queue.update",
+            commandId: asCommandId("cmd-update-missing"),
+            threadId: THREAD_ID,
+            messageId: asMessageId("message-missing"),
+            text: "Missing",
+            createdAt: NOW,
+          },
+          readModel,
+        }),
+      );
+      expect(updateError.message).toContain("does not exist");
     }),
   );
 

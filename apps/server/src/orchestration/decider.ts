@@ -1107,6 +1107,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.queue.update": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = thread.queuedMessages.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-queued",
+        payload: {
+          threadId: command.threadId,
+          messageId: queuedMessage.messageId,
+          text: command.text,
+          attachments: queuedMessage.attachments,
+          ...(queuedMessage.modelSelection !== undefined
+            ? { modelSelection: queuedMessage.modelSelection }
+            : {}),
+          ...(queuedMessage.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: queuedMessage.sourceProposedPlan }
+            : {}),
+          queuedAt: queuedMessage.queuedAt,
+        },
+      };
+    }
+
     case "thread.queue.drain": {
       const thread = yield* requireThread({
         readModel,
