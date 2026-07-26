@@ -570,6 +570,130 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("resolves session stop context for archived threads but not deleted ones", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES
+          (
+            'thread-archived-session',
+            'project-stop-test',
+            'Archived Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-04-07T00:00:00.000Z',
+            '2026-04-07T00:00:01.000Z',
+            '2026-04-07T00:00:02.000Z',
+            NULL
+          ),
+          (
+            'thread-deleted-session',
+            'project-stop-test',
+            'Deleted Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-04-07T00:00:00.000Z',
+            '2026-04-07T00:00:01.000Z',
+            NULL,
+            '2026-04-07T00:00:03.000Z'
+          )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id,
+          status,
+          provider_name,
+          provider_session_id,
+          provider_thread_id,
+          runtime_mode,
+          active_turn_id,
+          last_error,
+          updated_at
+        )
+        VALUES (
+          'thread-archived-session',
+          'running',
+          'codex',
+          'provider-session-stop',
+          'provider-thread-stop',
+          'full-access',
+          NULL,
+          NULL,
+          '2026-04-07T00:00:04.000Z'
+        )
+      `;
+
+      // The archived, nondeleted thread must resolve so the archive flow's
+      // session stop can still find it.
+      const archivedContext = yield* snapshotQuery.getSessionStopContextById(
+        ThreadId.make("thread-archived-session"),
+      );
+      assert.isTrue(archivedContext._tag === "Some");
+      if (archivedContext._tag === "Some") {
+        assert.equal(archivedContext.value.threadId, ThreadId.make("thread-archived-session"));
+        assert.equal(archivedContext.value.session?.status, "running");
+        assert.equal(archivedContext.value.session?.providerName, "codex");
+      }
+
+      const deletedContext = yield* snapshotQuery.getSessionStopContextById(
+        ThreadId.make("thread-deleted-session"),
+      );
+      assert.isTrue(deletedContext._tag === "None");
+
+      const archivedWithoutSession = yield* sql`
+        DELETE FROM projection_thread_sessions
+      `.pipe(
+        Effect.flatMap(() =>
+          snapshotQuery.getSessionStopContextById(ThreadId.make("thread-archived-session")),
+        ),
+      );
+      assert.isTrue(
+        archivedWithoutSession._tag === "Some" && archivedWithoutSession.value.session === null,
+      );
+    }),
+  );
+
   it.effect("keeps settled threads in the shell snapshot with non-null settlement fields", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
