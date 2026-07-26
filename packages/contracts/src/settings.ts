@@ -10,6 +10,7 @@ import {
 } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import { OpenWithEntries, OpenWithEntryRef } from "./openWith.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -159,6 +160,10 @@ export const ClientSettingsSchema = Schema.Struct({
       model: TrimmedNonEmptyString,
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  openWithEntries: OpenWithEntries.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  preferredOpenWith: Schema.NullOr(OpenWithEntryRef).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   providerModelPreferences: Schema.Record(
     ProviderInstanceId,
     Schema.Struct({
@@ -770,6 +775,8 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  openWithEntries: Schema.optionalKey(OpenWithEntries),
+  preferredOpenWith: Schema.optionalKey(Schema.NullOr(OpenWithEntryRef)),
   providerModelPreferences: Schema.optionalKey(
     Schema.Record(
       ProviderInstanceId,
