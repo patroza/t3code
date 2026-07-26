@@ -8,7 +8,7 @@ import type {
   ThreadId,
   UploadChatAttachment,
 } from "@t3tools/contracts";
-import { ApprovalRequestId, ProviderInstanceId } from "@t3tools/contracts";
+import { ApprovalRequestId, MessageId, ProviderInstanceId } from "@t3tools/contracts";
 import * as vscode from "vscode";
 
 import {
@@ -88,6 +88,8 @@ type WebviewRequest =
     }
   | { readonly type: "toggleProviderFavorite"; readonly instanceId: string }
   | { readonly type: "toggleModelFavorite"; readonly modelKey: string }
+  | { readonly type: "steerQueuedMessage"; readonly messageId: string }
+  | { readonly type: "removeQueuedMessage"; readonly messageId: string }
   | {
       readonly type: "send";
       readonly text: string;
@@ -205,6 +207,9 @@ function isRequest(value: unknown): value is WebviewRequest {
   }
   if (type === "toggleModelFavorite") {
     return "modelKey" in value && typeof value.modelKey === "string";
+  }
+  if (type === "steerQueuedMessage" || type === "removeQueuedMessage") {
+    return "messageId" in value && typeof value.messageId === "string";
   }
   if (type === "setInteractionMode") {
     return (
@@ -451,6 +456,12 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
             if (this.client.activeThread === null) return;
             await this.client.setInteractionMode(message.interactionMode);
           });
+          return;
+        case "steerQueuedMessage":
+          await this.#run(() => this.client.steerQueuedMessage(MessageId.make(message.messageId)));
+          return;
+        case "removeQueuedMessage":
+          await this.#run(() => this.client.removeQueuedMessage(MessageId.make(message.messageId)));
           return;
         case "send": {
           await this.#run(async () => {
@@ -712,6 +723,12 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
             createdAt: activeProposedPlan.createdAt,
           }
         : null,
+      queuedMessages: thread.queuedMessages.map((message) => ({
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
+        queuedAt: message.queuedAt,
+      })),
       proposedPlans: proposedPlans.map((plan) => ({
         id: plan.id,
         planMarkdown: plan.planMarkdown,
@@ -894,6 +911,13 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     .streaming::after { content: '▋'; animation: blink 1s steps(1) infinite; }
     @keyframes blink { 50% { opacity: 0; } }
     #pending-interactions:empty { display: none; }
+    #queued-messages:empty { display: none; }
+    #queued-messages { display: flex; flex-direction: column; gap: 5px; margin-bottom: 7px; }
+    .queued-message { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 7px; padding: 5px 6px 5px 8px; background: color-mix(in srgb, var(--vscode-editorWidget-background) 72%, var(--vscode-sideBar-background)); }
+    .queued-message-icon { color: var(--vscode-descriptionForeground); }
+    .queued-message-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .queued-message button { border: 0; padding: 3px 6px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .queued-message button:hover:not(:disabled) { color: var(--vscode-foreground); background: color-mix(in srgb, var(--vscode-descriptionForeground) 10%, transparent); }
     #plan-ready:empty { display: none; }
     #plan-ready { margin-bottom: 8px; border: 1px solid color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 45%, var(--vscode-editorWidget-border)); border-radius: 7px; padding: 8px 10px; background: color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 12%, var(--vscode-sideBar-background)); }
     .plan-ready-badge { display: inline-block; margin-right: 8px; border-radius: 4px; padding: 1px 6px; background: color-mix(in srgb, var(--vscode-charts-purple, #a970ff) 28%, transparent); color: var(--vscode-foreground); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
@@ -1031,6 +1055,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     <div class="composer">
       <div id="status"></div>
       <div id="plan-ready"></div>
+      <div id="queued-messages"></div>
       <div id="pending-attachments"></div>
       <div id="pending-interactions"></div>
       <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><div class="context-trailing"><button id="change-request" type="button" hidden><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"/></svg><span id="change-request-label"></span></button><div id="host-resources-control" class="host-resources-control"><button id="host-resources-toggle" type="button" hidden></button><div id="host-resources-details" class="host-resources-details"></div></div><button id="context-window" hidden><span id="context-window-label"></span></button></div></div>
