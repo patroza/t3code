@@ -12,7 +12,9 @@ import {
   createElement,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type PropsWithChildren,
   type Dispatch,
@@ -26,7 +28,8 @@ import type { HomeProjectSortOrder } from "./homeThreadList";
 export interface HomeListOptions {
   /**
    * Multi-select environment filter. Empty means all environments.
-   * Applies to Recent, Projects, and Board modes.
+   * Applies to Recent, Projects, and Board modes. Persisted on device when
+   * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly listMode: HomeListMode;
@@ -72,6 +75,10 @@ function defaultHomeListOptions(): HomeListOptions {
   };
 }
 
+function environmentIdsKey(ids: readonly EnvironmentId[]): string {
+  return ids.join("\0");
+}
+
 interface HomeListOptionsContextValue {
   readonly options: HomeListOptions;
   readonly setOptions: Dispatch<SetStateAction<HomeListOptions>>;
@@ -80,12 +87,53 @@ interface HomeListOptionsContextValue {
 
 const HomeListOptionsContext = createContext<HomeListOptionsContextValue | null>(null);
 
-/** Keeps list preferences stable while the app moves between compact and split shells. */
+/**
+ * Keeps list preferences stable while the app moves between compact and split
+ * shells. Optional storedEnvironmentIds + onStoreEnvironmentIds make the
+ * multi-select env filter survive app restarts (device preferences).
+ */
 export function HomeListOptionsProvider({
   children,
   projectGroupingMode,
-}: PropsWithChildren<{ readonly projectGroupingMode: SidebarProjectGroupingMode }>) {
+  /**
+   * `undefined` = storage not loaded yet (do not hydrate).
+   * Array (possibly empty) = loaded value to apply once.
+   */
+  storedEnvironmentIds,
+  onStoreEnvironmentIds,
+}: PropsWithChildren<{
+  readonly projectGroupingMode: SidebarProjectGroupingMode;
+  readonly storedEnvironmentIds?: readonly EnvironmentId[];
+  readonly onStoreEnvironmentIds?: (ids: readonly EnvironmentId[]) => void;
+}>) {
   const [options, setOptions] = useState<HomeListOptions>(defaultHomeListOptions);
+  const envFilterHydratedRef = useRef(false);
+  const lastPersistedEnvKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (envFilterHydratedRef.current) return;
+    if (storedEnvironmentIds === undefined) return;
+    if (storedEnvironmentIds.length > 0) {
+      setOptions((current) => ({
+        ...current,
+        selectedEnvironmentIds: storedEnvironmentIds,
+      }));
+      lastPersistedEnvKeyRef.current = environmentIdsKey(storedEnvironmentIds);
+    } else {
+      lastPersistedEnvKeyRef.current = "";
+    }
+    envFilterHydratedRef.current = true;
+  }, [storedEnvironmentIds]);
+
+  useEffect(() => {
+    if (!envFilterHydratedRef.current) return;
+    if (!onStoreEnvironmentIds) return;
+    const key = environmentIdsKey(options.selectedEnvironmentIds);
+    if (lastPersistedEnvKeyRef.current === key) return;
+    lastPersistedEnvKeyRef.current = key;
+    onStoreEnvironmentIds(options.selectedEnvironmentIds);
+  }, [onStoreEnvironmentIds, options.selectedEnvironmentIds]);
+
   const value = useMemo(
     () => ({ options, setOptions, projectGroupingMode }),
     [options, projectGroupingMode],
