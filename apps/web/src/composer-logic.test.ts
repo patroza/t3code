@@ -360,6 +360,10 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
 });
 
 describe("parseStandaloneComposerSlashCommand", () => {
+  it("parses standalone /new command", () => {
+    expect(parseStandaloneComposerSlashCommand(" /NEW ")).toBe("new");
+  });
+
   it("parses standalone /plan command", () => {
     expect(parseStandaloneComposerSlashCommand(" /plan ")).toBe("plan");
   });
@@ -369,6 +373,6 @@ describe("parseStandaloneComposerSlashCommand", () => {
   });
 
   it("ignores slash commands with extra message text", () => {
-    expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
+    expect(parseStandaloneComposerSlashCommand("/new explain this")).toBeNull();
   });
 });
