@@ -132,27 +132,6 @@ export class OpenWithUnavailableApplicationError extends Schema.TaggedErrorClass
   }
 }
 
-export const OpenWithBundleResolutionReason = Schema.Literals([
-  "invalid-application-path",
-  "missing-info-plist",
-  "malformed-info-plist",
-  "missing-executable",
-]);
-export type OpenWithBundleResolutionReason = typeof OpenWithBundleResolutionReason.Type;
-
-export class OpenWithBundleResolutionError extends Schema.TaggedErrorClass<OpenWithBundleResolutionError>()(
-  "OpenWithBundleResolutionError",
-  {
-    applicationPath: Schema.String,
-    reason: OpenWithBundleResolutionReason,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Unable to resolve the executable in macOS application '${this.applicationPath}' (${this.reason}).`;
-  }
-}
-
 export class OpenWithSpawnError extends Schema.TaggedErrorClass<OpenWithSpawnError>()(
   "OpenWithSpawnError",
   {
@@ -173,7 +152,6 @@ export const OpenWithLaunchError = Schema.Union([
   OpenWithMissingEntryError,
   OpenWithInvalidTargetError,
   OpenWithUnavailableApplicationError,
-  OpenWithBundleResolutionError,
   OpenWithSpawnError,
 ]);
 export type OpenWithLaunchError = typeof OpenWithLaunchError.Type;
