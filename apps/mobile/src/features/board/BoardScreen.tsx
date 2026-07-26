@@ -77,6 +77,12 @@ export interface BoardScreenProps {
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   /** Hide the in-board filter chrome when the parent header already owns it. */
   readonly hideFilterChrome?: boolean;
+  /**
+   * Extra top inset when the parent still uses a transparent glass header
+   * (board columns are not a single UIKit-inset scroll view). Prefer a solid
+   * stack header for Board; use this only as a fallback.
+   */
+  readonly contentTopInset?: number;
 }
 
 interface BoardProjectFilterOption {
@@ -631,21 +637,26 @@ export function BoardScreen(props: BoardScreenProps) {
     return `${envPart} · ${projectPart}`;
   })();
 
+  const topInset = props.contentTopInset ?? 0;
+
   if (liveThreads.length === 0) {
     return (
-      <View className="flex-1 items-center justify-center bg-screen px-8">
+      <View
+        className="flex-1 items-center justify-center bg-screen px-8"
+        style={{
+          paddingTop: topInset,
+          paddingBottom: Math.max(insets.bottom, 16),
+        }}
+      >
         <EmptyState title="No threads yet" detail="Create a task to start filling the board." />
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-screen">
+    <View className="flex-1 bg-screen" style={{ paddingTop: topInset }}>
       {props.hideFilterChrome ? null : (
-        <View
-          className="flex-row items-center gap-2 border-b border-border px-4 pb-2"
-          style={{ paddingTop: 8 }}
-        >
+        <View className="flex-row items-center gap-2 border-b border-border px-4 pb-2.5 pt-2">
           <ControlPillMenu actions={filterMenuActions} onPressAction={handleFilterAction}>
             <Pressable
               accessibilityRole="button"
