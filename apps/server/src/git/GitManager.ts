@@ -1440,6 +1440,7 @@ export const make = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
+    disableSigning?: boolean,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
   ) {
@@ -1482,28 +1483,51 @@ export const make = Effect.gen(function* () {
     });
 
     let currentHookName: string | null = null;
+    let sawCommitHook = false;
+    let pendingUnattributedOutput: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+    const emitHookOutput = (
+      hookName: string | null,
+      { stream, text }: { stream: "stdout" | "stderr"; text: string },
+    ) => {
+      const sanitized = sanitizeProgressText(text);
+      if (!sanitized) {
+        return Effect.void;
+      }
+      return emit({
+        kind: "hook_output",
+        hookName,
+        stream,
+        text: sanitized,
+      });
+    };
+    const finalizeUnattributedOutput = (shouldEmit: boolean) =>
+      Effect.suspend(() => {
+        const pending = pendingUnattributedOutput;
+        pendingUnattributedOutput = [];
+        return shouldEmit
+          ? Effect.forEach(pending, (output) => emitHookOutput(null, output), { discard: true })
+          : Effect.void;
+      });
     const commitProgress =
       progressReporter && actionId
         ? {
-            onOutputLine: ({ stream, text }: { stream: "stdout" | "stderr"; text: string }) => {
-              const sanitized = sanitizeProgressText(text);
-              if (!sanitized) {
-                return Effect.void;
-              }
-              return emit({
-                kind: "hook_output",
-                hookName: currentHookName,
-                stream,
-                text: sanitized,
-              });
-            },
-            onHookStarted: (hookName: string) => {
-              currentHookName = hookName;
-              return emit({
-                kind: "hook_started",
-                hookName,
-              });
-            },
+            onOutputLine: (output: { stream: "stdout" | "stderr"; text: string }) =>
+              Effect.suspend(() => {
+                if (currentHookName === null) {
+                  pendingUnattributedOutput.push(output);
+                  return Effect.void;
+                }
+                return emitHookOutput(currentHookName, output);
+              }),
+            onHookStarted: (hookName: string) =>
+              Effect.suspend(() => {
+                sawCommitHook = true;
+                currentHookName = hookName;
+                return emit({
+                  kind: "hook_started",
+                  hookName,
+                });
+              }),
             onHookFinished: ({
               hookName,
               exitCode,
@@ -1525,10 +1549,19 @@ export const make = Effect.gen(function* () {
             },
           }
         : null;
-    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-      timeoutMs: COMMIT_TIMEOUT_MS,
-      ...(commitProgress ? { progress: commitProgress } : {}),
-    });
+    const { commitSha } = yield* gitCore
+      .commit(cwd, suggestion.subject, suggestion.body, {
+        timeoutMs: COMMIT_TIMEOUT_MS,
+        ...(disableSigning ? { disableSigning: true } : {}),
+        ...(commitProgress ? { progress: commitProgress } : {}),
+      })
+      .pipe(
+        Effect.tapError((error) =>
+          finalizeUnattributedOutput(
+            sawCommitHook && error.failureKind !== "commit_signing_failed",
+          ),
+        ),
+      );
     if (currentHookName !== null) {
       yield* emit({
         kind: "hook_finished",
@@ -1538,6 +1571,7 @@ export const make = Effect.gen(function* () {
       });
       currentHookName = null;
     }
+    yield* finalizeUnattributedOutput(sawCommitHook);
     return {
       status: "created" as const,
       commitSha,
@@ -2060,6 +2094,7 @@ export const make = Effect.gen(function* () {
                   commitMessageForStep,
                   preResolvedCommitSuggestion,
                   input.filePaths,
+                  input.disableCommitSigning,
                   options?.progressReporter,
                   progress.actionId,
                 ),
@@ -2126,6 +2161,10 @@ export const make = Effect.gen(function* () {
               kind: "action_failed",
               phase: Option.getOrNull(phase),
               message: error.message,
+              failureKind:
+                !input.disableCommitSigning && error._tag === "GitCommandError"
+                  ? error.failureKind
+                  : "unknown",
             }),
           ),
         ),
