@@ -247,6 +247,7 @@ function initRepo(
     yield* runGit(cwd, ["init", "--initial-branch=main"]);
     yield* runGit(cwd, ["config", "user.email", "test@example.com"]);
     yield* runGit(cwd, ["config", "user.name", "Test User"]);
+    yield* runGit(cwd, ["config", "commit.gpgSign", "false"]);
     yield* fs.writeFileString(NodePath.join(cwd, "README.md"), "hello\n");
     yield* runGit(cwd, ["add", "README.md"]);
     yield* runGit(cwd, ["commit", "-m", "Initial commit"]);
@@ -610,6 +611,7 @@ function runStackedAction(
     actionId?: string;
     commitMessage?: string;
     featureBranch?: boolean;
+    disableCommitSigning?: boolean;
     filePaths?: readonly string[];
   },
   options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
@@ -622,6 +624,19 @@ function runStackedAction(
     options,
   );
 }
+
+const configureFailingCommitSigner = Effect.fn("configureFailingCommitSigner")(function* (
+  repoDir: string,
+) {
+  const signerPath = NodePath.join(repoDir, "failing-signer.sh");
+  NodeFS.writeFileSync(
+    signerPath,
+    "#!/bin/sh\necho 'gpg: signing failed: No secret key' >&2\nexit 1\n",
+    { mode: 0o755 },
+  );
+  yield* runGit(repoDir, ["config", "commit.gpgSign", "true"]);
+  yield* runGit(repoDir, ["config", "gpg.program", signerPath]);
+});
 
 function resolvePullRequest(
   manager: GitManager.GitManager["Service"],
@@ -3742,6 +3757,63 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("does not attribute ambiguous output to the wrong commit hook", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "multi-hook.txt"), "multi hook\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+        '#!/bin/sh\necho "output from pre-commit" >&2\n',
+        { mode: 0o755 },
+      );
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "commit-msg"),
+        '#!/bin/sh\necho "output from commit-msg" >&2\n',
+        { mode: 0o755 },
+      );
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+
+      const result = yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "test: preserve hook output attribution",
+        },
+        {
+          actionId: "action-multi-hook",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      );
+
+      expect(result.commit.status).toBe("created");
+      const hookOutput = events.filter((event) => event.kind === "hook_output");
+      const preCommitOutput = hookOutput.find((event) =>
+        event.text.includes("output from pre-commit"),
+      );
+      const commitMsgOutput = hookOutput.find((event) =>
+        event.text.includes("output from commit-msg"),
+      );
+      const gitOutput = hookOutput.find((event) =>
+        event.text.includes("test: preserve hook output attribution"),
+      );
+
+      expect(preCommitOutput).toBeDefined();
+      expect([null, "pre-commit"]).toContain(preCommitOutput?.hookName);
+      expect(commitMsgOutput).toBeDefined();
+      expect([null, "commit-msg"]).toContain(commitMsgOutput?.hookName);
+      expect(gitOutput).toMatchObject({ hookName: null });
+    }),
+  );
+
   it.effect("emits action_failed when a commit hook rejects", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -3791,9 +3863,152 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           expect.objectContaining({
             kind: "action_failed",
             phase: "commit",
+            failureKind: "unknown",
           }),
         ]),
       );
+    }),
+  );
+
+  it.effect(
+    "classifies signing failures and retries a created feature branch without branching again",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "signing.txt"), "signing retry\n");
+        yield* configureFailingCommitSigner(repoDir);
+
+        const { manager } = yield* makeManager();
+        const events: GitActionProgressEvent[] = [];
+        yield* runStackedAction(
+          manager,
+          {
+            cwd: repoDir,
+            action: "commit",
+            commitMessage: "feat: signing retry",
+            featureBranch: true,
+          },
+          {
+            progressReporter: {
+              publish: (event) =>
+                Effect.sync(() => {
+                  events.push(event);
+                }),
+            },
+          },
+        ).pipe(Effect.flip);
+
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "action_failed",
+              phase: "commit",
+              failureKind: "commit_signing_failed",
+            }),
+          ]),
+        );
+        expect(
+          events.some(
+            (event) => event.kind === "hook_output" && event.text.includes("No secret key"),
+          ),
+        ).toBe(false);
+        const branchAfterFailure = yield* runGit(repoDir, ["branch", "--show-current"]).pipe(
+          Effect.map((result) => result.stdout.trim()),
+        );
+        const branchCountAfterFailure = yield* runGit(repoDir, [
+          "branch",
+          "--format=%(refname)",
+        ]).pipe(Effect.map((result) => result.stdout.trim().split("\n").length));
+
+        const retried = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "feat: signing retry",
+          disableCommitSigning: true,
+        });
+        const branchCountAfterRetry = yield* runGit(repoDir, [
+          "branch",
+          "--format=%(refname)",
+        ]).pipe(Effect.map((result) => result.stdout.trim().split("\n").length));
+
+        expect(retried.commit.status).toBe("created");
+        expect(retried.branch.status).toBe("skipped_not_requested");
+        expect(branchAfterFailure).toBe("feature/feat-signing-retry");
+        expect(branchCountAfterRetry).toBe(branchCountAfterFailure);
+      }),
+  );
+
+  for (const action of ["commit", "commit_push", "commit_push_pr"] as const) {
+    it.effect(`forwards the unsigned override for ${action}`, () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        if (action !== "commit") {
+          const remoteDir = yield* createBareRemote();
+          yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+          yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+          yield* runGit(repoDir, ["checkout", "-b", `feature/unsigned-${action}`]);
+        }
+        NodeFS.writeFileSync(NodePath.join(repoDir, `${action}.txt`), `${action}\n`);
+        yield* configureFailingCommitSigner(repoDir);
+
+        const { manager } = yield* makeManager();
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action,
+          commitMessage: `test: ${action} unsigned`,
+          disableCommitSigning: true,
+        });
+
+        expect(result.commit.status).toBe("created");
+        if (action !== "commit") {
+          expect(result.push.status).toBe("pushed");
+        }
+        if (action === "commit_push_pr") {
+          expect(result.pr.status).toBe("created");
+        }
+      }),
+    );
+  }
+
+  it.effect("does not advertise another retry when an unsigned attempt fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "unsigned-hook.txt"), "hook failure\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+        "#!/bin/sh\necho 'error: gpg failed to sign the data' >&2\nexit 1\n",
+        { mode: 0o755 },
+      );
+
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+      yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "test: unsigned hook failure",
+          disableCommitSigning: true,
+        },
+        {
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(Effect.flip);
+
+      const failure = events.find((event) => event.kind === "action_failed");
+      expect(failure).toMatchObject({
+        kind: "action_failed",
+        phase: "commit",
+        failureKind: "unknown",
+      });
     }),
   );
 
