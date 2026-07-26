@@ -26,7 +26,7 @@ import {
   ThreadWorktreeIndicator,
   usePrStatusIndicator,
 } from "./ThreadStatusIndicators";
-import { ProjectFavicon } from "./ProjectFavicon";
+import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
@@ -83,6 +83,7 @@ import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform } from "../lib/utils";
 import {
+  readEnvironmentSupportsSettlement,
   readThreadShell,
   useProject,
   useProjects,
@@ -198,6 +199,7 @@ import {
   resolveSidebarProjectBadgeLabel,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  isThreadSettledForDisplay,
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -209,15 +211,24 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useNowMinute } from "~/hooks/useNowMinute";
 import { CommandDialogTrigger } from "./ui/command";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { ListEnvironmentFilterControl } from "./ListEnvironmentFilterControl";
 import {
+  DEFAULT_HIDE_SETTLED_PROJECTS,
+  DEFAULT_HIDE_SETTLED_RECENT,
   DEFAULT_WEB_LIST_MODE,
   EMPTY_LIST_ENVIRONMENT_FILTER,
   LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY,
+  LIST_HIDE_SETTLED_RECENT_STORAGE_KEY,
   LIST_MODE_STORAGE_KEY,
+  LIST_PROJECT_FILTER_ALL,
+  LIST_PROJECT_FILTER_STORAGE_KEY,
   ListEnvironmentFilterSchema,
+  ListHideSettledSchema,
+  ListProjectFilterSchema,
   WEB_LIST_MODE_LABELS,
   WEB_LIST_MODES,
   WebListModeSchema,
@@ -1124,6 +1135,10 @@ interface SidebarProjectItemProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  settleThread: ReturnType<typeof useThreadActions>["settleThread"];
+  unsettleThread: ReturnType<typeof useThreadActions>["unsettleThread"];
+  hideSettledThreads: boolean;
+  settledThreadKeys: ReadonlySet<string>;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1145,6 +1160,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     handleNewThread,
     archiveThread,
     deleteThread,
+    settleThread,
+    unsettleThread,
+    hideSettledThreads,
+    settledThreadKeys,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -1245,7 +1264,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   // thread-list change).
   const sidebarThreadByKeyRef = useRef(sidebarThreadByKey);
   sidebarThreadByKeyRef.current = sidebarThreadByKey;
-  const projectThreads = sidebarThreads;
+  const projectThreads = useMemo(
+    () =>
+      hideSettledThreads
+        ? sidebarThreads.filter(
+            (thread) =>
+              !settledThreadKeys.has(
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              ),
+          )
+        : sidebarThreads,
+    [hideSettledThreads, settledThreadKeys, sidebarThreads],
+  );
   const projectPreferenceKeys = useMemo(() => projectExpansionPreferenceKeys(project), [project]);
   const projectExpanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, projectPreferenceKeys),
@@ -2182,10 +2212,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const threadWorkspacePath =
         thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
       const isPinned = useUiStateStore.getState().pinnedThreadKeys.includes(threadKey);
+      const isSettled = settledThreadKeys.has(threadKey);
+      const supportsSettlement = readEnvironmentSupportsSettlement(thread.environmentId);
       const clicked = await api.contextMenu.show(
         [
           ...(thread.branch
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
+            : []),
+          ...(supportsSettlement
+            ? [
+                isSettled
+                  ? { id: "unsettle", label: "Un-settle thread" }
+                  : { id: "settle", label: "Settle thread" },
+              ]
             : []),
           { id: "pin", label: isPinned ? "Unpin thread" : "Pin thread" },
           { id: "rename", label: "Rename thread" },
@@ -2214,6 +2253,23 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             stackedThreadToast({
               type: "error",
               title: "Could not create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+
+      if (clicked === "settle" || clicked === "unsettle") {
+        const result =
+          clicked === "settle" ? await settleThread(threadRef) : await unsettleThread(threadRef);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title:
+                clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -2285,8 +2341,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.workspaceRoot,
+      settleThread,
+      settledThreadKeys,
       startThreadRename,
       toggleThreadPinned,
+      unsettleThread,
     ],
   );
 
@@ -2822,6 +2881,8 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  settleThread: ReturnType<typeof useThreadActions>["settleThread"];
+  unsettleThread: ReturnType<typeof useThreadActions>["unsettleThread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   recentThreads: readonly SidebarRecentThread[];
   threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
@@ -2836,6 +2897,17 @@ interface SidebarProjectsContentProps {
   environmentFilterOptions: readonly { environmentId: EnvironmentId; label: string }[];
   selectedEnvironmentIds: readonly EnvironmentId[];
   onSelectedEnvironmentIdsChange: (next: readonly EnvironmentId[]) => void;
+  projectFilterOptions: readonly {
+    projectKey: string;
+    displayName: string;
+    environmentId: EnvironmentId;
+    workspaceRoot: string;
+  }[];
+  selectedProjectFilterKey: string | null;
+  onSelectedProjectFilterKeyChange: (key: string | null) => void;
+  hideSettledThreads: boolean;
+  onHideSettledThreadsChange: (hide: boolean) => void;
+  settledThreadKeys: ReadonlySet<string>;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -2869,6 +2941,9 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  settleThread: ReturnType<typeof useThreadActions>["settleThread"];
+  unsettleThread: ReturnType<typeof useThreadActions>["unsettleThread"];
+  isSettled: boolean;
   orderedRecentThreadKeys: readonly string[];
   threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
 }) {
@@ -3090,8 +3165,16 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           return;
         }
         if (selectedThreadKeys.length > 0) clearSelection();
+        const supportsSettlement = readEnvironmentSupportsSettlement(thread.environmentId);
         const clicked = await api.contextMenu.show(
           [
+            ...(supportsSettlement
+              ? [
+                  props.isSettled
+                    ? { id: "unsettle", label: "Un-settle thread" }
+                    : { id: "settle", label: "Settle thread" },
+                ]
+              : []),
             { id: "pin", label: isPinned ? "Unpin thread" : "Pin thread" },
             { id: "rename", label: "Rename thread" },
             { id: "mark-unread", label: "Mark unread" },
@@ -3101,7 +3184,23 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           ],
           { x: event.clientX, y: event.clientY },
         );
-        if (clicked === "pin") {
+        if (clicked === "settle" || clicked === "unsettle") {
+          const result =
+            clicked === "settle"
+              ? await props.settleThread(threadRef)
+              : await props.unsettleThread(threadRef);
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title:
+                  clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+        } else if (clicked === "pin") {
           toggleThreadPinned(threadKey);
         } else if (clicked === "rename") {
           renameCommitStartedRef.current = false;
@@ -3485,6 +3584,9 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
+  settleThread: ReturnType<typeof useThreadActions>["settleThread"];
+  unsettleThread: ReturnType<typeof useThreadActions>["unsettleThread"];
+  settledThreadKeys: ReadonlySet<string>;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
 }) {
@@ -3516,6 +3618,9 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
               handleNewThread={props.handleNewThread}
               archiveThread={props.archiveThread}
               deleteThread={props.deleteThread}
+              settleThread={props.settleThread}
+              unsettleThread={props.unsettleThread}
+              isSettled={props.settledThreadKeys.has(threadKey)}
               orderedRecentThreadKeys={orderedRecentThreadKeys}
               threadByKey={props.threadByKey}
             />
@@ -3549,6 +3654,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
+    settleThread,
+    unsettleThread,
     sortedProjects,
     recentThreads,
     threadByKey,
@@ -3563,6 +3670,12 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     environmentFilterOptions,
     selectedEnvironmentIds,
     onSelectedEnvironmentIdsChange,
+    projectFilterOptions,
+    selectedProjectFilterKey,
+    onSelectedProjectFilterKeyChange,
+    hideSettledThreads,
+    onHideSettledThreadsChange,
+    settledThreadKeys,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -3573,6 +3686,28 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
+
+  const projectFilterItems = useMemo(
+    () => [
+      { value: LIST_PROJECT_FILTER_ALL, label: "All projects" },
+      ...projectFilterOptions.map((project) => ({
+        value: project.projectKey,
+        label: project.displayName,
+      })),
+    ],
+    [projectFilterOptions],
+  );
+  const selectedProjectFilterValue =
+    selectedProjectFilterKey !== null &&
+    projectFilterOptions.some((project) => project.projectKey === selectedProjectFilterKey)
+      ? selectedProjectFilterKey
+      : LIST_PROJECT_FILTER_ALL;
+  const selectedProjectFilterSnapshot =
+    selectedProjectFilterValue === LIST_PROJECT_FILTER_ALL
+      ? null
+      : (projectFilterOptions.find(
+          (project) => project.projectKey === selectedProjectFilterValue,
+        ) ?? null);
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -3650,6 +3785,75 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             triggerClassName="w-full"
             data-testid="sidebar-environment-filter"
           />
+          {listMode === "recent" || listMode === "projects" ? (
+            <>
+              {projectFilterOptions.length > 0 ? (
+                <Select
+                  modal={false}
+                  value={selectedProjectFilterValue}
+                  onValueChange={(value) => {
+                    onSelectedProjectFilterKeyChange(
+                      value === LIST_PROJECT_FILTER_ALL ? null : (value as string),
+                    );
+                  }}
+                  items={projectFilterItems}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="h-7 w-full min-w-0 px-2 text-xs"
+                    aria-label="Filter by project"
+                    data-testid="sidebar-project-filter"
+                  >
+                    <SelectValue>
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        {selectedProjectFilterSnapshot ? (
+                          <ProjectFavicon
+                            environmentId={selectedProjectFilterSnapshot.environmentId}
+                            cwd={selectedProjectFilterSnapshot.workspaceRoot}
+                          />
+                        ) : (
+                          <ProjectFaviconFallback />
+                        )}
+                        <span className="truncate">
+                          {selectedProjectFilterSnapshot?.displayName ?? "All projects"}
+                        </span>
+                      </span>
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value={LIST_PROJECT_FILTER_ALL}>
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <ProjectFaviconFallback />
+                        <span className="truncate">All projects</span>
+                      </span>
+                    </SelectItem>
+                    {projectFilterOptions.map((project) => (
+                      <SelectItem key={project.projectKey} value={project.projectKey}>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <ProjectFavicon
+                            environmentId={project.environmentId}
+                            cwd={project.workspaceRoot}
+                          />
+                          <span className="truncate">{project.displayName}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              ) : null}
+              <Button
+                type="button"
+                size="xs"
+                variant={hideSettledThreads ? "secondary" : "outline"}
+                className="h-7 w-full justify-start px-2 text-xs font-normal"
+                aria-pressed={hideSettledThreads}
+                data-testid="sidebar-hide-settled-toggle"
+                onClick={() => onHideSettledThreadsChange(!hideSettledThreads)}
+              >
+                {hideSettledThreads ? "Hide settled · on" : "Hide settled · off"}
+              </Button>
+            </>
+          ) : null}
         </div>
       </SidebarGroup>
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
@@ -3684,6 +3888,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           handleNewThread={handleNewThread}
           archiveThread={archiveThread}
           deleteThread={deleteThread}
+          settleThread={settleThread}
+          unsettleThread={unsettleThread}
+          settledThreadKeys={settledThreadKeys}
           threadJumpLabelByKey={threadJumpLabelByKey}
           threadByKey={threadByKey}
         />
@@ -3750,6 +3957,10 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                           handleNewThread={handleNewThread}
                           archiveThread={archiveThread}
                           deleteThread={deleteThread}
+                          settleThread={settleThread}
+                          unsettleThread={unsettleThread}
+                          hideSettledThreads={hideSettledThreads}
+                          settledThreadKeys={settledThreadKeys}
                           threadJumpLabelByKey={EMPTY_THREAD_JUMP_LABELS}
                           attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                           expandThreadListForProject={expandThreadListForProject}
@@ -3781,6 +3992,10 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   }
                   newThreadShortcutLabel={newThreadShortcutLabel}
                   handleNewThread={handleNewThread}
+                  settleThread={settleThread}
+                  unsettleThread={unsettleThread}
+                  hideSettledThreads={hideSettledThreads}
+                  settledThreadKeys={settledThreadKeys}
                   archiveThread={archiveThread}
                   deleteThread={deleteThread}
                   threadJumpLabelByKey={EMPTY_THREAD_JUMP_LABELS}
@@ -3834,7 +4049,10 @@ export default function Sidebar() {
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread } = useThreadActions();
+  const { archiveThread, deleteThread, settleThread, unsettleThread } = useThreadActions();
+  const serverConfigs = useServerConfigs();
+  const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
+  const nowMinute = useNowMinute();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
     strict: false,
@@ -3881,6 +4099,33 @@ export default function Sidebar() {
     LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
     EMPTY_LIST_ENVIRONMENT_FILTER,
     ListEnvironmentFilterSchema,
+  );
+  const [storedProjectFilter, setStoredProjectFilter] = useLocalStorage(
+    LIST_PROJECT_FILTER_STORAGE_KEY,
+    null as string | null,
+    ListProjectFilterSchema,
+  );
+  const [hideSettledRecent, setHideSettledRecent] = useLocalStorage(
+    LIST_HIDE_SETTLED_RECENT_STORAGE_KEY,
+    DEFAULT_HIDE_SETTLED_RECENT,
+    ListHideSettledSchema,
+  );
+  const [hideSettledProjects, setHideSettledProjects] = useLocalStorage(
+    LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY,
+    DEFAULT_HIDE_SETTLED_PROJECTS,
+    ListHideSettledSchema,
+  );
+  const hideSettledThreads =
+    storedListMode === "projects" ? hideSettledProjects : hideSettledRecent;
+  const handleHideSettledThreadsChange = useCallback(
+    (hide: boolean) => {
+      if (storedListMode === "projects") {
+        setHideSettledProjects(hide);
+        return;
+      }
+      setHideSettledRecent(hide);
+    },
+    [setHideSettledProjects, setHideSettledRecent, storedListMode],
   );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
@@ -4196,18 +4441,84 @@ export default function Sidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
-  /** Recent mode: all unarchived threads sorted by latest activity. */
+  const settledThreadKeys = useMemo(() => {
+    const now = `${nowMinute}:00.000Z`;
+    const keys = new Set<string>();
+    for (const thread of visibleThreads) {
+      if (
+        isThreadSettledForDisplay(thread, {
+          serverConfigs,
+          now,
+          autoSettleAfterDays,
+          changeRequestState: null,
+        })
+      ) {
+        keys.add(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
+      }
+    }
+    return keys;
+  }, [autoSettleAfterDays, nowMinute, serverConfigs, visibleThreads]);
+  const selectedProjectFilterKey =
+    storedProjectFilter !== null &&
+    sortedProjects.some((project) => project.projectKey === storedProjectFilter)
+      ? storedProjectFilter
+      : null;
+  const projectFilteredProjects = useMemo(
+    () =>
+      selectedProjectFilterKey === null
+        ? sortedProjects
+        : sortedProjects.filter((project) => project.projectKey === selectedProjectFilterKey),
+    [selectedProjectFilterKey, sortedProjects],
+  );
+  const projectFilterOptions = useMemo(
+    () =>
+      sortedProjects.map((project) => ({
+        projectKey: project.projectKey,
+        displayName: project.displayName,
+        environmentId: project.environmentId,
+        workspaceRoot: project.workspaceRoot,
+      })),
+    [sortedProjects],
+  );
+  /** Recent mode: unarchived threads sorted by latest activity, optional filters. */
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
+    const memberKeysForSelectedProject =
+      selectedProjectFilterKey === null
+        ? null
+        : new Set(
+            (
+              sortedProjects.find((project) => project.projectKey === selectedProjectFilterKey)
+                ?.memberProjects ?? []
+            ).map((member) => scopedProjectKey(scopeProjectRef(member.environmentId, member.id))),
+          );
     return sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
-      const physicalKey =
-        projectPhysicalKeyByScopedRef.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      if (hideSettledRecent && settledThreadKeys.has(threadKey)) {
+        return [];
+      }
+      const memberKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+      const physicalKey = projectPhysicalKeyByScopedRef.get(memberKey) ?? memberKey;
       const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+      if (
+        memberKeysForSelectedProject !== null &&
+        !memberKeysForSelectedProject.has(memberKey) &&
+        projectKey !== selectedProjectFilterKey
+      ) {
+        return [];
+      }
       const project = sidebarProjectByKey.get(projectKey);
       return project ? [{ thread, project }] : [];
     });
-  }, [physicalToLogicalKey, projectPhysicalKeyByScopedRef, sidebarProjectByKey, visibleThreads]);
+  }, [
+    hideSettledRecent,
+    physicalToLogicalKey,
+    projectPhysicalKeyByScopedRef,
+    selectedProjectFilterKey,
+    settledThreadKeys,
+    sidebarProjectByKey,
+    sortedProjects,
+    visibleThreads,
+  ]);
   const recentThreadKeys = useMemo(
     () =>
       recentThreads
@@ -4564,7 +4875,9 @@ export default function Sidebar() {
             handleNewThread={handleNewThread}
             archiveThread={archiveThread}
             deleteThread={deleteThread}
-            sortedProjects={sortedProjects}
+            settleThread={settleThread}
+            unsettleThread={unsettleThread}
+            sortedProjects={projectFilteredProjects}
             recentThreads={recentThreads}
             threadByKey={sidebarThreadByKey}
             navigateToThread={navigateToThread}
@@ -4578,6 +4891,12 @@ export default function Sidebar() {
             environmentFilterOptions={environmentFilterOptions}
             selectedEnvironmentIds={selectedEnvironmentIds}
             onSelectedEnvironmentIdsChange={handleSelectedEnvironmentIdsChange}
+            projectFilterOptions={projectFilterOptions}
+            selectedProjectFilterKey={selectedProjectFilterKey}
+            onSelectedProjectFilterKeyChange={setStoredProjectFilter}
+            hideSettledThreads={hideSettledThreads}
+            onHideSettledThreadsChange={handleHideSettledThreadsChange}
+            settledThreadKeys={settledThreadKeys}
             threadJumpLabelByKey={visibleThreadJumpLabelByKey}
             attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
             expandThreadListForProject={expandThreadListForProject}

@@ -67,11 +67,28 @@ export function isWebListMode(value: unknown): value is WebListMode {
 
 export const LIST_ENVIRONMENT_FILTER_STORAGE_KEY = "t3code:list:environment-filter:v1";
 export const LIST_MODE_STORAGE_KEY = "t3code:list:mode:v1";
+/** Sidebar Recent/Projects project scope; Board keeps its own storage key. */
+export const LIST_PROJECT_FILTER_STORAGE_KEY = "t3code:list:project-filter:v1";
+export const LIST_PROJECT_FILTER_ALL = "all";
+/**
+ * Per list mode: when true, settled threads are omitted.
+ * Recent defaults to hide (cleaner inbox); Projects defaults to show.
+ */
+export const LIST_HIDE_SETTLED_RECENT_STORAGE_KEY = "t3code:list:hide-settled-recent:v1";
+export const LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY = "t3code:list:hide-settled-projects:v1";
+export const DEFAULT_HIDE_SETTLED_RECENT = true;
+export const DEFAULT_HIDE_SETTLED_PROJECTS = false;
 
 /** Persisted env multi-select; empty array means all environments. */
 export const ListEnvironmentFilterSchema = Schema.Array(Schema.String);
 export type ListEnvironmentFilterStored = typeof ListEnvironmentFilterSchema.Type;
 export const EMPTY_LIST_ENVIRONMENT_FILTER: ListEnvironmentFilterStored = [];
+
+/** Persisted single project key, or null for all projects. */
+export const ListProjectFilterSchema = Schema.NullOr(Schema.String);
+export type ListProjectFilterStored = typeof ListProjectFilterSchema.Type;
+
+export const ListHideSettledSchema = Schema.Boolean;
 
 export const WebListModeSchema = Schema.Literals(WEB_LIST_MODES);
 export const DEFAULT_WEB_LIST_MODE: WebListMode = "projects";
