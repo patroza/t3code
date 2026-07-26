@@ -66,9 +66,30 @@ gh workflow run rebase-pr-stack.yml --repo patroza/t3code --ref fork/changes
 The workflow fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged,
 and atomically updates `main`, `fork/tim`, `fork/candidates`, `fork/changes`, and
 `fork/integration` with
-force-with-lease. A repository-scoped write deploy key stored as `FORK_STACK_DEPLOY_KEY` is the only
-automation actor allowed to bypass `main`'s PR and status-check requirements. It cannot access other
-repositories. Never expose or reuse it.
+force-with-lease. A repository-scoped write deploy key stored as `FORK_STACK_DEPLOY_KEY` is the
+automation actor that bypasses branch rulesets for those force-with-lease updates (including
+`main`'s PR and status-check requirements). It cannot access other repositories. Never expose or
+reuse it.
+
+## Branch rulesets (protection vs rewrites)
+
+Repository rulesets gate **long-lived stack branches**. Ordinary feature branches (`feat/**`,
+`import/**`, …) are not covered, so agents and humans can still force-push them freely.
+
+| Ruleset                                   | Branches                                          | Enforced                                                                                                                                                  | Bypass (always)                                                                                |
+| ----------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Protect upstream main                     | `main`                                            | No delete, no force-push, linear history, **PR required**, **Fork CI checks**                                                                             | `patroza`, `omegabot`, deploy key (`FORK_STACK_DEPLOY_KEY`); Admin role may bypass via PR only |
+| Protect fork/changes (PR + CI)            | `fork/changes`                                    | No delete, no force-push, linear history, **PR required** (squash/rebase), **strict Fork CI** (Check, Test, Mobile Native Static Analysis, Release Smoke) | `patroza`, `omegabot`, deploy key                                                              |
+| Protect fork/tim, candidates, integration | `fork/tim`, `fork/candidates`, `fork/integration` | No delete, no force-push, linear history (no PR requirement — stack rebuilds these tips)                                                                  | `patroza`, `omegabot`, deploy key                                                              |
+
+**CI path:** the stack workflow authenticates with the deploy key, not `GITHUB_TOKEN` (default
+workflow token is read-only and cannot be added as an Integration bypass on this personal fork).
+
+**Who cannot force-push protected branches:** write collaborators without a User bypass entry.
+They can still open PRs into `fork/changes` and merge only when required checks are green.
+
+**Who can force-push:** `patroza`, `omegabot` (must accept the collaborator invite), and the stack
+deploy key. Feature-branch force-pushes do not need bypass.
 
 Upstream's `.github/workflows/ci.yml` and `.github/workflows/deploy-relay.yml` remain present on the
 exact `main` mirror but are disabled in this repository. Fork PR and integration checks use
