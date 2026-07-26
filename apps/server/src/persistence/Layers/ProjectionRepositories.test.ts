@@ -195,4 +195,85 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(updated?.snoozedAt, null);
     }),
   );
+
+  it.effect("lists nondeleted worktree references including archived rows", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_threads`;
+
+      const baseRow = {
+        projectId: ProjectId.make("project-worktrees"),
+        title: "Worktree thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature-1",
+        latestTurnId: null,
+        createdAt: "2026-03-24T00:00:00.000Z",
+        updatedAt: "2026-03-24T00:00:00.000Z",
+        settledOverride: null,
+        settledAt: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+      } as const;
+
+      yield* threads.upsert({
+        ...baseRow,
+        threadId: ThreadId.make("thread-active-worktree"),
+        worktreePath: "/tmp/worktrees/feature-1",
+        archivedAt: null,
+        deletedAt: null,
+      });
+      yield* threads.upsert({
+        ...baseRow,
+        threadId: ThreadId.make("thread-archived-worktree"),
+        worktreePath: "/tmp/worktrees/feature-1",
+        archivedAt: "2026-03-25T00:00:00.000Z",
+        deletedAt: null,
+      });
+      yield* threads.upsert({
+        ...baseRow,
+        threadId: ThreadId.make("thread-deleted-worktree"),
+        worktreePath: "/tmp/worktrees/feature-1",
+        archivedAt: null,
+        deletedAt: "2026-03-25T00:00:00.000Z",
+      });
+      yield* threads.upsert({
+        ...baseRow,
+        threadId: ThreadId.make("thread-no-worktree"),
+        worktreePath: null,
+        archivedAt: null,
+        deletedAt: null,
+      });
+
+      const references = yield* threads.listWorktreeReferences();
+      assert.deepStrictEqual(
+        references.map((reference) => ({
+          threadId: reference.threadId,
+          worktreePath: reference.worktreePath,
+          archivedAt: reference.archivedAt,
+        })),
+        [
+          {
+            threadId: ThreadId.make("thread-active-worktree"),
+            worktreePath: "/tmp/worktrees/feature-1",
+            archivedAt: null,
+          },
+          {
+            threadId: ThreadId.make("thread-archived-worktree"),
+            worktreePath: "/tmp/worktrees/feature-1",
+            archivedAt: "2026-03-25T00:00:00.000Z",
+          },
+        ],
+      );
+    }),
+  );
 });
