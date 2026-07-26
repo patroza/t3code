@@ -128,6 +128,10 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarHideProviderIcons: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_HIDE_PROVIDER_ICONS)),
   ),
+  /**
+   * Classic sidebar strip above projects. Setting key is historical ("Recent");
+   * product behavior is Needs attention (Working ∪ blocked Review).
+   */
   sidebarRecentThreadsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),

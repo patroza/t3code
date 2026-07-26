@@ -2,10 +2,10 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
-  HOME_RECENT_WORK_GROUP_KEY,
-  HOME_RECENT_WORK_PREVIEW_COUNT,
-  type HomeRecentWorkEntry,
-} from "./homeRecentWork";
+  HOME_NEEDS_ATTENTION_GROUP_KEY,
+  HOME_NEEDS_ATTENTION_PREVIEW_COUNT,
+  type HomeNeedsAttentionEntry,
+} from "./homeNeedsAttention";
 import type { HomeThreadGroup } from "./homeThreadList";
 
 /** Threads shown per project before the "Show more" affordance appears. */
@@ -56,27 +56,29 @@ export interface HomeShowMoreListItem {
   readonly canShowLess: boolean;
 }
 
-/** Cross-project Recent section label (web sidebar "Recent"). */
-export interface HomeRecentHeaderListItem {
-  readonly type: "recent-header";
+/** Cross-project Needs attention section label. */
+export interface HomeAttentionHeaderListItem {
+  readonly type: "attention-header";
   readonly key: string;
 }
 
-/** Thread row inside the cross-project Recent section. */
-export interface HomeRecentThreadListItem {
-  readonly type: "recent-thread";
+/** Thread row inside the Needs attention section. */
+export interface HomeAttentionThreadListItem {
+  readonly type: "attention-thread";
   readonly key: string;
   readonly thread: EnvironmentThreadShell;
   readonly projectTitle: string;
+  /** Optional status chip text (e.g. Pending Approval, Working). */
+  readonly statusLabel: string | null;
   readonly isLast: boolean;
 }
 
 /**
- * Recent section show-more uses a binary expand (preview ↔ all), matching
- * web. Reuses the project show-more row UI via {@link HOME_RECENT_WORK_GROUP_KEY}.
+ * Needs attention show-more uses a binary expand (preview ↔ all).
+ * Reuses the project show-more row UI via {@link HOME_NEEDS_ATTENTION_GROUP_KEY}.
  */
-export interface HomeRecentShowMoreListItem {
-  readonly type: "recent-show-more";
+export interface HomeAttentionShowMoreListItem {
+  readonly type: "attention-show-more";
   readonly key: string;
   readonly hiddenCount: number;
   readonly canShowLess: boolean;
@@ -87,9 +89,9 @@ export type HomeListItem =
   | HomePendingTaskListItem
   | HomeThreadListItem
   | HomeShowMoreListItem
-  | HomeRecentHeaderListItem
-  | HomeRecentThreadListItem
-  | HomeRecentShowMoreListItem;
+  | HomeAttentionHeaderListItem
+  | HomeAttentionThreadListItem
+  | HomeAttentionShowMoreListItem;
 
 export interface HomeListLayout {
   readonly items: ReadonlyArray<HomeListItem>;
@@ -147,18 +149,19 @@ export function homeListItemsAreEqual(previous: HomeListItem, item: HomeListItem
         previous.hiddenCount === item.hiddenCount &&
         previous.canShowLess === item.canShowLess
       );
-    case "recent-header":
-      return previous.type === "recent-header";
-    case "recent-thread":
+    case "attention-header":
+      return previous.type === "attention-header";
+    case "attention-thread":
       return (
-        previous.type === "recent-thread" &&
+        previous.type === "attention-thread" &&
         previous.thread === item.thread &&
         previous.projectTitle === item.projectTitle &&
+        previous.statusLabel === item.statusLabel &&
         previous.isLast === item.isLast
       );
-    case "recent-show-more":
+    case "attention-show-more":
       return (
-        previous.type === "recent-show-more" &&
+        previous.type === "attention-show-more" &&
         previous.hiddenCount === item.hiddenCount &&
         previous.canShowLess === item.canShowLess
       );
@@ -173,11 +176,12 @@ export function buildHomeListLayout(input: {
    */
   readonly showAllThreads?: boolean;
   /**
-   * Cross-project Recent section (web sidebar "Recent"). When null/undefined
-   * or empty, the section is omitted. Expansion is binary: preview count vs all.
+   * Cross-project Needs attention section (Working ∪ blocked Review). When
+   * null/undefined or empty, the section is omitted. Expansion is binary:
+   * preview count vs all.
    */
-  readonly recentWork?: {
-    readonly entries: ReadonlyArray<HomeRecentWorkEntry>;
+  readonly needsAttention?: {
+    readonly entries: ReadonlyArray<HomeNeedsAttentionEntry>;
     readonly expanded: boolean;
     readonly previewCount?: number;
   } | null;
@@ -185,32 +189,33 @@ export function buildHomeListLayout(input: {
   const items: HomeListItem[] = [];
   const stickyHeaderIndices: number[] = [];
 
-  const recentEntries = input.recentWork?.entries ?? [];
-  if (recentEntries.length > 0 && input.recentWork) {
-    const previewCount = input.recentWork.previewCount ?? HOME_RECENT_WORK_PREVIEW_COUNT;
-    const showAll = input.showAllThreads === true || input.recentWork.expanded;
-    const hasOverflow = recentEntries.length > previewCount;
+  const attentionEntries = input.needsAttention?.entries ?? [];
+  if (attentionEntries.length > 0 && input.needsAttention) {
+    const previewCount = input.needsAttention.previewCount ?? HOME_NEEDS_ATTENTION_PREVIEW_COUNT;
+    const showAll = input.showAllThreads === true || input.needsAttention.expanded;
+    const hasOverflow = attentionEntries.length > previewCount;
     const visibleEntries =
-      showAll || !hasOverflow ? recentEntries : recentEntries.slice(0, previewCount);
-    const hiddenCount = recentEntries.length - visibleEntries.length;
+      showAll || !hasOverflow ? attentionEntries : attentionEntries.slice(0, previewCount);
+    const hiddenCount = attentionEntries.length - visibleEntries.length;
     const hasShowMoreRow = !input.showAllThreads && hasOverflow;
 
-    items.push({ type: "recent-header", key: "recent-header" });
+    items.push({ type: "attention-header", key: "attention-header" });
     for (const [index, entry] of visibleEntries.entries()) {
       items.push({
-        type: "recent-thread",
-        key: `recent-thread:${entry.thread.environmentId}:${entry.thread.id}`,
+        type: "attention-thread",
+        key: `attention-thread:${entry.thread.environmentId}:${entry.thread.id}`,
         thread: entry.thread,
         projectTitle: entry.project.title,
+        statusLabel: entry.statusLabel,
         isLast: index === visibleEntries.length - 1 && !hasShowMoreRow,
       });
     }
     if (hasShowMoreRow) {
       items.push({
-        type: "recent-show-more",
-        key: `recent-show-more:${HOME_RECENT_WORK_GROUP_KEY}`,
+        type: "attention-show-more",
+        key: `attention-show-more:${HOME_NEEDS_ATTENTION_GROUP_KEY}`,
         hiddenCount,
-        canShowLess: input.recentWork.expanded,
+        canShowLess: input.needsAttention.expanded,
       });
     }
   }
@@ -225,8 +230,8 @@ export function buildHomeListLayout(input: {
       key: `header:${group.key}`,
       group,
       collapsed,
-      // First project group is no longer visually first when Recent sits above.
-      isFirst: groupIndex === 0 && recentEntries.length === 0,
+      // First project group is no longer visually first when Needs attention sits above.
+      isFirst: groupIndex === 0 && attentionEntries.length === 0,
     });
 
     if (collapsed) {
