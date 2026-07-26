@@ -50,8 +50,8 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "../home/homeListItems";
-import { HomeListModeSwitcher } from "../home/HomeListModeSwitcher";
 import { buildHomeRecentListEntries, buildHomeRecentPendingEntries } from "../home/homeRecentList";
+import { HOME_LIST_MODE_TITLES } from "../home/homeListMode";
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -133,7 +133,6 @@ interface ThreadNavigationSidebarProps {
   readonly visible: boolean;
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
-  readonly onOpenBoard: () => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -1065,11 +1064,6 @@ function ThreadNavigationSidebarPane(
       toggleSelectedEnvironmentId,
     ],
   );
-  const modeSwitcher = (
-    <View className="px-3.5 pb-2">
-      <HomeListModeSwitcher mode={options.listMode} onModeChange={setListMode} />
-    </View>
-  );
   const boardContent =
     options.listMode === "board" ? (
       <BoardScreen
@@ -1093,10 +1087,11 @@ function ThreadNavigationSidebarPane(
       createSidebarHeaderItems({
         filterIcon,
         filterMenu,
+        listMode: options.listMode,
+        onListModeChange: setListMode,
         onOpenSettings: props.onOpenSettings,
-        onOpenBoard: props.onOpenBoard,
       }),
-    [filterIcon, filterMenu, props.onOpenBoard, props.onOpenSettings],
+    [filterIcon, filterMenu, options.listMode, props.onOpenSettings, setListMode],
   );
   // "No threads yet" over an inbox that is merely all-snoozed reads as
   // data loss; name the snoozed threads instead.
@@ -1129,6 +1124,8 @@ function ThreadNavigationSidebarPane(
         <NativeStackScreenOptions
           optionsVersion={nativeHeaderItems}
           options={{
+            title: HOME_LIST_MODE_TITLES[options.listMode],
+            headerTitle: HOME_LIST_MODE_TITLES[options.listMode],
             headerSearchBarOptions:
               options.listMode === "board"
                 ? undefined
@@ -1153,7 +1150,6 @@ function ThreadNavigationSidebarPane(
           }}
         />
         <View className="flex-1">
-          {modeSwitcher}
           {boardContent !== null ? (
             boardContent
           ) : (
@@ -1295,7 +1291,7 @@ function ThreadNavigationSidebarPane(
         </View>
         <View className="h-[50px] flex-row items-end gap-0.5 pr-2 pl-5">
           <Text className="flex-1 text-[34px] font-t3-bold text-foreground" numberOfLines={1}>
-            Threads
+            {HOME_LIST_MODE_TITLES[options.listMode]}
           </Text>
           <SidebarHeaderButtonGroup colorScheme={colorScheme}>
             <ControlPillMenu actions={listMenuActions} onPressAction={handleListMenuAction}>
@@ -1307,13 +1303,12 @@ function ThreadNavigationSidebarPane(
             </ControlPillMenu>
             <SidebarHeaderActions
               grouped
-              onOpenBoard={props.onOpenBoard}
+              listMode={options.listMode}
+              onListModeChange={setListMode}
               onOpenSettings={props.onOpenSettings}
             />
           </SidebarHeaderButtonGroup>
         </View>
-
-        {modeSwitcher}
 
         {options.listMode === "board" ? null : (
           <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
