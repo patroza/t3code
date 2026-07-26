@@ -117,6 +117,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import { deriveLocalBranchNameFromRemoteRef } from "@t3tools/shared/git";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1000,24 +1001,45 @@ const makeWsRpcLayer = (
             }
 
             if (bootstrap?.prepareWorktree) {
-              let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
-              if (bootstrap.prepareWorktree.startFromOrigin) {
+              const prepareWorktree = bootstrap.prepareWorktree;
+              let worktreeBaseRef = prepareWorktree.baseBranch;
+              let worktreeNewRefName = prepareWorktree.branch;
+              let worktreeBaseRefName: string | undefined = prepareWorktree.baseBranch;
+              if (prepareWorktree.reuseBaseBranch) {
+                // Reuse the selected branch: check it out in the worktree
+                // instead of branching off it. A remote ref cannot be checked
+                // out directly (it would detach), so materialize it as its
+                // derived local branch; the branch keeps its own history, so
+                // skip the gh-merge-base config that new branches record.
+                const refsResult = yield* gitWorkflow.listRefs({
+                  cwd: prepareWorktree.projectCwd,
+                  query: prepareWorktree.baseBranch,
+                  includeMatchingRemoteRefs: true,
+                });
+                const selectedRef = refsResult.refs.find(
+                  (ref) => ref.name === prepareWorktree.baseBranch,
+                );
+                worktreeNewRefName = selectedRef?.isRemote
+                  ? deriveLocalBranchNameFromRemoteRef(prepareWorktree.baseBranch)
+                  : undefined;
+                worktreeBaseRefName = undefined;
+              } else if (prepareWorktree.startFromOrigin) {
                 yield* gitWorkflow.fetchRemote({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
+                  cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
                 });
                 const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
-                  refName: bootstrap.prepareWorktree.baseBranch,
+                  cwd: prepareWorktree.projectCwd,
+                  refName: prepareWorktree.baseBranch,
                   fallbackRemoteName: "origin",
                 });
                 worktreeBaseRef = resolvedRemoteBase.commitSha;
               }
               const worktree = yield* gitWorkflow.createWorktree({
-                cwd: bootstrap.prepareWorktree.projectCwd,
+                cwd: prepareWorktree.projectCwd,
                 refName: worktreeBaseRef,
-                newRefName: bootstrap.prepareWorktree.branch,
-                baseRefName: bootstrap.prepareWorktree.baseBranch,
+                ...(worktreeNewRefName !== undefined ? { newRefName: worktreeNewRefName } : {}),
+                ...(worktreeBaseRefName !== undefined ? { baseRefName: worktreeBaseRefName } : {}),
                 path: null,
               });
               targetWorktreePath = worktree.worktree.path;
