@@ -118,6 +118,7 @@ const DEFAULT_BINDINGS = compile([
     command: "commandPalette.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
+  { shortcut: modShortcut("t"), command: "board.open" },
   {
     shortcut: modShortcut("m", { shiftKey: true }),
     command: "modelPicker.toggle",
@@ -458,6 +459,15 @@ describe("model picker navigation helpers", () => {
 });
 
 describe("chat/editor shortcuts", () => {
+  it("resolves the board shortcut", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+      }),
+      "board.open",
+    );
+  });
+
   it("matches chat.new shortcut", () => {
     assert.isTrue(
       isChatNewShortcut(event({ key: "o", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
