@@ -8,8 +8,10 @@ import * as NodePath from "node:path";
 
 import {
   baseHistoryPushArgs,
+  rebaseOpenFeaturePullRequests,
   RebaseConflictError,
   resumeStack,
+  selectOpenFeaturePullRequests,
   StackError,
   syncStack,
   type PullRequestSnapshot,
@@ -31,6 +33,79 @@ describe("baseHistoryPushArgs", () => {
     assert.include(
       baseHistoryPushArgs(""),
       "--force-with-lease=refs/t3/stack/base-history/fork-changes:",
+    );
+  });
+});
+
+describe("selectOpenFeaturePullRequests", () => {
+  const manifest: StackManifest = {
+    upstreamRemote: "upstream",
+    upstreamBranch: "main",
+    forkChangesBranch: "fork/changes",
+    integrationBranch: "fork/integration",
+    pullRequests: [
+      { number: 1, branch: "fork/tim" },
+      { number: 2, branch: "fork/changes" },
+    ],
+    integrationOverlays: [
+      { number: 10, branch: "overlay/desktop" },
+      { number: 80, branch: "overlay/discord" },
+    ],
+  };
+
+  it("puts registered integration overlays first in manifest order", () => {
+    const selected = selectOpenFeaturePullRequests({
+      expectedRepository: "patroza/t3code",
+      manifest,
+      openPulls: [
+        {
+          number: 96,
+          headBranch: "feat/recent-project-filter",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 80,
+          headBranch: "overlay/discord",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 10,
+          headBranch: "overlay/desktop",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+    assert.deepEqual(
+      selected.map(({ branch }) => branch),
+      ["overlay/desktop", "overlay/discord", "feat/recent-project-filter"],
+    );
+  });
+
+  it("excludes managed stack provenance branches", () => {
+    const selected = selectOpenFeaturePullRequests({
+      expectedRepository: "patroza/t3code",
+      manifest,
+      openPulls: [
+        {
+          number: 2,
+          headBranch: "fork/changes",
+          baseBranch: "main",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 10,
+          headBranch: "overlay/desktop",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+    assert.deepEqual(
+      selected.map(({ branch }) => branch),
+      ["overlay/desktop"],
     );
   });
 });
@@ -540,5 +615,161 @@ describe("rebase-pr-stack", () => {
       /has diverged.*refusing to update fork main/,
     );
     assert.deepStrictEqual(remoteTips(fixture), before);
+  });
+});
+
+describe("rebaseOpenFeaturePullRequests isolation", () => {
+  function createFeatureRebaseFixture() {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "feature-rebase-"));
+    const work = NodePath.join(root, "work");
+    const origin = NodePath.join(root, "origin.git");
+    NodeFS.mkdirSync(work);
+    runGit(root, ["init", "--bare", "--quiet", origin]);
+    runGit(work, ["init", "--quiet", "--initial-branch=main"]);
+    runGit(work, ["config", "user.name", "Stack Test"]);
+    runGit(work, ["config", "user.email", "stack-test@example.com"]);
+    runGit(work, ["config", "commit.gpgsign", "false"]);
+    runGit(work, ["remote", "add", "origin", origin]);
+    commitFile(work, "base.txt", "base\n", "base");
+    runGit(work, ["checkout", "--quiet", "-b", "fork/changes"]);
+    runGit(work, ["push", "--quiet", "origin", "main", "fork/changes"]);
+
+    // Two branches based on the same fork/changes tip.
+    runGit(work, ["checkout", "--quiet", "-b", "feature/flaky", "fork/changes"]);
+    commitFile(work, "flaky.txt", "flaky\n", "flaky feature");
+    runGit(work, ["push", "--quiet", "origin", "feature/flaky"]);
+
+    runGit(work, ["checkout", "--quiet", "-b", "overlay/critical", "fork/changes"]);
+    commitFile(work, "overlay.txt", "overlay\n", "overlay work");
+    runGit(work, ["push", "--quiet", "origin", "overlay/critical"]);
+
+    const oldForkTip = remoteTip(origin, "fork/changes");
+
+    // Advance fork/changes so both branches need a rebase.
+    runGit(work, ["checkout", "--quiet", "fork/changes"]);
+    commitFile(work, "changes.txt", "moved\n", "fork/changes advances");
+    runGit(work, ["push", "--quiet", "origin", "fork/changes"]);
+    const newForkTip = remoteTip(origin, "fork/changes");
+
+    // Reject only feature/flaky pushes via a pre-receive hook (stale-lease stand-in).
+    const hookPath = NodePath.join(origin, "hooks", "pre-receive");
+    NodeFS.writeFileSync(
+      hookPath,
+      `#!/bin/sh
+while read oldrev newrev refname; do
+  if [ "$refname" = "refs/heads/feature/flaky" ]; then
+    echo "rejected flaky feature push" >&2
+    exit 1
+  fi
+done
+`,
+      { mode: 0o755 },
+    );
+
+    const manifest: StackManifest = {
+      upstreamRemote: "upstream",
+      upstreamBranch: "main",
+      forkChangesBranch: "fork/changes",
+      integrationBranch: "fork/integration",
+      pullRequests: [{ number: 2, branch: "fork/changes" }],
+      integrationOverlays: [{ number: 10, branch: "overlay/critical" }],
+    };
+    write(
+      NodePath.join(work, ".github", "pr-stack.json"),
+      `${JSON.stringify(manifest, undefined, 2)}\n`,
+    );
+
+    return { root, work, origin, oldForkTip, newForkTip, manifest };
+  }
+
+  it("continues rebasing other PRs when one force-with-lease push is rejected", async () => {
+    const fixture = createFeatureRebaseFixture();
+    const beforeOverlay = remoteTip(fixture.origin, "overlay/critical");
+    const beforeFlaky = remoteTip(fixture.origin, "feature/flaky");
+
+    const result = await rebaseOpenFeaturePullRequests({
+      sourceRoot: fixture.work,
+      manifest: fixture.manifest,
+      push: true,
+      oldForkChangesTip: fixture.oldForkTip,
+      newForkChangesTip: fixture.newForkTip,
+      openPulls: [
+        {
+          number: 96,
+          headBranch: "feature/flaky",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 10,
+          headBranch: "overlay/critical",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+
+    // Overlay still updates even though the ordinary feature push was rejected.
+    const afterOverlay = remoteTip(fixture.origin, "overlay/critical");
+    assert.notEqual(afterOverlay, beforeOverlay);
+    assert.ok(isAncestor(fixture.origin, fixture.newForkTip, afterOverlay));
+    assert.ok(result.updated.some((entry) => entry.branch === "overlay/critical"));
+
+    // Flaky feature remains on the old tip and is recorded as a conflict.
+    assert.equal(remoteTip(fixture.origin, "feature/flaky"), beforeFlaky);
+    assert.ok(
+      result.conflicts.some(
+        (entry) => entry.branch === "feature/flaky" && /push failed|rejected/i.test(entry.message),
+      ),
+    );
+  });
+
+  it("rebases registered overlays before ordinary feature PRs", async () => {
+    const fixture = createFeatureRebaseFixture();
+    // No rejection hook: both should update; order is asserted via selectOpenFeature.
+    NodeFS.unlinkSync(NodePath.join(fixture.origin, "hooks", "pre-receive"));
+    const ordered = selectOpenFeaturePullRequests({
+      expectedRepository: "patroza/t3code",
+      manifest: fixture.manifest,
+      openPulls: [
+        {
+          number: 96,
+          headBranch: "feature/flaky",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 10,
+          headBranch: "overlay/critical",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+    assert.deepEqual(
+      ordered.map(({ branch }) => branch),
+      ["overlay/critical", "feature/flaky"],
+    );
+
+    const result = await rebaseOpenFeaturePullRequests({
+      sourceRoot: fixture.work,
+      manifest: fixture.manifest,
+      push: true,
+      oldForkChangesTip: fixture.oldForkTip,
+      newForkChangesTip: fixture.newForkTip,
+      openPulls: ordered.map((entry) => ({
+        number: entry.number,
+        headBranch: entry.branch,
+        baseBranch: "fork/changes",
+        headRepository: "patroza/t3code",
+      })),
+    });
+    assert.equal(result.conflicts.length, 0);
+    assert.ok(
+      isAncestor(fixture.origin, fixture.newForkTip, remoteTip(fixture.origin, "overlay/critical")),
+    );
+    assert.ok(
+      isAncestor(fixture.origin, fixture.newForkTip, remoteTip(fixture.origin, "feature/flaky")),
+    );
   });
 });
