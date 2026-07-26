@@ -52,6 +52,12 @@ export function buildHomeListFilterMenu(props: {
   readonly listOrganization?: boolean;
   /** When false, hide the project scope submenu (Board uses its own control). */
   readonly showProjectFilter?: boolean;
+  /**
+   * Recent/Projects: hide settled threads. When provided, the menu offers a
+   * toggle (Recent defaults on; Projects defaults off at the call site).
+   */
+  readonly hideSettledThreads?: boolean;
+  readonly onHideSettledThreadsChange?: (hide: boolean) => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -98,6 +104,16 @@ export function buildHomeListFilterMenu(props: {
           onPress: () => props.onProjectChange(project.key),
         })),
       ],
+    });
+  }
+
+  if (props.onHideSettledThreadsChange !== undefined && props.hideSettledThreads !== undefined) {
+    items.push({
+      type: "action",
+      title: "Hide settled",
+      subtitle: "Omit settled threads from this list",
+      state: props.hideSettledThreads ? "on" : "off",
+      onPress: () => props.onHideSettledThreadsChange?.(!props.hideSettledThreads),
     });
   }
 
