@@ -31,10 +31,8 @@ export interface Preferences {
    */
   readonly threadListV2Enabled?: boolean;
   /**
-   * When true (default), the classic home list / iPad sidebar show a
-   * cross-project **Needs attention** section (Working ∪ blocked Review).
-   * Key name is historical from the earlier "Recent work" toggle — keep for
-   * device preference continuity. Mobile has no client-settings sync.
+   * @deprecated Legacy toggle from Needs attention / Recent work UI (removed).
+   * Kept only so older device preference payloads still decode.
    */
   readonly recentWorkEnabled?: boolean;
 }
