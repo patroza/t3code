@@ -15,6 +15,7 @@ const candidate: ArchiveWorktreeCleanupCandidate = {
 
 function makeFlow(overrides?: {
   readonly previewCandidate?: () => Promise<ArchiveWorktreeCleanupCandidate | null>;
+  readonly removalPolicy?: "confirm" | "remove";
   readonly confirmation?: WorktreeCleanupConfirmation<{ readonly _tag: "Failure" }> | null;
   readonly archiveSucceeds?: boolean;
   readonly cleanupOutcome?: WorktreeCleanupOutcome;
@@ -35,6 +36,7 @@ function makeFlow(overrides?: {
   const run = () =>
     runArchiveWithWorktreeCleanup({
       previewCandidate: overrides?.previewCandidate ?? (async () => candidate),
+      removalPolicy: overrides?.removalPolicy ?? "confirm",
       confirmRemoval,
       archive,
       isArchiveSuccess: (result) => result._tag === "Success",
@@ -68,6 +70,17 @@ describe("runArchiveWithWorktreeCleanup", () => {
     await flow.run();
     expect(flow.archive).toHaveBeenCalledTimes(1);
     expect(flow.cleanup).not.toHaveBeenCalled();
+  });
+
+  it("removes the final active worktree without prompting when confirmation is disabled", async () => {
+    const flow = makeFlow({ removalPolicy: "remove", confirmation: null });
+    const outcome = await flow.run();
+    expect(outcome).toEqual({ kind: "archived", result: { _tag: "Success" } });
+    expect(flow.archive).toHaveBeenCalledTimes(1);
+    expect(flow.cleanup).toHaveBeenCalledTimes(1);
+    expect(flow.archive.mock.invocationCallOrder[0]).toBeLessThan(
+      flow.cleanup.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("archives without cleanup when the user declines", async () => {
@@ -154,6 +167,7 @@ describe("runArchiveWithWorktreeCleanup", () => {
           );
           return shared ? null : target;
         },
+        removalPolicy: "confirm",
         confirmRemoval: async ({ displayWorktreePath }) => {
           prompts.push(displayWorktreePath);
           return { kind: "declined" };
