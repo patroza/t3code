@@ -63,6 +63,14 @@ export const ListProjectionThreadsByProjectInput = Schema.Struct({
 });
 export type ListProjectionThreadsByProjectInput = typeof ListProjectionThreadsByProjectInput.Type;
 
+export const ProjectionThreadWorktreeReference = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  worktreePath: Schema.String,
+  archivedAt: Schema.NullOr(IsoDateTime),
+});
+export type ProjectionThreadWorktreeReference = typeof ProjectionThreadWorktreeReference.Type;
+
 /**
  * ProjectionThreadRepositoryShape - Service API for projected thread records.
  */
@@ -96,6 +104,19 @@ export interface ProjectionThreadRepositoryShape {
   readonly deleteById: (
     input: DeleteProjectionThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * List every nondeleted thread row that references a worktree path.
+   *
+   * Soft-deleted rows are excluded so they never count as worktree
+   * references; archived rows are included so callers can distinguish
+   * archived from active references. Path comparison is left to callers so
+   * they can apply the shared normalization helper.
+   */
+  readonly listWorktreeReferences: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadWorktreeReference>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**
