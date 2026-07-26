@@ -31,6 +31,7 @@ describe("buildGrokAcpSpawnInput", () => {
         XAI_API_KEY: "secret",
         GROK_OAUTH2_REFERRER: "t3code",
       },
+      extendEnv: false,
     });
   });
 });
