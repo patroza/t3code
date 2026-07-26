@@ -19,6 +19,8 @@ type ChildProcessCommand = {
   readonly args: ReadonlyArray<string>;
   readonly options: {
     readonly shell?: boolean | string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly extendEnv?: boolean;
   };
 };
 
@@ -80,6 +82,24 @@ const runWith =
     );
 
 describe("runProcess", () => {
+  it.effect("can launch with an exact non-extending environment", () => {
+    const environment = { PATH: "/project/bin", KEEP: "value" };
+    const spawner = makeSpawner((command) =>
+      Effect.sync(() => {
+        expect(command.options.env).toEqual(environment);
+        expect(command.options.extendEnv).toBe(false);
+        return makeHandle({ stdout: "ok" });
+      }),
+    );
+
+    return runWith(spawner)({
+      command: "/project/bin/direnv",
+      args: ["export", "json"],
+      env: environment,
+      extendEnv: false,
+    });
+  });
+
   it.effect("collects stdout through an injected ChildProcessSpawner", () =>
     Effect.gen(function* () {
       const spawner = makeSpawner((command) =>
