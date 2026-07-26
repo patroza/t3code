@@ -38,10 +38,11 @@ const DISK_FREE_MIN_GB = 2;
 const SENTRY_RSS_ALERT_MB = 512;
 const SENTRY_COUNT_ALERT = 2;
 const STUCK_RSS_ALERT_MB = 768;
+const JAEGER_ANON_ALERT_MB = 2 * 1024;
 /**
- * A process is "hot" when it holds ≥STUCK_RSS_ALERT_MB of RSS or averages
- * ≥SUSTAINED_CPU_PERCENT of a core, and it only alerts once it has stayed hot
- * for SUSTAINED_TICKS consecutive ticks.
+ * A process is "hot" when it exceeds its memory policy or averages at least
+ * SUSTAINED_CPU_PERCENT of a core, and it only alerts once it has stayed hot for
+ * SUSTAINED_TICKS consecutive ticks.
  *
  * This measures a *rate* (Δcpu / Δwall between ticks), not cumulative CPU time:
  * a long-lived-but-idle process (e.g. one that gathered 200s of CPU over hours
@@ -77,9 +78,36 @@ const RUNAWAY_PATTERNS: ReadonlyArray<{
 export interface ProcInfo {
   readonly pid: number;
   readonly rssMb: number;
+  readonly rssAnonMb: number;
+  readonly rssFileMb: number;
   readonly cpuSeconds: number;
   readonly cmd: string;
   readonly label: string;
+}
+
+export interface ProcMemoryPolicy {
+  readonly valueMb: number;
+  readonly thresholdMb: number;
+  readonly kind: "anonymous" | "rss";
+}
+
+export function memoryPolicyForProcess(
+  proc: ProcInfo,
+  defaultRssMbThreshold = STUCK_RSS_ALERT_MB,
+): ProcMemoryPolicy {
+  if (/(?:^|[/\s])jaeger(?:$|[/\s-])/i.test(proc.cmd)) {
+    const hasRssBreakdown = proc.rssAnonMb > 0 || proc.rssFileMb > 0;
+    return {
+      valueMb: hasRssBreakdown ? proc.rssAnonMb : proc.rssMb,
+      thresholdMb: JAEGER_ANON_ALERT_MB,
+      kind: hasRssBreakdown ? "anonymous" : "rss",
+    };
+  }
+  return {
+    valueMb: proc.rssMb,
+    thresholdMb: defaultRssMbThreshold,
+    kind: "rss",
+  };
 }
 
 /** Per-process tracker state carried between ticks to derive a CPU rate. */
@@ -96,6 +124,11 @@ export interface ProcSustainState {
 export interface SustainedHotProcess {
   readonly pid: number;
   readonly rssMb: number;
+  readonly rssAnonMb: number;
+  readonly rssFileMb: number;
+  readonly memoryValueMb: number;
+  readonly memoryThresholdMb: number;
+  readonly memoryKind: ProcMemoryPolicy["kind"];
   /** Average CPU over the last tick gap, as percent of a single core. */
   readonly cpuPercent: number;
   /** How long it has been continuously hot. */
@@ -116,6 +149,7 @@ export function trackSustainedHotProcesses(input: {
   readonly nowMs: number;
   readonly cpuPercentThreshold: number;
   readonly rssMbThreshold: number;
+  readonly memoryPolicyFor?: (proc: ProcInfo) => ProcMemoryPolicy;
   readonly sustainedTicks: number;
 }): {
   readonly next: Map<number, ProcSustainState>;
@@ -136,9 +170,14 @@ export function trackSustainedHotProcesses(input: {
         ? (Math.max(0, proc.cpuSeconds - previous.cpuSeconds) / (elapsedMs / 1_000)) * 100
         : null;
 
+    const memoryPolicy = input.memoryPolicyFor?.(proc) ?? {
+      valueMb: proc.rssMb,
+      thresholdMb: input.rssMbThreshold,
+      kind: "rss",
+    };
     const isHot =
       (cpuPercent !== null && cpuPercent >= input.cpuPercentThreshold) ||
-      proc.rssMb >= input.rssMbThreshold;
+      memoryPolicy.valueMb >= memoryPolicy.thresholdMb;
     const hotTicks = isHot ? (previous?.hotTicks ?? 0) + 1 : 0;
     const hotSinceMs = isHot
       ? previous?.hotTicks
@@ -157,6 +196,11 @@ export function trackSustainedHotProcesses(input: {
       hot.push({
         pid: proc.pid,
         rssMb: proc.rssMb,
+        rssAnonMb: proc.rssAnonMb,
+        rssFileMb: proc.rssFileMb,
+        memoryValueMb: memoryPolicy.valueMb,
+        memoryThresholdMb: memoryPolicy.thresholdMb,
+        memoryKind: memoryPolicy.kind,
         cpuPercent: cpuPercent ?? 0,
         sustainedMs: input.nowMs - hotSinceMs,
         label: proc.label,
@@ -164,7 +208,7 @@ export function trackSustainedHotProcesses(input: {
     }
   }
 
-  hot.sort((a, b) => b.cpuPercent - a.cpuPercent || b.rssMb - a.rssMb);
+  hot.sort((a, b) => b.cpuPercent - a.cpuPercent || b.memoryValueMb - a.memoryValueMb);
   return { next, hot: hot.slice(0, 8) };
 }
 
@@ -354,13 +398,32 @@ function readDisk(path: string): DiskInfo | null {
   }
 }
 
-function readRssMb(pid: number): number {
+export function parseProcMemoryStatus(status: string): {
+  readonly rssMb: number;
+  readonly rssAnonMb: number;
+  readonly rssFileMb: number;
+} {
+  const readMb = (field: string) => {
+    const match = new RegExp(`^${field}:\\s+(\\d+)\\s+kB`, "m").exec(status);
+    return match ? Number(match[1]) / 1024 : 0;
+  };
+  return {
+    rssMb: readMb("VmRSS"),
+    rssAnonMb: readMb("RssAnon"),
+    rssFileMb: readMb("RssFile"),
+  };
+}
+
+function readProcMemory(pid: number): {
+  readonly rssMb: number;
+  readonly rssAnonMb: number;
+  readonly rssFileMb: number;
+} {
   try {
     const status = NodeFS.readFileSync(`/proc/${pid}/status`, "utf8");
-    const match = /^VmRSS:\s+(\d+)\s+kB/m.exec(status);
-    return match ? Number(match[1]) / 1024 : 0;
+    return parseProcMemoryStatus(status);
   } catch {
-    return 0;
+    return { rssMb: 0, rssAnonMb: 0, rssFileMb: 0 };
   }
 }
 
@@ -414,9 +477,10 @@ function listProcesses(): ReadonlyArray<ProcInfo> {
     if (pid === process.pid) continue;
     const cmd = readCmdline(pid);
     if (cmd === "") continue;
+    const memory = readProcMemory(pid);
     out.push({
       pid,
-      rssMb: readRssMb(pid),
+      ...memory,
       cpuSeconds: readCpuSeconds(pid),
       cmd,
       label: shortCmd(cmd),
@@ -456,6 +520,7 @@ function listFatProcesses(
     nowMs,
     cpuPercentThreshold: SUSTAINED_CPU_PERCENT,
     rssMbThreshold: STUCK_RSS_ALERT_MB,
+    memoryPolicyFor: (proc) => memoryPolicyForProcess(proc, STUCK_RSS_ALERT_MB),
     sustainedTicks: SUSTAINED_TICKS,
   });
   sustainState = next;
@@ -803,13 +868,20 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           yield* postAlert(
             "stuck-proc",
             [
-              "**Sustained high RSS / CPU process(es)**",
-              ...fatNonRunaway.map(
-                (p) =>
-                  `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
-                  `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
-              ),
-              `_Sustained ≥${SUSTAINED_TICKS} ticks with RSS≥${STUCK_RSS_ALERT_MB}MiB or CPU≥${SUSTAINED_CPU_PERCENT}% of a core (not auto-killed)._`,
+              "**Sustained high memory / CPU process(es)**",
+              ...fatNonRunaway.map((p) => {
+                const memory =
+                  p.memoryKind === "anonymous"
+                    ? `anon=${p.rssAnonMb.toFixed(0)}MiB file-cache=${p.rssFileMb.toFixed(0)}MiB rss=${p.rssMb.toFixed(0)}MiB`
+                    : `rss=${p.rssMb.toFixed(0)}MiB`;
+                return (
+                  `• pid=${p.pid} ${memory} ` +
+                  `(memory alert ${p.memoryKind}≥${p.memoryThresholdMb.toFixed(0)}MiB) ` +
+                  `cpu≈${p.cpuPercent.toFixed(0)}% ` +
+                  `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`
+                );
+              }),
+              `_Sustained ≥${SUSTAINED_TICKS} ticks with process-specific high memory or CPU≥${SUSTAINED_CPU_PERCENT}% of a core (not auto-killed)._`,
             ].join("\n"),
           );
         }

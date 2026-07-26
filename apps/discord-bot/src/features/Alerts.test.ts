@@ -5,6 +5,8 @@ import {
   classifySessionLastError,
   formatAlertCause,
   isExpectedSessionLastError,
+  memoryPolicyForProcess,
+  parseProcMemoryStatus,
   selectSessionErrorsForAlert,
   sessionErrorAlertKey,
   trackSustainedHotProcesses,
@@ -20,6 +22,8 @@ const SUSTAINED_TICKS = 5;
 const proc = (over: Partial<ProcInfo> & { pid: number }): ProcInfo => ({
   pid: over.pid,
   rssMb: over.rssMb ?? 100,
+  rssAnonMb: over.rssAnonMb ?? 50,
+  rssFileMb: over.rssFileMb ?? 50,
   cpuSeconds: over.cpuSeconds ?? 0,
   cmd: over.cmd ?? `/bin/proc-${over.pid}`,
   label: over.label ?? `proc-${over.pid}`,
@@ -42,6 +46,7 @@ function run(
       nowMs: startMs + index * TICK_MS,
       cpuPercentThreshold: CPU_THRESHOLD,
       rssMbThreshold: RSS_THRESHOLD,
+      memoryPolicyFor: (process) => memoryPolicyForProcess(process, RSS_THRESHOLD),
       sustainedTicks: SUSTAINED_TICKS,
     });
     state = result.next;
@@ -126,6 +131,20 @@ describe("session last_error alert classification", () => {
 });
 
 describe("trackSustainedHotProcesses", () => {
+  it("parses total, anonymous, and file-backed RSS from proc status", () => {
+    expect(
+      parseProcMemoryStatus(`
+VmRSS:       1638400 kB
+RssAnon:      921600 kB
+RssFile:      716800 kB
+`),
+    ).toEqual({
+      rssMb: 1_600,
+      rssAnonMb: 900,
+      rssFileMb: 700,
+    });
+  });
+
   it("does not alert on a long-lived but idle process", () => {
     // The reported bug: a process with lots of cumulative CPU time that now barely
     // moves (a few seconds every tick) must never alert. +2s of CPU per 60s tick
@@ -173,7 +192,61 @@ describe("trackSustainedHotProcesses", () => {
     const hot = run(ticks).hot;
     expect(hot).toHaveLength(1);
     expect(hot[0]!.rssMb).toBe(900);
+    expect(hot[0]!.memoryKind).toBe("rss");
     expect(hot[0]!.cpuPercent).toBe(0);
+  });
+
+  it("ignores Jaeger file cache below the anonymous-memory threshold", () => {
+    const ticks = Array.from({ length: SUSTAINED_TICKS + 1 }, () => [
+      proc({
+        pid: 950,
+        rssMb: 3_000,
+        rssAnonMb: 900,
+        rssFileMb: 2_100,
+        cmd: "/cmd/jaeger/jaeger-linux --config=/etc/jaeger/config.yaml",
+      }),
+    ]);
+
+    expect(run(ticks).hot).toEqual([]);
+  });
+
+  it("alerts once Jaeger sustains 2 GiB of anonymous memory", () => {
+    const ticks = Array.from({ length: SUSTAINED_TICKS + 1 }, () => [
+      proc({
+        pid: 950,
+        rssMb: 3_000,
+        rssAnonMb: 2 * 1024,
+        rssFileMb: 952,
+        cmd: "/cmd/jaeger/jaeger-linux --config=/etc/jaeger/config.yaml",
+      }),
+    ]);
+
+    expect(run(ticks).hot).toEqual([
+      expect.objectContaining({
+        pid: 950,
+        memoryKind: "anonymous",
+        memoryValueMb: 2 * 1024,
+        memoryThresholdMb: 2 * 1024,
+      }),
+    ]);
+  });
+
+  it("falls back to total RSS when the kernel omits the Jaeger RSS breakdown", () => {
+    expect(
+      memoryPolicyForProcess(
+        proc({
+          pid: 950,
+          rssMb: 2 * 1024,
+          rssAnonMb: 0,
+          rssFileMb: 0,
+          cmd: "/cmd/jaeger/jaeger-linux",
+        }),
+      ),
+    ).toEqual({
+      valueMb: 2 * 1024,
+      thresholdMb: 2 * 1024,
+      kind: "rss",
+    });
   });
 
   it("treats a reused pid as a new process and resets its streak", () => {
