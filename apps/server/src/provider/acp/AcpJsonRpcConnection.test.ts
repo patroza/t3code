@@ -8,9 +8,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Sink from "effect/Sink";
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import { describe, expect } from "vite-plus/test";
 
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
@@ -22,6 +25,57 @@ const mockAgentCommand = "node";
 const mockAgentArgs = [mockAgentPath];
 
 describe("AcpSessionRuntime", () => {
+  it.effect("passes an exact environment to the ACP child when extension is disabled", () => {
+    let spawnedCommand: unknown;
+    const spawner = ChildProcessSpawner.make((command) => {
+      spawnedCommand = command;
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.never,
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.never,
+          stderr: Stream.never,
+          all: Stream.never,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.never,
+        }),
+      );
+    });
+    const exactEnvironment = { PATH: "/project/bin", KEEP: "value" };
+
+    return Layer.build(
+      AcpSessionRuntime.layer({
+        spawn: {
+          command: "/project/bin/agent",
+          args: ["acp"],
+          env: exactEnvironment,
+          extendEnv: false,
+        },
+        cwd: "/project",
+        clientInfo: { name: "t3-test", version: "0.0.0" },
+        authMethodId: "test",
+      }).pipe(
+        Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          const command = spawnedCommand as {
+            readonly options: { readonly env?: NodeJS.ProcessEnv; readonly extendEnv?: boolean };
+          };
+          expect(command.options.env).toEqual(exactEnvironment);
+          expect(command.options.extendEnv).toBe(false);
+        }),
+      ),
+      Effect.scoped,
+    );
+  });
+
   it.effect("merges custom initialize client capabilities into the ACP handshake", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
