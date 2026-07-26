@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationGetSnapshotError,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
@@ -41,6 +42,33 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
     : "Could not synchronize the thread.";
+}
+
+/**
+ * Extract a permanent snapshot-unavailable reason from a subscription failure.
+ * "thread-missing" is intentionally not returned: the projection row may just
+ * not be written yet (a freshly created thread), so it stays retriable.
+ */
+function terminalSnapshotReason(
+  cause: Cause.Cause<unknown>,
+): "thread-deleted" | "thread-archived" | undefined {
+  for (const reason of cause.reasons) {
+    if (reason._tag !== "Fail") {
+      continue;
+    }
+    const error: unknown = reason.error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { readonly _tag?: unknown })._tag === "OrchestrationGetSnapshotError"
+    ) {
+      const snapshotReason = (error as OrchestrationGetSnapshotError).reason;
+      if (snapshotReason === "thread-deleted" || snapshotReason === "thread-archived") {
+        return snapshotReason;
+      }
+    }
+  }
+  return undefined;
 }
 
 function shouldPersistThread(thread: OrchestrationThread): boolean {
@@ -302,8 +330,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         };
       }),
       {
-        onExpectedFailure: setStreamError,
+        // A permanently unavailable thread must not keep resubscribing: the
+        // server can never satisfy it, and the 250ms retry would hammer the
+        // socket until the state's idle TTL expires.
+        onExpectedFailure: (cause) =>
+          terminalSnapshotReason(cause) === "thread-deleted" ? setDeleted() : setStreamError(cause),
         retryExpectedFailureAfter: "250 millis",
+        isExpectedFailureTerminal: (cause) => terminalSnapshotReason(cause) !== undefined,
         resubscribe: foregroundResubscriptions,
       },
     ).pipe(Stream.runForEach(applyItem)),

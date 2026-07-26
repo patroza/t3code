@@ -722,6 +722,7 @@ const buildAppUnderTest = (options?: {
             getThreadShellById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getThreadLifecycleById: () => Effect.succeed(Option.none()),
             getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
@@ -5685,6 +5686,57 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(items[0]?.kind, "snapshot");
       assert.deepEqual(items[1], { kind: "synchronized" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "fails a thread subscription as permanently deleted when the thread row is deleted",
+    () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest({
+          layers: {
+            projectionSnapshotQuery: {
+              getThreadLifecycleById: () =>
+                Effect.succeed(
+                  Option.some({ deletedAt: "2026-01-01T00:00:01.000Z", archivedAt: null }),
+                ),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+              threadId: defaultThreadId,
+            }).pipe(Stream.runCollect),
+          ).pipe(Effect.result),
+        );
+
+        assertTrue(result._tag === "Failure");
+        assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
+        assert.equal(result.failure.reason, "thread-deleted");
+        assert.equal(result.failure.message, `Thread ${defaultThreadId} was deleted`);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("fails a thread subscription as retriable when no thread row exists yet", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({});
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+          }).pipe(Stream.runCollect),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
+      assert.equal(result.failure.reason, "thread-missing");
+      assert.equal(result.failure.message, `Thread ${defaultThreadId} was not found`);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
