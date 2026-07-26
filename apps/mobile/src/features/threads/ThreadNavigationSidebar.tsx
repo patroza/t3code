@@ -3,9 +3,10 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import { LegendList } from "@legendapp/list/react-native";
 import type { MenuAction } from "@react-native-menu/menu";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -25,7 +26,11 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
-import { mobilePreferencesAtom } from "../../state/preferences";
+import {
+  resolveHideSettledOnProjects,
+  resolveHideSettledOnRecent,
+} from "../../persistence/mobile-preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -197,6 +202,7 @@ function ThreadNavigationSidebarPane(
   const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
     useThreadListActions();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -226,6 +232,24 @@ function ThreadNavigationSidebarPane(
     options.listMode === "projects" &&
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
+  const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnRecent(preferencesResult.value)
+    : true;
+  const hideSettledOnProjects = AsyncResult.isSuccess(preferencesResult)
+    ? resolveHideSettledOnProjects(preferencesResult.value)
+    : false;
+  const hideSettledThreads =
+    options.listMode === "projects" ? hideSettledOnProjects : hideSettledOnRecent;
+  const setHideSettledThreads = useCallback(
+    (hide: boolean) => {
+      if (options.listMode === "projects") {
+        savePreferences({ hideSettledOnProjects: hide });
+        return;
+      }
+      savePreferences({ hideSettledOnRecent: hide });
+    },
+    [options.listMode, savePreferences],
+  );
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectScopes = useMemo(
     () =>
@@ -313,22 +337,6 @@ function ThreadNavigationSidebarPane(
             ),
           ),
     [pendingTasks, selectedProjectRefs],
-  );
-  const groups = useMemo(
-    () =>
-      options.listMode === "projects"
-        ? buildHomeThreadGroups({
-            projects: scopedProjects,
-            threads: scopedThreads,
-            pendingTasks: scopedPendingTasks,
-            selectedEnvironmentIds: options.selectedEnvironmentIds,
-            searchQuery: props.searchQuery,
-            projectSortOrder: options.projectSortOrder,
-            threadSortOrder: options.threadSortOrder,
-            projectGroupingMode: options.projectGroupingMode,
-          })
-        : [],
-    [options, props.searchQuery, scopedPendingTasks, scopedProjects, scopedThreads],
   );
   const recentEntries = useMemo(
     () =>
@@ -449,15 +457,17 @@ function ThreadNavigationSidebarPane(
   // next wake boundary re-runs the partition with a fresh clock so a woken
   // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
+  const needsSettlementClock =
+    threadListV2Enabled || options.listMode === "recent" || options.listMode === "projects";
   useEffect(() => {
-    if (!threadListV2Enabled) return;
+    if (!needsSettlementClock) return;
     // Refresh immediately on enable: the mount-time value can be hours old
     // by the time the beta is switched on, which would misclassify the
     // inactivity auto-settle boundary until the first tick.
     setNowMinute(new Date().toISOString().slice(0, 16));
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
-  }, [threadListV2Enabled]);
+  }, [needsSettlementClock]);
   // Threads on servers without the settlement capability never classify as
   // settled (the user could neither un-settle nor pin them).
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -480,14 +490,75 @@ function ThreadNavigationSidebarPane(
     return supported;
   }, [serverConfigs]);
 
+  const settledThreadKeys = useMemo(() => {
+    if (options.listMode === "board") {
+      return new Set<string>();
+    }
+    const now = `${nowMinute}:00.000Z`;
+    const keys = new Set<string>();
+    for (const thread of scopedThreads) {
+      if (thread.archivedAt !== null) continue;
+      if (!settlementEnvironmentIds.has(thread.environmentId)) continue;
+      if (
+        effectiveSettled(thread, {
+          now,
+          autoSettleAfterDays: 3,
+          changeRequestState: null,
+        })
+      ) {
+        keys.add(scopedThreadKey(thread.environmentId, thread.id));
+      }
+    }
+    return keys;
+  }, [nowMinute, options.listMode, scopedThreads, settlementEnvironmentIds]);
+
+  const threadsForProjectList = useMemo(() => {
+    if (!hideSettledThreads) return scopedThreads;
+    return scopedThreads.filter(
+      (thread) => !settledThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id)),
+    );
+  }, [hideSettledThreads, scopedThreads, settledThreadKeys]);
+
+  const visibleRecentEntries = useMemo(() => {
+    if (options.listMode !== "recent") return [];
+    return recentEntries.flatMap((entry) => {
+      const key = scopedThreadKey(entry.thread.environmentId, entry.thread.id);
+      if (hideSettledThreads && settledThreadKeys.has(key)) {
+        return [];
+      }
+      return [{ thread: entry.thread, projectTitle: entry.project.title }];
+    });
+  }, [hideSettledThreads, options.listMode, recentEntries, settledThreadKeys]);
+
+  const groups = useMemo(
+    () =>
+      options.listMode === "projects" && !threadListV2Enabled
+        ? buildHomeThreadGroups({
+            projects: scopedProjects,
+            threads: threadsForProjectList,
+            pendingTasks: scopedPendingTasks,
+            selectedEnvironmentIds: options.selectedEnvironmentIds,
+            searchQuery: props.searchQuery,
+            projectSortOrder: options.projectSortOrder,
+            threadSortOrder: options.threadSortOrder,
+            projectGroupingMode: options.projectGroupingMode,
+          })
+        : [],
+    [
+      options,
+      props.searchQuery,
+      scopedPendingTasks,
+      scopedProjects,
+      threadListV2Enabled,
+      threadsForProjectList,
+    ],
+  );
+
   const listLayout = useMemo(() => {
     if (options.listMode === "recent") {
       return buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
-        entries: recentEntries.map((entry) => ({
-          thread: entry.thread,
-          projectTitle: entry.project.title,
-        })),
+        entries: visibleRecentEntries,
       });
     }
     if (options.listMode !== "projects") {
@@ -503,14 +574,14 @@ function ThreadNavigationSidebarPane(
     groups,
     hasSearchQuery,
     options.listMode,
-    recentEntries,
     recentPendingEntries,
+    visibleRecentEntries,
   ]);
 
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
-    return buildThreadListV2Items({
+    const layout = buildThreadListV2Items({
       threads: threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: options.selectedEnvironmentIds,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -518,12 +589,19 @@ function ThreadNavigationSidebarPane(
       changeRequestStateByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      settledLimit: settledVisibleCount,
+      settledLimit: hideSettledThreads ? 0 : settledVisibleCount,
       now: `${nowMinute}:00.000Z`,
       snoozeNow: new Date().toISOString(),
     });
+    if (!hideSettledThreads) return layout;
+    return {
+      ...layout,
+      items: layout.items.filter((item) => item.variant === "card"),
+      hiddenSettledCount: 0,
+    };
   }, [
     changeRequestStateByKey,
+    hideSettledThreads,
     nowMinute,
     snoozeWakeTick,
     options.selectedEnvironmentIds,
@@ -637,6 +715,15 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
+      ...(options.listMode === "recent" || options.listMode === "projects"
+        ? ([
+            {
+              id: "hide-settled",
+              title: "Hide settled",
+              state: hideSettledThreads ? ("on" as const) : ("off" as const),
+            },
+          ] satisfies MenuAction[])
+        : []),
       // Sort controls only apply in Projects classic layout. v2/Recent/Board
       // use fixed order; environment multi-filter still scopes every mode.
       ...(listOrganization
@@ -664,6 +751,7 @@ function ThreadNavigationSidebarPane(
     ],
     [
       environments,
+      hideSettledThreads,
       listOrganization,
       options.listMode,
       options.projectSortOrder,
@@ -685,6 +773,10 @@ function ThreadNavigationSidebarPane(
           (candidate) => String(candidate.environmentId) === event.slice("environment:".length),
         );
         if (environment) toggleSelectedEnvironmentId(environment.environmentId);
+        return;
+      }
+      if (event === "hide-settled") {
+        setHideSettledThreads(!hideSettledThreads);
         return;
       }
       if (event === "project:all") {
@@ -716,7 +808,9 @@ function ThreadNavigationSidebarPane(
     [
       clearSelectedEnvironments,
       environments,
+      hideSettledThreads,
       projectFilterOptions,
+      setHideSettledThreads,
       setProjectSortOrder,
       setThreadSortOrder,
       toggleSelectedEnvironmentId,
@@ -960,6 +1054,7 @@ function ThreadNavigationSidebarPane(
           );
         case "thread": {
           const thread = item.thread;
+          const threadKey = scopedThreadKey(thread.environmentId, thread.id);
           return (
             <ThreadListRow
               variant="sidebar"
@@ -973,10 +1068,14 @@ function ThreadNavigationSidebarPane(
                 null
               }
               isLast={item.isLast}
-              selected={
-                scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
-              }
+              selected={threadKey === props.selectedThreadKey}
               fullSwipeWidth={props.width - 20}
+              settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+              isSettled={settledThreadKeys.has(threadKey)}
+              onSettleThread={(target) => {
+                void settleThread(target);
+              }}
+              onUnsettleThread={unsettleThread}
               onArchiveThread={archiveThread}
               onDeleteThread={confirmDeleteThread}
               onSelectThread={handleSelectThread}
@@ -1017,6 +1116,7 @@ function ThreadNavigationSidebarPane(
       serverConfigs,
       settleThread,
       settlementEnvironmentIds,
+      settledThreadKeys,
       showMoreSettled,
       sidebarScrollGesture,
       unsettleThread,
@@ -1028,6 +1128,8 @@ function ThreadNavigationSidebarPane(
   const filterCustomized =
     options.selectedEnvironmentIds.length > 0 ||
     selectedProjectKey !== null ||
+    ((options.listMode === "recent" || options.listMode === "projects") &&
+      hideSettledThreads !== (options.listMode === "recent")) ||
     (listOrganization && hasCustomHomeListOptions({ ...options, selectedProjectKey }));
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
@@ -1048,10 +1150,17 @@ function ThreadNavigationSidebarPane(
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization,
         showProjectFilter: options.listMode !== "board",
+        ...(options.listMode === "recent" || options.listMode === "projects"
+          ? {
+              hideSettledThreads,
+              onHideSettledThreadsChange: setHideSettledThreads,
+            }
+          : {}),
       }),
     [
       clearSelectedEnvironments,
       environments,
+      hideSettledThreads,
       listOrganization,
       options.listMode,
       options.projectSortOrder,
@@ -1059,6 +1168,7 @@ function ThreadNavigationSidebarPane(
       options.threadSortOrder,
       projectFilterOptions,
       selectedProjectKey,
+      setHideSettledThreads,
       setProjectSortOrder,
       setThreadSortOrder,
       toggleSelectedEnvironmentId,
