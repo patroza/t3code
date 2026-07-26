@@ -186,6 +186,19 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Read a thread's lifecycle markers regardless of its deleted/archived
+   * state. Lets callers that got no active row distinguish a thread that was
+   * deleted or archived (permanent) from one whose projection row does not
+   * exist (possibly not projected yet).
+   */
+  readonly getThreadLifecycleById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<
+    Option.Option<{ readonly deletedAt: string | null; readonly archivedAt: string | null }>,
+    ProjectionRepositoryError
+  >;
 }
 
 /**
