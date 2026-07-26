@@ -39,6 +39,18 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings worktree removal confirmation", () => {
+  it("defaults confirmation on for existing settings", () => {
+    expect(decodeClientSettings({}).confirmWorktreeRemoval).toBe(true);
+  });
+
+  it("accepts confirmation updates", () => {
+    expect(
+      decodeClientSettingsPatch({ confirmWorktreeRemoval: false }).confirmWorktreeRemoval,
+    ).toBe(false);
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);
