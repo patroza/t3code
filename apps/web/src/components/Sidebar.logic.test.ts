@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
+  buildSidebarV2ThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -17,6 +18,7 @@ import {
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarV2Status,
+  resolveSidebarV2TopStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   formatWorkingDurationLabel,
@@ -160,6 +162,90 @@ describe("buildMultiSelectThreadContextMenuItems", () => {
     expect(
       buildMultiSelectThreadContextMenuItems({ count: 2, hasRunningThread: true }),
     ).toContainEqual({ id: "archive", label: "Archive (2)", disabled: true });
+  });
+});
+
+describe("buildSidebarV2ThreadContextMenuItems", () => {
+  const baseInput = {
+    branch: null,
+    supportsSettlement: false,
+    isSettled: false,
+    supportsSnooze: false,
+    isSnoozed: false,
+    canSnoozeNow: true,
+    snoozePresets: [],
+  } as const;
+
+  it("offers settlement actions matching the thread's state and server support", () => {
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        ...baseInput,
+        supportsSettlement: true,
+      })[0],
+    ).toEqual({ id: "settle", label: "Settle thread" });
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        ...baseInput,
+        supportsSettlement: true,
+        isSettled: true,
+      })[0],
+    ).toEqual({ id: "unsettle", label: "Un-settle thread" });
+    expect(buildSidebarV2ThreadContextMenuItems(baseInput)).toEqual([
+      { id: "rename", label: "Rename thread" },
+      { id: "mark-unread", label: "Mark unread" },
+      { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+    ]);
+  });
+
+  it("leads with a new-thread item for the thread's branch", () => {
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        ...baseInput,
+        branch: "feature/login",
+        supportsSettlement: true,
+      })[0],
+    ).toEqual({ id: "new-thread-on-branch", label: "New thread on feature/login" });
+  });
+
+  it("offers snooze presets when supported, disabled while the thread blocks on the user", () => {
+    const presets = [
+      {
+        id: "hour",
+        label: "In 1 hour",
+        whenLabel: "10:00 AM",
+        snoozedUntil: "2026-07-24T10:00:00.000Z",
+      },
+    ] as const;
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        ...baseInput,
+        supportsSnooze: true,
+        snoozePresets: presets,
+      })[0],
+    ).toEqual({
+      id: "snooze",
+      label: "Snooze",
+      disabled: false,
+      children: [{ id: "snooze:hour", label: "In 1 hour (10:00 AM)" }],
+    });
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        ...baseInput,
+        supportsSnooze: true,
+        canSnoozeNow: false,
+        snoozePresets: presets,
+      })[0],
+    ).toMatchObject({ id: "snooze", disabled: true });
+  });
+
+  it("offers wake instead of snooze for a snoozed thread", () => {
+    expect(
+      buildSidebarV2ThreadContextMenuItems({
+        ...baseInput,
+        supportsSnooze: true,
+        isSnoozed: true,
+      })[0],
+    ).toEqual({ id: "unsnooze", label: "Wake thread" });
   });
 });
 
@@ -651,6 +737,21 @@ describe("resolveSidebarV2Status", () => {
 
   it("defaults to ready with no session", () => {
     expect(resolveSidebarV2Status({ ...idle, session: null })).toBe("ready");
+  });
+});
+
+describe("resolveSidebarV2TopStatus", () => {
+  it("labels ready threads Done only when they carry an unread completion", () => {
+    expect(resolveSidebarV2TopStatus({ status: "ready", isUnread: true })).toMatchObject({
+      label: "Done",
+      icon: "done",
+    });
+    expect(resolveSidebarV2TopStatus({ status: "ready", isUnread: false })).toBeNull();
+    // Unread only matters for ready threads; active statuses keep their label.
+    expect(resolveSidebarV2TopStatus({ status: "working", isUnread: true })).toMatchObject({
+      label: "Working",
+      icon: "working",
+    });
   });
 });
 
