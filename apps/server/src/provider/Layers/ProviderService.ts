@@ -10,7 +10,6 @@
  * @module ProviderServiceLive
  */
 import {
-  ModelSelection,
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
@@ -55,7 +54,12 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
-const isModelSelection = Schema.is(ModelSelection);
+import {
+  makeProviderRestartRecoveryMarker,
+  readPersistedProviderActiveTurnId,
+  readPersistedProviderCwd,
+  readPersistedProviderModelSelection,
+} from "../ProviderRestartRecovery.ts";
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -123,8 +127,10 @@ function toRuntimePayloadFromSession(
   session: ProviderSession,
   extra?: {
     readonly modelSelection?: unknown;
+    readonly interactionMode?: unknown;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
+    readonly restartRecovery?: unknown;
   },
 ): Record<string, unknown> {
   return {
@@ -133,33 +139,13 @@ function toRuntimePayloadFromSession(
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
+    ...(extra?.interactionMode !== undefined ? { interactionMode: extra.interactionMode } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
       : {}),
+    ...(extra?.restartRecovery !== undefined ? { restartRecovery: extra.restartRecovery } : {}),
   };
-}
-
-function readPersistedModelSelection(
-  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
-): ModelSelection | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
-  return isModelSelection(raw) ? raw : undefined;
-}
-
-function readPersistedCwd(
-  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
-  if (typeof rawCwd !== "string") return undefined;
-  const trimmed = rawCwd.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 const dieOnMissingBindingInstanceId = (
@@ -238,6 +224,73 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.asVoid,
     );
 
+  const persistRuntimeEventState = Effect.fn("persistRuntimeEventState")(function* (
+    event: ProviderRuntimeEvent,
+  ) {
+    const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+    if (!binding || event.providerInstanceId === undefined) return;
+    if (binding.providerInstanceId !== event.providerInstanceId) {
+      yield* Effect.logWarning("provider runtime event ignored for stale persisted instance", {
+        threadId: event.threadId,
+        eventType: event.type,
+        eventProviderInstanceId: event.providerInstanceId,
+        bindingProviderInstanceId: binding.providerInstanceId,
+      });
+      return;
+    }
+
+    const persistedActiveTurnId = readPersistedProviderActiveTurnId(binding.runtimePayload);
+    const lifecycle = (() => {
+      switch (event.type) {
+        case "turn.started":
+          return event.turnId === undefined
+            ? { status: "running" as const }
+            : { status: "running" as const, activeTurnId: event.turnId };
+        case "turn.completed":
+        case "turn.aborted":
+          if (
+            persistedActiveTurnId !== undefined &&
+            (event.turnId === undefined || event.turnId !== persistedActiveTurnId)
+          ) {
+            return undefined;
+          }
+          return { status: "running" as const, activeTurnId: null };
+        case "session.exited":
+          return { status: "stopped" as const, activeTurnId: null };
+        case "session.state.changed":
+          switch (event.payload.state) {
+            case "starting":
+              return { status: "starting" as const };
+            case "error":
+              return { status: "error" as const, activeTurnId: null };
+            case "stopped":
+              return { status: "stopped" as const, activeTurnId: null };
+            case "ready":
+            case "waiting":
+              return { status: "running" as const, activeTurnId: null };
+            case "running":
+              return { status: "running" as const };
+          }
+        default:
+          return undefined;
+      }
+    })();
+    if (lifecycle === undefined) return;
+
+    yield* directory.upsert({
+      threadId: event.threadId,
+      provider: binding.provider,
+      providerInstanceId: event.providerInstanceId,
+      ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+      status: lifecycle.status,
+      runtimePayload: {
+        ...(lifecycle.activeTurnId !== undefined ? { activeTurnId: lifecycle.activeTurnId } : {}),
+        lastRuntimeEvent: event.type,
+        lastRuntimeEventAt: event.createdAt,
+      },
+    });
+  });
+
   const requireBindingInstanceId = (
     operation: string,
     payload: {
@@ -261,8 +314,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     threadId: ThreadId,
     extra?: {
       readonly modelSelection?: unknown;
+      readonly interactionMode?: unknown;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
+      readonly restartRecovery?: unknown;
     },
   ) =>
     Effect.gen(function* () {
@@ -293,7 +348,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        }).pipe(
+          Effect.andThen(
+            persistRuntimeEventState(canonicalEvent).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to persist provider runtime lifecycle event", {
+                  threadId: canonicalEvent.threadId,
+                  eventType: canonicalEvent.type,
+                  cause,
+                }),
+              ),
+            ),
+          ),
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+        ),
       ),
     );
 
@@ -394,8 +462,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         );
       }
 
-      const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
-      const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const persistedCwd = readPersistedProviderCwd(input.binding.runtimePayload);
+      const persistedModelSelection = readPersistedProviderModelSelection(
+        input.binding.runtimePayload,
+      );
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
       const resumed = yield* adapter
@@ -568,7 +638,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const effectiveCwd =
           input.cwd ??
           (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? readPersistedCwd(persistedBinding.runtimePayload)
+            ? readPersistedProviderCwd(persistedBinding.runtimePayload)
             : undefined);
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
@@ -688,7 +758,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
         runtimePayload: {
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
           activeTurnId: turn.turnId,
+          restartRecovery: null,
           lastRuntimeEvent: "provider.sendTurn",
           lastRuntimeEventAt: yield* nowIso,
         },
@@ -857,6 +931,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            restartRecovery: null,
           },
         });
         yield* analytics.record("provider.session.stopped", {
@@ -1022,12 +1097,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ),
     ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
     yield* Effect.forEach(activeSessions, (session) =>
-      Effect.flatMap(nowIso, (lastRuntimeEventAt) =>
-        upsertSessionBinding(session, session.threadId, {
+      Effect.flatMap(nowIso, (lastRuntimeEventAt) => {
+        const wasWorking = session.status === "connecting" || session.status === "running";
+        return upsertSessionBinding(session, session.threadId, {
           lastRuntimeEvent: "provider.stopAll",
           lastRuntimeEventAt,
-        }),
-      ),
+          restartRecovery: wasWorking
+            ? makeProviderRestartRecoveryMarker({
+                interruptedProviderTurnId: session.activeTurnId,
+                shutdownAt: lastRuntimeEventAt,
+              })
+            : null,
+        });
+      }),
     ).pipe(Effect.asVoid);
     yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
