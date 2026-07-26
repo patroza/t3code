@@ -1,13 +1,13 @@
-# Private fork workflow
+# Downstream fork workflow
 
-This repository separates upstream history, private changes, temporary review branches, and the
+This repository separates upstream history, downstream changes, temporary review branches, and the
 runnable build:
 
 ```text
 pingdotgg/t3code:main
     └── fork/tim                 selected Tim Smart PRs
             └── fork/candidates  selected open upstream PRs
-                    └── fork/changes     our private changes
+                    └── fork/changes     our downstream changes
                             ├── ordinary feature PRs
                             ├── registered draft overlays
                             └── fork/integration   changes + overlays, tested/deployed
@@ -16,7 +16,7 @@ pingdotgg/t3code:main
 `main` mirrors `pingdotgg/t3code:main`. `fork/tim` is a linear provenance layer with one commit per
 selected Tim Smart PR and a permanently open PR against `main`. `fork/candidates` is a temporary
 upstream-provenance layer with one commit per selected open upstream PR and a permanently open PR
-against `fork/tim`. `fork/changes` is the GitHub default branch and canonical private layer, with a
+against `fork/tim`. `fork/changes` is the GitHub default branch and canonical downstream layer, with a
 permanently open PR against `fork/candidates`.
 `fork/integration` is generated from the reviewed layers plus registered integration overlays and
 is used by running instances.
@@ -224,7 +224,7 @@ Do not merge an external branch wholesale. For every import PR, document:
 - provenance using fully qualified links such as `tim-smart/t3code#17`.
 
 Merge the import with squash so `fork/tim` gains exactly one provenance commit. Adjustments for our
-environment use a separate normal PR against `fork/changes`; never hide private policy inside the
+environment use a separate normal PR against `fork/changes`; never hide downstream policy inside the
 Tim layer. A later Tim update is compared against both the prior provenance commit and our
 adjustment, and automation never overwrites local decisions.
 
@@ -260,16 +260,16 @@ candidate must not remove adaptations that belong to `fork/changes`.
 ## Upstreamable changes
 
 Every feature lands in `fork/changes`; upstreamability is a clean projection, not an alternative
-home. Closing or rejecting an upstream PR therefore never removes the private implementation.
+home. Closing or rejecting an upstream PR therefore never removes the downstream implementation.
 
-After the private PR merges, promote it onto real upstream history:
+After the downstream PR merges, promote it onto real upstream history:
 
 ```sh
-pnpm fork:stack promote <private-pr-number> upstream/portable-feature
-# remove private assumptions from the staged extraction, test, and commit
+pnpm fork:stack promote <downstream-pr-number> upstream/portable-feature
+# remove downstream-only assumptions from the staged extraction, test, and commit
 ```
 
-The command creates a branch from upstream `main` and stages the private PR's commits without
+The command creates a branch from upstream `main` and stages the downstream PR's commits without
 committing, allowing the projection to be simplified before opening it to `pingdotgg/t3code:main`:
 
 ```sh
@@ -279,7 +279,7 @@ gh pr create \
   --head patroza:upstream/portable-feature
 ```
 
-For work that began upstream-first, adopt its clean branch into the private fork:
+For work that began upstream-first, adopt its clean branch into the downstream fork:
 
 ```sh
 pnpm fork:stack adopt upstream/portable-feature adopt/portable-feature
@@ -287,13 +287,13 @@ pnpm fork:stack adopt upstream/portable-feature adopt/portable-feature
 ```
 
 If the upstream proposal is withdrawn, demotion closes only the projection and cross-links the
-private source:
+downstream source:
 
 ```sh
-pnpm fork:stack demote <upstream-pr-number> <private-pr-number>
+pnpm fork:stack demote <upstream-pr-number> <downstream-pr-number>
 ```
 
-Never rebase the private branch onto `main`. Promotion creates an independently reviewable upstream
+Never rebase the downstream branch onto `main`. Promotion creates an independently reviewable upstream
 implementation while `fork/changes` remains canonical. Select `main` in T3, or use
 `start-upstream`, only for deliberately upstream-first work.
 
