@@ -45,6 +45,11 @@ Landing an overlay is deliberate: remove its manifest entry in the same reviewed
 the implementation in `fork/changes`, then verify that the resulting `fork/integration` tree is
 unchanged.
 
+Some overlays also own complete client integrations. Their path ownership and change-routing rules
+live in [client-overlays.md](./client-overlays.md). Check that ownership before starting ordinary
+work so Discord, VS Code, and desktop-link changes do not accidentally leak back into
+`fork/changes`.
+
 ## Updating from upstream
 
 Do not use GitHub's **Sync fork** button, create a PR into this repository's `main`, or push `main`
