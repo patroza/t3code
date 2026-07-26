@@ -47,6 +47,7 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "../home/homeListItems";
+import { buildHomeRecentWorkEntries } from "../home/homeRecentWork";
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -61,6 +62,7 @@ import {
   PendingTaskListRow,
   ThreadListGroupHeader,
   ThreadListRow,
+  ThreadListSectionHeader,
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import { ThreadListV2Row } from "./thread-list-v2-items";
@@ -200,6 +202,11 @@ function ThreadNavigationSidebarPane(
   const threadListV2Enabled =
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
+  // Default on — mirrors web `sidebarRecentThreadsEnabled`. Classic list only.
+  const recentWorkEnabled = AsyncResult.isSuccess(preferencesResult)
+    ? preferencesResult.value.recentWorkEnabled !== false
+    : true;
+  const [recentWorkExpanded, setRecentWorkExpanded] = useState(false);
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -334,14 +341,55 @@ function ThreadNavigationSidebarPane(
     });
   }, []);
   const hasSearchQuery = props.searchQuery.trim().length > 0;
+  const recentWorkEntries = useMemo(() => {
+    if (!recentWorkEnabled || threadListV2Enabled) return [];
+    return buildHomeRecentWorkEntries({
+      projects: scopedProjects,
+      threads: scopedThreads,
+      environmentId: options.selectedEnvironmentId,
+      projectRefKeys: selectedProjectRefs,
+      searchQuery: props.searchQuery,
+    });
+  }, [
+    options.selectedEnvironmentId,
+    props.searchQuery,
+    recentWorkEnabled,
+    scopedProjects,
+    scopedThreads,
+    selectedProjectRefs,
+    threadListV2Enabled,
+  ]);
+  const recentExpandResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const lastRecentExpandResetKeyRef = useRef(recentExpandResetKey);
+  if (lastRecentExpandResetKeyRef.current !== recentExpandResetKey) {
+    lastRecentExpandResetKeyRef.current = recentExpandResetKey;
+    if (recentWorkExpanded) {
+      setRecentWorkExpanded(false);
+    }
+  }
+  const toggleRecentWorkExpanded = useCallback(() => {
+    setRecentWorkExpanded((current) => !current);
+  }, []);
   const listLayout = useMemo(
     () =>
       buildHomeListLayout({
         groups,
         displayStates: groupDisplayStates,
         showAllThreads: hasSearchQuery,
+        recentWork:
+          recentWorkEnabled && !threadListV2Enabled && recentWorkEntries.length > 0
+            ? { entries: recentWorkEntries, expanded: recentWorkExpanded }
+            : null,
       }),
-    [groups, groupDisplayStates, hasSearchQuery],
+    [
+      groups,
+      groupDisplayStates,
+      hasSearchQuery,
+      recentWorkEnabled,
+      recentWorkEntries,
+      recentWorkExpanded,
+      threadListV2Enabled,
+    ],
   );
   const projectCwdByKey = useMemo(() => {
     const map = new Map<string, string>();
@@ -823,6 +871,45 @@ function ThreadNavigationSidebarPane(
               </Text>
             </Pressable>
           );
+        case "recent-header":
+          return <ThreadListSectionHeader variant="sidebar" title="Recent" />;
+        case "recent-thread": {
+          const thread = item.thread;
+          return (
+            <ThreadListRow
+              variant="sidebar"
+              thread={thread}
+              projectTitle={item.projectTitle}
+              environmentLabel={
+                savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
+              }
+              projectCwd={
+                projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
+                null
+              }
+              isLast={item.isLast}
+              selected={
+                scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
+              }
+              fullSwipeWidth={props.width - 20}
+              onArchiveThread={archiveThread}
+              onDeleteThread={confirmDeleteThread}
+              onSelectThread={handleSelectThread}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
+              simultaneousSwipeGesture={sidebarScrollGesture}
+            />
+          );
+        }
+        case "recent-show-more":
+          return (
+            <ThreadListShowMoreRow
+              variant="sidebar"
+              hiddenCount={item.hiddenCount}
+              canShowLess={item.canShowLess}
+              onToggleExpanded={toggleRecentWorkExpanded}
+            />
+          );
         case "header":
           return (
             <ThreadListGroupHeader
@@ -915,6 +1002,7 @@ function ThreadNavigationSidebarPane(
       settlementEnvironmentIds,
       showMoreSettled,
       sidebarScrollGesture,
+      toggleRecentWorkExpanded,
       unsettleThread,
       updateGroupDisplay,
     ],
