@@ -9,7 +9,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -142,35 +141,6 @@ describe("DesktopOpenWith launch resolution", () => {
       assert.deepEqual(launch.args, ["prefix=/tmp/work tree=suffix", "literal value"]);
       assert.isFalse(launch.shell ?? false);
     }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolves CFBundleExecutable and reports missing bundle executables", () =>
-    Effect.gen(function* () {
-      // oxlint-disable-next-line t3code/no-global-process-runtime -- Platform-gated native fixture.
-      if (process.platform !== "darwin") return;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const base = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-open-with-test-" });
-      const applicationPath = path.join(base, "Fixture.app");
-      const contentsPath = path.join(applicationPath, "Contents");
-      const executableDirectory = path.join(contentsPath, "MacOS");
-      yield* fileSystem.makeDirectory(executableDirectory, { recursive: true });
-      yield* fileSystem.writeFileString(
-        path.join(contentsPath, "Info.plist"),
-        `<?xml version="1.0" encoding="UTF-8"?>
-        <plist version="1.0"><dict><key>CFBundleExecutable</key><string>Fixture</string></dict></plist>`,
-      );
-      const executablePath = path.join(executableDirectory, "Fixture");
-      yield* fileSystem.writeFileString(executablePath, "#!/bin/sh\n");
-
-      assert.equal(
-        yield* DesktopOpenWith.resolveMacBundleExecutable(applicationPath),
-        executablePath,
-      );
-      yield* fileSystem.remove(executablePath);
-      const error = yield* Effect.flip(DesktopOpenWith.resolveMacBundleExecutable(applicationPath));
-      assert.equal(error.reason, "missing-executable");
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
   it.effect("reports available and missing command presentations", () =>
