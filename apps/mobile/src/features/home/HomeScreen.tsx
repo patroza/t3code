@@ -54,7 +54,7 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "./homeListItems";
-import { buildHomeRecentWorkEntries } from "./homeRecentWork";
+import { buildHomeNeedsAttentionEntries } from "./homeNeedsAttention";
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
@@ -187,12 +187,12 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Enabled =
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
-  // Default on — mirrors web `sidebarRecentThreadsEnabled`. Classic list only;
-  // Thread List v2 is already a recency-first flat list.
-  const recentWorkEnabled = AsyncResult.isSuccess(preferencesResult)
+  // Default on. Classic list only — Thread List v2 already surfaces active work.
+  // Preference key remains `recentWorkEnabled` so existing toggles migrate.
+  const needsAttentionEnabled = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.recentWorkEnabled !== false
     : true;
-  const [recentWorkExpanded, setRecentWorkExpanded] = useState(false);
+  const [needsAttentionExpanded, setNeedsAttentionExpanded] = useState(false);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -344,58 +344,6 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const hasSearchQuery = props.searchQuery.trim().length > 0;
-  const recentWorkEntries = useMemo(() => {
-    if (!recentWorkEnabled || threadListV2Enabled) return [];
-    return buildHomeRecentWorkEntries({
-      projects: scopedProjects,
-      threads: scopedThreads,
-      environmentId: props.selectedEnvironmentId,
-      projectRefKeys: selectedProjectRefKeys,
-      searchQuery: props.searchQuery,
-    });
-  }, [
-    props.searchQuery,
-    props.selectedEnvironmentId,
-    recentWorkEnabled,
-    scopedProjects,
-    scopedThreads,
-    selectedProjectRefKeys,
-    threadListV2Enabled,
-  ]);
-  // Reset expand when the filter context changes so a deep expand never
-  // carries across environment / project / search flips.
-  const recentExpandResetKey = `${props.selectedEnvironmentId ?? "all"}:${props.selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
-  const lastRecentExpandResetKeyRef = useRef(recentExpandResetKey);
-  if (lastRecentExpandResetKeyRef.current !== recentExpandResetKey) {
-    lastRecentExpandResetKeyRef.current = recentExpandResetKey;
-    if (recentWorkExpanded) {
-      setRecentWorkExpanded(false);
-    }
-  }
-  const listLayout = useMemo(
-    () =>
-      buildHomeListLayout({
-        groups: projectGroups,
-        displayStates: effectiveGroupDisplayStates,
-        showAllThreads: hasSearchQuery,
-        recentWork:
-          recentWorkEnabled && !threadListV2Enabled && recentWorkEntries.length > 0
-            ? { entries: recentWorkEntries, expanded: recentWorkExpanded }
-            : null,
-      }),
-    [
-      projectGroups,
-      effectiveGroupDisplayStates,
-      hasSearchQuery,
-      recentWorkEnabled,
-      recentWorkEntries,
-      recentWorkExpanded,
-      threadListV2Enabled,
-    ],
-  );
-  const toggleRecentWorkExpanded = useCallback(() => {
-    setRecentWorkExpanded((current) => !current);
-  }, []);
 
   const projectCwdByKey = useMemo(() => {
     const map = new Map<string, string>();
@@ -558,6 +506,63 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     return supported;
   }, [serverConfigs]);
+
+  const needsAttentionEntries = useMemo(() => {
+    if (!needsAttentionEnabled || threadListV2Enabled) return [];
+    return buildHomeNeedsAttentionEntries({
+      projects: scopedProjects,
+      threads: scopedThreads,
+      environmentId: props.selectedEnvironmentId,
+      projectRefKeys: selectedProjectRefKeys,
+      searchQuery: props.searchQuery,
+      settlementEnvironmentIds,
+      snoozeEnvironmentIds,
+    });
+  }, [
+    needsAttentionEnabled,
+    props.searchQuery,
+    props.selectedEnvironmentId,
+    scopedProjects,
+    scopedThreads,
+    selectedProjectRefKeys,
+    settlementEnvironmentIds,
+    snoozeEnvironmentIds,
+    threadListV2Enabled,
+  ]);
+  // Reset expand when the filter context changes so a deep expand never
+  // carries across environment / project / search flips.
+  const attentionExpandResetKey = `${props.selectedEnvironmentId ?? "all"}:${props.selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const lastAttentionExpandResetKeyRef = useRef(attentionExpandResetKey);
+  if (lastAttentionExpandResetKeyRef.current !== attentionExpandResetKey) {
+    lastAttentionExpandResetKeyRef.current = attentionExpandResetKey;
+    if (needsAttentionExpanded) {
+      setNeedsAttentionExpanded(false);
+    }
+  }
+  const listLayout = useMemo(
+    () =>
+      buildHomeListLayout({
+        groups: projectGroups,
+        displayStates: effectiveGroupDisplayStates,
+        showAllThreads: hasSearchQuery,
+        needsAttention:
+          needsAttentionEnabled && !threadListV2Enabled && needsAttentionEntries.length > 0
+            ? { entries: needsAttentionEntries, expanded: needsAttentionExpanded }
+            : null,
+      }),
+    [
+      projectGroups,
+      effectiveGroupDisplayStates,
+      hasSearchQuery,
+      needsAttentionEnabled,
+      needsAttentionEntries,
+      needsAttentionExpanded,
+      threadListV2Enabled,
+    ],
+  );
+  const toggleNeedsAttentionExpanded = useCallback(() => {
+    setNeedsAttentionExpanded((current) => !current);
+  }, []);
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
@@ -725,9 +730,9 @@ export function HomeScreen(props: HomeScreenProps) {
   const renderItem = useCallback(
     ({ item }: LegendListRenderItemProps<HomeListItem>) => {
       switch (item.type) {
-        case "recent-header":
-          return <ThreadListSectionHeader variant="compact" title="Recent" />;
-        case "recent-thread": {
+        case "attention-header":
+          return <ThreadListSectionHeader variant="compact" title="Needs attention" />;
+        case "attention-thread": {
           const thread = item.thread;
           return (
             <ThreadListRow
@@ -750,13 +755,13 @@ export function HomeScreen(props: HomeScreenProps) {
             />
           );
         }
-        case "recent-show-more":
+        case "attention-show-more":
           return (
             <ThreadListShowMoreRow
               variant="compact"
               hiddenCount={item.hiddenCount}
               canShowLess={item.canShowLess}
-              onToggleExpanded={toggleRecentWorkExpanded}
+              onToggleExpanded={toggleNeedsAttentionExpanded}
             />
           );
         case "header":
@@ -837,7 +842,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
-      toggleRecentWorkExpanded,
+      toggleNeedsAttentionExpanded,
       updateGroupDisplay,
     ],
   );
