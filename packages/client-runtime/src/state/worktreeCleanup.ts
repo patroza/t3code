@@ -2,11 +2,10 @@
  * Shared archive-time worktree cleanup flow.
  *
  * The server owns the safety decision (preview + conditional cleanup RPCs);
- * this module owns the client sequencing shared by web and mobile: prompt
- * only when the server reports a candidate and a confirmation surface
- * exists, archive regardless of the answer, run cleanup only after a
- * confirmed archive, and report cleanup problems without failing the
- * archive itself.
+ * this module owns the client sequencing shared by web and mobile: act only
+ * when the server reports a candidate, optionally confirm based on client
+ * policy, archive before cleanup, and report cleanup problems without
+ * failing the archive itself.
  */
 import type { WorktreeCleanupStatus } from "@t3tools/contracts";
 
@@ -41,10 +40,14 @@ export type ArchiveWithWorktreeCleanupResult<TArchive, TAbort> =
   | { readonly kind: "archived"; readonly result: TArchive }
   | { readonly kind: "aborted"; readonly result: TAbort };
 
+export type WorktreeRemovalPolicy = "confirm" | "remove";
+
 export async function runArchiveWithWorktreeCleanup<TArchive, TAbort = never>(input: {
   /** Server-authoritative preview; null when ineligible or when the preview failed. */
   readonly previewCandidate: () => Promise<ArchiveWorktreeCleanupCandidate | null>;
-  /** Confirmation surface, or null when none is available (no prompt, no cleanup). */
+  /** Whether an eligible worktree is confirmed first or removed automatically. */
+  readonly removalPolicy: WorktreeRemovalPolicy;
+  /** Confirmation surface, or null when none is available. */
   readonly confirmRemoval:
     | ((prompt: {
         readonly candidate: ArchiveWorktreeCleanupCandidate;
@@ -60,13 +63,17 @@ export async function runArchiveWithWorktreeCleanup<TArchive, TAbort = never>(in
   const candidate = await input.previewCandidate();
   let shouldCleanup = false;
   let displayWorktreePath: string | null = null;
-  if (candidate && input.confirmRemoval) {
+  if (candidate) {
     displayWorktreePath = formatWorktreePathForDisplay(candidate.worktreePath);
-    const confirmation = await input.confirmRemoval({ candidate, displayWorktreePath });
-    if (confirmation.kind === "aborted") {
-      return { kind: "aborted", result: confirmation.result };
+    if (input.removalPolicy === "remove") {
+      shouldCleanup = true;
+    } else if (input.confirmRemoval) {
+      const confirmation = await input.confirmRemoval({ candidate, displayWorktreePath });
+      if (confirmation.kind === "aborted") {
+        return { kind: "aborted", result: confirmation.result };
+      }
+      shouldCleanup = confirmation.kind === "confirmed";
     }
-    shouldCleanup = confirmation.kind === "confirmed";
   }
 
   const archiveResult = await input.archive();
