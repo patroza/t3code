@@ -62,6 +62,7 @@ export interface ThreadDetailScreenProps {
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   readonly activeThreadBusy: boolean;
+  readonly isEditingQueuedMessage: boolean;
   readonly hasMoreOlderActivities: boolean;
   readonly loadingOlderActivities: boolean;
   readonly onLoadOlderActivities: () => void;
@@ -80,10 +81,7 @@ export interface ThreadDetailScreenProps {
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
-  readonly onRemoveQueuedMessage: (
-    messageId: MessageId,
-    source: "local" | "server",
-  ) => Promise<void>;
+  readonly onEditQueuedMessage: (messageId: MessageId, source: "local" | "server") => Promise<void>;
   readonly onStartNewThread: () => void;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
@@ -381,7 +379,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             loadingOlder={props.loadingOlderActivities}
             onLoadOlder={props.onLoadOlderActivities}
             onSteerQueuedMessage={props.onSteerQueuedMessage}
-            onRemoveQueuedMessage={props.onRemoveQueuedMessage}
+            onEditQueuedMessage={props.onEditQueuedMessage}
           />
         </View>
       ) : (
@@ -440,6 +438,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               selectedThread={props.selectedThread}
               serverConfig={props.serverConfig}
               activeThreadBusy={props.activeThreadBusy}
+              isEditingQueuedMessage={props.isEditingQueuedMessage}
               environmentId={props.environmentId}
               projectCwd={props.projectWorkspaceRoot}
               bottomInset={composerBottomInset}

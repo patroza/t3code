@@ -90,6 +90,7 @@ type WebviewRequest =
   | { readonly type: "toggleModelFavorite"; readonly modelKey: string }
   | { readonly type: "steerQueuedMessage"; readonly messageId: string }
   | { readonly type: "removeQueuedMessage"; readonly messageId: string }
+  | { readonly type: "updateQueuedMessage"; readonly messageId: string; readonly text: string }
   | {
       readonly type: "send";
       readonly text: string;
@@ -210,6 +211,14 @@ function isRequest(value: unknown): value is WebviewRequest {
   }
   if (type === "steerQueuedMessage" || type === "removeQueuedMessage") {
     return "messageId" in value && typeof value.messageId === "string";
+  }
+  if (type === "updateQueuedMessage") {
+    return (
+      "messageId" in value &&
+      typeof value.messageId === "string" &&
+      "text" in value &&
+      typeof value.text === "string"
+    );
   }
   if (type === "setInteractionMode") {
     return (
@@ -462,6 +471,11 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           return;
         case "removeQueuedMessage":
           await this.#run(() => this.client.removeQueuedMessage(MessageId.make(message.messageId)));
+          return;
+        case "updateQueuedMessage":
+          await this.#run(() =>
+            this.client.updateQueuedMessage(MessageId.make(message.messageId), message.text),
+          );
           return;
         case "send": {
           await this.#run(async () => {

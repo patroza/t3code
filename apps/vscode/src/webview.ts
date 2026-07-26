@@ -17,6 +17,7 @@ import {
   EMPTY_COMPOSER_INPUT_HISTORY,
   navigateComposerInputHistory,
   pushComposerInputHistory,
+  recallComposerInputHistory,
   resolveComposerInputHistoryKeyAction,
   seedComposerInputHistoryFromConversation,
   type ComposerInputHistoryState,
@@ -269,6 +270,32 @@ let selectedSlashCommand = 0;
 const inputHistoryByScopeKey = new Map<string, ComposerInputHistoryState>();
 let inputHistoryScopeKey = "__none__";
 let inputHistory: ComposerInputHistoryState = EMPTY_COMPOSER_INPUT_HISTORY;
+let editingQueuedMessage: { readonly messageId: string; readonly previousDraft: string } | null =
+  null;
+
+function restoreDraftAfterQueuedEdit(): void {
+  if (editingQueuedMessage === null) return;
+  prompt.value = editingQueuedMessage.previousDraft;
+  editingQueuedMessage = null;
+  inputHistory = {
+    entries: inputHistory.entries,
+    browsingIndex: null,
+    stashedDraft: "",
+  };
+  persistInputHistory(inputHistoryScopeKey, inputHistory);
+  renderComposerAction();
+}
+
+function editQueuedMessage(messageId: string, text: string): void {
+  const previousDraft = editingQueuedMessage?.previousDraft ?? prompt.value;
+  editingQueuedMessage = { messageId, previousDraft };
+  inputHistory = recallComposerInputHistory(inputHistory, text, previousDraft);
+  persistInputHistory(inputHistoryScopeKey, inputHistory);
+  prompt.value = text;
+  prompt.focus();
+  prompt.setSelectionRange(text.length, text.length);
+  renderComposerAction();
+}
 
 function inputHistoryKeyForState(state: ViewState | null): string {
   if (state?.activeThread?.id) {
@@ -1117,17 +1144,15 @@ function renderQueuedMessages(state: ViewState): void {
       post({ type: "steerQueuedMessage", messageId: message.messageId }),
     );
 
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.textContent = "×";
-    remove.title = "Remove queued message";
-    remove.ariaLabel = "Remove queued message";
-    remove.disabled = state.busy;
-    remove.addEventListener("click", () =>
-      post({ type: "removeQueuedMessage", messageId: message.messageId }),
-    );
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.title = "Edit or recall queued message";
+    edit.ariaLabel = "Edit queued message";
+    edit.disabled = state.busy;
+    edit.addEventListener("click", () => editQueuedMessage(message.messageId, message.text));
 
-    row.append(icon, text, steer, remove);
+    row.append(icon, text, steer, edit);
     queuedMessages.append(row);
   }
 }
@@ -1401,7 +1426,7 @@ function isRunning(): boolean {
 }
 
 function hasComposerInput(): boolean {
-  return prompt.value.trim() !== "" || pendingImages.length > 0;
+  return editingQueuedMessage !== null || prompt.value.trim() !== "" || pendingImages.length > 0;
 }
 
 function showPlanFollowUp(): boolean {
@@ -1655,6 +1680,17 @@ function renderModelOptions(state: ViewState): void {
 }
 
 function submit(): void {
+  if (editingQueuedMessage !== null) {
+    const editing = editingQueuedMessage;
+    const text = prompt.value.trim();
+    if (text.length === 0) {
+      post({ type: "removeQueuedMessage", messageId: editing.messageId });
+    } else {
+      post({ type: "updateQueuedMessage", messageId: editing.messageId, text });
+    }
+    restoreDraftAfterQueuedEdit();
+    return;
+  }
   const slash = prompt.value.trim();
   if (slash.startsWith("/") && executeSlashCommand(slash)) return;
   const planFollowUp = showPlanFollowUp();
@@ -2010,6 +2046,9 @@ prompt.addEventListener("keydown", (event) => {
         inputHistory = navigation.state;
         persistInputHistory(inputHistoryScopeKey, inputHistory);
         prompt.value = navigation.value;
+        if (editingQueuedMessage !== null && navigation.state.browsingIndex === null) {
+          editingQueuedMessage = null;
+        }
         const cursor = navigation.value.length;
         prompt.setSelectionRange(cursor, cursor);
         renderComposerAction();
