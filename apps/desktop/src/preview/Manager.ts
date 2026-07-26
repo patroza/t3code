@@ -334,6 +334,8 @@ const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   { key: "j", meta: true, shift: true, control: false },
   // mod+K → command palette
   { key: "k", meta: true, shift: false, control: false },
+  // mod+T → board
+  { key: "t", meta: true, shift: false, control: false },
   // mod+, → settings (macOS convention)
   { key: ",", meta: true, shift: false, control: false },
   // mod+W → close tab/panel

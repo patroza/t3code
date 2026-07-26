@@ -1,4 +1,8 @@
 import * as React from "react";
+import {
+  effectiveSettled,
+  type ChangeRequestStateLike,
+} from "@t3tools/client-runtime/state/thread-settled";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
@@ -12,12 +16,17 @@ import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import type { SnoozePreset } from "./Sidebar.snooze";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
 // nearby thread usually reuses an already-hot subscription.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
+// Settled-tail paging: recent history is the common lookup; the deep tail
+// stays behind an explicit Show more. Shared by SidebarV2 and the board.
+export const SETTLED_TAIL_INITIAL_COUNT = 10;
+export const SETTLED_TAIL_PAGE_COUNT = 25;
 type SidebarProject = {
   id: string;
   title: string;
@@ -91,6 +100,82 @@ export function buildMultiSelectThreadContextMenuItems(input: {
       disabled: input.hasRunningThread,
     },
     { id: "delete", label: `Delete (${input.count})`, destructive: true },
+  ];
+}
+
+export type ThreadContextMenuAction =
+  | "rename"
+  | "mark-unread"
+  | "copy-path"
+  | "copy-thread-id"
+  | "delete";
+
+export function buildThreadContextMenuItems(): readonly ContextMenuItem<ThreadContextMenuAction>[] {
+  return [
+    { id: "rename", label: "Rename thread" },
+    { id: "mark-unread", label: "Mark unread" },
+    { id: "copy-path", label: "Copy Path" },
+    { id: "copy-thread-id", label: "Copy Thread ID" },
+    { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+  ];
+}
+
+export type SidebarV2ThreadContextMenuAction =
+  | "new-thread-on-branch"
+  | "settle"
+  | "unsettle"
+  | "snooze"
+  | `snooze:${string}`
+  | "unsnooze"
+  | "rename"
+  | "mark-unread"
+  | "delete";
+
+// Single source for the per-thread menu on both v2 surfaces (sidebar rows
+// and board cards) so the two can't drift apart item-by-item.
+export function buildSidebarV2ThreadContextMenuItems(input: {
+  branch: string | null;
+  supportsSettlement: boolean;
+  isSettled: boolean;
+  supportsSnooze: boolean;
+  isSnoozed: boolean;
+  canSnoozeNow: boolean;
+  snoozePresets: ReadonlyArray<SnoozePreset>;
+}): readonly ContextMenuItem<SidebarV2ThreadContextMenuAction>[] {
+  return [
+    ...(input.branch
+      ? [
+          {
+            id: "new-thread-on-branch",
+            label: `New thread on ${input.branch}`,
+          } as const,
+        ]
+      : []),
+    ...(input.supportsSettlement
+      ? [
+          input.isSettled
+            ? ({ id: "unsettle", label: "Un-settle thread" } as const)
+            : ({ id: "settle", label: "Settle thread" } as const),
+        ]
+      : []),
+    ...(input.supportsSnooze
+      ? [
+          input.isSnoozed
+            ? ({ id: "unsnooze", label: "Wake thread" } as const)
+            : ({
+                id: "snooze",
+                label: "Snooze",
+                disabled: !input.canSnoozeNow,
+                children: input.snoozePresets.map((preset) => ({
+                  id: `snooze:${preset.id}` as const,
+                  label: `${preset.label} (${preset.whenLabel})`,
+                })),
+              } satisfies ContextMenuItem<SidebarV2ThreadContextMenuAction>),
+        ]
+      : []),
+    { id: "rename", label: "Rename thread" },
+    { id: "mark-unread", label: "Mark unread" },
+    { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }
 
@@ -220,15 +305,63 @@ export function useThreadJumpHintVisibility(): {
   };
 }
 
-export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
-  if (!thread.latestTurn?.completedAt) return false;
-  const completedAt = Date.parse(thread.latestTurn.completedAt);
-  if (Number.isNaN(completedAt)) return false;
-  if (!thread.lastVisitedAt) return false;
+/**
+ * Whether `completedAt` is a completion the user has not seen yet: a missing
+ * last-visited timestamp counts as seen, an unparsable one as unseen.
+ */
+export function isCompletionUnseen(
+  completedAt: string | null | undefined,
+  lastVisitedAt: string | null | undefined,
+): boolean {
+  if (!completedAt) return false;
+  const completedAtMs = Date.parse(completedAt);
+  if (Number.isNaN(completedAtMs)) return false;
+  if (!lastVisitedAt) return false;
 
-  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
-  if (Number.isNaN(lastVisitedAt)) return true;
-  return completedAt > lastVisitedAt;
+  const lastVisitedAtMs = Date.parse(lastVisitedAt);
+  if (Number.isNaN(lastVisitedAtMs)) return true;
+  return completedAtMs > lastVisitedAtMs;
+}
+
+export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
+  return isCompletionUnseen(thread.latestTurn?.completedAt, thread.lastVisitedAt);
+}
+
+/**
+ * Shared settled classification for display surfaces (sidebar v2, board), so
+ * they always agree on what is settled. Threads on servers without the
+ * settlement capability (old server, or descriptor not loaded yet) never
+ * classify as settled: the user could neither un-settle nor pin them, so
+ * auto-settling them would strand rows in a tail with no working affordances.
+ */
+export function isThreadSettledForDisplay(
+  thread: Parameters<typeof effectiveSettled>[0] & { readonly environmentId: string },
+  input: {
+    serverConfigs: {
+      get(environmentId: string):
+        | {
+            readonly environment: {
+              readonly capabilities: { readonly threadSettlement?: boolean };
+            };
+          }
+        | undefined;
+    };
+    now: string;
+    autoSettleAfterDays: number | null;
+    changeRequestState: ChangeRequestStateLike | null;
+  },
+): boolean {
+  const supportsSettlement =
+    input.serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
+    true;
+  return (
+    supportsSettlement &&
+    effectiveSettled(thread, {
+      now: input.now,
+      autoSettleAfterDays: input.autoSettleAfterDays,
+      changeRequestState: input.changeRequestState,
+    })
+  );
 }
 
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
@@ -422,6 +555,56 @@ export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2S
     return "failed";
   }
   return "ready";
+}
+
+export interface SidebarV2TopStatus {
+  label: "Working" | "Approval" | "Input" | "Failed" | "Done";
+  icon: "working" | "done" | null;
+  className: string;
+}
+
+// The v2 indicator presentation: colored label text (with an icon only for
+// "in motion" and "done") instead of the v1 dot pill. Ready threads stay
+// unlabeled unless they carry an unread completion, which surfaces as "Done".
+export function resolveSidebarV2TopStatus(input: {
+  status: SidebarV2Status;
+  isUnread: boolean;
+}): SidebarV2TopStatus | null {
+  switch (input.status) {
+    case "working":
+      return {
+        label: "Working",
+        icon: "working",
+        className:
+          "animate-sidebar-working-text text-sky-600 motion-reduce:animate-none dark:text-sky-400",
+      };
+    case "approval":
+      return {
+        label: "Approval",
+        icon: null,
+        className: "text-amber-700 dark:text-amber-300",
+      };
+    case "input":
+      return {
+        label: "Input",
+        icon: null,
+        className: "text-indigo-600 dark:text-indigo-300",
+      };
+    case "failed":
+      return {
+        label: "Failed",
+        icon: null,
+        className: "text-red-700 dark:text-red-300",
+      };
+    case "ready":
+      return input.isUnread
+        ? {
+            label: "Done",
+            icon: "done",
+            className: "text-emerald-700 dark:text-emerald-300",
+          }
+        : null;
+  }
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not

@@ -8,6 +8,7 @@ import {
   Globe2Icon,
   LoaderIcon,
   SearchIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -75,7 +76,7 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { isElectron } from "../env";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform } from "../lib/utils";
+import { cn, isMacPlatform } from "../lib/utils";
 import {
   readThreadShell,
   useProject,
@@ -172,6 +173,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
+  buildThreadContextMenuItems,
   getSidebarThreadIdsToPrewarm,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -2488,6 +2490,42 @@ const SidebarProjectListRow = memo(function SidebarProjectListRow(props: Sidebar
   );
 });
 
+// Self-contained so its router hooks don't force new props through the
+// memoized sidebar content on every navigation.
+function SidebarBoardLink({ shortcutLabel }: { shortcutLabel: string | null }) {
+  const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const { isMobile, setOpenMobile } = useSidebar();
+  const isActive = pathname === "/board";
+
+  return (
+    <SidebarMenuButton
+      size="sm"
+      isActive={isActive}
+      aria-current={isActive ? "page" : undefined}
+      className={cn(
+        "gap-2 px-2 py-1.5 hover:bg-accent hover:text-foreground focus-visible:ring-0",
+        isActive ? "bg-accent text-foreground" : "text-muted-foreground/70",
+      )}
+      data-testid="sidebar-board-link"
+      onClick={() => {
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        void navigate({ to: "/board" });
+      }}
+    >
+      <SquareKanbanIcon
+        className={cn("size-3.5", isActive ? "text-foreground" : "text-muted-foreground/70")}
+      />
+      <span className="flex-1 truncate text-left text-xs">Board</span>
+      {shortcutLabel ? (
+        <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">{shortcutLabel}</Kbd>
+      ) : null}
+    </SidebarMenuButton>
+  );
+}
+
 function LocalSecondaryStatus() {
   const { environments } = useEnvironments();
   // The desktop reports which local secondary backends (e.g. the WSL backend)
@@ -2752,6 +2790,7 @@ interface SidebarProjectsContentProps {
   routeThreadKey: string | null;
   newThreadShortcutLabel: string | null;
   commandPaletteShortcutLabel: string | null;
+  boardShortcutLabel: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -2792,6 +2831,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     routeThreadKey,
     newThreadShortcutLabel,
     commandPaletteShortcutLabel,
+    boardShortcutLabel,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -2844,6 +2884,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 </Kbd>
               ) : null}
             </CommandDialogTrigger>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarBoardLink shortcutLabel={boardShortcutLabel} />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarGroup>
@@ -3413,6 +3456,16 @@ export default function Sidebar() {
         platform,
         context: shortcutContext,
       });
+      if (command === "board.open") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isMobile) {
+          setOpenMobile(false);
+        }
+        void navigate({ to: "/board" });
+        return;
+      }
+
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {
         const targetThreadKey = resolveAdjacentThreadId({
@@ -3460,12 +3513,15 @@ export default function Sidebar() {
     };
   }, [
     getCurrentSidebarShortcutContext,
+    isMobile,
     keybindings,
+    navigate,
     navigateToThread,
     orderedSidebarThreadKeys,
     platform,
     routeThreadKey,
     sidebarThreadByKey,
+    setOpenMobile,
     threadJumpThreadKeys,
   ]);
 
@@ -3496,6 +3552,11 @@ export default function Sidebar() {
   const commandPaletteShortcutLabel = shortcutLabelForCommand(
     keybindings,
     "commandPalette.toggle",
+    newThreadShortcutLabelOptions,
+  );
+  const boardShortcutLabel = shortcutLabelForCommand(
+    keybindings,
+    "board.open",
     newThreadShortcutLabelOptions,
   );
   const handleDesktopUpdateButtonClick = useCallback(() => {
@@ -3623,6 +3684,7 @@ export default function Sidebar() {
             routeThreadKey={routeThreadKey}
             newThreadShortcutLabel={newThreadShortcutLabel}
             commandPaletteShortcutLabel={commandPaletteShortcutLabel}
+            boardShortcutLabel={boardShortcutLabel}
             threadJumpLabelByKey={visibleThreadJumpLabelByKey}
             attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
             expandThreadListForProject={expandThreadListForProject}
