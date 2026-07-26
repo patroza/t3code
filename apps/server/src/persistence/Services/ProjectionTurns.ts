@@ -129,6 +129,15 @@ export interface ProjectionTurnRepositoryShape {
   ) => Effect.Effect<Option.Option<ProjectionPendingTurnStart>, ProjectionRepositoryError>;
 
   /**
+   * Lists every pending-start placeholder across active reconciliation scope.
+   * Callers must still resolve the owning thread and discard archived/deleted rows.
+   */
+  readonly listPendingTurnStarts: () => Effect.Effect<
+    ReadonlyArray<ProjectionPendingTurnStart>,
+    ProjectionRepositoryError
+  >;
+
+  /**
    * Deletes only pending-start placeholder rows (`turnId = null`) for a thread and leaves concrete turn rows untouched.
    */
   readonly deletePendingTurnStartByThreadId: (
