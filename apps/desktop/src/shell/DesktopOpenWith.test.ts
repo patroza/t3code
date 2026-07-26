@@ -146,6 +146,8 @@ describe("DesktopOpenWith launch resolution", () => {
 
   it.effect("resolves CFBundleExecutable and reports missing bundle executables", () =>
     Effect.gen(function* () {
+      // oxlint-disable-next-line t3code/no-global-process-runtime -- Platform-gated native fixture.
+      if (process.platform !== "darwin") return;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const base = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-open-with-test-" });
