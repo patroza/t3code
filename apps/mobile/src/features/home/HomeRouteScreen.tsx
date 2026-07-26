@@ -110,8 +110,7 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Restore the compact title in case the split branch blanked it. */}
-        <NativeStackScreenOptions options={{ title: "Threads", headerTitle: "Threads" }} />
+        {/* Title is owned by HomeHeader (tracks list mode). */}
         <HomeHeader
           environments={environments}
           projects={projectFilterOptions}
