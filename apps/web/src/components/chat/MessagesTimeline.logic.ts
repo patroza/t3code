@@ -183,7 +183,10 @@ export interface TimelineDurationMessage {
 export type TimelineLatestTurn = Pick<
   OrchestrationLatestTurn,
   "turnId" | "state" | "startedAt" | "completedAt"
->;
+> & {
+  /** When set, preferred terminal assistant for this turn (fold / copy meta). */
+  readonly assistantMessageId?: MessageId | null;
+};
 
 export type MessagesTimelineRow =
   | {
@@ -280,7 +283,10 @@ export function resolveAssistantMessageCopyState({
   };
 }
 
-function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
+function deriveTerminalAssistantMessageIds(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  preferredTerminalMessageIdByTurn: ReadonlyMap<TurnId, MessageId> = new Map(),
+) {
   const lastAssistantMessageIdByResponseKey = new Map<string, string>();
   let nullTurnResponseIndex = 0;
 
@@ -301,6 +307,17 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
       ? `turn:${message.turnId}`
       : `unkeyed:${nullTurnResponseIndex}`;
     lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
+  }
+
+  // Prefer the turn projection's assistant_message_id when present — it stays
+  // correct even if the message row was stamped with the next turn at drain.
+  for (const [turnId, messageId] of preferredTerminalMessageIdByTurn) {
+    const exists = timelineEntries.some(
+      (entry) => entry.kind === "message" && entry.message.id === messageId,
+    );
+    if (exists) {
+      lastAssistantMessageIdByResponseKey.set(`turn:${turnId}`, messageId);
+    }
   }
 
   return new Set(lastAssistantMessageIdByResponseKey.values());
@@ -392,13 +409,74 @@ function deriveTurnFolds(input: {
     }
     group.entries.push(entry);
     if (entry.kind === "message") {
-      if (input.terminalAssistantMessageIds.has(entry.message.id)) {
-        group.terminalEntry = entry;
-      }
       if (entry.message.streaming) {
         group.hasStreamingMessage = true;
       }
     }
+  }
+
+  // Queue-drain / turn flip can stamp the previous turn's final assistant
+  // message with the *next* turn id at the same timestamp as the next user
+  // message. Re-home those orphans so the fold keeps the real final visible.
+  const userCreatedAts = input.timelineEntries
+    .filter(
+      (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
+        entry.kind === "message" && entry.message.role === "user",
+    )
+    .map((entry) => entry.createdAt);
+  const orderedTurns = [...groupsByTurnId.entries()].sort((left, right) => {
+    const leftAt = left[1].entries[0]?.createdAt ?? left[1].startBoundary ?? "";
+    const rightAt = right[1].entries[0]?.createdAt ?? right[1].startBoundary ?? "";
+    return leftAt.localeCompare(rightAt);
+  });
+  for (let index = 1; index < orderedTurns.length; index += 1) {
+    const previous = orderedTurns[index - 1];
+    const current = orderedTurns[index];
+    if (!previous || !current) continue;
+    const [, previousGroup] = previous;
+    const [, currentGroup] = current;
+    const previousLastAt =
+      previousGroup.entries.at(-1)?.createdAt ?? previousGroup.startBoundary ?? null;
+    if (previousLastAt === null) continue;
+    const nextUserAt = userCreatedAts.find((createdAt) => createdAt >= previousLastAt) ?? null;
+    if (nextUserAt === null) continue;
+    const firstAssistantIndex = currentGroup.entries.findIndex(
+      (entry) => entry.kind === "message" && entry.message.role === "assistant",
+    );
+    if (firstAssistantIndex < 0) continue;
+    const firstAssistant = currentGroup.entries[firstAssistantIndex];
+    if (!firstAssistant || firstAssistant.kind !== "message") continue;
+    // True first tokens of the next turn always land *after* that user message.
+    if (firstAssistant.createdAt > nextUserAt) continue;
+    currentGroup.entries.splice(firstAssistantIndex, 1);
+    previousGroup.entries.push(firstAssistant);
+  }
+
+  // Resolve terminal after re-homing: last assistant in the group is the real
+  // final (status lines are earlier). Prefer an explicit preferred terminal id
+  // when that message lives in the group (e.g. latestTurn.assistantMessageId).
+  for (const [turnId, group] of groupsByTurnId) {
+    group.terminalEntry = null;
+    let lastAssistant: Extract<TimelineEntry, { kind: "message" }> | null = null;
+    for (const entry of group.entries) {
+      if (entry.kind === "message" && entry.message.role === "assistant") {
+        lastAssistant = entry;
+      }
+    }
+    if (input.latestTurn?.turnId === turnId && input.latestTurn.assistantMessageId != null) {
+      const preferredId = input.latestTurn.assistantMessageId;
+      const preferred = group.entries.find(
+        (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
+          entry.kind === "message" &&
+          entry.message.role === "assistant" &&
+          entry.message.id === preferredId,
+      );
+      if (preferred) {
+        group.terminalEntry = preferred;
+        continue;
+      }
+    }
+    group.terminalEntry = lastAssistant;
   }
 
   const foldsByAnchorEntryId = new Map<string, TurnFold>();
@@ -680,7 +758,17 @@ export function deriveMessagesTimelineRows(input: {
   const durationStartByMessageId = computeMessageDurationStart(
     displayTimelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(displayTimelineEntries);
+  const preferredTerminalMessageIdByTurn = new Map<TurnId, MessageId>();
+  if (input.latestTurn?.assistantMessageId != null) {
+    preferredTerminalMessageIdByTurn.set(
+      input.latestTurn.turnId,
+      input.latestTurn.assistantMessageId,
+    );
+  }
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(
+    displayTimelineEntries,
+    preferredTerminalMessageIdByTurn,
+  );
   const unsettledTurnId = deriveUnsettledTurnId(
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
