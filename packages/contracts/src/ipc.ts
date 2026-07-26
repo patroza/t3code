@@ -101,6 +101,11 @@ import { EnvironmentId } from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { EditorId } from "./editor.ts";
+import type {
+  DesktopApplicationSelection,
+  DesktopOpenWithInput,
+  OpenWithEntryPresentation,
+} from "./openWith.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
 import type {
@@ -1024,6 +1029,9 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
+  resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
+  openWith: (input: DesktopOpenWithInput) => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
@@ -1125,10 +1133,13 @@ export interface LocalApi {
   dialogs: {
     pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
     confirm: (message: string) => Promise<boolean>;
+    pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
   };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
+    openWith: (input: DesktopOpenWithInput) => Promise<void>;
   };
   contextMenu: {
     show: <T extends string>(
