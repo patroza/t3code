@@ -464,6 +464,19 @@ export class T3Client {
     });
   }
 
+  async updateQueuedMessage(messageId: MessageId, text: string): Promise<void> {
+    const thread = this.#activeThread;
+    if (thread === null) throw new Error("Select a T3 Code thread before changing its queue.");
+    await this.#dispatch({
+      type: "thread.queue.update",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      messageId,
+      text,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   async setInteractionMode(interactionMode: ProviderInteractionMode): Promise<void> {
     const thread = this.#activeThread;
     if (thread === null)
