@@ -22,7 +22,7 @@
     {
       "id": "discord",
       "branch": "fork/discord",
-      "pullRequest": null,
+      "pullRequest": 80,
       "paths": [
         "apps/discord-bot/**",
         "docs/integrations/discord-bot.md",
@@ -33,7 +33,7 @@
     {
       "id": "vscode",
       "branch": "fork/vscode",
-      "pullRequest": null,
+      "pullRequest": 79,
       "paths": ["apps/vscode/**", ".vscode/launch.json"]
     }
   ]
