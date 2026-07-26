@@ -10,6 +10,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   detectComposerTrigger,
+  parseStandaloneComposerSlashCommand,
   replaceTextRange,
   serializeComposerFileLink,
   type ComposerTrigger,
@@ -110,6 +111,7 @@ export interface ThreadComposerProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  readonly onStartNewThread: () => void;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -373,6 +375,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       const q = composerTrigger.query.toLowerCase();
       const allBuiltIn = [
         {
+          id: "cmd:new",
+          type: "slash-command" as const,
+          command: "new",
+          label: "/new",
+          description: "Start a new thread here",
+        },
+        {
           id: "cmd:model",
           type: "slash-command" as const,
           command: "model",
@@ -512,9 +521,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   }, [composerTrigger, pathSearch.entries, selectedProviderStatus]);
 
   // ── Handle command selection ──────────────────────────────
-  const { onChangeDraftMessage, onUpdateInteractionMode, draftMessage, onSendMessage } = props;
+  const {
+    onChangeDraftMessage,
+    onStartNewThread,
+    onUpdateInteractionMode,
+    draftMessage,
+    onSendMessage,
+  } = props;
 
   const handleSend = useCallback(async () => {
+    if (parseStandaloneComposerSlashCommand(draftMessage) === "new") {
+      onChangeDraftMessage("");
+      onStartNewThread();
+      return;
+    }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
@@ -531,6 +551,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     }
   }, [
     onSendMessage,
+    draftMessage,
+    onChangeDraftMessage,
+    onStartNewThread,
     props.environmentId,
     props.environmentLabel,
     props.selectedThread.id,
@@ -556,6 +579,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         return;
       }
 
+      if (item.type === "slash-command" && item.command === "new") {
+        const result = replaceTextRange(
+          draftMessage,
+          composerTrigger.rangeStart,
+          composerTrigger.rangeEnd,
+          "",
+        );
+        setComposerSelection({ start: result.cursor, end: result.cursor });
+        onChangeDraftMessage(result.text);
+        onStartNewThread();
+        return;
+      }
+
       let replacement = "";
       if (item.type === "path") {
         replacement = `${serializeComposerFileLink(item.path)} `;
@@ -576,7 +612,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       setComposerSelection({ start: result.cursor, end: result.cursor });
       onChangeDraftMessage(result.text);
     },
-    [composerTrigger, draftMessage, onChangeDraftMessage, onUpdateInteractionMode],
+    [
+      composerTrigger,
+      draftMessage,
+      onChangeDraftMessage,
+      onStartNewThread,
+      onUpdateInteractionMode,
+    ],
   );
 
   // ── Model menu ───────────────────────────────────────────
