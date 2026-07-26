@@ -148,10 +148,7 @@ export interface ThreadFeedProps {
   readonly loadingOlder?: boolean;
   readonly onLoadOlder?: () => void;
   readonly onSteerQueuedMessage: (messageId: MessageId) => Promise<void>;
-  readonly onRemoveQueuedMessage: (
-    messageId: MessageId,
-    source: "local" | "server",
-  ) => Promise<void>;
+  readonly onEditQueuedMessage: (messageId: MessageId, source: "local" | "server") => Promise<void>;
 }
 
 function MessageAttachmentImage(props: {
@@ -809,7 +806,7 @@ function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<
     ThreadFeedProps,
-    "environmentId" | "skills" | "onSteerQueuedMessage" | "onRemoveQueuedMessage"
+    "environmentId" | "skills" | "onSteerQueuedMessage" | "onEditQueuedMessage"
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
@@ -968,19 +965,15 @@ function renderFeedEntry(
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={
-                  queueSource === "server"
-                    ? "Remove queued message"
-                    : "Discard offline queued message"
+                  queueSource === "server" ? "Edit queued message" : "Edit offline queued message"
                 }
                 hitSlop={8}
                 onPress={() =>
-                  void props.onRemoveQueuedMessage(MessageId.make(message.id), queueSource)
+                  void props.onEditQueuedMessage(MessageId.make(message.id), queueSource)
                 }
                 className="min-h-8 justify-center rounded-full px-2"
               >
-                <NativeText className="font-t3-semibold text-xs text-destructive">
-                  {queueSource === "local" ? "Discard" : "Remove"}
-                </NativeText>
+                <NativeText className="font-t3-semibold text-xs text-accent">Edit</NativeText>
               </Pressable>
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
@@ -1791,7 +1784,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         onPressImage,
         onMarkdownLinkPress,
         onSteerQueuedMessage: props.onSteerQueuedMessage,
-        onRemoveQueuedMessage: props.onRemoveQueuedMessage,
+        onEditQueuedMessage: props.onEditQueuedMessage,
         iconSubtleColor,
         userBubbleColor,
         markdownStyles,
@@ -1814,7 +1807,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onCopyWorkRow,
       onMarkdownLinkPress,
       props.onSteerQueuedMessage,
-      props.onRemoveQueuedMessage,
+      props.onEditQueuedMessage,
       onPressImage,
       onToggleTurnFold,
       onToggleWorkGroup,
