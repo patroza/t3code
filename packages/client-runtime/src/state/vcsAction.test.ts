@@ -34,6 +34,7 @@ import {
   createVcsActionTransportId,
   EMPTY_VCS_ACTION_STATE,
   getVcsActionTargetKey,
+  isCommitSigningFailure,
   normalizeVcsActionProgressEvent,
   parseVcsActionTargetKey,
   VcsActionMissingTerminalEventError,
@@ -258,6 +259,7 @@ describe("vcsActionState", () => {
         kind: "action_failed",
         phase: null,
         message: "Push failed.",
+        failureKind: "unknown",
       }),
     );
 
@@ -398,6 +400,7 @@ describe("vcsActionState", () => {
             kind: "action_failed",
             phase: "push",
             message: remoteMessage,
+            failureKind: "unknown",
           },
         ]),
         {
@@ -417,11 +420,43 @@ describe("vcsActionState", () => {
         environmentId,
         cwd,
         phase: "push",
+        failureKind: "unknown",
         remoteMessageLength: remoteMessage.length,
       });
       expect(error).not.toHaveProperty("detail");
       expect(error.message).toBe("Source control action 'commit_push' failed during push.");
       expect(error.message).not.toContain(remoteMessage);
+    }),
+  );
+
+  it.effect("prefers a classified terminal failure over a following stream error", () =>
+    Effect.gen(function* () {
+      const target = { environmentId, cwd };
+      const transportActionId = createVcsActionTransportId(target, actionId);
+      const transportError = new Error("rpc stream closed");
+      const stream = Stream.fromIterable<GitActionProgressEvent>([
+        {
+          actionId: transportActionId,
+          action,
+          cwd,
+          kind: "action_failed",
+          phase: "commit",
+          message: "Remote diagnostic that must stay sanitized.",
+          failureKind: "commit_signing_failed",
+        },
+      ]).pipe(Stream.concat(Stream.fail(transportError)));
+
+      const error = yield* consumeVcsActionProgress(stream, {
+        target,
+        transportActionId,
+        actionId,
+        action,
+        onProgress: () => Effect.void,
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(VcsActionRemoteFailureError);
+      expect(error).toMatchObject({ failureKind: "commit_signing_failed" });
+      expect(isCommitSigningFailure(error)).toBe(true);
     }),
   );
 
@@ -608,6 +643,7 @@ describe("vcsActionState", () => {
                     action,
                     phase: "push",
                     message: "push failed after creating the branch",
+                    failureKind: "unknown",
                   }),
                 ),
         } as unknown as WsRpcProtocolClient;
