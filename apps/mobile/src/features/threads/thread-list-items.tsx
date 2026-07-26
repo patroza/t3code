@@ -460,10 +460,26 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
 
 /* ─── Thread row ─────────────────────────────────────────────────────── */
 
-const THREAD_ROW_MENU_ACTIONS: MenuAction[] = [
+const THREAD_ROW_LEGACY_MENU_ACTIONS: MenuAction[] = [
   { id: "archive", title: "Archive", image: "archivebox" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
+
+function buildThreadRowMenuActions(input: {
+  readonly settlementSupported: boolean;
+  readonly isSettled: boolean;
+}): MenuAction[] {
+  if (!input.settlementSupported) {
+    return THREAD_ROW_LEGACY_MENU_ACTIONS;
+  }
+  return [
+    input.isSettled
+      ? { id: "unsettle", title: "Unsettle", image: "pin" }
+      : { id: "settle", title: "Settle", image: "checkmark.circle" },
+    { id: "archive", title: "Archive", image: "archivebox" },
+    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  ];
+}
 
 export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly variant: ThreadListVariant;
@@ -483,6 +499,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  /** When set with settlementSupported, long-press can settle/unsettle. */
+  readonly settlementSupported?: boolean;
+  readonly isSettled?: boolean;
+  readonly onSettleThread?: (thread: EnvironmentThreadShell) => void;
+  readonly onUnsettleThread?: (thread: EnvironmentThreadShell) => void;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   readonly simultaneousSwipeGesture?: ComponentProps<
@@ -504,7 +525,16 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
 
-  const { thread, onSelectThread, onArchiveThread, onDeleteThread } = props;
+  const {
+    thread,
+    onSelectThread,
+    onArchiveThread,
+    onDeleteThread,
+    onSettleThread,
+    onUnsettleThread,
+  } = props;
+  const settlementSupported = props.settlementSupported === true;
+  const isSettled = props.isSettled === true;
   const status = resolveThreadStatus(thread);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
@@ -544,6 +574,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const handleSettle = useCallback(() => onSettleThread?.(thread), [onSettleThread, thread]);
+  const handleUnsettle = useCallback(() => onUnsettleThread?.(thread), [onUnsettleThread, thread]);
   const primaryAction = useMemo(
     () => ({
       accessibilityLabel: `Archive ${thread.title}`,
@@ -553,12 +585,18 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     }),
     [handleArchive, thread.title],
   );
+  const menuActions = useMemo(
+    () => buildThreadRowMenuActions({ settlementSupported, isSettled }),
+    [isSettled, settlementSupported],
+  );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "settle") handleSettle();
+      if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete],
+    [handleArchive, handleDelete, handleSettle, handleUnsettle],
   );
 
   const statusPill = effectiveStatus ? (
@@ -757,7 +795,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         // ControlPillMenu injects onLongPress into the row and anchors the
         // token-styled dropdown to it; taps and swipes are untouched.
         <ControlPillMenu
-          actions={THREAD_ROW_MENU_ACTIONS}
+          actions={menuActions}
           onPressAction={handleMenuAction}
           shouldOpenOnLongPress
         >
