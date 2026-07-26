@@ -29,11 +29,11 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { environmentServerConfigsAtom } from "../../state/server";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { BoardScreen } from "../board/BoardScreen";
 import {
   PendingTaskListRow,
   ThreadListGroupHeader,
   ThreadListRow,
-  ThreadListSectionHeader,
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import { ThreadListV2Row } from "../threads/thread-list-v2-items";
@@ -44,8 +44,10 @@ import {
   type ThreadListV2Item,
 } from "../threads/threadListV2";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
+import { matchesEnvironmentFilter } from "./homeEnvironmentFilter";
 import {
   buildHomeListLayout,
+  buildHomeRecentListLayout,
   DEFAULT_GROUP_DISPLAY_STATE,
   homeListItemsAreEqual,
   nextGroupDisplayState,
@@ -53,7 +55,8 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "./homeListItems";
-import { buildHomeNeedsAttentionEntries } from "./homeNeedsAttention";
+import type { HomeListMode } from "./homeListMode";
+import { buildHomeRecentListEntries, buildHomeRecentPendingEntries } from "./homeRecentList";
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
@@ -74,13 +77,15 @@ interface HomeScreenProps {
   readonly savedConnectionsById: Readonly<Record<string, SavedRemoteConnection>>;
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly searchQuery: string;
-  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly listMode: HomeListMode;
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly onSearchQueryChange: (query: string) => void;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+  readonly onClearEnvironments: () => void;
+  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
@@ -183,15 +188,11 @@ export function HomeScreen(props: HomeScreenProps) {
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  // Thread List v2 only applies in Projects mode; Recent/Board use fixed layouts.
   const threadListV2Enabled =
+    props.listMode === "projects" &&
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
-  // Default on. Classic list only — Thread List v2 already surfaces active work.
-  // Preference key remains `recentWorkEnabled` so existing toggles migrate.
-  const needsAttentionEnabled = AsyncResult.isSuccess(preferencesResult)
-    ? preferencesResult.value.recentWorkEnabled !== false
-    : true;
-  const [needsAttentionExpanded, setNeedsAttentionExpanded] = useState(false);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -257,10 +258,10 @@ export function HomeScreen(props: HomeScreenProps) {
     () =>
       buildHomeProjectScopes({
         projects: props.projects,
-        environmentId: props.selectedEnvironmentId,
+        selectedEnvironmentIds: props.selectedEnvironmentIds,
         projectGroupingMode: props.projectGroupingMode,
       }),
-    [props.projectGroupingMode, props.projects, props.selectedEnvironmentId],
+    [props.projectGroupingMode, props.projects, props.selectedEnvironmentIds],
   );
   const selectedProjectScope = useMemo(
     () =>
@@ -320,25 +321,67 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const projectGroups = useMemo(
     () =>
-      buildHomeThreadGroups({
-        projects: scopedProjects,
-        threads: scopedThreads,
-        pendingTasks: scopedPendingTasks,
-        environmentId: props.selectedEnvironmentId,
-        searchQuery: props.searchQuery,
-        projectSortOrder: props.projectSortOrder,
-        threadSortOrder: props.threadSortOrder,
-        projectGroupingMode: props.projectGroupingMode,
-      }),
+      props.listMode === "projects"
+        ? buildHomeThreadGroups({
+            projects: scopedProjects,
+            threads: scopedThreads,
+            pendingTasks: scopedPendingTasks,
+            selectedEnvironmentIds: props.selectedEnvironmentIds,
+            searchQuery: props.searchQuery,
+            projectSortOrder: props.projectSortOrder,
+            threadSortOrder: props.threadSortOrder,
+            projectGroupingMode: props.projectGroupingMode,
+          })
+        : [],
     [
+      props.listMode,
       props.projectGroupingMode,
       props.projectSortOrder,
       props.searchQuery,
-      props.selectedEnvironmentId,
+      props.selectedEnvironmentIds,
       props.threadSortOrder,
       scopedPendingTasks,
       scopedProjects,
       scopedThreads,
+    ],
+  );
+
+  const recentEntries = useMemo(
+    () =>
+      props.listMode === "recent"
+        ? buildHomeRecentListEntries({
+            projects: scopedProjects,
+            threads: scopedThreads,
+            selectedEnvironmentIds: props.selectedEnvironmentIds,
+            projectRefKeys: selectedProjectRefKeys,
+            searchQuery: props.searchQuery,
+          })
+        : [],
+    [
+      props.listMode,
+      props.searchQuery,
+      props.selectedEnvironmentIds,
+      scopedProjects,
+      scopedThreads,
+      selectedProjectRefKeys,
+    ],
+  );
+  const recentPendingEntries = useMemo(
+    () =>
+      props.listMode === "recent"
+        ? buildHomeRecentPendingEntries({
+            pendingTasks: scopedPendingTasks,
+            selectedEnvironmentIds: props.selectedEnvironmentIds,
+            projectRefKeys: selectedProjectRefKeys,
+            searchQuery: props.searchQuery,
+          })
+        : [],
+    [
+      props.listMode,
+      props.searchQuery,
+      props.selectedEnvironmentIds,
+      scopedPendingTasks,
+      selectedProjectRefKeys,
     ],
   );
 
@@ -373,7 +416,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.pendingTasks,
       props.projects,
       props.projectSortOrder,
-      props.selectedEnvironmentId,
+      props.selectedEnvironmentIds,
       props.threads,
       projectScopes,
     ],
@@ -457,7 +500,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${props.selectedEnvironmentId ?? "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${props.selectedEnvironmentIds.join(",") || "all"}:${v2ProjectScopeKey ?? "all"}:${props.searchQuery.trim()}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -506,62 +549,32 @@ export function HomeScreen(props: HomeScreenProps) {
     return supported;
   }, [serverConfigs]);
 
-  const needsAttentionEntries = useMemo(() => {
-    if (!needsAttentionEnabled || threadListV2Enabled) return [];
-    return buildHomeNeedsAttentionEntries({
-      projects: scopedProjects,
-      threads: scopedThreads,
-      environmentId: props.selectedEnvironmentId,
-      projectRefKeys: selectedProjectRefKeys,
-      searchQuery: props.searchQuery,
-      settlementEnvironmentIds,
-      snoozeEnvironmentIds,
+  const listLayout = useMemo(() => {
+    if (props.listMode === "recent") {
+      return buildHomeRecentListLayout({
+        pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
+        entries: recentEntries.map((entry) => ({
+          thread: entry.thread,
+          projectTitle: entry.project.title,
+        })),
+      });
+    }
+    if (props.listMode !== "projects") {
+      return { items: [] as HomeListItem[], stickyHeaderIndices: [] as number[] };
+    }
+    return buildHomeListLayout({
+      groups: projectGroups,
+      displayStates: effectiveGroupDisplayStates,
+      showAllThreads: hasSearchQuery,
     });
   }, [
-    needsAttentionEnabled,
-    props.searchQuery,
-    props.selectedEnvironmentId,
-    scopedProjects,
-    scopedThreads,
-    selectedProjectRefKeys,
-    settlementEnvironmentIds,
-    snoozeEnvironmentIds,
-    threadListV2Enabled,
+    effectiveGroupDisplayStates,
+    hasSearchQuery,
+    projectGroups,
+    props.listMode,
+    recentEntries,
+    recentPendingEntries,
   ]);
-  // Reset expand when the filter context changes so a deep expand never
-  // carries across environment / project / search flips.
-  const attentionExpandResetKey = `${props.selectedEnvironmentId ?? "all"}:${props.selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
-  const lastAttentionExpandResetKeyRef = useRef(attentionExpandResetKey);
-  if (lastAttentionExpandResetKeyRef.current !== attentionExpandResetKey) {
-    lastAttentionExpandResetKeyRef.current = attentionExpandResetKey;
-    if (needsAttentionExpanded) {
-      setNeedsAttentionExpanded(false);
-    }
-  }
-  const listLayout = useMemo(
-    () =>
-      buildHomeListLayout({
-        groups: projectGroups,
-        displayStates: effectiveGroupDisplayStates,
-        showAllThreads: hasSearchQuery,
-        needsAttention:
-          needsAttentionEnabled && !threadListV2Enabled && needsAttentionEntries.length > 0
-            ? { entries: needsAttentionEntries, expanded: needsAttentionExpanded }
-            : null,
-      }),
-    [
-      projectGroups,
-      effectiveGroupDisplayStates,
-      hasSearchQuery,
-      needsAttentionEnabled,
-      needsAttentionEntries,
-      needsAttentionExpanded,
-      threadListV2Enabled,
-    ],
-  );
-  const toggleNeedsAttentionExpanded = useCallback(() => {
-    setNeedsAttentionExpanded((current) => !current);
-  }, []);
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
@@ -569,7 +582,7 @@ export function HomeScreen(props: HomeScreenProps) {
     // "hidden from lists" meaning.
     return buildThreadListV2Items({
       threads: props.threads.filter((thread) => thread.archivedAt === null),
-      environmentId: props.selectedEnvironmentId,
+      selectedEnvironmentIds: props.selectedEnvironmentIds,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
       searchQuery: props.searchQuery,
       changeRequestStateByKey,
@@ -587,7 +600,7 @@ export function HomeScreen(props: HomeScreenProps) {
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     props.searchQuery,
-    props.selectedEnvironmentId,
+    props.selectedEnvironmentIds,
     props.threads,
     threadListV2Enabled,
     v2ScopedProjectGroup,
@@ -680,40 +693,6 @@ export function HomeScreen(props: HomeScreenProps) {
   const renderItem = useCallback(
     ({ item }: LegendListRenderItemProps<HomeListItem>) => {
       switch (item.type) {
-        case "attention-header":
-          return <ThreadListSectionHeader variant="compact" title="Needs attention" />;
-        case "attention-thread": {
-          const thread = item.thread;
-          return (
-            <ThreadListRow
-              variant="compact"
-              thread={thread}
-              projectTitle={item.projectTitle}
-              environmentLabel={
-                props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
-              }
-              projectCwd={
-                projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
-                null
-              }
-              isLast={item.isLast}
-              onArchiveThread={props.onArchiveThread}
-              onDeleteThread={props.onDeleteThread}
-              onSelectThread={props.onSelectThread}
-              onSwipeableClose={handleSwipeableClose}
-              onSwipeableWillOpen={handleSwipeableWillOpen}
-            />
-          );
-        }
-        case "attention-show-more":
-          return (
-            <ThreadListShowMoreRow
-              variant="compact"
-              hiddenCount={item.hiddenCount}
-              canShowLess={item.canShowLess}
-              onToggleExpanded={toggleNeedsAttentionExpanded}
-            />
-          );
         case "header":
           return (
             <ThreadListGroupHeader
@@ -753,6 +732,7 @@ export function HomeScreen(props: HomeScreenProps) {
             <ThreadListRow
               variant="compact"
               thread={thread}
+              projectTitle={item.projectTitle}
               environmentLabel={
                 props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
               }
@@ -792,7 +772,6 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
-      toggleNeedsAttentionExpanded,
       updateGroupDisplay,
     ],
   );
@@ -806,12 +785,24 @@ export function HomeScreen(props: HomeScreenProps) {
   // so the v1 check already covers v2.
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
-  const hasResults = projectGroups.length > 0;
+  const hasResults =
+    props.listMode === "recent"
+      ? recentEntries.length > 0 || recentPendingEntries.length > 0
+      : projectGroups.length > 0;
   const selectedEnvironmentLabel =
-    props.selectedEnvironmentId === null
+    props.selectedEnvironmentIds.length === 0
       ? null
-      : (props.savedConnectionsById[props.selectedEnvironmentId]?.environmentLabel ??
-        "this environment");
+      : props.selectedEnvironmentIds.length === 1
+        ? (props.savedConnectionsById[props.selectedEnvironmentIds[0]!]?.environmentLabel ??
+          "this environment")
+        : `${props.selectedEnvironmentIds.length} environments`;
+  const environmentLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const connection of Object.values(props.savedConnectionsById)) {
+      map.set(connection.environmentId, connection.environmentLabel);
+    }
+    return map;
+  }, [props.savedConnectionsById]);
   const shouldShowConnectionStatus = shouldShowWorkspaceConnectionStatus(props.catalogState);
   const emptyState = deriveEmptyState({
     catalogState: props.catalogState,
@@ -827,7 +818,9 @@ export function HomeScreen(props: HomeScreenProps) {
       </View>
     ) : null;
 
-  if (!hasAnyThreads) {
+  // Board owns its empty chrome; connection-level empty still applies below
+  // for Recent/Projects when the workspace has no threads at all.
+  if (!hasAnyThreads && props.listMode !== "board") {
     return (
       <View
         className="flex-1 items-center justify-center bg-screen px-8"
@@ -887,8 +880,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
   const v2PendingTasks = props.pendingTasks.filter(
     (pendingTask) =>
-      (props.selectedEnvironmentId === null ||
-        pendingTask.message.environmentId === props.selectedEnvironmentId) &&
+      matchesEnvironmentFilter(pendingTask.message.environmentId, props.selectedEnvironmentIds) &&
       (v2ScopedProjectKeys === null ||
         v2ScopedProjectKeys.has(
           scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
@@ -969,6 +961,29 @@ export function HomeScreen(props: HomeScreenProps) {
     ) : (
       listEmpty
     );
+
+  if (props.listMode === "board") {
+    return (
+      <View className="flex-1 bg-screen">
+        <BoardScreen
+          projects={props.projects}
+          threads={props.threads}
+          projectGroupingMode={props.projectGroupingMode}
+          environmentLabelById={environmentLabelById}
+          selectedEnvironmentIds={props.selectedEnvironmentIds}
+          onClearEnvironments={props.onClearEnvironments}
+          onToggleEnvironment={props.onToggleEnvironment}
+          hideFilterChrome
+          onSelectThread={props.onSelectThread}
+          onArchiveThread={props.onArchiveThread}
+          onDeleteThread={props.onDeleteThread}
+          onSettleThread={props.onSettleThread}
+          onUnsettleThread={props.onUnsettleThread}
+        />
+        {connectionStatus}
+      </View>
+    );
+  }
 
   if (threadListV2Enabled) {
     return (

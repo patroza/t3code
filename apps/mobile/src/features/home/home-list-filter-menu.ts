@@ -1,5 +1,6 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 
+import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import { PROJECT_SORT_OPTIONS, THREAD_SORT_OPTIONS } from "./home-list-options";
 
@@ -35,18 +36,22 @@ export interface HomeListFilterMenu {
 export function buildHomeListFilterMenu(props: {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
-  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+  readonly onClearEnvironments: () => void;
+  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
-  /** False hides the sort/group submenus. Thread List v2 uses a fixed
-      creation-order layout, so offering those controls while it silently
-      ignores them would be a lie; the environment filter still applies. */
+  /**
+   * False hides the sort/group submenus. Recent/Board and Thread List v2 use
+   * fixed layouts; the environment multi-filter still applies.
+   */
   readonly listOrganization?: boolean;
+  /** When false, hide the project scope submenu (Board uses its own control). */
+  readonly showProjectFilter?: boolean;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -58,22 +63,23 @@ export function buildHomeListFilterMenu(props: {
         type: "action",
         title: "All environments",
         subtitle: "Show threads from every environment",
-        state: props.selectedEnvironmentId === null ? "on" : "off",
-        onPress: () => props.onEnvironmentChange(null),
+        state: isAllEnvironmentsSelected(props.selectedEnvironmentIds) ? "on" : "off",
+        onPress: () => props.onClearEnvironments(),
       },
       ...props.environments.map((environment) => ({
         type: "action" as const,
         title: environment.label,
-        state:
-          props.selectedEnvironmentId === environment.environmentId
-            ? ("on" as const)
-            : ("off" as const),
-        onPress: () => props.onEnvironmentChange(environment.environmentId),
+        // When "all" is selected every row is visually on so multi-toggle is clear;
+        // pressing one leaves "all" and keeps only that environment.
+        state: isEnvironmentSelected(props.selectedEnvironmentIds, environment.environmentId)
+          ? ("on" as const)
+          : ("off" as const),
+        onPress: () => props.onToggleEnvironment(environment.environmentId),
       })),
     ],
   });
 
-  if (props.projects.length > 0) {
+  if (props.showProjectFilter !== false && props.projects.length > 0) {
     items.push({
       type: "submenu",
       title: "Project",
