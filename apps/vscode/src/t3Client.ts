@@ -14,6 +14,7 @@ import {
   OrchestrationThreadDetailSnapshot,
   type OrchestrationThread,
   type OrchestrationThreadShell,
+  type MessageId,
   type RuntimeMode,
   type ProviderInteractionMode,
   type ApprovalRequestId,
@@ -435,6 +436,30 @@ export class T3Client {
       ...(input.sourceProposedPlan === undefined
         ? {}
         : { sourceProposedPlan: input.sourceProposedPlan }),
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  async steerQueuedMessage(messageId: MessageId): Promise<void> {
+    const thread = this.#activeThread;
+    if (thread === null) throw new Error("Select a T3 Code thread before steering its queue.");
+    await this.#dispatch({
+      type: "thread.queue.steer",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      messageId,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  async removeQueuedMessage(messageId: MessageId): Promise<void> {
+    const thread = this.#activeThread;
+    if (thread === null) throw new Error("Select a T3 Code thread before changing its queue.");
+    await this.#dispatch({
+      type: "thread.queue.remove",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      messageId,
       createdAt: new Date().toISOString(),
     });
   }

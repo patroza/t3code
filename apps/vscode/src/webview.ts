@@ -68,6 +68,13 @@ interface ViewActiveProposedPlan {
   readonly createdAt: string;
 }
 
+interface ViewQueuedMessage {
+  readonly messageId: string;
+  readonly text: string;
+  readonly attachmentCount: number;
+  readonly queuedAt: string;
+}
+
 interface ViewMessage {
   readonly id: string;
   readonly role: "user" | "assistant" | "system";
@@ -150,6 +157,7 @@ interface ViewState {
     readonly pendingInteractions: ReadonlyArray<ViewPendingApproval | ViewPendingUserInput>;
     readonly showPlanFollowUp: boolean;
     readonly activeProposedPlan: ViewActiveProposedPlan | null;
+    readonly queuedMessages: ReadonlyArray<ViewQueuedMessage>;
     readonly proposedPlans: ReadonlyArray<ViewProposedPlan>;
     readonly tasks: null | {
       readonly explanation: string | null;
@@ -208,6 +216,7 @@ const threadActions = requiredElement<HTMLDetailsElement>("thread-actions");
 const archiveThread = requiredElement<HTMLButtonElement>("archive-thread");
 const visitT3 = requiredElement<HTMLButtonElement>("visit-t3");
 const status = requiredElement<HTMLElement>("status");
+const queuedMessages = requiredElement<HTMLElement>("queued-messages");
 const prompt = requiredElement<HTMLTextAreaElement>("prompt");
 const slashCommands = requiredElement<HTMLElement>("slash-commands");
 const send = requiredElement<HTMLButtonElement>("send");
@@ -838,6 +847,7 @@ function activityRevision(thread: ViewState["activeThread"]): string {
     lastResolvedUserInput: thread.resolvedUserInputs.at(-1) ?? null,
     proposedPlanCount: thread.proposedPlans.length,
     lastProposedPlan: thread.proposedPlans.at(-1) ?? null,
+    queuedMessages: thread.queuedMessages,
   });
 }
 
@@ -1077,6 +1087,49 @@ function render(next: ViewState): void {
   visitT3.disabled = !next.connected || next.activeThread === null;
   syncPromptDisabled(next.busy);
   renderComposerAction();
+  renderQueuedMessages(next);
+}
+
+function renderQueuedMessages(state: ViewState): void {
+  queuedMessages.replaceChildren();
+  for (const message of state.activeThread?.queuedMessages ?? []) {
+    const row = document.createElement("div");
+    row.className = "queued-message";
+    row.title = message.text;
+
+    const icon = document.createElement("span");
+    icon.className = "queued-message-icon";
+    icon.textContent = "↳";
+
+    const text = document.createElement("span");
+    text.className = "queued-message-text";
+    text.textContent =
+      message.text.trim() ||
+      `${message.attachmentCount} attachment${message.attachmentCount === 1 ? "" : "s"}`;
+
+    const steer = document.createElement("button");
+    steer.type = "button";
+    steer.textContent = "Steer";
+    steer.title = "Send now, interrupting the current step";
+    steer.ariaLabel = "Steer queued message";
+    steer.disabled = state.busy;
+    steer.addEventListener("click", () =>
+      post({ type: "steerQueuedMessage", messageId: message.messageId }),
+    );
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.title = "Remove queued message";
+    remove.ariaLabel = "Remove queued message";
+    remove.disabled = state.busy;
+    remove.addEventListener("click", () =>
+      post({ type: "removeQueuedMessage", messageId: message.messageId }),
+    );
+
+    row.append(icon, text, steer, remove);
+    queuedMessages.append(row);
+  }
 }
 
 /**
@@ -1366,8 +1419,9 @@ function renderComposerAction(): void {
     send.title =
       prompt.value.trim().length > 0 ? "Send plan feedback" : "Implement the proposed plan";
   } else {
-    send.textContent = "Send";
-    send.title = "Send message";
+    send.textContent = isRunning() && hasComposerInput() ? "Queue" : "Send";
+    send.title =
+      isRunning() && hasComposerInput() ? "Queue message after the active turn" : "Send message";
   }
   send.classList.toggle("stop-action", stopping);
   prompt.placeholder = planFollowUp
