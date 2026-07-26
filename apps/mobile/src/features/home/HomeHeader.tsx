@@ -1,6 +1,10 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import {
+  NativeHeaderToolbar,
+  NativeStackScreenOptions,
+  nativeHeaderScrollEdgeEffects,
+} from "../../native/StackHeader";
 import { useCallback, useMemo, useRef } from "react";
 import { Platform, Pressable, Text as RNText, TextInput, View } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
@@ -9,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -32,6 +37,8 @@ import {
   otherHomeListModes,
   type HomeListMode,
 } from "./homeListMode";
+
+const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
@@ -321,8 +328,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
+  const sheetBackground = useThemeColor("--color-sheet");
   const listOrganization = usesListOrganization(props.listMode);
   const alternateModes = otherHomeListModes(props.listMode);
+  const isBoardMode = props.listMode === "board";
+  // Board columns are nested horizontal/vertical lists — not one UIKit scroll
+  // view that glass can sample / auto-inset. Use a solid bar so cards never
+  // paint under the status/nav chrome (same as the dedicated Board route).
+  const useSolidBoardHeader = isBoardMode && NATIVE_LIQUID_GLASS_SUPPORTED;
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
@@ -360,11 +373,29 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, props.listMode, headerTitle]}
+        optionsVersion={[filterMenu.items, props.listMode, headerTitle, useSolidBoardHeader]}
         options={{
           title: headerTitle,
           headerTitle,
           headerTintColor: iconColor,
+          // Explicitly toggle glass ↔ solid when switching modes so board
+          // underlap does not stick after leaving Board, and vice versa.
+          ...(NATIVE_LIQUID_GLASS_SUPPORTED
+            ? useSolidBoardHeader
+              ? {
+                  headerTransparent: false,
+                  // native-stack types backgroundColor as string; ColorValue is fine at runtime.
+                  headerStyle: {
+                    backgroundColor: sheetBackground as unknown as string,
+                  },
+                  scrollEdgeEffects: undefined,
+                }
+              : {
+                  headerTransparent: true,
+                  headerStyle: { backgroundColor: "transparent" },
+                  scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
+                }
+            : {}),
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
@@ -388,8 +419,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   }),
                 ]
               : undefined,
+          // Board has no thread search — hide the bottom mail search toolbar.
           unstable_headerToolbarItems:
-            Platform.OS === "ios"
+            Platform.OS === "ios" && !isBoardMode
               ? () => [
                   createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
