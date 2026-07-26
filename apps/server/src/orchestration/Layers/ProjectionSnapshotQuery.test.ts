@@ -11,6 +11,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -691,6 +692,121 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.isTrue(
         archivedWithoutSession._tag === "Some" && archivedWithoutSession.value.session === null,
       );
+    }),
+  );
+
+  it.effect("reads thread lifecycle markers regardless of deleted/archived state", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_threads`;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES
+          (
+            'thread-lifecycle-active',
+            'project-lifecycle-test',
+            'Active Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-04-06T00:00:02.000Z',
+            '2026-04-06T00:00:03.000Z',
+            NULL,
+            NULL
+          ),
+          (
+            'thread-lifecycle-archived',
+            'project-lifecycle-test',
+            'Archived Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-04-06T00:00:04.000Z',
+            '2026-04-06T00:00:05.000Z',
+            '2026-04-06T00:00:06.000Z',
+            NULL
+          ),
+          (
+            'thread-lifecycle-deleted',
+            'project-lifecycle-test',
+            'Deleted Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-04-06T00:00:07.000Z',
+            '2026-04-06T00:00:08.000Z',
+            NULL,
+            '2026-04-06T00:00:09.000Z'
+          )
+      `;
+
+      const active = yield* snapshotQuery.getThreadLifecycleById(
+        ThreadId.make("thread-lifecycle-active"),
+      );
+      assert.deepEqual(active, Option.some({ deletedAt: null, archivedAt: null }));
+
+      const archived = yield* snapshotQuery.getThreadLifecycleById(
+        ThreadId.make("thread-lifecycle-archived"),
+      );
+      assert.deepEqual(
+        archived,
+        Option.some({ deletedAt: null, archivedAt: "2026-04-06T00:00:06.000Z" }),
+      );
+
+      const deleted = yield* snapshotQuery.getThreadLifecycleById(
+        ThreadId.make("thread-lifecycle-deleted"),
+      );
+      assert.deepEqual(
+        deleted,
+        Option.some({ deletedAt: "2026-04-06T00:00:09.000Z", archivedAt: null }),
+      );
+
+      const missing = yield* snapshotQuery.getThreadLifecycleById(
+        ThreadId.make("thread-lifecycle-missing"),
+      );
+      assert.deepEqual(missing, Option.none());
     }),
   );
 
