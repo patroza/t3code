@@ -202,6 +202,7 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { openCommandPalette } from "../commandPaletteBus";
+import { subscribeToProjectReveal } from "../projectJump";
 import {
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
@@ -2659,7 +2660,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
 const SidebarProjectListRow = memo(function SidebarProjectListRow(props: SidebarProjectItemProps) {
   return (
-    <SidebarMenuItem className="rounded-md">
+    <SidebarMenuItem className="rounded-md" data-project-key={props.project.projectKey}>
       <SidebarProjectItem {...props} />
     </SidebarMenuItem>
   );
@@ -2897,6 +2898,7 @@ function SortableProjectItem({
       } ${isOver && !isDragging ? "ring-1 ring-primary/40" : ""}`}
       data-sidebar="menu-item"
       data-slot="sidebar-menu-item"
+      data-project-key={projectId}
     >
       {children({ attributes, listeners, setActivatorNodeRef })}
     </li>
@@ -5476,6 +5478,25 @@ export default function Sidebar() {
       return next;
     });
   }, []);
+
+  useEffect(
+    () =>
+      subscribeToProjectReveal(({ environmentId, projectId }) => {
+        const physicalProjectKey = `${environmentId}:${projectId}`;
+        const projectKey = physicalToLogicalKey.get(physicalProjectKey) ?? physicalProjectKey;
+        if (!sidebarProjectByKey.has(projectKey)) return;
+        expandThreadListForProject(projectKey);
+        requestAnimationFrame(() => {
+          const rows = document.querySelectorAll<HTMLElement>("[data-project-key]");
+          for (const row of rows) {
+            if (row.dataset.projectKey !== projectKey) continue;
+            row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            break;
+          }
+        });
+      }),
+    [expandThreadListForProject, physicalToLogicalKey, sidebarProjectByKey],
+  );
 
   return (
     <>

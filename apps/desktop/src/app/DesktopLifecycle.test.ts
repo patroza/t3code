@@ -79,6 +79,7 @@ describe("DesktopLifecycle", () => {
         dispatchMenuAction: () => Effect.void,
         syncAppearance: Effect.void,
         navigateToThread: () => Effect.void,
+        navigateToProject: () => Effect.void,
       });
 
       const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
