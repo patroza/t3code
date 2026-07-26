@@ -30,6 +30,12 @@ export interface Preferences {
    * variant decides — see `resolveThreadListV2Enabled`.
    */
   readonly threadListV2Enabled?: boolean;
+  /**
+   * Device-local mirror of web `sidebarRecentThreadsEnabled`. When true
+   * (default), the home list and iPad sidebar show a cross-project Recent
+   * section above project groups. Mobile has no client-settings sync.
+   */
+  readonly recentWorkEnabled?: boolean;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -81,6 +87,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     threadListV2Enabled?: boolean;
+    recentWorkEnabled?: boolean;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -112,6 +119,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListV2Enabled === "boolean") {
     preferences.threadListV2Enabled = parsed.threadListV2Enabled;
+  }
+  if (typeof parsed.recentWorkEnabled === "boolean") {
+    preferences.recentWorkEnabled = parsed.recentWorkEnabled;
   }
   return preferences;
 }

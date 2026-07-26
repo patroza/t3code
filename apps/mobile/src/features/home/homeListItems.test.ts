@@ -239,4 +239,72 @@ describe("buildHomeListLayout", () => {
     expect(layout.stickyHeaderIndices).toEqual([0, 8]);
     expect(layout.items[8]).toMatchObject({ type: "header", isFirst: false });
   });
+
+  it("prepends a Recent section with project titles and binary show-more", () => {
+    const alpha = makeProject("alpha", "Alpha");
+    const beta = makeProject("beta", "Beta");
+    const recentEntries = Array.from({ length: 8 }, (_, index) => {
+      const project = index % 2 === 0 ? alpha : beta;
+      return {
+        thread: makeThread(`recent-${index}`, project.id),
+        project,
+      };
+    });
+
+    const collapsed = buildHomeListLayout({
+      groups: [makeGroup("alpha", 2)],
+      displayStates: displayStates({}),
+      recentWork: { entries: recentEntries, expanded: false },
+    });
+
+    expect(itemTypes(collapsed.items).slice(0, 3)).toEqual([
+      "recent-header",
+      "recent-thread",
+      "recent-thread",
+    ]);
+    expect(collapsed.items.filter((item) => item.type === "recent-thread")).toHaveLength(6);
+    expect(collapsed.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "recent-show-more",
+          hiddenCount: 2,
+          canShowLess: false,
+        }),
+      ]),
+    );
+    // Project groups shift down; sticky index accounts for Recent rows
+    // (header + 6 threads + show-more = 8).
+    expect(collapsed.stickyHeaderIndices).toEqual([8]);
+    expect(collapsed.items[8]).toMatchObject({ type: "header", isFirst: false });
+    expect(collapsed.items[1]).toMatchObject({
+      type: "recent-thread",
+      projectTitle: "Alpha",
+    });
+
+    const expanded = buildHomeListLayout({
+      groups: [makeGroup("alpha", 2)],
+      displayStates: displayStates({}),
+      recentWork: { entries: recentEntries, expanded: true },
+    });
+    expect(expanded.items.filter((item) => item.type === "recent-thread")).toHaveLength(8);
+    expect(expanded.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "recent-show-more",
+          hiddenCount: 0,
+          canShowLess: true,
+        }),
+      ]),
+    );
+  });
+
+  it("omits the Recent section when entries are empty", () => {
+    const layout = buildHomeListLayout({
+      groups: [makeGroup("alpha", 1)],
+      displayStates: displayStates({}),
+      recentWork: { entries: [], expanded: false },
+    });
+    expect(itemTypes(layout.items)).toEqual(["header", "thread"]);
+    expect(layout.items[0]).toMatchObject({ type: "header", isFirst: true });
+  });
 });
