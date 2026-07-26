@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { CornerDownRightIcon, ListEndIcon, Trash2Icon } from "lucide-react";
+import { CornerDownRightIcon, ListEndIcon, PencilIcon } from "lucide-react";
 import type { MessageId, OrchestrationQueuedMessage } from "@t3tools/contracts";
 
 import { Button } from "../ui/button";
@@ -13,12 +13,12 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
   queuedMessages,
   disabled,
   onSteer,
-  onRemove,
+  onEdit,
 }: {
   readonly queuedMessages: ReadonlyArray<OrchestrationQueuedMessage>;
   readonly disabled?: boolean;
   readonly onSteer: (messageId: MessageId) => void;
-  readonly onRemove: (messageId: MessageId) => void;
+  readonly onEdit: (messageId: MessageId) => void;
 }) {
   if (queuedMessages.length === 0) {
     return null;
@@ -55,11 +55,11 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
             size="icon-xs"
             variant="ghost"
             disabled={disabled}
-            aria-label="Remove queued message"
-            title="Remove queued message"
-            onClick={() => onRemove(queuedMessage.messageId)}
+            aria-label="Edit queued message"
+            title="Edit queued message; save an empty draft to remove it"
+            onClick={() => onEdit(queuedMessage.messageId)}
           >
-            <Trash2Icon className="size-3.5" />
+            <PencilIcon className="size-3.5" />
           </Button>
         </div>
       ))}
