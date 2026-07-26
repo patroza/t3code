@@ -134,6 +134,10 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./state/worktreeCleanup": {
+      "types": "./src/state/worktreeCleanup.ts",
+      "default": "./src/state/worktreeCleanup.ts"
     }
   },
   "scripts": {
