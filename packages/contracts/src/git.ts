@@ -170,6 +170,46 @@ export const VcsRemoveWorktreeInput = Schema.Struct({
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
 
+// Worktree lifecycle (thread-scoped cleanup)
+//
+// These inputs are keyed by thread id instead of a client-provided repository
+// root and path so the server stays authoritative over which worktree (if
+// any) is safe to remove or must be restored.
+
+export const WorktreeCleanupPreviewInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type WorktreeCleanupPreviewInput = typeof WorktreeCleanupPreviewInput.Type;
+
+export const WorktreeCleanupCandidate = Schema.Struct({
+  worktreePath: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema,
+});
+export type WorktreeCleanupCandidate = typeof WorktreeCleanupCandidate.Type;
+
+export const WorktreeCleanupPreviewResult = Schema.Struct({
+  candidate: Schema.NullOr(WorktreeCleanupCandidate),
+});
+export type WorktreeCleanupPreviewResult = typeof WorktreeCleanupPreviewResult.Type;
+
+export const WorktreeCleanupInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type WorktreeCleanupInput = typeof WorktreeCleanupInput.Type;
+
+export const WorktreeCleanupStatus = Schema.Literals([
+  "removed",
+  "retained-active",
+  "already-missing",
+]);
+export type WorktreeCleanupStatus = typeof WorktreeCleanupStatus.Type;
+
+export const WorktreeCleanupResult = Schema.Struct({
+  status: WorktreeCleanupStatus,
+  worktreePath: TrimmedNonEmptyStringSchema,
+});
+export type WorktreeCleanupResult = typeof WorktreeCleanupResult.Type;
+
 export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
@@ -342,6 +382,20 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
 }) {
   override get message(): string {
     return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}`;
+  }
+}
+
+export class WorktreeLifecycleError extends Schema.TaggedErrorClass<WorktreeLifecycleError>()(
+  "WorktreeLifecycleError",
+  {
+    operation: Schema.String,
+    threadId: ThreadId,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Worktree ${this.operation} failed: ${this.detail}`;
   }
 }
 
