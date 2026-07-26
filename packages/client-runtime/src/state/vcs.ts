@@ -20,7 +20,11 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { request, subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
+import {
+  vcsCommandConcurrency,
+  vcsCommandScheduler,
+  vcsThreadCommandConcurrency,
+} from "./vcsCommandScheduler.ts";
 
 const OFFLINE_BRANCH_LIST_LIMIT = 100;
 const VCS_REFS_REVALIDATE_INTERVAL = "5 seconds";
@@ -199,6 +203,18 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.vcsRemoveWorktree,
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
+    }),
+    previewWorktreeCleanup: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:preview-worktree-cleanup",
+      tag: WS_METHODS.vcsPreviewWorktreeCleanup,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsThreadCommandConcurrency,
+    }),
+    cleanupThreadWorktree: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:cleanup-thread-worktree",
+      tag: WS_METHODS.vcsCleanupThreadWorktree,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsThreadCommandConcurrency,
     }),
     createRef: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-ref",
