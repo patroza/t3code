@@ -4,6 +4,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  buildUnsignedCommitRetryInput,
+  isCommitSigningFailure,
+} from "@t3tools/client-runtime/state/vcs";
 import type {
   GitActionProgressEvent,
   GitRunStackedActionResult,
@@ -103,7 +107,7 @@ interface PendingDefaultBranchAction {
   includesCommit: boolean;
   commitMessage?: string;
   onConfirmed?: () => void;
-  filePaths?: string[];
+  filePaths?: ReadonlyArray<string>;
 }
 
 type PublishProviderKind = Extract<
@@ -132,8 +136,9 @@ interface RunGitActionWithToastInput {
   skipDefaultBranchPrompt?: boolean;
   statusOverride?: VcsStatusResult | null;
   featureBranch?: boolean;
+  disableCommitSigning?: boolean;
   progressToastId?: GitActionToastId;
-  filePaths?: string[];
+  filePaths?: ReadonlyArray<string>;
 }
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
@@ -1019,6 +1024,7 @@ export default function GitActionsControl({
       title: progress.title,
       description: resolveProgressDescription(progress),
       timeout: 0,
+      actionProps: undefined,
       data: progress.toastData,
     });
   }, []);
@@ -1250,6 +1256,7 @@ export default function GitActionsControl({
       skipDefaultBranchPrompt = false,
       statusOverride,
       featureBranch = false,
+      disableCommitSigning = false,
       progressToastId,
       filePaths,
     }: RunGitActionWithToastInput) => {
@@ -1326,6 +1333,7 @@ export default function GitActionsControl({
           title: progressStages[0] ?? "Running git action...",
           description: "Waiting for Git...",
           timeout: 0,
+          actionProps: undefined,
           data: scopedToastData,
         });
       }
@@ -1391,6 +1399,7 @@ export default function GitActionsControl({
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
+        ...(disableCommitSigning ? { disableCommitSigning: true } : {}),
         ...(filePaths ? { filePaths } : {}),
         onProgress: applyProgressEvent,
       });
@@ -1403,6 +1412,42 @@ export default function GitActionsControl({
         }
 
         const error = squashAtomCommandFailure(result);
+        if (!disableCommitSigning && isCommitSigningFailure(error)) {
+          const retryInput = buildUnsignedCommitRetryInput({
+            action,
+            ...(commitMessage ? { commitMessage } : {}),
+            ...(featureBranch ? { featureBranch: true } : {}),
+            ...(filePaths ? { filePaths } : {}),
+          });
+          toastManager.update(
+            resolvedProgressToastId,
+            stackedThreadToast({
+              type: "error",
+              title: "Commit signing failed",
+              description: "Git couldn’t sign the commit. Retry this commit without signing?",
+              timeout: 0,
+              actionProps: {
+                children: "Retry without signing",
+                onClick: () => {
+                  void runGitActionWithToast({
+                    action: retryInput.action,
+                    ...(retryInput.commitMessage !== undefined
+                      ? { commitMessage: retryInput.commitMessage }
+                      : {}),
+                    ...(retryInput.filePaths !== undefined
+                      ? { filePaths: retryInput.filePaths }
+                      : {}),
+                    disableCommitSigning: true,
+                    skipDefaultBranchPrompt: true,
+                    progressToastId: resolvedProgressToastId,
+                  });
+                },
+              },
+              ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
+            }),
+          );
+          return;
+        }
         toastManager.update(
           resolvedProgressToastId,
           stackedThreadToast({
