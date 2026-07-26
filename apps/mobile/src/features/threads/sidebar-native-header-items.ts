@@ -40,6 +40,7 @@ export function createSidebarHeaderItems(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
   readonly onOpenSettings: () => void;
+  readonly onOpenBoard?: () => void;
 }): NativeStackHeaderItem[] {
   return [
     withNativeGlassHeaderItem({
@@ -52,6 +53,17 @@ export function createSidebarHeaderItems(input: {
         items: toNativeHeaderMenuItems(input.filterMenu.items),
       },
     }),
+    ...(input.onOpenBoard
+      ? [
+          withNativeGlassHeaderItem({
+            type: "button" as const,
+            label: "",
+            accessibilityLabel: "Open board",
+            icon: sfSymbolIcon("square.split.2x1"),
+            onPress: input.onOpenBoard,
+          }),
+        ]
+      : []),
     withNativeGlassHeaderItem({
       type: "button",
       label: "",

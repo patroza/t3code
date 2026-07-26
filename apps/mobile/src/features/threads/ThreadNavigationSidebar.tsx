@@ -135,6 +135,7 @@ interface ThreadNavigationSidebarProps {
   readonly visible: boolean;
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
+  readonly onOpenBoard: () => void;
   readonly onOpenEnvironmentSettings: () => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -1047,8 +1048,9 @@ function ThreadNavigationSidebarPane(
         filterIcon,
         filterMenu,
         onOpenSettings: props.onOpenSettings,
+        onOpenBoard: props.onOpenBoard,
       }),
-    [filterIcon, filterMenu, props.onOpenSettings],
+    [filterIcon, filterMenu, props.onOpenBoard, props.onOpenSettings],
   );
   // "No threads yet" over an inbox that is merely all-snoozed reads as
   // data loss; name the snoozed threads instead.
@@ -1243,7 +1245,11 @@ function ThreadNavigationSidebarPane(
                 icon={filterIcon}
               />
             </ControlPillMenu>
-            <SidebarHeaderActions grouped onOpenSettings={props.onOpenSettings} />
+            <SidebarHeaderActions
+              grouped
+              onOpenBoard={props.onOpenBoard}
+              onOpenSettings={props.onOpenSettings}
+            />
           </SidebarHeaderButtonGroup>
         </View>
 
