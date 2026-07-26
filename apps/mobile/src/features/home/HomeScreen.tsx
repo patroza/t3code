@@ -963,6 +963,10 @@ export function HomeScreen(props: HomeScreenProps) {
     );
 
   if (props.listMode === "board") {
+    // Solid nav header is forced for Board mode (HomeHeader): horizontal
+    // columns are not UIKit-auto-inset scroll views, so glass underlapped cards.
+    // Keep in-board env/project filter chrome — the bottom search toolbar is
+    // hidden in Board mode.
     return (
       <View className="flex-1 bg-screen">
         <BoardScreen
@@ -973,7 +977,6 @@ export function HomeScreen(props: HomeScreenProps) {
           selectedEnvironmentIds={props.selectedEnvironmentIds}
           onClearEnvironments={props.onClearEnvironments}
           onToggleEnvironment={props.onToggleEnvironment}
-          hideFilterChrome
           onSelectThread={props.onSelectThread}
           onArchiveThread={props.onArchiveThread}
           onDeleteThread={props.onDeleteThread}
