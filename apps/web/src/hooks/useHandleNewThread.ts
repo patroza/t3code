@@ -50,6 +50,7 @@ export function useNewThreadHandler() {
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
+        reuseBaseBranch?: boolean;
         replace?: boolean;
       },
     ): Promise<void> => {
@@ -112,6 +113,7 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const hasReuseBaseBranchOption = options?.reuseBaseBranch !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -137,7 +139,8 @@ export function useNewThreadHandler() {
             hasBranchOption ||
             hasWorktreePathOption ||
             hasEnvModeOption ||
-            hasStartFromOriginOption;
+            hasStartFromOriginOption ||
+            hasReuseBaseBranchOption;
           // Resurrecting a stored draft must not resurrect its stale context:
           // explicit workspace options win outright; otherwise the env context
           // resets to the configured defaults so drafts seeded before a
@@ -153,6 +156,7 @@ export function useNewThreadHandler() {
                 ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
                 ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
                 ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
+                ...(hasReuseBaseBranchOption ? { reuseBaseBranch: options?.reuseBaseBranch } : {}),
               }
             : isDraftAlreadyOpen
               ? null
@@ -164,6 +168,7 @@ export function useNewThreadHandler() {
                     envMode: defaultEnvMode,
                     newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
                   }),
+                  reuseBaseBranch: false,
                 };
           if (workspaceContext) {
             setDraftThreadContext(reusableStoredDraftThread.draftId, {
@@ -220,13 +225,15 @@ export function useNewThreadHandler() {
           hasBranchOption ||
           hasWorktreePathOption ||
           hasEnvModeOption ||
-          hasStartFromOriginOption
+          hasStartFromOriginOption ||
+          hasReuseBaseBranchOption
         ) {
           setDraftThreadContext(currentRouteTarget.draftId, {
             ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
             ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
             ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
             ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
+            ...(hasReuseBaseBranchOption ? { reuseBaseBranch: options?.reuseBaseBranch } : {}),
           });
         }
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, currentRouteTarget.draftId, {
@@ -238,6 +245,7 @@ export function useNewThreadHandler() {
           ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
           ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
           ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
+          ...(hasReuseBaseBranchOption ? { reuseBaseBranch: options?.reuseBaseBranch } : {}),
         });
         return Promise.resolve();
       }
@@ -259,6 +267,7 @@ export function useNewThreadHandler() {
               envMode: initialEnvMode,
               newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
             }),
+          reuseBaseBranch: options?.reuseBaseBranch ?? false,
           runtimeMode: carryRuntimeMode ?? DEFAULT_RUNTIME_MODE,
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
