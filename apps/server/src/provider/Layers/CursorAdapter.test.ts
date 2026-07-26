@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -168,6 +168,41 @@ const cursorAdapterTestLayer = it.layer(
 );
 
 cursorAdapterTestLayer("CursorAdapterLive", (it) => {
+  it.effect("passes the resolved complete environment to the Cursor ACP child", () =>
+    Effect.gen(function* () {
+      const tempDirectory = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-direnv-")),
+      );
+      const requestLogPath = NodePath.join(tempDirectory, "requests.jsonl");
+      const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
+      const resolveEnvironment = vi.fn((input) =>
+        Effect.succeed({
+          ...input.environment,
+          PROVIDER_VALUE: "from-direnv",
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeCursorAdapter(decodeCursorSettings({ binaryPath: wrapperPath }), {
+        environment: { ...process.env, PROVIDER_VALUE: "configured" },
+        resolveEnvironment,
+      });
+      const threadId = ThreadId.make("cursor-direnv-thread");
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: ".",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(resolveEnvironment.mock.calls[0]?.[0].cwd, process.cwd());
+      // The wait only succeeds once the child saw the resolved environment
+      // (the request log path only exists inside it).
+      yield* waitForJsonLogMatch(requestLogPath, (entry) => entry.method === "initialize");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("starts a session and maps mock ACP prompt flow to runtime events", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;

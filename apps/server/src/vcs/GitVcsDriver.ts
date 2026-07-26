@@ -30,6 +30,7 @@ import {
   type VcsStatusInput,
   type VcsStatusResult,
 } from "@t3tools/contracts";
+import * as DirenvEnvironment from "../provider/DirenvEnvironment.ts";
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -878,5 +879,9 @@ export const make = Effect.gen(function* () {
   return GitVcsDriver.of(git);
 });
 
-export const vcsLayer = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver);
-export const layer = Layer.effect(GitVcsDriver, make);
+export const vcsLayer = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver).pipe(
+  Layer.provide(DirenvEnvironment.layerLive),
+);
+export const layer = Layer.effect(GitVcsDriver, make).pipe(
+  Layer.provide(DirenvEnvironment.layerLive),
+);
