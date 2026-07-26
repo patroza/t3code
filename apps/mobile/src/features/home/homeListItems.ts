@@ -1,6 +1,11 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import {
+  HOME_RECENT_WORK_GROUP_KEY,
+  HOME_RECENT_WORK_PREVIEW_COUNT,
+  type HomeRecentWorkEntry,
+} from "./homeRecentWork";
 import type { HomeThreadGroup } from "./homeThreadList";
 
 /** Threads shown per project before the "Show more" affordance appears. */
@@ -51,11 +56,40 @@ export interface HomeShowMoreListItem {
   readonly canShowLess: boolean;
 }
 
+/** Cross-project Recent section label (web sidebar "Recent"). */
+export interface HomeRecentHeaderListItem {
+  readonly type: "recent-header";
+  readonly key: string;
+}
+
+/** Thread row inside the cross-project Recent section. */
+export interface HomeRecentThreadListItem {
+  readonly type: "recent-thread";
+  readonly key: string;
+  readonly thread: EnvironmentThreadShell;
+  readonly projectTitle: string;
+  readonly isLast: boolean;
+}
+
+/**
+ * Recent section show-more uses a binary expand (preview ↔ all), matching
+ * web. Reuses the project show-more row UI via {@link HOME_RECENT_WORK_GROUP_KEY}.
+ */
+export interface HomeRecentShowMoreListItem {
+  readonly type: "recent-show-more";
+  readonly key: string;
+  readonly hiddenCount: number;
+  readonly canShowLess: boolean;
+}
+
 export type HomeListItem =
   | HomeHeaderListItem
   | HomePendingTaskListItem
   | HomeThreadListItem
-  | HomeShowMoreListItem;
+  | HomeShowMoreListItem
+  | HomeRecentHeaderListItem
+  | HomeRecentThreadListItem
+  | HomeRecentShowMoreListItem;
 
 export interface HomeListLayout {
   readonly items: ReadonlyArray<HomeListItem>;
@@ -113,6 +147,21 @@ export function homeListItemsAreEqual(previous: HomeListItem, item: HomeListItem
         previous.hiddenCount === item.hiddenCount &&
         previous.canShowLess === item.canShowLess
       );
+    case "recent-header":
+      return previous.type === "recent-header";
+    case "recent-thread":
+      return (
+        previous.type === "recent-thread" &&
+        previous.thread === item.thread &&
+        previous.projectTitle === item.projectTitle &&
+        previous.isLast === item.isLast
+      );
+    case "recent-show-more":
+      return (
+        previous.type === "recent-show-more" &&
+        previous.hiddenCount === item.hiddenCount &&
+        previous.canShowLess === item.canShowLess
+      );
   }
 }
 
@@ -123,9 +172,48 @@ export function buildHomeListLayout(input: {
    * When searching, pagination is suspended so every match stays visible.
    */
   readonly showAllThreads?: boolean;
+  /**
+   * Cross-project Recent section (web sidebar "Recent"). When null/undefined
+   * or empty, the section is omitted. Expansion is binary: preview count vs all.
+   */
+  readonly recentWork?: {
+    readonly entries: ReadonlyArray<HomeRecentWorkEntry>;
+    readonly expanded: boolean;
+    readonly previewCount?: number;
+  } | null;
 }): HomeListLayout {
   const items: HomeListItem[] = [];
   const stickyHeaderIndices: number[] = [];
+
+  const recentEntries = input.recentWork?.entries ?? [];
+  if (recentEntries.length > 0 && input.recentWork) {
+    const previewCount = input.recentWork.previewCount ?? HOME_RECENT_WORK_PREVIEW_COUNT;
+    const showAll = input.showAllThreads === true || input.recentWork.expanded;
+    const hasOverflow = recentEntries.length > previewCount;
+    const visibleEntries =
+      showAll || !hasOverflow ? recentEntries : recentEntries.slice(0, previewCount);
+    const hiddenCount = recentEntries.length - visibleEntries.length;
+    const hasShowMoreRow = !input.showAllThreads && hasOverflow;
+
+    items.push({ type: "recent-header", key: "recent-header" });
+    for (const [index, entry] of visibleEntries.entries()) {
+      items.push({
+        type: "recent-thread",
+        key: `recent-thread:${entry.thread.environmentId}:${entry.thread.id}`,
+        thread: entry.thread,
+        projectTitle: entry.project.title,
+        isLast: index === visibleEntries.length - 1 && !hasShowMoreRow,
+      });
+    }
+    if (hasShowMoreRow) {
+      items.push({
+        type: "recent-show-more",
+        key: `recent-show-more:${HOME_RECENT_WORK_GROUP_KEY}`,
+        hiddenCount,
+        canShowLess: input.recentWork.expanded,
+      });
+    }
+  }
 
   for (const [groupIndex, group] of input.groups.entries()) {
     const display = input.displayStates.get(group.key) ?? DEFAULT_GROUP_DISPLAY_STATE;
@@ -137,7 +225,8 @@ export function buildHomeListLayout(input: {
       key: `header:${group.key}`,
       group,
       collapsed,
-      isFirst: groupIndex === 0,
+      // First project group is no longer visually first when Recent sits above.
+      isFirst: groupIndex === 0 && recentEntries.length === 0,
     });
 
     if (collapsed) {
