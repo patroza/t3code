@@ -1,6 +1,11 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 
 import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
+import {
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
+  type HomeThreadGrouping,
+} from "./homeListMode";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import { PROJECT_SORT_OPTIONS, THREAD_SORT_OPTIONS } from "./home-list-options";
 
@@ -46,18 +51,21 @@ export function buildHomeListFilterMenu(props: {
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   /**
-   * False hides the sort/group submenus. Recent/Board and Thread List v2 use
-   * fixed layouts; the environment multi-filter still applies.
+   * False hides project/thread sort submenus. Flat recency, Board, and Thread
+   * List v2 use fixed layouts; the environment multi-filter still applies.
    */
   readonly listOrganization?: boolean;
   /** When false, hide the project scope submenu (Board uses its own control). */
   readonly showProjectFilter?: boolean;
   /**
-   * Recent/Projects: hide settled threads. When provided, the menu offers a
-   * toggle (Recent defaults on; Projects defaults off at the call site).
+   * Threads surface: hide settled threads. When provided, the menu offers a
+   * toggle (recency/none default on; project defaults off at the call site).
    */
   readonly hideSettledThreads?: boolean;
   readonly onHideSettledThreadsChange?: (hide: boolean) => void;
+  /** When set, offers Group by recency / project / nothing. */
+  readonly threadGrouping?: HomeThreadGrouping;
+  readonly onThreadGroupingChange?: (grouping: HomeThreadGrouping) => void;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
@@ -104,6 +112,19 @@ export function buildHomeListFilterMenu(props: {
           onPress: () => props.onProjectChange(project.key),
         })),
       ],
+    });
+  }
+
+  if (props.threadGrouping !== undefined && props.onThreadGroupingChange !== undefined) {
+    items.push({
+      type: "submenu",
+      title: "Group threads",
+      items: HOME_THREAD_GROUPINGS.map((grouping) => ({
+        type: "action" as const,
+        title: HOME_THREAD_GROUPING_LABELS[grouping],
+        state: props.threadGrouping === grouping ? ("on" as const) : ("off" as const),
+        onPress: () => props.onThreadGroupingChange?.(grouping),
+      })),
     });
   }
 

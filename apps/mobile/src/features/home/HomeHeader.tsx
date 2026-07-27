@@ -34,8 +34,12 @@ import {
   HOME_LIST_MODE_ICONS,
   HOME_LIST_MODE_LABELS,
   HOME_LIST_MODE_TITLES,
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
   otherHomeListModes,
+  usesProjectThreadGrouping,
   type HomeListMode,
+  type HomeThreadGrouping,
 } from "./homeListMode";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
@@ -47,17 +51,19 @@ export function HomeHeader(props: {
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly searchQuery: string;
   readonly listMode: HomeListMode;
+  readonly threadGrouping: HomeThreadGrouping;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   /**
-   * Hide settled threads for the active list mode. Recent defaults on;
-   * Projects defaults off. Toggle is offered in Recent and Projects filters.
+   * Hide settled threads for the Threads surface. Recency/none default on;
+   * project grouping defaults off at the call site.
    */
   readonly hideSettledThreads: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onListModeChange: (mode: HomeListMode) => void;
+  readonly onThreadGroupingChange: (grouping: HomeThreadGrouping) => void;
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
@@ -80,26 +86,32 @@ function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
 }
 
-/** Sort controls only apply in Projects mode. */
-function usesListOrganization(listMode: HomeListMode) {
-  return listMode === "projects";
+/** Sort projects/threads only apply when Threads are grouped by project. */
+function usesListOrganization(listMode: HomeListMode, threadGrouping: HomeThreadGrouping) {
+  return listMode === "threads" && usesProjectThreadGrouping(threadGrouping);
+}
+
+function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): boolean {
+  return !usesProjectThreadGrouping(threadGrouping);
 }
 
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
-  const listOrganization = usesListOrganization(props.listMode);
+  const listOrganization = usesListOrganization(props.listMode, props.threadGrouping);
   const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
-    ((props.listMode === "recent" || props.listMode === "projects") &&
-      props.hideSettledThreads !== (props.listMode === "recent")) ||
+    (props.listMode === "threads" &&
+      props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
+    props.threadGrouping !== "project" ||
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
         listMode: props.listMode,
+        threadGrouping: props.threadGrouping,
         projectSortOrder: props.projectSortOrder,
         threadSortOrder: props.threadSortOrder,
         selectedProjectKey: props.selectedProjectKey,
@@ -144,8 +156,17 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
-      ...(props.listMode === "recent" || props.listMode === "projects"
+      ...(props.listMode === "threads"
         ? ([
+            {
+              id: "grouping",
+              title: "Group threads",
+              subactions: HOME_THREAD_GROUPINGS.map((grouping) => ({
+                id: `grouping:${grouping}`,
+                title: HOME_THREAD_GROUPING_LABELS[grouping],
+                state: checkedMenuState(props.threadGrouping === grouping),
+              })),
+            },
             {
               id: "hide-settled",
               title: "Hide settled",
@@ -185,6 +206,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       props.projects,
       props.selectedEnvironmentIds,
       props.selectedProjectKey,
+      props.threadGrouping,
       props.threadSortOrder,
     ],
   );
@@ -211,6 +233,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         const projectKey = id.slice("project:".length);
         if (props.projects.some((project) => project.key === projectKey)) {
           props.onProjectChange(projectKey);
+        }
+        return;
+      }
+
+      if (id.startsWith("grouping:")) {
+        const grouping = id.slice("grouping:".length);
+        if (grouping === "recency" || grouping === "project" || grouping === "none") {
+          props.onThreadGroupingChange(grouping);
         }
         return;
       }
@@ -352,7 +382,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
   const sheetBackground = useThemeColor("--color-sheet");
-  const listOrganization = usesListOrganization(props.listMode);
+  const listOrganization = usesListOrganization(props.listMode, props.threadGrouping);
   const alternateModes = otherHomeListModes(props.listMode);
   const isBoardMode = props.listMode === "board";
   // Board columns are nested horizontal/vertical lists — not one UIKit scroll
@@ -362,12 +392,14 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.selectedProjectKey !== null ||
-    ((props.listMode === "recent" || props.listMode === "projects") &&
-      props.hideSettledThreads !== (props.listMode === "recent")) ||
+    (props.listMode === "threads" &&
+      props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
+    props.threadGrouping !== "project" ||
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
         listMode: props.listMode,
+        threadGrouping: props.threadGrouping,
         projectSortOrder: props.projectSortOrder,
         threadSortOrder: props.threadSortOrder,
         selectedProjectKey: props.selectedProjectKey,
@@ -391,7 +423,9 @@ function IosHomeHeader(props: HomeHeaderProps) {
     onThreadSortOrderChange: props.onThreadSortOrderChange,
     listOrganization,
     showProjectFilter: props.listMode !== "board",
-    ...(props.listMode === "recent" || props.listMode === "projects"
+    threadGrouping: props.listMode === "threads" ? props.threadGrouping : undefined,
+    onThreadGroupingChange: props.listMode === "threads" ? props.onThreadGroupingChange : undefined,
+    ...(props.listMode === "threads"
       ? {
           hideSettledThreads: props.hideSettledThreads,
           onHideSettledThreadsChange: props.onHideSettledThreadsChange,
@@ -562,6 +596,32 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   </NativeHeaderToolbar.MenuAction>
                 ))}
               </NativeHeaderToolbar.Menu>
+            ) : null}
+
+            {props.listMode === "threads" ? (
+              <>
+                <NativeHeaderToolbar.Menu title="Group threads">
+                  <NativeHeaderToolbar.Label>Group threads</NativeHeaderToolbar.Label>
+                  {HOME_THREAD_GROUPINGS.map((grouping) => (
+                    <NativeHeaderToolbar.MenuAction
+                      key={grouping}
+                      isOn={props.threadGrouping === grouping}
+                      onPress={() => props.onThreadGroupingChange(grouping)}
+                    >
+                      <NativeHeaderToolbar.Label>
+                        {HOME_THREAD_GROUPING_LABELS[grouping]}
+                      </NativeHeaderToolbar.Label>
+                    </NativeHeaderToolbar.MenuAction>
+                  ))}
+                </NativeHeaderToolbar.Menu>
+                <NativeHeaderToolbar.MenuAction
+                  isOn={props.hideSettledThreads}
+                  onPress={() => props.onHideSettledThreadsChange(!props.hideSettledThreads)}
+                  subtitle="Omit settled threads from this list"
+                >
+                  <NativeHeaderToolbar.Label>Hide settled</NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              </>
             ) : null}
 
             {listOrganization ? (

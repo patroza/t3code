@@ -56,7 +56,13 @@ import {
   type HomeListItem,
 } from "../home/homeListItems";
 import { buildHomeRecentListEntries, buildHomeRecentPendingEntries } from "../home/homeRecentList";
-import { HOME_LIST_MODE_TITLES } from "../home/homeListMode";
+import {
+  HOME_LIST_MODE_TITLES,
+  HOME_THREAD_GROUPING_LABELS,
+  HOME_THREAD_GROUPINGS,
+  usesFlatThreadGrouping,
+  usesProjectThreadGrouping,
+} from "../home/homeListMode";
 import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
@@ -71,6 +77,7 @@ import {
   PendingTaskListRow,
   ThreadListGroupHeader,
   ThreadListRow,
+  ThreadListSectionHeader,
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import { ThreadListV2PendingRow, ThreadListV2Row } from "./thread-list-v2-items";
@@ -224,12 +231,14 @@ function ThreadNavigationSidebarPane(
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
     setListMode,
+    setThreadGrouping,
     setProjectSortOrder,
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
-  // Thread List v2 only applies in Projects mode; Recent/Board use fixed layouts.
+  // Thread List v2 only applies when Threads are grouped by project.
   const threadListV2Enabled =
-    options.listMode === "projects" &&
+    options.listMode === "threads" &&
+    usesProjectThreadGrouping(options.threadGrouping) &&
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
@@ -239,17 +248,21 @@ function ThreadNavigationSidebarPane(
     ? resolveHideSettledOnProjects(preferencesResult.value)
     : false;
   const hideSettledThreads =
-    options.listMode === "projects" ? hideSettledOnProjects : hideSettledOnRecent;
+    options.threadGrouping === "project" ? hideSettledOnProjects : hideSettledOnRecent;
   const setHideSettledThreads = useCallback(
     (hide: boolean) => {
-      if (options.listMode === "projects") {
+      if (options.threadGrouping === "project") {
         savePreferences({ hideSettledOnProjects: hide });
         return;
       }
       savePreferences({ hideSettledOnRecent: hide });
     },
-    [options.listMode, savePreferences],
+    [options.threadGrouping, savePreferences],
   );
+  const showFlatThreadList =
+    options.listMode === "threads" && usesFlatThreadGrouping(options.threadGrouping);
+  const showProjectThreadList =
+    options.listMode === "threads" && usesProjectThreadGrouping(options.threadGrouping);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectScopes = useMemo(
     () =>
@@ -340,7 +353,7 @@ function ThreadNavigationSidebarPane(
   );
   const recentEntries = useMemo(
     () =>
-      options.listMode === "recent"
+      showFlatThreadList
         ? buildHomeRecentListEntries({
             projects: scopedProjects,
             threads: scopedThreads,
@@ -350,17 +363,17 @@ function ThreadNavigationSidebarPane(
           })
         : [],
     [
-      options.listMode,
       options.selectedEnvironmentIds,
       props.searchQuery,
       scopedProjects,
       scopedThreads,
       selectedProjectRefs,
+      showFlatThreadList,
     ],
   );
   const recentPendingEntries = useMemo(
     () =>
-      options.listMode === "recent"
+      showFlatThreadList
         ? buildHomeRecentPendingEntries({
             pendingTasks: scopedPendingTasks,
             selectedEnvironmentIds: options.selectedEnvironmentIds,
@@ -369,11 +382,11 @@ function ThreadNavigationSidebarPane(
           })
         : [],
     [
-      options.listMode,
       options.selectedEnvironmentIds,
       props.searchQuery,
       scopedPendingTasks,
       selectedProjectRefs,
+      showFlatThreadList,
     ],
   );
   const environmentLabelById = useMemo(() => {
@@ -457,8 +470,7 @@ function ThreadNavigationSidebarPane(
   // next wake boundary re-runs the partition with a fresh clock so a woken
   // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
-  const needsSettlementClock =
-    threadListV2Enabled || options.listMode === "recent" || options.listMode === "projects";
+  const needsSettlementClock = threadListV2Enabled || options.listMode === "threads";
   useEffect(() => {
     if (!needsSettlementClock) return;
     // Refresh immediately on enable: the mount-time value can be hours old
@@ -520,7 +532,7 @@ function ThreadNavigationSidebarPane(
   }, [hideSettledThreads, scopedThreads, settledThreadKeys]);
 
   const visibleRecentEntries = useMemo(() => {
-    if (options.listMode !== "recent") return [];
+    if (!showFlatThreadList) return [];
     return recentEntries.flatMap((entry) => {
       const key = scopedThreadKey(entry.thread.environmentId, entry.thread.id);
       if (hideSettledThreads && settledThreadKeys.has(key)) {
@@ -528,11 +540,11 @@ function ThreadNavigationSidebarPane(
       }
       return [{ thread: entry.thread, projectTitle: entry.project.title }];
     });
-  }, [hideSettledThreads, options.listMode, recentEntries, settledThreadKeys]);
+  }, [hideSettledThreads, recentEntries, settledThreadKeys, showFlatThreadList]);
 
   const groups = useMemo(
     () =>
-      options.listMode === "projects" && !threadListV2Enabled
+      showProjectThreadList && !threadListV2Enabled
         ? buildHomeThreadGroups({
             projects: scopedProjects,
             threads: threadsForProjectList,
@@ -549,19 +561,21 @@ function ThreadNavigationSidebarPane(
       props.searchQuery,
       scopedPendingTasks,
       scopedProjects,
+      showProjectThreadList,
       threadListV2Enabled,
       threadsForProjectList,
     ],
   );
 
   const listLayout = useMemo(() => {
-    if (options.listMode === "recent") {
+    if (showFlatThreadList) {
       return buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
         entries: visibleRecentEntries,
+        groupByRecency: options.threadGrouping === "recency",
       });
     }
-    if (options.listMode !== "projects") {
+    if (!showProjectThreadList) {
       return { items: [] as HomeListItem[], stickyHeaderIndices: [] as number[] };
     }
     return buildHomeListLayout({
@@ -573,8 +587,10 @@ function ThreadNavigationSidebarPane(
     groupDisplayStates,
     groups,
     hasSearchQuery,
-    options.listMode,
+    options.threadGrouping,
     recentPendingEntries,
+    showFlatThreadList,
+    showProjectThreadList,
     visibleRecentEntries,
   ]);
 
@@ -670,7 +686,7 @@ function ThreadNavigationSidebarPane(
     threadListV2Layout,
   ]);
   const showsConnectionStatus = shouldShowWorkspaceConnectionStatus(catalogState);
-  const listOrganization = options.listMode === "projects" && !threadListV2Enabled;
+  const listOrganization = showProjectThreadList && !threadListV2Enabled;
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
       {
@@ -715,8 +731,17 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
-      ...(options.listMode === "recent" || options.listMode === "projects"
+      ...(options.listMode === "threads"
         ? ([
+            {
+              id: "grouping",
+              title: "Group threads",
+              subactions: HOME_THREAD_GROUPINGS.map((grouping) => ({
+                id: `grouping:${grouping}`,
+                title: HOME_THREAD_GROUPING_LABELS[grouping],
+                state: options.threadGrouping === grouping ? ("on" as const) : ("off" as const),
+              })),
+            },
             {
               id: "hide-settled",
               title: "Hide settled",
@@ -724,7 +749,7 @@ function ThreadNavigationSidebarPane(
             },
           ] satisfies MenuAction[])
         : []),
-      // Sort controls only apply in Projects classic layout. v2/Recent/Board
+      // Sort controls only apply in project classic layout. v2/recency/flat/Board
       // use fixed order; environment multi-filter still scopes every mode.
       ...(listOrganization
         ? ([
@@ -756,6 +781,7 @@ function ThreadNavigationSidebarPane(
       options.listMode,
       options.projectSortOrder,
       options.selectedEnvironmentIds,
+      options.threadGrouping,
       options.threadSortOrder,
       projectFilterOptions,
       selectedProjectKey,
@@ -777,6 +803,13 @@ function ThreadNavigationSidebarPane(
       }
       if (event === "hide-settled") {
         setHideSettledThreads(!hideSettledThreads);
+        return;
+      }
+      if (event.startsWith("grouping:")) {
+        const grouping = event.slice("grouping:".length);
+        if (grouping === "recency" || grouping === "project" || grouping === "none") {
+          setThreadGrouping(grouping);
+        }
         return;
       }
       if (event === "project:all") {
@@ -812,6 +845,7 @@ function ThreadNavigationSidebarPane(
       projectFilterOptions,
       setHideSettledThreads,
       setProjectSortOrder,
+      setThreadGrouping,
       setThreadSortOrder,
       toggleSelectedEnvironmentId,
     ],
@@ -1038,6 +1072,8 @@ function ThreadNavigationSidebarPane(
               title={item.group.title}
             />
           );
+        case "section-header":
+          return <ThreadListSectionHeader variant="sidebar" title={item.title} />;
         case "pending-task":
           return (
             <PendingTaskListRow
@@ -1123,13 +1159,14 @@ function ThreadNavigationSidebarPane(
       updateGroupDisplay,
     ],
   );
-  // Outside Projects classic layout only the environment/project filters can
+  // Outside project classic layout only env/project/grouping filters can
   // light the "customized" state (sort options are hidden).
   const filterCustomized =
     options.selectedEnvironmentIds.length > 0 ||
     selectedProjectKey !== null ||
-    ((options.listMode === "recent" || options.listMode === "projects") &&
-      hideSettledThreads !== (options.listMode === "recent")) ||
+    options.threadGrouping !== "project" ||
+    (options.listMode === "threads" &&
+      hideSettledThreads !== (options.threadGrouping !== "project")) ||
     (listOrganization && hasCustomHomeListOptions({ ...options, selectedProjectKey }));
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
@@ -1150,7 +1187,9 @@ function ThreadNavigationSidebarPane(
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization,
         showProjectFilter: options.listMode !== "board",
-        ...(options.listMode === "recent" || options.listMode === "projects"
+        threadGrouping: options.listMode === "threads" ? options.threadGrouping : undefined,
+        onThreadGroupingChange: options.listMode === "threads" ? setThreadGrouping : undefined,
+        ...(options.listMode === "threads"
           ? {
               hideSettledThreads,
               onHideSettledThreadsChange: setHideSettledThreads,
@@ -1165,11 +1204,13 @@ function ThreadNavigationSidebarPane(
       options.listMode,
       options.projectSortOrder,
       options.selectedEnvironmentIds,
+      options.threadGrouping,
       options.threadSortOrder,
       projectFilterOptions,
       selectedProjectKey,
       setHideSettledThreads,
       setProjectSortOrder,
+      setThreadGrouping,
       setThreadSortOrder,
       toggleSelectedEnvironmentId,
     ],
