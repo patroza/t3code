@@ -17,6 +17,76 @@ export type PendingQueuedPrompt = {
 /** Discord unicode used as the "queued" badge on the user's message. */
 export const QUEUED_PROMPT_REACTION_EMOJI = "📥";
 
+/**
+ * Resolve which message ids `/omegent steernow` should inject.
+ *
+ * Prefer the server queue (authoritative after restart). Fall back to the
+ * in-memory Discord registry when the HTTP snapshot is missing/lagging so a
+ * just-queued mid-turn follow-up is still steerable.
+ */
+export function resolveSteernowMessageIds(input: {
+  readonly serverQueued: ReadonlyArray<{ readonly messageId: MessageId }>;
+  readonly localPending: ReadonlyArray<{ readonly t3MessageId: MessageId }>;
+  /** True when `fetchThreadDetail` returned a snapshot (even if queue empty). */
+  readonly detailLoaded: boolean;
+}): {
+  readonly messageIds: ReadonlyArray<MessageId>;
+  readonly source: "server" | "local" | "empty";
+  readonly snapshotMissing: boolean;
+} {
+  if (input.serverQueued.length > 0) {
+    // Dedupe while preserving server order.
+    const seen = new Set<string>();
+    const messageIds: MessageId[] = [];
+    for (const entry of input.serverQueued) {
+      const key = String(entry.messageId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      messageIds.push(entry.messageId);
+    }
+    return { messageIds, source: "server", snapshotMissing: false };
+  }
+
+  if (input.localPending.length > 0) {
+    const seen = new Set<string>();
+    const messageIds: MessageId[] = [];
+    for (const entry of input.localPending) {
+      const key = String(entry.t3MessageId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      messageIds.push(entry.t3MessageId);
+    }
+    return {
+      messageIds,
+      source: "local",
+      snapshotMissing: !input.detailLoaded,
+    };
+  }
+
+  return {
+    messageIds: [],
+    source: "empty",
+    snapshotMissing: !input.detailLoaded,
+  };
+}
+
+/** User-facing reply when steernow has nothing to inject. */
+export function formatSteernowEmptyQueueMessage(input: {
+  readonly snapshotMissing: boolean;
+}): string {
+  if (input.snapshotMissing) {
+    return [
+      "Could not load the server queue (thread snapshot unavailable), and nothing is parked in this bot process.",
+      "Use `/agent steer prompt:…` (or `@Omegent --steer …`) to inject mid-turn, then try `/agent steernow` again if you park follow-ups.",
+    ].join(" ");
+  }
+  return [
+    "Nothing is queued on this thread.",
+    "Mid-turn follow-ups park with 📥 by default — then `/agent steernow` flushes them.",
+    "To inject immediately, use `/agent steer prompt:…` or `@Omegent --steer …`.",
+  ].join(" ");
+}
+
 export function createDiscordQueuedPromptRegistry() {
   const byDiscordMessageId = new Map<string, PendingQueuedPrompt>();
   const byT3ThreadId = new Map<string, Set<string>>();
