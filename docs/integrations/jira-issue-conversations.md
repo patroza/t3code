@@ -20,15 +20,17 @@ not yet linked.
 ```
 
 Agent-side Jira read/write for general tooling remains the shared Jira MCP (`mcp-atlassian`). This
-bridge only owns **inbound webhooks** and **outbound response comments** for mention turns.
+bridge owns **inbound webhooks** (start a turn on a linked thread) and **outbound system/error
+comments** only. Successful turn answers are expected from the agent via MCP — the bridge does
+**not** re-post the final assistant text to Jira.
 
 ## User experience
 
-| Surface       | Webhook event     | Trigger                                        | Where T3 replies  |
-| ------------- | ----------------- | ---------------------------------------------- | ----------------- |
-| Issue comment | `comment_created` | Explicit configured mention + prompt           | New issue comment |
-| Comment reply | `comment_created` | Mention in a comment with `parent` (when set)  | New issue comment |
-| Comment edit  | `comment_updated` | Edited comment still contains mention + prompt | New issue comment |
+| Surface       | Webhook event     | Trigger                                        | Where T3 replies                               |
+| ------------- | ----------------- | ---------------------------------------------- | ---------------------------------------------- |
+| Issue comment | `comment_created` | Explicit configured mention + prompt           | Agent via Jira MCP (bridge: system/error only) |
+| Comment reply | `comment_created` | Mention in a comment with `parent` (when set)  | Agent via Jira MCP (bridge: system/error only) |
+| Comment edit  | `comment_updated` | Edited comment still contains mention + prompt | Agent via Jira MCP (bridge: system/error only) |
 
 A turn starts only when a non-bot author writes an explicit configured mention followed by a prompt:
 
@@ -87,8 +89,8 @@ JiraIssueBridge
   dispatch orchestration turn
   poll projection snapshot
         |
-        v
-Jira REST comment create (markdown → ADF or wiki)
+        +-- success → mark delivery completed (no bridge comment; agent used MCP)
+        +-- fail/busy/not-linked → Jira REST system comment (markdown → ADF)
 ```
 
 Work-item associations live in:
@@ -125,9 +127,13 @@ ${T3CODE stateDir}/thread-work-items.json
 
 ## Outbound comments
 
-Responses are posted as issue comments authored by the service account. Prefer Markdown converted
-to a minimal ADF document for API v3. Do not @-spam watchers unless the agent explicitly mentions
-users.
+**Successful turns:** the bridge does **not** post the assistant final answer. The agent is expected
+to comment on the issue through Jira MCP (already in the turn context). Duplicating that text as a
+bridge comment produced hard-to-read markdown/stats-footer noise.
+
+**System / error paths only** (not linked, ambiguous, busy, empty prompt, failed, still working):
+posted as issue comments by the service account. Prefer Markdown converted to a minimal ADF document
+for API v3, nested under the source comment when `parentId` is accepted. Do not @-spam watchers.
 
 ## Testing checklist
 
@@ -135,7 +141,8 @@ users.
 2. Unit: webhook secret acceptance / rejection; project allowlist.
 3. Unit: delivery dedupe on redelivery of the same comment id.
 4. Integration (manual): register a Jira webhook or Automation rule → `POST /api/jira/webhook`
-   with the shared secret; mention the bot on a linked issue; confirm a reply comment.
+   with the shared secret; mention the bot on a linked issue; confirm the agent MCP reply appears
+   and the bridge does **not** add a second final-answer comment.
 
 ## Non-goals (this foundation)
 
@@ -143,4 +150,5 @@ users.
 - Full comment-edit re-routing
 - Confluence page mentions
 - Jira Service Management customer portal public/internal split (beyond posting internal comments later)
-- Real-time streaming of intermediate assistant text into Jira (final answer only)
+- Real-time streaming of intermediate assistant text into Jira
+- Auto-posting successful final answers (agent MCP owns human-visible replies)

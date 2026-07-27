@@ -18,7 +18,6 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   discoverGitHubTargetTurnId,
-  githubFinalAnswerText,
   resolveGitHubBridgeTurnOutcome,
 } from "../github/GitHubPrBridge.ts";
 import {
@@ -46,19 +45,14 @@ const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
-/** Prepare assistant text for Jira: drop GH stats footer, cap length. */
+/**
+ * Prepare system/error text for Jira: drop accidental GH stats footers, cap length.
+ * Successful turn answers are not posted by this bridge (agent uses Jira MCP).
+ */
 export function formatJiraComment(body: string): string {
   const trimmed = stripTurnStatsFooter(body).trim();
   if (trimmed.length <= MAX_JIRA_COMMENT_LENGTH) return trimmed;
   return `${trimmed.slice(0, MAX_JIRA_COMMENT_LENGTH - 20)}\n\n…(truncated)`;
-}
-
-/** Final answer for Jira: plain assistant text only (no markdown stats footer). */
-export function jiraFinalAnswerText(
-  thread: Parameters<typeof githubFinalAnswerText>[0],
-  turnId: string | null = null,
-): string {
-  return formatJiraComment(githubFinalAnswerText(thread, turnId));
 }
 
 function isThreadBusy(thread: OrchestrationThread): boolean {
@@ -106,6 +100,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** Post a system/error comment and mark the delivery terminal. */
   const finishDelivery = Effect.fn("JiraIssueBridge.finishDelivery")(function* (
     delivery: StoredJiraDelivery,
     body: string,
@@ -118,6 +113,21 @@ const make = Effect.gen(function* () {
       ...delivery,
       responseCommentId: posted?.id ?? delivery.responseCommentId,
       status,
+      updatedAt: DateTime.formatIso(yield* DateTime.now),
+    });
+  });
+
+  /**
+   * Mark a successful turn complete without posting. The agent already writes
+   * the human-visible reply through Jira MCP; duplicating the final answer here
+   * produces the raw markdown + stats-footer comments users do not want.
+   */
+  const completeDeliveryWithoutComment = Effect.fn(
+    "JiraIssueBridge.completeDeliveryWithoutComment",
+  )(function* (delivery: StoredJiraDelivery) {
+    yield* deliveries.put({
+      ...delivery,
+      status: "completed",
       updatedAt: DateTime.formatIso(yield* DateTime.now),
     });
   });
@@ -191,15 +201,16 @@ const make = Effect.gen(function* () {
         knownTargetTurnId: tracked.targetTurnId,
       });
       if (outcome._tag === "terminal") {
-        const body =
-          outcome.status === "completed"
-            ? formatJiraComment(
-                outcome.body ||
-                  jiraFinalAnswerText(thread, outcome.targetTurnId) ||
-                  FAILED_RESPONSE,
-              )
-            : formatJiraComment(outcome.body || FAILED_RESPONSE);
-        yield* finishDelivery(tracked, body, outcome.status);
+        if (outcome.status === "completed") {
+          // Agent responds on the issue via Jira MCP — do not re-post the final answer.
+          yield* completeDeliveryWithoutComment(tracked);
+          return;
+        }
+        yield* finishDelivery(
+          tracked,
+          formatJiraComment(outcome.body || FAILED_RESPONSE),
+          "rejected",
+        );
         return;
       }
 
