@@ -8,9 +8,27 @@ import {
   THREAD_RECENCY_BUCKET_LABELS,
 } from "./threadRecencyGroups.ts";
 
+/** Local calendar fixture; Date APIs are intentional for bucket tests. */
+function localDate(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hours = 0,
+  minutes = 0,
+  seconds = 0,
+): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date(year, monthIndex, day, hours, minutes, seconds);
+}
+
+function addMs(date: Date, ms: number): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date(date.getTime() + ms);
+}
+
 describe("getThreadRecencyBucketId", () => {
   // Fixed local morning so calendar math is stable across CI timezones.
-  const now = new Date(2026, 2, 15, 14, 30, 0); // 2026-03-15 local
+  const now = localDate(2026, 2, 15, 14, 30, 0); // 2026-03-15 local
 
   it("classifies today, yesterday, previous 7, previous 30, and older", () => {
     const startToday = startOfLocalDay(now).getTime();
@@ -31,7 +49,7 @@ describe("getThreadRecencyBucketId", () => {
 });
 
 describe("groupThreadsByRecency", () => {
-  const now = new Date(2026, 2, 15, 12, 0, 0);
+  const now = localDate(2026, 2, 15, 12, 0, 0);
   const startToday = startOfLocalDay(now).getTime();
 
   it("returns only non-empty buckets in order with labels", () => {
@@ -61,10 +79,10 @@ describe("groupThreadsByRecency", () => {
 
 describe("groupSortedThreadsByRecency", () => {
   it("groups using activity timestamps from ThreadSortInput", () => {
-    const now = new Date(2026, 2, 15, 12, 0, 0);
+    const now = localDate(2026, 2, 15, 12, 0, 0);
     const startToday = startOfLocalDay(now);
-    const todayIso = new Date(startToday.getTime() + 3_600_000).toISOString();
-    const olderIso = new Date(startToday.getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const todayIso = addMs(startToday, 3_600_000).toISOString();
+    const olderIso = addMs(startToday, -40 * 24 * 60 * 60 * 1000).toISOString();
 
     const groups = groupSortedThreadsByRecency(
       [
