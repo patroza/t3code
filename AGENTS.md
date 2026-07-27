@@ -32,7 +32,8 @@ branches.
   report conflicts and a huge unrelated diff. Always base and retarget feature PRs on `fork/changes`.
 - Before handoff (and whenever a PR is CONFLICTING / behind), run
   `pnpm fork:stack update --push` (or `pnpm fork:stack update --push <pr-number>`). That rebases or
-  replays the feature commits onto latest `origin/fork/changes`, retargets a wrong PR base, and
+  replays the feature commits onto the PR's intended parent (`fork/changes` for ordinary features,
+  or the current parent branch for dependent/overlay-child PRs), retargets only an invalid base, and
   force-with-lease pushes so the PR stays mergeable.
 - After automation rebases your branch (or `fork/changes`), refresh a local checkout with
   `pnpm fork:stack pull`. It hard-resets to remote when local commits are patch-equivalent, and only
@@ -62,8 +63,9 @@ branches.
   disabled at repository level so mirror updates do not run redundant CI or attempt upstream relay
   deployment. Do not re-enable or target those workflows for fork releases.
 - Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
-  the provenance layers, rebuilds `fork/integration`, force-with-lease rebases open feature PRs that
-  target `fork/changes`, and dispatches CI for the exact integration SHA.
+  the provenance layers, rebuilds `fork/integration`, and parent-first force-with-lease rebases the
+  complete same-repository PR tree rooted at `fork/changes` (including overlay children and deeper
+  dependent PRs), then dispatches CI for the exact integration SHA.
 - Successful `fork/integration` CI classifies the complete tree diff from the previous approved
   integration tree. Runtime-affecting changes hand the exact tested SHA to the private operations
   repository; tests, documentation, agent metadata, and GitHub-only metadata do not deploy.
@@ -84,8 +86,9 @@ When implementation work for a user request is done (code, docs, config — not 
      the first formatter, linter, or typechecker.
    - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>`
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
-   - `baseRefName` must be `fork/changes` and `mergeable` should be `MERGEABLE` (CI may still be
-     `UNSTABLE` while checks run).
+   - `baseRefName` must be `fork/changes` for ordinary features or the intended parent branch for a
+     dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be `UNSTABLE`
+     while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
    - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push.
    - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
