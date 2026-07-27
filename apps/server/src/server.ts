@@ -39,6 +39,7 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -286,8 +287,17 @@ const TerminalLayerLive = TerminalManager.layer.pipe(
   Layer.provide(PortScannerLayerLive),
 );
 
+// Self-contained: the HTTP client is only used to prove a published port
+// answers, and the Net service only to notice a dev server that has exited.
+// Neither belongs in the requirements of everything that renders a preview.
+const PortExposureLayerLive = PortExposure.layer.pipe(
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(NetService.layer),
+);
+
 const PreviewLayerLive = Layer.empty.pipe(
   Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(PortExposureLayerLive),
   Layer.provideMerge(PortScannerLayerLive),
 );
 
