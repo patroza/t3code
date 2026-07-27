@@ -195,7 +195,15 @@ export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (in
     });
   }
 
-  yield* ensureTailscaleServe({ localPort: input.webPort, servePort: input.webPort }).pipe(
+  // `localhost`, not the default `127.0.0.1`: Vite's default `--host localhost`
+  // binds `::1` only, so an IPv4-pinned mapping proxies to nothing and every
+  // shared URL answers 502. The hostname lets tailscale pick the family the web
+  // server actually bound.
+  yield* ensureTailscaleServe({
+    localPort: input.webPort,
+    servePort: input.webPort,
+    localHost: "localhost",
+  }).pipe(
     Effect.mapError((error) => {
       const explanation = explainCommandFailure(error);
       return new DevServeFailedError({
