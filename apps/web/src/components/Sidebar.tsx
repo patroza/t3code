@@ -218,6 +218,7 @@ import {
   DEFAULT_HIDE_SETTLED_PROJECTS,
   DEFAULT_HIDE_SETTLED_RECENT,
   DEFAULT_WEB_LIST_MODE,
+  DEFAULT_WEB_THREAD_GROUPING,
   EMPTY_LIST_ENVIRONMENT_FILTER,
   LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
   LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY,
@@ -225,17 +226,27 @@ import {
   LIST_MODE_STORAGE_KEY,
   LIST_PROJECT_FILTER_ALL,
   LIST_PROJECT_FILTER_STORAGE_KEY,
+  LIST_THREAD_GROUPING_STORAGE_KEY,
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
   ListProjectFilterSchema,
   WEB_LIST_MODE_LABELS,
   WEB_LIST_MODES,
+  WEB_THREAD_GROUPING_LABELS,
+  WEB_THREAD_GROUPINGS,
   WebListModeSchema,
+  WebThreadGroupingSchema,
+  defaultThreadGroupingFromLegacyModeStorage,
   isWebListMode,
+  isWebThreadGrouping,
   matchesEnvironmentFilter,
   resolveSelectedEnvironmentIds,
+  usesFlatThreadGrouping,
+  usesProjectThreadGrouping,
   type WebListMode,
+  type WebThreadGrouping,
 } from "./listEnvironmentFilter";
+import { groupSortedThreadsByRecency } from "@t3tools/client-runtime/state/thread-recency-groups";
 import { Toggle, ToggleGroup } from "./ui/toggle-group";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import {
@@ -2896,6 +2907,8 @@ interface SidebarProjectsContentProps {
   commandPaletteShortcutLabel: string | null;
   listMode: WebListMode;
   onListModeChange: (mode: WebListMode) => void;
+  threadGrouping: WebThreadGrouping;
+  onThreadGroupingChange: (grouping: WebThreadGrouping) => void;
   environmentFilterOptions: readonly { environmentId: EnvironmentId; label: string }[];
   selectedEnvironmentIds: readonly EnvironmentId[];
   onSelectedEnvironmentIdsChange: (next: readonly EnvironmentId[]) => void;
@@ -3589,6 +3602,8 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
 
 const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   recentThreads: readonly SidebarRecentThread[];
+  /** When true, wrap threads in Today / Yesterday / … section headers. */
+  groupByRecency: boolean;
   routeThreadKey: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
@@ -3603,7 +3618,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   if (props.recentThreads.length === 0) {
     return (
       <SidebarGroup className="px-2 pt-4 pb-1">
-        <div className="px-2 text-center text-xs text-muted-foreground/60">No recent threads</div>
+        <div className="px-2 text-center text-xs text-muted-foreground/60">No threads</div>
       </SidebarGroup>
     );
   }
@@ -3611,33 +3626,65 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
   );
 
+  const renderThreadRow = (entry: SidebarRecentThread) => {
+    const threadKey = scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id));
+    return (
+      <SidebarRecentThreadRow
+        key={threadKey}
+        entry={entry}
+        isActive={threadKey === props.routeThreadKey}
+        jumpLabel={props.threadJumpLabelByKey.get(threadKey) ?? null}
+        navigateToThread={props.navigateToThread}
+        handleNewThread={props.handleNewThread}
+        archiveThread={props.archiveThread}
+        deleteThread={props.deleteThread}
+        settleThread={props.settleThread}
+        unsettleThread={props.unsettleThread}
+        isSettled={props.settledThreadKeys.has(threadKey)}
+        orderedRecentThreadKeys={orderedRecentThreadKeys}
+        threadByKey={props.threadByKey}
+      />
+    );
+  };
+
+  if (!props.groupByRecency) {
+    return (
+      <SidebarGroup className="px-2 pt-1 pb-1">
+        <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+          {props.recentThreads.map(renderThreadRow)}
+        </SidebarMenuSub>
+      </SidebarGroup>
+    );
+  }
+
+  const recencyGroups = groupSortedThreadsByRecency(
+    props.recentThreads.map((entry) => entry.thread),
+  );
+  const entryByThreadKey = new Map(
+    props.recentThreads.map((entry) => [
+      scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+      entry,
+    ]),
+  );
+
   return (
-    <SidebarGroup className="px-2 pt-1 pb-1">
-      <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
-        {props.recentThreads.map((entry) => {
-          const threadKey = scopedThreadKey(
-            scopeThreadRef(entry.thread.environmentId, entry.thread.id),
-          );
-          return (
-            <SidebarRecentThreadRow
-              key={threadKey}
-              entry={entry}
-              isActive={threadKey === props.routeThreadKey}
-              jumpLabel={props.threadJumpLabelByKey.get(threadKey) ?? null}
-              navigateToThread={props.navigateToThread}
-              handleNewThread={props.handleNewThread}
-              archiveThread={props.archiveThread}
-              deleteThread={props.deleteThread}
-              settleThread={props.settleThread}
-              unsettleThread={props.unsettleThread}
-              isSettled={props.settledThreadKeys.has(threadKey)}
-              orderedRecentThreadKeys={orderedRecentThreadKeys}
-              threadByKey={props.threadByKey}
-            />
-          );
-        })}
-      </SidebarMenuSub>
-    </SidebarGroup>
+    <>
+      {recencyGroups.map((group) => (
+        <SidebarGroup key={group.id} className="px-2 pt-2 pb-1">
+          <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-sidebar-muted-foreground/70">
+            {group.label}
+          </div>
+          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+            {group.threads.flatMap((thread) => {
+              const entry = entryByThreadKey.get(
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              );
+              return entry ? [renderThreadRow(entry)] : [];
+            })}
+          </SidebarMenuSub>
+        </SidebarGroup>
+      ))}
+    </>
   );
 });
 
@@ -3677,6 +3724,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     commandPaletteShortcutLabel,
     listMode,
     onListModeChange,
+    threadGrouping,
+    onThreadGroupingChange,
     environmentFilterOptions,
     selectedEnvironmentIds,
     onSelectedEnvironmentIdsChange,
@@ -3696,6 +3745,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
+  const showThreadListChrome = listMode === "threads";
+  const showProjectGroups = showThreadListChrome && usesProjectThreadGrouping(threadGrouping);
+  const showFlatOrRecencyList = showThreadListChrome && usesFlatThreadGrouping(threadGrouping);
 
   const projectFilterItems = useMemo(
     () => [
@@ -3795,8 +3847,44 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             triggerClassName="w-full"
             data-testid="sidebar-environment-filter"
           />
-          {listMode === "recent" || listMode === "projects" ? (
+          {showThreadListChrome ? (
             <>
+              <Menu>
+                <MenuTrigger
+                  className="inline-flex h-7 w-full items-center justify-between gap-1 rounded-md border border-input bg-transparent px-2 text-xs font-normal hover:bg-accent hover:text-accent-foreground"
+                  data-testid="sidebar-thread-grouping-trigger"
+                  aria-label="Thread grouping"
+                >
+                  <span className="truncate">{WEB_THREAD_GROUPING_LABELS[threadGrouping]}</span>
+                  <ChevronRightIcon className="size-3.5 shrink-0 rotate-90 text-muted-foreground" />
+                </MenuTrigger>
+                <MenuPopup align="start" side="bottom" className="min-w-52">
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      Group threads
+                    </div>
+                    <MenuRadioGroup
+                      value={threadGrouping}
+                      onValueChange={(value) => {
+                        if (isWebThreadGrouping(value)) {
+                          onThreadGroupingChange(value);
+                        }
+                      }}
+                    >
+                      {WEB_THREAD_GROUPINGS.map((grouping) => (
+                        <MenuRadioItem
+                          key={grouping}
+                          value={grouping}
+                          className="min-h-7 py-1 sm:text-xs"
+                          data-testid={`sidebar-thread-grouping-${grouping}`}
+                        >
+                          {WEB_THREAD_GROUPING_LABELS[grouping]}
+                        </MenuRadioItem>
+                      ))}
+                    </MenuRadioGroup>
+                  </MenuGroup>
+                </MenuPopup>
+              </Menu>
               {projectFilterOptions.length > 0 ? (
                 <Select
                   modal={false}
@@ -3890,9 +3978,10 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       ) : null}
       <LocalSecondaryStatus />
-      {listMode === "recent" ? (
+      {showFlatOrRecencyList ? (
         <SidebarRecentThreads
           recentThreads={recentThreads}
+          groupByRecency={threadGrouping === "recency"}
           routeThreadKey={routeThreadKey}
           navigateToThread={navigateToThread}
           handleNewThread={handleNewThread}
@@ -3905,7 +3994,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           threadByKey={threadByKey}
         />
       ) : null}
-      {listMode === "projects" ? (
+      {showProjectGroups ? (
         <SidebarGroup className="px-2 py-2">
           <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
             <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
@@ -4105,6 +4194,21 @@ export default function Sidebar() {
     DEFAULT_WEB_LIST_MODE,
     WebListModeSchema,
   );
+  const defaultThreadGrouping = useMemo(() => {
+    if (typeof window === "undefined") return DEFAULT_WEB_THREAD_GROUPING;
+    try {
+      return defaultThreadGroupingFromLegacyModeStorage(
+        window.localStorage.getItem(LIST_MODE_STORAGE_KEY),
+      );
+    } catch {
+      return DEFAULT_WEB_THREAD_GROUPING;
+    }
+  }, []);
+  const [storedThreadGrouping, setStoredThreadGrouping] = useLocalStorage(
+    LIST_THREAD_GROUPING_STORAGE_KEY,
+    defaultThreadGrouping,
+    WebThreadGroupingSchema,
+  );
   const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
     LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
     EMPTY_LIST_ENVIRONMENT_FILTER,
@@ -4125,17 +4229,18 @@ export default function Sidebar() {
     DEFAULT_HIDE_SETTLED_PROJECTS,
     ListHideSettledSchema,
   );
-  const hideSettledThreads =
-    storedListMode === "projects" ? hideSettledProjects : hideSettledRecent;
+  const hideSettledThreads = usesProjectThreadGrouping(storedThreadGrouping)
+    ? hideSettledProjects
+    : hideSettledRecent;
   const handleHideSettledThreadsChange = useCallback(
     (hide: boolean) => {
-      if (storedListMode === "projects") {
+      if (usesProjectThreadGrouping(storedThreadGrouping)) {
         setHideSettledProjects(hide);
         return;
       }
       setHideSettledRecent(hide);
     },
-    [setHideSettledProjects, setHideSettledRecent, storedListMode],
+    [setHideSettledProjects, setHideSettledRecent, storedThreadGrouping],
   );
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
@@ -4490,7 +4595,7 @@ export default function Sidebar() {
       })),
     [sortedProjects],
   );
-  /** Recent mode: unarchived threads sorted by latest activity, optional filters. */
+  /** Flat/recency groupings: unarchived threads sorted by latest activity, optional filters. */
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
     const memberKeysForSelectedProject =
       selectedProjectFilterKey === null
@@ -4503,7 +4608,11 @@ export default function Sidebar() {
           );
     return sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (hideSettledRecent && settledThreadKeys.has(threadKey)) {
+      if (
+        usesFlatThreadGrouping(storedThreadGrouping) &&
+        hideSettledRecent &&
+        settledThreadKeys.has(threadKey)
+      ) {
         return [];
       }
       const memberKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
@@ -4527,14 +4636,15 @@ export default function Sidebar() {
     settledThreadKeys,
     sidebarProjectByKey,
     sortedProjects,
+    storedThreadGrouping,
     visibleThreads,
   ]);
   const recentThreadKeys = useMemo(
     () =>
-      recentThreads
-        .slice(0, sidebarThreadPreviewCount)
-        .map(({ thread }) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
-    [recentThreads, sidebarThreadPreviewCount],
+      recentThreads.map(({ thread }) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
+    [recentThreads],
   );
   const visibleSidebarThreadKeys = useMemo(
     () =>
@@ -4587,8 +4697,11 @@ export default function Sidebar() {
     ],
   );
   const jumpCandidateThreadKeys = useMemo(
-    () => (storedListMode === "recent" ? recentThreadKeys : visibleSidebarThreadKeys),
-    [recentThreadKeys, storedListMode, visibleSidebarThreadKeys],
+    () =>
+      storedListMode === "threads" && usesFlatThreadGrouping(storedThreadGrouping)
+        ? recentThreadKeys
+        : visibleSidebarThreadKeys,
+    [recentThreadKeys, storedListMode, storedThreadGrouping, visibleSidebarThreadKeys],
   );
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
@@ -4898,6 +5011,8 @@ export default function Sidebar() {
             commandPaletteShortcutLabel={commandPaletteShortcutLabel}
             listMode={storedListMode}
             onListModeChange={handleListModeChange}
+            threadGrouping={storedThreadGrouping}
+            onThreadGroupingChange={setStoredThreadGrouping}
             environmentFilterOptions={environmentFilterOptions}
             selectedEnvironmentIds={selectedEnvironmentIds}
             onSelectedEnvironmentIdsChange={handleSelectedEnvironmentIdsChange}
