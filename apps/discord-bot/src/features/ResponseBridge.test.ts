@@ -50,6 +50,7 @@ import {
   shouldReopenFinalizedDelivery,
   shouldPublishAssistantUpdate,
   startsNewStreamDelivery,
+  shouldFinalizeStreamBeforeNewDelivery,
   streamTipBodyForHeartbeat,
   finalAnswerText,
   parseDiscordThreadTitleBadgeState,
@@ -1107,6 +1108,43 @@ describe("Working tip lifecycle contracts", () => {
           nextTurnId: "turn-2",
           reopensFinalizedDelivery: false,
           seededWorkingAckPending: false,
+        }),
+      ).toBe(false);
+    });
+
+    it("finalizes substantial prior tip body before a new delivery (queue-drain race)", () => {
+      expect(
+        shouldFinalizeStreamBeforeNewDelivery({
+          startsNewDelivery: true,
+          lastAssistantText:
+            "**Yes — the bug is almost entirely a naming/dual-use problem.** Rename + return type.",
+          t3AssistantMessageId: "assistant:run:segment:5",
+          finalizedTurnId: null,
+          currentTurnId: "turn-prior",
+        }),
+      ).toBe(true);
+    });
+
+    it("does not finalize empty Working placeholders before a new delivery", () => {
+      expect(
+        shouldFinalizeStreamBeforeNewDelivery({
+          startsNewDelivery: true,
+          lastAssistantText: "_Working.._",
+          t3AssistantMessageId: "assistant:placeholder",
+          finalizedTurnId: null,
+          currentTurnId: "turn-prior",
+        }),
+      ).toBe(false);
+    });
+
+    it("does not re-finalize when the prior tip turn is already finalized", () => {
+      expect(
+        shouldFinalizeStreamBeforeNewDelivery({
+          startsNewDelivery: true,
+          lastAssistantText: "Already posted final answer body",
+          t3AssistantMessageId: "assistant:run:segment:5",
+          finalizedTurnId: "turn-prior",
+          currentTurnId: "turn-prior",
         }),
       ).toBe(false);
     });
