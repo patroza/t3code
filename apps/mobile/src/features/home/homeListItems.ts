@@ -1,4 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { groupSortedThreadsByRecency } from "@t3tools/client-runtime/state/thread-recency-groups";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import type { HomeThreadGroup } from "./homeThreadList";
@@ -27,12 +28,20 @@ export interface HomeHeaderListItem {
   readonly isFirst: boolean;
 }
 
+/** Non-collapsible calendar section (Today / Yesterday / …). */
+export interface HomeSectionHeaderListItem {
+  readonly type: "section-header";
+  readonly key: string;
+  readonly title: string;
+  readonly isFirst: boolean;
+}
+
 export interface HomeThreadListItem {
   readonly type: "thread";
   readonly key: string;
   readonly thread: EnvironmentThreadShell;
   readonly isLast: boolean;
-  /** Optional project title for cross-project contexts (Recent mode). */
+  /** Optional project title for cross-project contexts (recency / flat). */
   readonly projectTitle?: string;
 }
 
@@ -55,6 +64,7 @@ export interface HomeShowMoreListItem {
 
 export type HomeListItem =
   | HomeHeaderListItem
+  | HomeSectionHeaderListItem
   | HomePendingTaskListItem
   | HomeThreadListItem
   | HomeShowMoreListItem;
@@ -94,6 +104,12 @@ export function homeListItemsAreEqual(previous: HomeListItem, item: HomeListItem
         previous.type === "header" &&
         previous.group === item.group &&
         previous.collapsed === item.collapsed &&
+        previous.isFirst === item.isFirst
+      );
+    case "section-header":
+      return (
+        previous.type === "section-header" &&
+        previous.title === item.title &&
         previous.isFirst === item.isFirst
       );
     case "pending-task":
@@ -210,9 +226,11 @@ export function buildHomeListLayout(input: {
 }
 
 /**
- * Flat Recent mode layout: pending tasks first, then threads by recency.
+ * Flat / recency Threads layouts: pending tasks first, then threads by activity.
  * Each thread row can carry a project title for multi-project context.
  * Callers apply hide-settled / project filters before building entries.
+ *
+ * When `groupByRecency` is true, inserts Today / Yesterday / … section headers.
  */
 export function buildHomeRecentListLayout(input: {
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -220,29 +238,69 @@ export function buildHomeRecentListLayout(input: {
     readonly thread: EnvironmentThreadShell;
     readonly projectTitle: string;
   }>;
+  readonly groupByRecency?: boolean;
+  readonly now?: Date;
 }): HomeListLayout {
   const items: HomeListItem[] = [];
-  const total = input.pendingTasks.length + input.entries.length;
+  const stickyHeaderIndices: number[] = [];
 
   for (const [index, pendingTask] of input.pendingTasks.entries()) {
     items.push({
       type: "pending-task",
       key: `pending-task:${pendingTask.message.messageId}`,
       pendingTask,
-      isLast: index === total - 1,
+      isLast:
+        index === input.pendingTasks.length - 1 &&
+        input.entries.length === 0 &&
+        input.groupByRecency !== true,
     });
   }
 
-  for (const [index, entry] of input.entries.entries()) {
-    const absoluteIndex = input.pendingTasks.length + index;
+  if (input.groupByRecency !== true) {
+    const total = input.pendingTasks.length + input.entries.length;
+    for (const [index, entry] of input.entries.entries()) {
+      const absoluteIndex = input.pendingTasks.length + index;
+      items.push({
+        type: "thread",
+        key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
+        thread: entry.thread,
+        projectTitle: entry.projectTitle,
+        isLast: absoluteIndex === total - 1,
+      });
+    }
+    return { items, stickyHeaderIndices: [] };
+  }
+
+  const projectTitleByThreadKey = new Map(
+    input.entries.map((entry) => [
+      `${entry.thread.environmentId}:${entry.thread.id}`,
+      entry.projectTitle,
+    ]),
+  );
+  const recencyGroups = groupSortedThreadsByRecency(
+    input.entries.map((entry) => entry.thread),
+    input.now,
+  );
+
+  for (const [groupIndex, group] of recencyGroups.entries()) {
+    stickyHeaderIndices.push(items.length);
     items.push({
-      type: "thread",
-      key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
-      thread: entry.thread,
-      projectTitle: entry.projectTitle,
-      isLast: absoluteIndex === total - 1,
+      type: "section-header",
+      key: `section:${group.id}`,
+      title: group.label,
+      isFirst: groupIndex === 0 && input.pendingTasks.length === 0,
     });
+
+    for (const [threadIndex, thread] of group.threads.entries()) {
+      items.push({
+        type: "thread",
+        key: `thread:${thread.environmentId}:${thread.id}`,
+        thread,
+        projectTitle: projectTitleByThreadKey.get(`${thread.environmentId}:${thread.id}`),
+        isLast: groupIndex === recencyGroups.length - 1 && threadIndex === group.threads.length - 1,
+      });
+    }
   }
 
-  return { items, stickyHeaderIndices: [] };
+  return { items, stickyHeaderIndices };
 }
