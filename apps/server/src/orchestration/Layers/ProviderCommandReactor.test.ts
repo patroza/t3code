@@ -159,6 +159,9 @@ describe("ProviderCommandReactor", () => {
     readonly deferReactorStart?: boolean;
     readonly providerBindings?: ReadonlyArray<ProviderRuntimeBindingWithMetadata>;
     readonly providerBindingsMap?: Map<ThreadId, ProviderRuntimeBindingWithMetadata>;
+    readonly listBindingsEffect?: () => Effect.Effect<
+      ReadonlyArray<ProviderRuntimeBindingWithMetadata>
+    >;
     readonly skipDefaultSetup?: boolean;
     readonly providerInstanceEnabled?: boolean;
     readonly startSessionEffect?: (
@@ -406,7 +409,9 @@ describe("ProviderCommandReactor", () => {
           getBinding: (threadId) =>
             Effect.succeed(Option.fromNullishOr(providerBindings.get(threadId))),
           listThreadIds: () => Effect.succeed(Array.from(providerBindings.keys())),
-          listBindings: () => Effect.succeed(Array.from(providerBindings.values())),
+          listBindings:
+            input?.listBindingsEffect ??
+            (() => Effect.succeed(Array.from(providerBindings.values()))),
         }),
       ),
       Layer.provideMerge(makeProviderRegistryLayer(providerSnapshots as never)),
@@ -739,6 +744,25 @@ describe("ProviderCommandReactor", () => {
       restartRecovery: null,
       interactionMode: "plan",
     });
+  });
+
+  it("does not finish reactor startup before restart reconciliation completes", async () => {
+    const reconciliationGate = Effect.runSync(Deferred.make<void>());
+    const harness = await createHarness({
+      deferReactorStart: true,
+      listBindingsEffect: () => Deferred.await(reconciliationGate).pipe(Effect.as([] as const)),
+    });
+
+    let startupFinished = false;
+    const startup = harness.startReactor().then(() => {
+      startupFinished = true;
+    });
+    await Effect.runPromise(Effect.yieldNow);
+    expect(startupFinished).toBe(false);
+
+    Effect.runSync(Deferred.succeed(reconciliationGate, undefined));
+    await startup;
+    expect(startupFinished).toBe(true);
   });
 
   it("does not resume settled turns from stale recovery bindings", async () => {
