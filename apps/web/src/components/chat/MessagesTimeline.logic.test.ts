@@ -596,6 +596,15 @@ describe("deriveMessagesTimelineRows", () => {
 
     const collapsedRows = deriveMessagesTimelineRows({
       timelineEntries,
+      latestTurn: {
+        turnId: "turn-1" as never,
+        state: "completed",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:22Z",
+        // The projection can retain the first commentary message here. The
+        // later assistant message must remain visible as the actual final.
+        assistantMessageId: "assistant-thought" as never,
+      },
       isWorking: false,
       activeTurnStartedAt: null,
       turnDiffSummaryByAssistantMessageId: new Map(),
