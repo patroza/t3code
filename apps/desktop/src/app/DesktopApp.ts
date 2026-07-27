@@ -21,6 +21,7 @@ import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import { readLiveExistingBackend } from "../backend/DesktopExistingBackend.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -63,6 +64,24 @@ const { logInfo: logBootstrapInfo, logWarning: logBootstrapWarning } =
 
 const { logInfo: logStartupInfo, logError: logStartupError } =
   DesktopObservability.makeComponentLogger("desktop-startup");
+
+export function resolveDesktopBackendPortHint(
+  existingBackendHttpBaseUrl: string | undefined,
+  configuredPort: Option.Option<number>,
+): Option.Option<number> {
+  if (existingBackendHttpBaseUrl !== undefined) {
+    try {
+      const port = Number.parseInt(new URL(existingBackendHttpBaseUrl).port, 10);
+      if (Number.isSafeInteger(port) && port > 0 && port <= MAX_TCP_PORT) {
+        return Option.some(port);
+      }
+    } catch {
+      // Fall through to the configured port when the live marker is malformed.
+    }
+  }
+
+  return configuredPort;
+}
 
 const resolveDesktopBackendPort = Effect.fn("resolveDesktopBackendPort")(function* (
   configuredPort: Option.Option<number>,
@@ -152,7 +171,10 @@ const bootstrap = Effect.gen(function* () {
     return yield* new DesktopDevelopmentBackendPortRequiredError();
   }
 
-  const backendPortSelection = yield* resolveDesktopBackendPort(environment.configuredBackendPort);
+  const existingBackend = readLiveExistingBackend(environment.stateDir);
+  const backendPortSelection = yield* resolveDesktopBackendPort(
+    resolveDesktopBackendPortHint(existingBackend?.httpBaseUrl, environment.configuredBackendPort),
+  );
   const backendPort = backendPortSelection.port;
   yield* logBootstrapInfo(
     backendPortSelection.selectedByScan
@@ -163,6 +185,13 @@ const bootstrap = Effect.gen(function* () {
       ...(backendPortSelection.selectedByScan ? { startPort: DEFAULT_DESKTOP_BACKEND_PORT } : {}),
     },
   );
+  if (existingBackend) {
+    yield* logBootstrapInfo("reusing existing backend for shared T3 home", {
+      pid: existingBackend.pid,
+      httpBaseUrl: existingBackend.httpBaseUrl,
+      stateDir: existingBackend.stateDir,
+    });
+  }
 
   const settings = yield* desktopSettings.get;
   if (settings.serverExposureMode !== environment.defaultDesktopSettings.serverExposureMode) {
