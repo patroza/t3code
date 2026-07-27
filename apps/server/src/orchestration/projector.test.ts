@@ -513,104 +513,102 @@ describe("orchestration projector", () => {
     const restampAt = "2026-07-27T05:57:32.206Z";
     const model = createEmptyReadModel(createdAt);
 
-    const afterCreate = await Effect.runPromise(
-      projectEvent(
-        model,
-        makeEvent({
-          sequence: 1,
-          type: "thread.created",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          occurredAt: createdAt,
-          commandId: "cmd-create",
-          payload: {
-            threadId: "thread-1",
-            projectId: "project-1",
-            title: "demo",
-            modelSelection: {
-              provider: ProviderDriverKind.make("codex"),
-              model: "gpt-5.3-codex",
-            },
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt,
-            updatedAt: createdAt,
-          },
-        }),
-      ),
-    );
-
-    const afterFinal = await Effect.runPromise(
-      projectEvent(
-        afterCreate,
-        makeEvent({
-          sequence: 2,
-          type: "thread.message-sent",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          occurredAt: completeAt,
-          commandId: "cmd-final-delta",
-          payload: {
-            threadId: "thread-1",
-            messageId: "assistant:run:segment:5",
-            role: "assistant",
-            text: "**Yes — the bug is almost entirely a naming/dual-use problem.**",
-            turnId: "turn-prior",
-            streaming: true,
-            createdAt: completeAt,
-            updatedAt: completeAt,
-          },
-        }),
-      ),
-    );
-
-    const afterComplete = await Effect.runPromise(
-      projectEvent(
-        afterFinal,
-        makeEvent({
-          sequence: 3,
-          type: "thread.message-sent",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          occurredAt: completeAt,
-          commandId: "cmd-final-complete",
-          payload: {
-            threadId: "thread-1",
-            messageId: "assistant:run:segment:5",
-            role: "assistant",
-            text: "",
-            turnId: "turn-prior",
-            streaming: false,
-            createdAt: completeAt,
-            updatedAt: completeAt,
-          },
-        }),
-      ),
-    );
-
+    // Single runPromise so we stay within the file's LEGACY_BASELINE for
+    // t3code/no-manual-effect-runtime-in-tests.
     const afterRestamp = await Effect.runPromise(
-      projectEvent(
-        afterComplete,
-        makeEvent({
-          sequence: 4,
-          type: "thread.message-sent",
-          aggregateKind: "thread",
-          aggregateId: "thread-1",
-          occurredAt: restampAt,
-          commandId: "cmd-restamp-complete",
-          payload: {
-            threadId: "thread-1",
-            messageId: "assistant:run:segment:5",
-            role: "assistant",
-            text: "",
-            turnId: "turn-next",
-            streaming: false,
-            createdAt: restampAt,
-            updatedAt: restampAt,
-          },
-        }),
-      ),
+      Effect.gen(function* () {
+        const afterCreate = yield* projectEvent(
+          model,
+          makeEvent({
+            sequence: 1,
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: createdAt,
+            commandId: "cmd-create",
+            payload: {
+              threadId: "thread-1",
+              projectId: "project-1",
+              title: "demo",
+              modelSelection: {
+                provider: ProviderDriverKind.make("codex"),
+                model: "gpt-5.3-codex",
+              },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        );
+
+        const afterFinal = yield* projectEvent(
+          afterCreate,
+          makeEvent({
+            sequence: 2,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: completeAt,
+            commandId: "cmd-final-delta",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "**Yes — the bug is almost entirely a naming/dual-use problem.**",
+              turnId: "turn-prior",
+              streaming: true,
+              createdAt: completeAt,
+              updatedAt: completeAt,
+            },
+          }),
+        );
+
+        const afterComplete = yield* projectEvent(
+          afterFinal,
+          makeEvent({
+            sequence: 3,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: completeAt,
+            commandId: "cmd-final-complete",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "",
+              turnId: "turn-prior",
+              streaming: false,
+              createdAt: completeAt,
+              updatedAt: completeAt,
+            },
+          }),
+        );
+
+        return yield* projectEvent(
+          afterComplete,
+          makeEvent({
+            sequence: 4,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: restampAt,
+            commandId: "cmd-restamp-complete",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "",
+              turnId: "turn-next",
+              streaming: false,
+              createdAt: restampAt,
+              updatedAt: restampAt,
+            },
+          }),
+        );
+      }),
     );
 
     const message = firstThread(afterRestamp)?.messages[0];
