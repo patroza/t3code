@@ -89,7 +89,7 @@ import {
   openUrlInPreview,
   BrowserPreviewUnavailableError,
 } from "../browser/openFileInPreview";
-import { resolveDiscoveredServerUrl } from "../browser/browserTargetResolver";
+import { resolveDiscoveredServerUrl, resolveNavigableUrl } from "../browser/browserTargetResolver";
 import { useAssetUrl } from "../assets/assetUrls";
 
 class CodeHighlightErrorBoundary extends React.Component<
@@ -1368,19 +1368,24 @@ function ChatMarkdown({
     event.clipboardData.setData("text/html", payload.html);
   }, []);
   const openExternalLinkInPreview = useCallback(
-    (url: string) => {
+    async (url: string) => {
       if (!threadRef) {
-        return Promise.resolve(
-          AsyncResult.failure<void, BrowserPreviewUnavailableError>(
-            Cause.fail(
-              new BrowserPreviewUnavailableError({
-                message: "Thread context is unavailable.",
-              }),
-            ),
+        return AsyncResult.failure<void, BrowserPreviewUnavailableError>(
+          Cause.fail(
+            new BrowserPreviewUnavailableError({
+              message: "Thread context is unavailable.",
+            }),
           ),
         );
       }
-      return openUrlInPreview({ threadRef, url, openPreview });
+      // The rendered href names the environment host for readability; the
+      // address that is actually opened has to be one the environment confirms
+      // it publishes.
+      return openUrlInPreview({
+        threadRef,
+        url: await resolveNavigableUrl(threadRef.environmentId, { kind: "url", url }),
+        openPreview,
+      });
     },
     [openPreview, threadRef],
   );

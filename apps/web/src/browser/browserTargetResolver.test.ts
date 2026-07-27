@@ -1,9 +1,19 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, PreviewPortUnreachableError } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const readPreparedConnection = vi.fn();
+const runAtomCommand = vi.fn();
 
 vi.mock("~/state/session", () => ({ readPreparedConnection }));
+vi.mock("@t3tools/client-runtime/state/runtime", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  runAtomCommand,
+}));
+// The resolver reaches the environment through the app-wide registry; the
+// command itself is stubbed above, so the registry only needs to exist.
+vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
+vi.mock("~/state/preview", () => ({ previewEnvironment: { resolvePort: { label: "test" } } }));
 
 describe("browser target resolver", () => {
   beforeEach(() => readPreparedConnection.mockReset());
@@ -192,5 +202,100 @@ describe("browser target resolver", () => {
   it("leaves malformed input for the normal navigation error path", async () => {
     const { resolveDiscoveredServerUrl } = await import("./browserTargetResolver");
     expect(resolveDiscoveredServerUrl(EnvironmentId.make("environment-1"), "   ")).toBe("   ");
+  });
+});
+
+describe("navigable url resolution", () => {
+  beforeEach(() => {
+    readPreparedConnection.mockReset();
+    runAtomCommand.mockReset();
+  });
+
+  const succeedWith = (origin: string) =>
+    runAtomCommand.mockResolvedValue({
+      _tag: "Success",
+      value: { origin, strategy: "tailnet-serve", createdExposure: true },
+    });
+
+  it("asks the environment for a reachable origin instead of reusing the port", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://smart.tail.ts.net/" });
+    succeedWith("https://smart.tail.ts.net:46545");
+    const { resolveNavigableUrl } = await import("./browserTargetResolver");
+
+    const url = await resolveNavigableUrl(EnvironmentId.make("environment-1"), {
+      kind: "url",
+      url: "http://localhost:6545/dashboard?mode=test#results",
+    });
+
+    // The serve port and scheme both differ from the requested ones — the exact
+    // pair the old host-swap guess could not produce.
+    expect(url).toBe("https://smart.tail.ts.net:46545/dashboard?mode=test#results");
+    expect(runAtomCommand.mock.calls[0]?.[2]).toEqual({
+      environmentId: "environment-1",
+      input: { port: 6545, clientBaseUrl: "https://smart.tail.ts.net/" },
+    });
+  });
+
+  it("resolves a link already rewritten to the environment host", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://smart.tail.ts.net/" });
+    succeedWith("https://smart.tail.ts.net:46545");
+    const { resolveNavigableUrl } = await import("./browserTargetResolver");
+
+    // Chat renders hrefs against the environment host for readability, so the
+    // click path receives this spelling rather than the localhost one.
+    expect(
+      await resolveNavigableUrl(EnvironmentId.make("environment-1"), {
+        kind: "url",
+        url: "http://smart.tail.ts.net:6545/",
+      }),
+    ).toBe("https://smart.tail.ts.net:46545/");
+  });
+
+  it("never asks about a port a same-machine client already reaches", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://localhost:3773" });
+    const { resolveNavigableUrl } = await import("./browserTargetResolver");
+
+    expect(
+      await resolveNavigableUrl(EnvironmentId.make("environment-1"), {
+        kind: "url",
+        url: "http://localhost:6545/",
+      }),
+    ).toBe("http://localhost:6545/");
+    expect(runAtomCommand).not.toHaveBeenCalled();
+  });
+
+  it("leaves an unrelated external URL alone", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://smart.tail.ts.net/" });
+    const { resolveNavigableUrl } = await import("./browserTargetResolver");
+
+    expect(
+      await resolveNavigableUrl(EnvironmentId.make("environment-1"), {
+        kind: "url",
+        url: "https://example.com/docs",
+      }),
+    ).toBe("https://example.com/docs");
+    expect(runAtomCommand).not.toHaveBeenCalled();
+  });
+
+  it("raises the environment's explanation rather than navigating somewhere broken", async () => {
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://smart.tail.ts.net/" });
+    runAtomCommand.mockResolvedValue({
+      _tag: "Failure",
+      cause: Cause.fail(
+        new PreviewPortUnreachableError({
+          port: 6545,
+          reason: "not-listening",
+          remedy: "Start the dev server first, then open the port again.",
+        }),
+      ),
+    });
+    const { resolveNavigableUrl } = await import("./browserTargetResolver");
+
+    await expect(
+      resolveNavigableUrl(EnvironmentId.make("environment-1"), {
+        kind: "url",
+        url: "http://localhost:6545/",
+      }),
+    ).rejects.toThrow("Start the dev server first");
   });
 });
