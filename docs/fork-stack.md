@@ -192,6 +192,32 @@ synchronizer rebases that provenance chain onto the latest upstream `main` and r
 `fork/integration`. Other open repository PRs are ignored. Temporary state is retained after a
 conflict and can be resumed with the command printed in the error.
 
+### Lockfile after layer rewrites (agents and humans)
+
+Stack and manual recoveries often hit conflicts in `pnpm-lock.yaml` (and sometimes `patches/*`) when
+upstream or Tim changes dependencies while a large `fork/changes` commit also touches manifests.
+
+**Do not** finish a recovery by only checking out `--ours` or `--theirs` for the lockfile if any
+`package.json` still disagrees with it. Fork CI installs with a **frozen** lockfile; a mismatch
+fails every job at `Setup Vite+` with `ERR_PNPM_OUTDATED_LOCKFILE` (for example after
+`packages/client-runtime` gained `react` / `@types/react` while the lockfile was left on the
+rebased base).
+
+Required recovery step after resolving stack conflicts that touch package manifests or the lockfile:
+
+```sh
+# On the tip you are about to push as fork/changes (or a fix PR based on it)
+CI= pnpm install --no-frozen-lockfile
+git add pnpm-lock.yaml
+# commit, open/merge PR to fork/changes if the rewrite already landed without this
+# then recompose integration and re-dispatch Fork CI
+node scripts/compose-integration-overlays.ts   # when integration tip must pick up the fix
+gh workflow run fork-ci.yml --repo patroza/t3code --ref fork/integration
+```
+
+Prefer one deliberate lockfile regeneration at the end of a multi-commit `fork/changes` rebase over
+resolving the lockfile at every intermediate conflict.
+
 `register` is used during the one-time cutover and only when intentionally building an advanced,
 dependent integration chain:
 
