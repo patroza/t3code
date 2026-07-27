@@ -112,6 +112,14 @@ const DiscordLinksFile = Schema.Struct({
 });
 const decodeDiscordLinks = Schema.decodeUnknownSync(Schema.fromJsonString(DiscordLinksFile));
 
+function parseDiscordLinksOrEmpty(linksJson: string): ReadonlyArray<typeof DiscordThreadLink.Type> {
+  try {
+    return decodeDiscordLinks(linksJson).links;
+  } catch {
+    return [];
+  }
+}
+
 export class ThreadWorkItemStore extends Context.Service<
   ThreadWorkItemStore,
   {
@@ -276,10 +284,8 @@ export const make = Effect.gen(function* () {
     importDiscordLinksJson: (linksJson) =>
       lock.withPermit(
         Effect.gen(function* () {
-          let links: ReadonlyArray<typeof DiscordThreadLink.Type>;
-          try {
-            links = decodeDiscordLinks(linksJson).links;
-          } catch {
+          const links = parseDiscordLinksOrEmpty(linksJson);
+          if (links.length === 0) {
             return { threadsTouched: 0, jiraKeysAdded: 0, prsAdded: 0 };
           }
 

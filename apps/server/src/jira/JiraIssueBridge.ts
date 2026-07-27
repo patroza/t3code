@@ -82,13 +82,11 @@ const make = Effect.gen(function* () {
     jira.addIssueComment({ issueKey, body: formatJiraComment(body) });
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
-    Effect.gen(function* () {
-      yield* deliveries.put({
-        ...delivery,
-        ...patch,
-        updatedAt: DateTime.formatIso(yield* DateTime.now),
-      });
-    });
+    DateTime.now.pipe(
+      Effect.flatMap((now) =>
+        deliveries.put({ ...delivery, ...patch, updatedAt: DateTime.formatIso(now) }),
+      ),
+    );
 
   const finishDelivery = Effect.fn("JiraIssueBridge.finishDelivery")(function* (
     delivery: StoredJiraDelivery,
@@ -110,16 +108,18 @@ const make = Effect.gen(function* () {
    */
   const resolveLinkedThreadId = Effect.fn("JiraIssueBridge.resolveLinkedThreadId")(function* (
     issueKey: string,
-  ): Effect.Effect<WorkItemLookupResult> {
+  ) {
     const primary = yield* workItems.resolveJiraIssue(issueKey);
     if (primary._tag !== "unlinked") return primary;
 
     const linksPath = config.enabled ? config.discordLinksPath : null;
     if (linksPath === null || linksPath.length === 0) {
-      return { _tag: "unlinked" as const };
+      return { _tag: "unlinked" } satisfies WorkItemLookupResult;
     }
     const raw = yield* fileSystem.readFileString(linksPath).pipe(Effect.orElseSucceed(() => ""));
-    if (raw.trim().length === 0) return { _tag: "unlinked" as const };
+    if (raw.trim().length === 0) {
+      return { _tag: "unlinked" } satisfies WorkItemLookupResult;
+    }
 
     // Promote all active Discord associations into the server store, then re-resolve.
     const imported = yield* workItems.importDiscordLinksJson(raw);
