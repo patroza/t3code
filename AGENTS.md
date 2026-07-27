@@ -71,6 +71,20 @@ branches.
   repository; tests, documentation, agent metadata, and GitHub-only metadata do not deploy.
 - Machine topology and deployment implementation belong in a separate private operations repository,
   not this repository.
+- **Lockfile after stack rebase / conflict resolution (required):** never leave
+  `pnpm-lock.yaml` mismatched with any `package.json` after a manual or automated layer rewrite.
+  Taking `--ours` on the lockfile during conflicts is **not** finished work when `package.json`
+  (or workspace package manifests) still declare different deps. Before treating the stack or a
+  recovery PR as done:
+  1. On the rewritten tip (usually `fork/changes`), run `CI= pnpm install --no-frozen-lockfile`
+     (or `vp install` with frozen lockfile disabled) until the lockfile matches.
+  2. Commit the updated `pnpm-lock.yaml` on a PR targeting `fork/changes` (or include it in the
+     recovery commit that lands the rewrite).
+  3. Recompose `fork/integration` if the tip already moved, then re-dispatch Fork CI.
+  4. Confirm install would succeed under CI: frozen lockfile is **on** in Fork CI; failures look
+     like `ERR_PNPM_OUTDATED_LOCKFILE` / "specifiers in the lockfile don't match package.json".
+     Prefer regenerating the lockfile over repeatedly choosing ours/theirs on `pnpm-lock.yaml` during
+     multi-commit rebases of `fork/changes`.
 
 ## Pull requests (required handoff)
 
