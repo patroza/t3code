@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 
 import {
   baseHistoryPushArgs,
+  isSuccessfulFeatureRebaseSkip,
   rebaseOpenFeaturePullRequests,
   RebaseConflictError,
   resumeStack,
@@ -19,6 +20,59 @@ import {
   type StackManifest,
   validatePullRequestSnapshots,
 } from "./rebase-pr-stack.ts";
+
+describe("isSuccessfulFeatureRebaseSkip", () => {
+  it("treats actual already-based reason strings as success", () => {
+    // rebaseOpenFeaturePullRequests emits these exact strings when an overlay
+    // (or feature) already contains the new parent tip. The post-sync overlay
+    // gate must not treat them as incomplete — that bug hard-failed stack
+    // runs after #97 whenever overlays needed no rewrite.
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip("already based on fork/changes", "fork/changes"),
+      true,
+    );
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip(
+        "remote already based on fork/changes after concurrent update",
+        "fork/changes",
+      ),
+      true,
+    );
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip("rebase produced identical tip", "fork/changes"),
+      true,
+    );
+  });
+
+  it("does not accept the historical mistyped allowlist that never matched", () => {
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip("already based on new fork/changes", "fork/changes"),
+      false,
+    );
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip(
+        "remote already based on new fork/changes after concurrent update",
+        "fork/changes",
+      ),
+      false,
+    );
+  });
+
+  it("still fails incomplete recovery / missing-branch skips", () => {
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip(
+        "cannot recover old fork/changes tip (no known historical base tip is an ancestor of this head)",
+        "fork/changes",
+      ),
+      false,
+    );
+    assert.equal(isSuccessfulFeatureRebaseSkip("missing remote branch", "fork/changes"), false);
+    assert.equal(
+      isSuccessfulFeatureRebaseSkip("parent branch fork/changes was not rebased", "fork/changes"),
+      false,
+    );
+  });
+});
 
 describe("baseHistoryPushArgs", () => {
   it("force-updates the blob ref while leasing its observed remote value", () => {
