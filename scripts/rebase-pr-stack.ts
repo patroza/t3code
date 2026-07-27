@@ -368,7 +368,9 @@ export function parseManifest(source: string): StackManifest {
     integrationBranch,
     pullRequests: parsedPullRequests,
     integrationOverlays: parsedIntegrationOverlays,
-    conflictResolutions: parsedConflictResolutions,
+    ...(parsedConflictResolutions.length > 0
+      ? { conflictResolutions: parsedConflictResolutions }
+      : {}),
   };
 }
 
