@@ -20,6 +20,7 @@ import { resolveRemoteT3CliPackageSpec } from "@t3tools/ssh/command";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
+import { configureDesktopEarlyStartup } from "./electron/DesktopEarlyStartup.ts";
 import * as DesktopIpc from "./ipc/DesktopIpc.ts";
 import * as ElectronApp from "./electron/ElectronApp.ts";
 import * as ElectronDialog from "./electron/ElectronDialog.ts";
@@ -61,6 +62,13 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
+
+configureDesktopEarlyStartup({
+  app: Electron.app,
+  argv: process.argv,
+  platform: Effect.runSync(HostProcessPlatform),
+  writeStdout: (value) => process.stdout.write(value),
+});
 
 const desktopEnvironmentLayer = Layer.unwrap(
   Effect.gen(function* () {
