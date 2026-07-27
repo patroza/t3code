@@ -404,10 +404,14 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         ),
       );
 
-    const connectPrepared = (httpBaseUrl: string, bearerToken?: string) =>
+    // Parameter must not be named `httpBaseUrl` — that shadows the outer
+    // connection-state binding, so `httpBaseUrl = normalizedBaseUrl` would only
+    // mutate the parameter and leave outer state null forever. steernow and
+    // bridge HTTP reseed then always see "snapshot unavailable".
+    const connectPrepared = (baseUrl: string, bearerToken?: string) =>
       Effect.tryPromise({
         try: async () => {
-          const normalizedBaseUrl = new URL(httpBaseUrl).toString();
+          const normalizedBaseUrl = new URL(baseUrl).toString();
           if (session !== null) return;
 
           let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
