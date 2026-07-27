@@ -147,6 +147,10 @@
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"
     },
+    "./state/thread-recency-groups": {
+      "types": "./src/state/threadRecencyGroups.ts",
+      "default": "./src/state/threadRecencyGroups.ts"
+    },
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"
