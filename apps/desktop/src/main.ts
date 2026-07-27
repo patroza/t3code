@@ -66,7 +66,6 @@ import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 configureDesktopEarlyStartup({
   app: Electron.app,
   argv: process.argv,
-  platform: Effect.runSync(HostProcessPlatform),
   writeStdout: (value) => process.stdout.write(value),
 });
 
