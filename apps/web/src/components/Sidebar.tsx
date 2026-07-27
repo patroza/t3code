@@ -24,7 +24,6 @@ import {
   terminalStatusFromRunningIds,
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
-  usePrStatusIndicator,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -526,7 +525,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       lastVisitedAt,
     },
   });
-  const pr = resolveThreadPr(thread.branch, gitStatus.data ?? null);
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    gitStatus: gitStatus.data ?? null,
+  });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
@@ -3007,11 +3009,19 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   const isDesktopLocalThread =
     environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
   const gitCwd = thread.worktreePath ?? project.workspaceRoot;
-  const prStatus = usePrStatusIndicator({
-    environmentId: thread.environmentId,
-    branch: thread.branch,
-    gitCwd,
+  const gitStatus = useEnvironmentQuery(
+    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+      ? vcsEnvironment.status({
+          environmentId: thread.environmentId,
+          input: { cwd: gitCwd },
+        })
+      : null,
+  );
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    gitStatus: gitStatus.data ?? null,
   });
+  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const threadModelPresentation = useMemo(
     () =>
       resolveThreadModelPresentation(
@@ -3454,7 +3464,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               <TooltipPopup>{props.jumpLabel}</TooltipPopup>
             </Tooltip>
           ) : null}
-          <ThreadWorktreeIndicator thread={thread} onCreateSession={createThreadFromRecent} />
+          <ThreadWorktreeIndicator thread={thread} />
           {terminalStatus ? (
             <Tooltip>
               <TooltipTrigger
