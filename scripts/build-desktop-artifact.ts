@@ -401,6 +401,38 @@ export class WslNodePtyManifestReadError extends Schema.TaggedErrorClass<WslNode
   }
 }
 
+export const promoteDesktopBuildArtifacts = Effect.fn("promoteDesktopBuildArtifacts")(function* (
+  stageDistDir: string,
+  outputDir: string,
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const stageEntries = yield* fs.readDirectory(stageDistDir);
+  yield* fs.makeDirectory(outputDir, { recursive: true });
+
+  const copiedArtifacts: string[] = [];
+  for (const entry of stageEntries) {
+    const from = path.join(stageDistDir, entry);
+    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
+    if (!stat || (stat.type !== "File" && stat.type !== "Directory")) continue;
+
+    const to = path.join(outputDir, entry);
+    yield* fs.copy(from, to);
+    copiedArtifacts.push(to);
+  }
+
+  if (copiedArtifacts.length === 0) {
+    return yield* new DesktopBuildNoArtifactsProducedError({
+      distPath: stageDistDir,
+      platform,
+      arch,
+    });
+  }
+  return copiedArtifacts;
+});
+
 export class LinuxIconResizeError extends Schema.TaggedErrorClass<LinuxIconResizeError>()(
   "LinuxIconResizeError",
   {
@@ -1898,27 +1930,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  const stageEntries = yield* fs.readDirectory(stageDistDir);
-  yield* fs.makeDirectory(options.outputDir, { recursive: true });
-
-  const copiedArtifacts: string[] = [];
-  for (const entry of stageEntries) {
-    const from = path.join(stageDistDir, entry);
-    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
-
-    const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
-    copiedArtifacts.push(to);
-  }
-
-  if (copiedArtifacts.length === 0) {
-    return yield* new DesktopBuildNoArtifactsProducedError({
-      distPath: stageDistDir,
-      platform: options.platform,
-      arch: options.arch,
-    });
-  }
+  const copiedArtifacts = yield* promoteDesktopBuildArtifacts(
+    stageDistDir,
+    options.outputDir,
+    options.platform,
+    options.arch,
+  );
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
     Effect.annotateLogs({ artifacts: copiedArtifacts }),
