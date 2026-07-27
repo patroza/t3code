@@ -12,6 +12,7 @@ import {
   RebaseConflictError,
   resumeStack,
   selectOpenFeaturePullRequests,
+  selectOpenFeaturePullRequestTree,
   StackError,
   syncStack,
   type PullRequestSnapshot,
@@ -107,6 +108,54 @@ describe("selectOpenFeaturePullRequests", () => {
       selected.map(({ branch }) => branch),
       ["overlay/desktop"],
     );
+  });
+
+  it("orders overlay children and grandchildren after their rewritten parent", () => {
+    const selected = selectOpenFeaturePullRequestTree({
+      expectedRepository: "patroza/t3code",
+      manifest,
+      openPulls: [
+        {
+          number: 98,
+          headBranch: "fix/discord-edit",
+          baseBranch: "overlay/discord",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 108,
+          headBranch: "fix/discord-edit-tests",
+          baseBranch: "fix/discord-edit",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 80,
+          headBranch: "overlay/discord",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+
+    assert.deepEqual(selected, [
+      {
+        number: 80,
+        branch: "overlay/discord",
+        baseBranch: "fork/changes",
+        depth: 0,
+      },
+      {
+        number: 98,
+        branch: "fix/discord-edit",
+        baseBranch: "overlay/discord",
+        depth: 1,
+      },
+      {
+        number: 108,
+        branch: "fix/discord-edit-tests",
+        baseBranch: "fix/discord-edit",
+        depth: 2,
+      },
+    ]);
   });
 });
 
@@ -771,5 +820,124 @@ done
     assert.ok(
       isAncestor(fixture.origin, fixture.newForkTip, remoteTip(fixture.origin, "feature/flaky")),
     );
+  });
+
+  it("cascades an overlay rewrite through child and grandchild PRs", async () => {
+    const fixture = createFeatureRebaseFixture();
+    NodeFS.unlinkSync(NodePath.join(fixture.origin, "hooks", "pre-receive"));
+
+    runGit(fixture.work, [
+      "checkout",
+      "--quiet",
+      "-b",
+      "feature/overlay-child",
+      "overlay/critical",
+    ]);
+    commitFile(fixture.work, "child.txt", "child\n", "overlay child");
+    runGit(fixture.work, ["push", "--quiet", "origin", "feature/overlay-child"]);
+    runGit(fixture.work, [
+      "checkout",
+      "--quiet",
+      "-b",
+      "feature/overlay-grandchild",
+      "feature/overlay-child",
+    ]);
+    commitFile(fixture.work, "grandchild.txt", "grandchild\n", "overlay grandchild");
+    runGit(fixture.work, ["push", "--quiet", "origin", "feature/overlay-grandchild"]);
+
+    const result = await rebaseOpenFeaturePullRequests({
+      sourceRoot: fixture.work,
+      manifest: fixture.manifest,
+      push: true,
+      oldForkChangesTip: fixture.oldForkTip,
+      newForkChangesTip: fixture.newForkTip,
+      openPulls: [
+        {
+          number: 10,
+          headBranch: "overlay/critical",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 98,
+          headBranch: "feature/overlay-child",
+          baseBranch: "overlay/critical",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 108,
+          headBranch: "feature/overlay-grandchild",
+          baseBranch: "feature/overlay-child",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+
+    const overlayTip = remoteTip(fixture.origin, "overlay/critical");
+    const childTip = remoteTip(fixture.origin, "feature/overlay-child");
+    const grandchildTip = remoteTip(fixture.origin, "feature/overlay-grandchild");
+    assert.equal(result.conflicts.length, 0);
+    assert.ok(isAncestor(fixture.origin, fixture.newForkTip, overlayTip));
+    assert.ok(isAncestor(fixture.origin, overlayTip, childTip));
+    assert.ok(isAncestor(fixture.origin, childTip, grandchildTip));
+  });
+
+  it("recovers a stale overlay child from recorded parent force-push history", async () => {
+    const fixture = createFeatureRebaseFixture();
+    NodeFS.unlinkSync(NodePath.join(fixture.origin, "hooks", "pre-receive"));
+    const oldOverlayTip = remoteTip(fixture.origin, "overlay/critical");
+
+    runGit(fixture.work, [
+      "checkout",
+      "--quiet",
+      "-b",
+      "feature/stale-overlay-child",
+      oldOverlayTip,
+    ]);
+    commitFile(fixture.work, "child.txt", "child\n", "stale overlay child");
+    runGit(fixture.work, ["push", "--quiet", "origin", "feature/stale-overlay-child"]);
+
+    // Simulate an earlier cascade that rewrote only the overlay and missed its child.
+    runGit(fixture.work, ["checkout", "--quiet", "overlay/critical"]);
+    runGit(fixture.work, [
+      "-c",
+      "commit.gpgsign=false",
+      "rebase",
+      "--onto",
+      fixture.newForkTip,
+      fixture.oldForkTip,
+    ]);
+    runGit(fixture.work, ["push", "--quiet", "--force", "origin", "overlay/critical"]);
+
+    const result = await rebaseOpenFeaturePullRequests({
+      sourceRoot: fixture.work,
+      manifest: fixture.manifest,
+      push: true,
+      oldForkChangesTip: fixture.oldForkTip,
+      newForkChangesTip: fixture.newForkTip,
+      baseHistoryByBranch: {
+        "overlay/critical": [oldOverlayTip],
+      },
+      openPulls: [
+        {
+          number: 10,
+          headBranch: "overlay/critical",
+          baseBranch: "fork/changes",
+          headRepository: "patroza/t3code",
+        },
+        {
+          number: 98,
+          headBranch: "feature/stale-overlay-child",
+          baseBranch: "overlay/critical",
+          headRepository: "patroza/t3code",
+        },
+      ],
+    });
+
+    const overlayTip = remoteTip(fixture.origin, "overlay/critical");
+    const childTip = remoteTip(fixture.origin, "feature/stale-overlay-child");
+    assert.equal(result.conflicts.length, 0);
+    assert.ok(result.updated.some(({ branch }) => branch === "feature/stale-overlay-child"));
+    assert.ok(isAncestor(fixture.origin, overlayTip, childTip));
   });
 });
