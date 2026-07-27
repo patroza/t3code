@@ -30,6 +30,13 @@ function isLiveClaimingSessionStatus(
   return status === "starting" || status === "running";
 }
 
+export function shouldSettleAfterServerRestart(input: {
+  readonly claimsLive: boolean;
+  readonly hasLiveProcess: boolean;
+}): boolean {
+  return input.claimsLive && !input.hasLiveProcess;
+}
+
 function inProgressWorkFromShell(
   shell:
     | {
@@ -224,7 +231,17 @@ const make = Effect.gen(function* () {
         let settledSessions = 0;
         let interruptedSessions = 0;
         for (const thread of snapshot.threads) {
-          if (!isLiveClaimingSessionStatus(thread.session?.status)) {
+          const claimsLive = isLiveClaimingSessionStatus(thread.session?.status);
+          const processIsLive = claimsLive ? yield* hasLiveProcess(thread.id) : false;
+          // Provider restart reconciliation runs before this audit and may
+          // already have resumed the thread. Never classify that replacement
+          // process as an orphan merely because its projected session is live.
+          if (
+            !shouldSettleAfterServerRestart({
+              claimsLive,
+              hasLiveProcess: processIsLive,
+            })
+          ) {
             continue;
           }
           const hadInProgressWork = inProgressWorkFromShell(thread);
@@ -241,12 +258,21 @@ const make = Effect.gen(function* () {
 
         let settledRuntimes = 0;
         for (const binding of bindings) {
-          if (binding.status !== "running" && binding.status !== "starting") {
+          const claimsLive = binding.status === "running" || binding.status === "starting";
+          if (!claimsLive) {
             continue;
           }
           if (threadIds.has(String(binding.threadId))) {
             // Already settled with the shell session above.
             settledRuntimes += 1;
+            continue;
+          }
+          if (
+            !shouldSettleAfterServerRestart({
+              claimsLive,
+              hasLiveProcess: yield* hasLiveProcess(binding.threadId),
+            })
+          ) {
             continue;
           }
           // Runtime claims live without a matching shell running session —
