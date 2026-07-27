@@ -113,7 +113,7 @@ describe("buildThreadFeed", () => {
       .flatMap((entry) => entry.activities)
       .find((entry) => entry.id === "input-resolved");
     expect(resolved?.detail).toBe("Make it sleep");
-    expect(resolved?.fullDetail).toContain("What is the goal?\nMake it sleep");
+    expect(resolved?.getFullDetail()).toContain("What is the goal?\nMake it sleep");
   });
 
   it("keeps historic work entries attributed to their turns", () => {
