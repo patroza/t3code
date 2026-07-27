@@ -452,28 +452,16 @@ function deriveTurnFolds(input: {
     previousGroup.entries.push(firstAssistant);
   }
 
-  // Resolve terminal after re-homing: last assistant in the group is the real
-  // final (status lines are earlier). Prefer an explicit preferred terminal id
-  // when that message lives in the group (e.g. latestTurn.assistantMessageId).
-  for (const [turnId, group] of groupsByTurnId) {
+  // Resolve terminal after re-homing: the last assistant in the group is the
+  // real final (status lines are earlier). latestTurn.assistantMessageId can
+  // still point at the first commentary message, so it must not override the
+  // chronological final.
+  for (const group of groupsByTurnId.values()) {
     group.terminalEntry = null;
     let lastAssistant: Extract<TimelineEntry, { kind: "message" }> | null = null;
     for (const entry of group.entries) {
       if (entry.kind === "message" && entry.message.role === "assistant") {
         lastAssistant = entry;
-      }
-    }
-    if (input.latestTurn?.turnId === turnId && input.latestTurn.assistantMessageId != null) {
-      const preferredId = input.latestTurn.assistantMessageId;
-      const preferred = group.entries.find(
-        (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
-          entry.kind === "message" &&
-          entry.message.role === "assistant" &&
-          entry.message.id === preferredId,
-      );
-      if (preferred) {
-        group.terminalEntry = preferred;
-        continue;
       }
     }
     group.terminalEntry = lastAssistant;
