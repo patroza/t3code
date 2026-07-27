@@ -1709,11 +1709,23 @@ const make = Effect.gen(function* () {
         const shouldApplyFallbackCompletionText =
           !existingAssistantMessage || existingAssistantMessage.text.length === 0;
 
-        const shouldSkipRedundantCompletion =
-          Option.isNone(activeAssistantMessageId) &&
+        // Queue-drain race: after turn.completed finalizes a segment under turn A,
+        // the next provider session can re-emit assistant.complete for the same
+        // message id with turn B. Re-dispatching rebinds turnId in the projector
+        // and orphans the final from turn A (Discord loses it under Working).
+        const alreadyBoundToOtherTurn =
+          existingAssistantMessage !== undefined &&
+          existingAssistantMessage.role === "assistant" &&
+          existingAssistantMessage.turnId !== null &&
           turnId !== undefined &&
-          hasAssistantMessagesForTurn &&
-          (assistantCompletion.fallbackText?.trim().length ?? 0) === 0;
+          !sameId(existingAssistantMessage.turnId, turnId);
+
+        const shouldSkipRedundantCompletion =
+          alreadyBoundToOtherTurn ||
+          (Option.isNone(activeAssistantMessageId) &&
+            turnId !== undefined &&
+            hasAssistantMessagesForTurn &&
+            (assistantCompletion.fallbackText?.trim().length ?? 0) === 0);
 
         if (!shouldSkipRedundantCompletion) {
           if (turnId && Option.isNone(activeAssistantMessageId)) {
