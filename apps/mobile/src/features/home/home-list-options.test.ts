@@ -8,7 +8,8 @@ import { hasCustomHomeListOptions, type HomeListOptions } from "./home-list-opti
 
 const defaults: HomeListOptions = {
   selectedEnvironmentIds: [],
-  listMode: "projects",
+  listMode: "threads",
+  threadGrouping: "project",
   projectSortOrder:
     DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
       ? "updated_at"
