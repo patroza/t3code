@@ -22,17 +22,24 @@ import {
 } from "react";
 
 import { resolveSelectedEnvironmentIds, toggleEnvironmentId } from "./homeEnvironmentFilter";
-import { DEFAULT_HOME_LIST_MODE, type HomeListMode } from "./homeListMode";
+import {
+  DEFAULT_HOME_LIST_MODE,
+  DEFAULT_HOME_THREAD_GROUPING,
+  type HomeListMode,
+  type HomeThreadGrouping,
+} from "./homeListMode";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
 export interface HomeListOptions {
   /**
    * Multi-select environment filter. Empty means all environments.
-   * Applies to Recent, Projects, and Board modes. Persisted on device when
+   * Applies to Threads and Board modes. Persisted on device when
    * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly listMode: HomeListMode;
+  /** Organization of the Threads list (ignored on Board). */
+  readonly threadGrouping: HomeThreadGrouping;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
 }
@@ -67,6 +74,7 @@ function defaultHomeListOptions(): HomeListOptions {
   return {
     selectedEnvironmentIds: [],
     listMode: DEFAULT_HOME_LIST_MODE,
+    threadGrouping: DEFAULT_HOME_THREAD_GROUPING,
     projectSortOrder:
       DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
         ? "updated_at"
@@ -200,6 +208,12 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     },
     [setOptions],
   );
+  const setThreadGrouping = useCallback(
+    (value: HomeThreadGrouping) => {
+      setOptions((current) => ({ ...current, threadGrouping: value }));
+    },
+    [setOptions],
+  );
   const setProjectSortOrder = useCallback(
     (value: HomeProjectSortOrder) => {
       setOptions((current) => ({ ...current, projectSortOrder: value }));
@@ -218,6 +232,7 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
     setListMode,
+    setThreadGrouping,
     setProjectSortOrder,
     setThreadSortOrder,
   } as const;
