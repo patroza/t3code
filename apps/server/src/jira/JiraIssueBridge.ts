@@ -18,7 +18,7 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   discoverGitHubTargetTurnId,
-  githubFinalAnswerWithStats,
+  githubFinalAnswerText,
   resolveGitHubBridgeTurnOutcome,
 } from "../github/GitHubPrBridge.ts";
 import {
@@ -29,7 +29,11 @@ import { JiraAppClient } from "./JiraAppClient.ts";
 import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
 import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
-import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayload.ts";
+import {
+  buildJiraTurnPrompt,
+  stripTurnStatsFooter,
+  type JiraIssueInvocation,
+} from "./JiraWebhookPayload.ts";
 
 const NOT_LINKED_RESPONSE = "not yet linked.";
 const AMBIGUOUS_RESPONSE =
@@ -42,10 +46,19 @@ const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
+/** Prepare assistant text for Jira: drop GH stats footer, cap length. */
 export function formatJiraComment(body: string): string {
-  const trimmed = body.trim();
+  const trimmed = stripTurnStatsFooter(body).trim();
   if (trimmed.length <= MAX_JIRA_COMMENT_LENGTH) return trimmed;
   return `${trimmed.slice(0, MAX_JIRA_COMMENT_LENGTH - 20)}\n\n…(truncated)`;
+}
+
+/** Final answer for Jira: plain assistant text only (no markdown stats footer). */
+export function jiraFinalAnswerText(
+  thread: Parameters<typeof githubFinalAnswerText>[0],
+  turnId: string | null = null,
+): string {
+  return formatJiraComment(githubFinalAnswerText(thread, turnId));
 }
 
 function isThreadBusy(thread: OrchestrationThread): boolean {
@@ -78,8 +91,13 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
 
-  const postComment = (issueKey: string, body: string) =>
-    jira.addIssueComment({ issueKey, body: formatJiraComment(body) });
+  const postComment = (issueKey: string, body: string, parentCommentId: string | null) =>
+    jira.addIssueComment({
+      issueKey,
+      body: formatJiraComment(body),
+      // Reply under the human comment that triggered the bot when the site supports it.
+      parentCommentId,
+    });
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
     DateTime.now.pipe(
@@ -93,7 +111,9 @@ const make = Effect.gen(function* () {
     body: string,
     status: "completed" | "rejected",
   ) {
-    const posted = yield* postComment(delivery.issueKey, body);
+    const parentCommentId =
+      delivery.sourceCommentId.trim().length > 0 ? delivery.sourceCommentId.trim() : null;
+    const posted = yield* postComment(delivery.issueKey, body, parentCommentId);
     yield* deliveries.put({
       ...delivery,
       responseCommentId: posted?.id ?? delivery.responseCommentId,
@@ -173,10 +193,12 @@ const make = Effect.gen(function* () {
       if (outcome._tag === "terminal") {
         const body =
           outcome.status === "completed"
-            ? outcome.body ||
-              githubFinalAnswerWithStats(thread, outcome.targetTurnId) ||
-              FAILED_RESPONSE
-            : outcome.body || FAILED_RESPONSE;
+            ? formatJiraComment(
+                outcome.body ||
+                  jiraFinalAnswerText(thread, outcome.targetTurnId) ||
+                  FAILED_RESPONSE,
+              )
+            : formatJiraComment(outcome.body || FAILED_RESPONSE);
         yield* finishDelivery(tracked, body, outcome.status);
         return;
       }

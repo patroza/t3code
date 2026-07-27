@@ -387,26 +387,110 @@ function simplePromptFingerprint(prompt: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/** Minimal ADF document from plain text paragraphs (API v3 comment body). */
-export function plainTextToAdf(text: string): {
+type AdfMark = { readonly type: "strong" | "em" | "code" };
+type AdfInline =
+  | { readonly type: "text"; readonly text: string; readonly marks?: ReadonlyArray<AdfMark> }
+  | { readonly type: "hardBreak" };
+
+type AdfParagraph = {
+  readonly type: "paragraph";
+  readonly content: ReadonlyArray<AdfInline>;
+};
+
+export type JiraAdfDocument = {
   readonly type: "doc";
   readonly version: 1;
-  readonly content: ReadonlyArray<{
-    readonly type: "paragraph";
-    readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
-  }>;
-} {
-  const paragraphs = text
+  readonly content: ReadonlyArray<AdfParagraph>;
+};
+
+/**
+ * Drop GitHub-style turn stats footers that look like:
+ * `_`grok-4.5` · effort high · 6.3s_`
+ */
+export function stripTurnStatsFooter(text: string): string {
+  const lines = text.replace(/\r\n/gu, "\n").split("\n");
+  // Remove trailing blank lines then a single stats line (optionally italic-wrapped).
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") {
+    lines.pop();
+  }
+  if (lines.length === 0) return "";
+  const last = lines[lines.length - 1]!.trim();
+  const looksLikeStats =
+    /^_?`[^`]+`(?:\s*·\s*[^_]+)+_?$/u.test(last) ||
+    /^_`.+`\s*·.+_$/u.test(last) ||
+    (/^_.+_$/u.test(last) && last.includes("·") && last.includes("`"));
+  if (looksLikeStats) {
+    lines.pop();
+    while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") {
+      lines.pop();
+    }
+  }
+  return lines.join("\n").trimEnd();
+}
+
+function textNode(text: string, marks?: ReadonlyArray<AdfMark>): AdfInline {
+  if (marks === undefined || marks.length === 0) {
+    return { type: "text", text };
+  }
+  return { type: "text", text, marks };
+}
+
+/** Parse a single line into ADF inlines with basic markdown marks. */
+export function markdownLineToAdfInlines(line: string): ReadonlyArray<AdfInline> {
+  if (line.length === 0) return [textNode(" ")];
+
+  const nodes: AdfInline[] = [];
+  // Order: **bold**, `code`, then *italic* (not **)
+  const tokenRe = /(\*\*(.+?)\*\*|`([^`]+)`|(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*))/gu;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(line)) !== null) {
+    if (match.index > last) {
+      nodes.push(textNode(line.slice(last, match.index)));
+    }
+    if (match[2] !== undefined) {
+      nodes.push(textNode(match[2], [{ type: "strong" }]));
+    } else if (match[3] !== undefined) {
+      nodes.push(textNode(match[3], [{ type: "code" }]));
+    } else if (match[4] !== undefined) {
+      nodes.push(textNode(match[4], [{ type: "em" }]));
+    }
+    last = match.index + match[0].length;
+  }
+  if (last < line.length) {
+    nodes.push(textNode(line.slice(last)));
+  }
+  return nodes.length > 0 ? nodes : [textNode(" ")];
+}
+
+/**
+ * Convert assistant markdown-ish text to ADF for Jira Cloud comments.
+ * Supports paragraphs, hard breaks, **bold**, *italic*, and `code`.
+ */
+export function markdownishToAdf(text: string): JiraAdfDocument {
+  const cleaned = stripTurnStatsFooter(text).trim();
+  const paragraphs = cleaned
     .split(/\n{2,}/u)
-    .map((block) => block.trim())
+    .map((block) => block.trimEnd())
     .filter((block) => block.length > 0);
-  const blocks = paragraphs.length > 0 ? paragraphs : [text.trim() || " "];
+  const blocks = paragraphs.length > 0 ? paragraphs : [cleaned.length > 0 ? cleaned : " "];
+
   return {
     type: "doc",
     version: 1,
-    content: blocks.map((block) => ({
-      type: "paragraph" as const,
-      content: [{ type: "text" as const, text: block }],
-    })),
+    content: blocks.map((block) => {
+      const lines = block.split("\n");
+      const content: AdfInline[] = [];
+      for (let i = 0; i < lines.length; i += 1) {
+        if (i > 0) content.push({ type: "hardBreak" });
+        content.push(...markdownLineToAdfInlines(lines[i]!));
+      }
+      return { type: "paragraph" as const, content };
+    }),
   };
+}
+
+/** @deprecated Prefer {@link markdownishToAdf}. Kept for call-site compatibility. */
+export function plainTextToAdf(text: string): JiraAdfDocument {
+  return markdownishToAdf(text);
 }

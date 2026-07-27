@@ -10,9 +10,12 @@ import {
   extractJiraMentionPrompt,
   extractTextAndMentionsFromBody,
   jiraDeliveryIdFor,
+  markdownishToAdf,
+  markdownLineToAdfInlines,
   parseJiraCommentInvocation,
   plainTextToAdf,
   projectKeyFromIssueKey,
+  stripTurnStatsFooter,
   type JiraCommentWebhook,
 } from "./JiraWebhookPayload.ts";
 import { verifyJiraWebhookSecret } from "./JiraWebhookSecurity.ts";
@@ -333,5 +336,24 @@ describe("Jira helpers", () => {
   it("bodyMentionsIdentity distinguishes misses", () => {
     expect(bodyMentionsIdentity("hello world", "omegent").matched).toBe(false);
     expect(bodyMentionsIdentity("@omegent please", "omegent").matched).toBe(true);
+  });
+
+  it("strips GitHub-style turn stats footers from outbound Jira text", () => {
+    const raw = "Got **test 66** — replied on SA-414.\n\n_`grok-4.5` · effort high · 6.3s_";
+    expect(stripTurnStatsFooter(raw)).toBe("Got **test 66** — replied on SA-414.");
+    expect(formatJiraComment(raw)).toBe("Got **test 66** — replied on SA-414.");
+  });
+
+  it("maps basic markdown to ADF marks", () => {
+    const inlines = markdownLineToAdfInlines("Got **test 66** and `code`");
+    expect(inlines).toEqual([
+      { type: "text", text: "Got " },
+      { type: "text", text: "test 66", marks: [{ type: "strong" }] },
+      { type: "text", text: " and " },
+      { type: "text", text: "code", marks: [{ type: "code" }] },
+    ]);
+    const doc = markdownishToAdf("line one\nline two\n\npara 2");
+    expect(doc.content).toHaveLength(2);
+    expect(doc.content[0]?.content.some((n) => n.type === "hardBreak")).toBe(true);
   });
 });
