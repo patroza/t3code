@@ -101,6 +101,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -715,6 +716,9 @@ const buildAppUnderTest = (options?: {
             retain: Effect.void,
             registerTerminalProcesses: () => Effect.void,
             unregisterTerminal: () => Effect.void,
+          }),
+          Layer.mock(PortExposure.PreviewPortExposure)({
+            resolve: () => Effect.die("PreviewPortExposure not stubbed in this test"),
           }),
           Layer.mock(AiUsageMonitorModule.AiUsageMonitor)({
             current: () => Effect.succeed(AI_USAGE_UNAVAILABLE),
