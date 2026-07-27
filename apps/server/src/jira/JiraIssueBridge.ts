@@ -220,9 +220,11 @@ const make = Effect.gen(function* () {
       deliveryId: input.deliveryId,
       issueKey: input.invocation.issueKey,
       projectKey: input.invocation.projectKey,
+      webhookEvent: input.invocation.webhookEvent,
       commentSurface: input.invocation.commentSurface,
       commentId: input.invocation.commentId,
       replyToCommentId: input.invocation.replyToCommentId,
+      commentUpdatedAt: input.invocation.commentUpdatedAt,
       actorAccountId: input.invocation.actorAccountId,
       actorDisplayName: input.invocation.actorDisplayName,
     });

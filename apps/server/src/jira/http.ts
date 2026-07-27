@@ -5,6 +5,8 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
 import { JiraIssueBridge } from "./JiraIssueBridge.ts";
 import {
+  isAcceptedJiraCommentEvent,
+  jiraDeliveryIdFor,
   JiraCommentWebhook,
   parseJiraCommentInvocation,
   type JiraIssueInvocation,
@@ -30,25 +32,13 @@ function parseWebhook(body: string, mention: string, botAccountId: string | null
   })();
   if (payload === null) return { _tag: "invalid" };
 
-  // Accept missing webhookEvent (some Automation deliveries omit it) when a comment is present.
-  const event = payload.webhookEvent?.trim().toLowerCase();
-  if (event !== undefined && event !== "comment_created") {
+  // Accept missing webhookEvent (Automation often omits it). Allow created + updated.
+  if (!isAcceptedJiraCommentEvent(payload.webhookEvent)) {
     return { _tag: "ignored" };
   }
 
   const invocation = parseJiraCommentInvocation(payload, mention, { botAccountId });
   return invocation === null ? { _tag: "ignored" } : { _tag: "invocation", invocation };
-}
-
-function deliveryIdFor(
-  invocation: JiraIssueInvocation,
-  headerDeliveryId: string | undefined,
-): string {
-  if (headerDeliveryId && headerDeliveryId.trim().length > 0) {
-    return headerDeliveryId.trim();
-  }
-  // Stable per comment so redeliveries dedupe.
-  return `jira-comment:${invocation.issueKey}:${invocation.commentId}`;
 }
 
 export const jiraWebhookRouteLayer = HttpRouter.add(
@@ -97,7 +87,7 @@ export const jiraWebhookRouteLayer = HttpRouter.add(
       request.headers["x-atlassian-webhook-identifier"] ??
       request.headers["x-request-id"] ??
       undefined;
-    const deliveryId = deliveryIdFor(invocation, headerDeliveryId);
+    const deliveryId = jiraDeliveryIdFor({ invocation, headerDeliveryId });
 
     const bridge = yield* JiraIssueBridge;
     yield* Effect.forkDetach(

@@ -61,6 +61,24 @@ export type JiraCommentWebhook = typeof JiraCommentWebhook.Type;
 
 export type JiraCommentSurface = "issue" | "reply";
 
+/** Inbound comment webhook events we accept. */
+export type JiraCommentWebhookEvent = "comment_created" | "comment_updated";
+
+const ACCEPTED_COMMENT_EVENTS = new Set<string>(["comment_created", "comment_updated"]);
+
+export function isAcceptedJiraCommentEvent(
+  event: string | undefined,
+): event is JiraCommentWebhookEvent {
+  if (event === undefined) return true; // Automation may omit; treat as created-style delivery
+  return ACCEPTED_COMMENT_EVENTS.has(event.trim().toLowerCase());
+}
+
+export function normalizeJiraCommentEvent(event: string | undefined): JiraCommentWebhookEvent {
+  const normalized = event?.trim().toLowerCase();
+  if (normalized === "comment_updated") return "comment_updated";
+  return "comment_created";
+}
+
 export interface JiraIssueInvocation {
   readonly issueKey: string;
   readonly issueSummary: string | null;
@@ -70,6 +88,10 @@ export interface JiraIssueInvocation {
   /** Parent comment id when this is a threaded reply; otherwise equals `commentId`. */
   readonly replyToCommentId: string;
   readonly commentSurface: JiraCommentSurface;
+  /** `comment_created` or `comment_updated` (edits re-dispatch with a new delivery id). */
+  readonly webhookEvent: JiraCommentWebhookEvent;
+  /** Comment `updated` timestamp when present (used for update delivery dedupe). */
+  readonly commentUpdatedAt: string | null;
   readonly actorAccountId: string | null;
   readonly actorDisplayName: string | null;
   readonly prompt: string;
@@ -256,8 +278,7 @@ export function parseJiraCommentInvocation(
     readonly botAccountId?: string | null;
   },
 ): JiraIssueInvocation | null {
-  const event = payload.webhookEvent?.trim().toLowerCase();
-  if (event !== undefined && event !== "comment_created") return null;
+  if (!isAcceptedJiraCommentEvent(payload.webhookEvent)) return null;
   if (isBotAuthor(payload.comment.author)) return null;
 
   const authorAccountId = payload.comment.author?.accountId?.trim() || null;
@@ -285,6 +306,8 @@ export function parseJiraCommentInvocation(
 
   const extracted = extractTextAndMentionsFromBody(payload.comment.body);
   const commentSelf = payload.comment.self?.trim() || null;
+  const webhookEvent = normalizeJiraCommentEvent(payload.webhookEvent);
+  const commentUpdatedAt = payload.comment.updated?.trim() || null;
 
   return {
     issueKey,
@@ -294,6 +317,8 @@ export function parseJiraCommentInvocation(
     commentUrl: commentSelf,
     replyToCommentId,
     commentSurface,
+    webhookEvent,
+    commentUpdatedAt,
     actorAccountId: authorAccountId,
     actorDisplayName: payload.comment.author?.displayName?.trim() || null,
     prompt,
@@ -303,21 +328,63 @@ export function parseJiraCommentInvocation(
 
 export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
   const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
+  const isUpdate = invocation.webhookEvent === "comment_updated";
   const lines = [
     "<!--",
     "## Jira issue context",
     `- Issue: ${invocation.issueKey}${invocation.issueSummary ? ` — ${invocation.issueSummary}` : ""}`,
     `- Project: ${invocation.projectKey}`,
     `- Comment surface: ${invocation.commentSurface}`,
+    `- Webhook event: ${invocation.webhookEvent}`,
     `- Comment id: ${invocation.commentId}`,
     `- Reply-to comment id: ${invocation.replyToCommentId}`,
+    invocation.commentUpdatedAt ? `- Comment updated at: ${invocation.commentUpdatedAt}` : null,
     `- Jira requester: ${requester}${invocation.actorAccountId ? ` (accountId ${invocation.actorAccountId})` : ""}`,
     invocation.commentUrl ? `- Comment: ${invocation.commentUrl}` : null,
     "-->",
     "",
-    `From Jira [${requester}] on [${invocation.issueKey}]${invocation.commentUrl ? `(${invocation.commentUrl})` : ""}: ${invocation.prompt}`,
+    isUpdate
+      ? [
+          "The Jira user **edited** an earlier comment that addresses the bot. Treat the updated prompt as authoritative and discard work that only applied to a previous version of this comment.",
+          "",
+          `Updated prompt from Jira [${requester}] on [${invocation.issueKey}]${invocation.commentUrl ? `(${invocation.commentUrl})` : ""}: ${invocation.prompt}`,
+        ].join("\n")
+      : `From Jira [${requester}] on [${invocation.issueKey}]${invocation.commentUrl ? `(${invocation.commentUrl})` : ""}: ${invocation.prompt}`,
   ].filter((line): line is string => line !== null);
   return lines.join("\n");
+}
+
+/**
+ * Stable delivery id: creates dedupe on comment id; updates include updated-at / prompt
+ * so redeliveries of the same edit collapse but new edits re-run.
+ */
+export function jiraDeliveryIdFor(input: {
+  readonly invocation: JiraIssueInvocation;
+  readonly headerDeliveryId?: string | undefined;
+}): string {
+  if (input.headerDeliveryId && input.headerDeliveryId.trim().length > 0) {
+    return input.headerDeliveryId.trim();
+  }
+  const { invocation } = input;
+  if (invocation.webhookEvent === "comment_updated") {
+    const stamp =
+      invocation.commentUpdatedAt?.replace(/[^0-9A-Za-z._-]/gu, "") ||
+      // Fall back to a short hash of the prompt so body-only edits without `updated` still re-run.
+      simplePromptFingerprint(invocation.prompt);
+    return `jira-comment-updated:${invocation.issueKey}:${invocation.commentId}:${stamp}`;
+  }
+  return `jira-comment:${invocation.issueKey}:${invocation.commentId}`;
+}
+
+function simplePromptFingerprint(prompt: string): string {
+  // FNV-1a 32-bit — stable, no crypto dependency, good enough for delivery keys.
+  let hash = 0x811c9dc5;
+  const normalized = prompt.replace(/\s+/gu, " ").trim();
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash ^= normalized.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 /** Minimal ADF document from plain text paragraphs (API v3 comment body). */
