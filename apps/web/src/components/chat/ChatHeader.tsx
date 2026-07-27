@@ -6,6 +6,8 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
+import * as Option from "effect/Option";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
@@ -54,6 +56,48 @@ export function shouldShowOpenInPicker(input: {
     input.primaryEnvironmentId !== null &&
     input.activeThreadEnvironmentId === input.primaryEnvironmentId
   );
+}
+
+function encodeRemotePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+export function resolveRemoteVscodeOpenTarget(input: {
+  readonly entry: ConnectionCatalogEntry | null;
+  readonly cwd: string | null;
+}): { readonly authority: string; readonly uri: string } | null {
+  if (!input.cwd || !input.cwd.startsWith("/")) return null;
+  const entry = input.entry;
+  if (!entry) return null;
+
+  let hostname: string | null = null;
+  let username: string | null = null;
+
+  if (
+    entry.target._tag === "SshConnectionTarget" &&
+    Option.isSome(entry.profile) &&
+    entry.profile.value._tag === "SshConnectionProfile"
+  ) {
+    hostname = entry.profile.value.target.hostname;
+    username = entry.profile.value.target.username ?? username;
+  } else if (
+    entry.target._tag === "BearerConnectionTarget" &&
+    Option.isSome(entry.profile) &&
+    entry.profile.value._tag === "BearerConnectionProfile"
+  ) {
+    // The HTTP endpoint may be a gateway on a different machine. Remote-SSH must target
+    // the environment itself, not the transport endpoint used to reach its T3 server.
+    hostname = entry.profile.value.label.trim() || entry.target.label.trim() || null;
+  }
+
+  if (!hostname) return null;
+  const authority = username ? `${username}@${hostname}` : hostname;
+  // `windowId=_blank` focuses the window that already has this remote folder open, otherwise opens a
+  // new one — instead of replacing whatever window is currently focused.
+  const uri = `vscode://vscode-remote/ssh-remote+${encodeURIComponent(authority)}${encodeRemotePath(
+    input.cwd,
+  )}?windowId=_blank`;
+  return { authority, uri };
 }
 
 export const ChatHeader = memo(function ChatHeader({
