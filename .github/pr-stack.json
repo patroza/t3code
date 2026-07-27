@@ -30,5 +30,13 @@
       "number": 79,
       "branch": "fork/vscode"
     }
+  ],
+  "conflictResolutions": [
+    {
+      "branch": "fork/changes",
+      "commit": "10de598e790218c772ada3d908bc7b1eb1e54f0e",
+      "path": "apps/mobile/src/lib/threadActivity.ts",
+      "strategy": "theirs"
+    }
   ]
 }
