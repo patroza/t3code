@@ -64,6 +64,13 @@ export interface StackPullRequest {
   readonly branch: string;
 }
 
+export interface StackConflictResolution {
+  readonly branch: string;
+  readonly commit: string;
+  readonly path: string;
+  readonly strategy: "ours" | "theirs";
+}
+
 export interface StackManifest {
   readonly upstreamRemote: string;
   readonly upstreamBranch: string;
@@ -71,6 +78,7 @@ export interface StackManifest {
   readonly integrationBranch: string;
   readonly pullRequests: ReadonlyArray<StackPullRequest>;
   readonly integrationOverlays: ReadonlyArray<StackPullRequest>;
+  readonly conflictResolutions?: ReadonlyArray<StackConflictResolution>;
 }
 
 export interface PullRequestSnapshot {
@@ -273,6 +281,7 @@ export function parseManifest(source: string): StackManifest {
     integrationBranch,
     pullRequests,
     integrationOverlays = [],
+    conflictResolutions = [],
   } = value;
   if (
     typeof upstreamRemote !== "string" ||
@@ -284,7 +293,8 @@ export function parseManifest(source: string): StackManifest {
     typeof integrationBranch !== "string" ||
     integrationBranch.length === 0 ||
     !Array.isArray(pullRequests) ||
-    !Array.isArray(integrationOverlays)
+    !Array.isArray(integrationOverlays) ||
+    !Array.isArray(conflictResolutions)
   ) {
     throw new StackError("The PR stack manifest has missing or invalid fields.");
   }
@@ -313,6 +323,28 @@ export function parseManifest(source: string): StackManifest {
     }
     return { number: Number(entry.number), branch: entry.branch };
   });
+  const parsedConflictResolutions = conflictResolutions.map((entry, index) => {
+    assertObject(entry, `conflictResolutions[${index}]`);
+    if (
+      typeof entry.branch !== "string" ||
+      entry.branch.length === 0 ||
+      typeof entry.commit !== "string" ||
+      !/^[0-9a-f]{40}$/i.test(entry.commit) ||
+      typeof entry.path !== "string" ||
+      entry.path.length === 0 ||
+      NodePath.isAbsolute(entry.path) ||
+      entry.path.split("/").includes("..") ||
+      (entry.strategy !== "ours" && entry.strategy !== "theirs")
+    ) {
+      throw new StackError(`conflictResolutions[${index}] is invalid.`);
+    }
+    return {
+      branch: entry.branch,
+      commit: entry.commit.toLowerCase(),
+      path: entry.path,
+      strategy: entry.strategy,
+    } satisfies StackConflictResolution;
+  });
 
   const managed = [...parsedPullRequests, ...parsedIntegrationOverlays];
   const numbers = new Set(managed.map(({ number }) => number));
@@ -336,6 +368,9 @@ export function parseManifest(source: string): StackManifest {
     integrationBranch,
     pullRequests: parsedPullRequests,
     integrationOverlays: parsedIntegrationOverlays,
+    ...(parsedConflictResolutions.length > 0
+      ? { conflictResolutions: parsedConflictResolutions }
+      : {}),
   };
 }
 
@@ -816,6 +851,45 @@ function conflictError(
   );
 }
 
+function applyConfiguredConflictResolutions(
+  stateDir: string,
+  state: PersistedState,
+  operation: RebaseOperation,
+): boolean {
+  const conflictingPaths = git(state.repoDir, ["diff", "--name-only", "--diff-filter=U"], {
+    stateDir,
+  })
+    .split("\n")
+    .filter(Boolean);
+  const commit = git(state.repoDir, ["rev-parse", "--verify", "REBASE_HEAD"], {
+    stateDir,
+  }).toLowerCase();
+  const configured = state.manifest.conflictResolutions ?? [];
+  const resolutions = conflictingPaths.map((path) =>
+    configured.find(
+      (entry) =>
+        entry.branch === operation.branch &&
+        entry.commit.toLowerCase() === commit &&
+        entry.path === path,
+    ),
+  );
+  if (resolutions.some((entry) => entry === undefined)) {
+    return false;
+  }
+
+  for (const resolution of resolutions) {
+    if (!resolution) continue;
+    git(state.repoDir, ["checkout", `--${resolution.strategy}`, "--", resolution.path], {
+      stateDir,
+    });
+    git(state.repoDir, ["add", "--", resolution.path], { stateDir });
+    console.log(
+      `Applied configured ${resolution.strategy} resolution for ${operation.branch} ${commit.slice(0, 12)} ${resolution.path}`,
+    );
+  }
+  return true;
+}
+
 function finishOperation(
   stateDir: string,
   state: PersistedState,
@@ -844,7 +918,7 @@ function startOperation(
     return finishOperation(stateDir, updated, operation);
   }
   git(updated.repoDir, ["checkout", "--quiet", "--detach", operation.oldTip], { stateDir });
-  const result = run(
+  let result = run(
     "git",
     [
       "-c",
@@ -862,10 +936,18 @@ function startOperation(
       stateDir,
     },
   );
-  if (result.status !== 0) {
-    if (rebaseInProgress(updated.repoDir)) {
+  while (result.status !== 0 && rebaseInProgress(updated.repoDir)) {
+    if (!applyConfiguredConflictResolutions(stateDir, updated, operation)) {
       throw conflictError(stateDir, updated, operation);
     }
+    result = run("git", ["-c", "commit.gpgsign=false", "rebase", "--continue"], {
+      cwd: updated.repoDir,
+      allowFailure: true,
+      env: { GIT_EDITOR: "true" },
+      stateDir,
+    });
+  }
+  if (result.status !== 0) {
     throw new GitCommandError(
       ["rebase", "--onto", operation.newBase, operation.oldBase, operation.oldTip],
       updated.repoDir,
