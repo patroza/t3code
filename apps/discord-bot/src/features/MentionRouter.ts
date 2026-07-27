@@ -81,7 +81,9 @@ import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
 import {
   createDiscordQueuedPromptRegistry,
+  formatSteernowEmptyQueueMessage,
   QUEUED_PROMPT_REACTION_EMOJI,
+  resolveSteernowMessageIds,
 } from "./DiscordQueuedPromptRegistry.ts";
 import { BridgeHub } from "./BridgeHub.ts";
 import { bridgeThreadToDiscord, getLiveDiscordBridge } from "./ResponseBridge.ts";
@@ -941,7 +943,7 @@ const make = (botConfig: DiscordBotConfig) =>
           const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags);
           const t3MessageId = MessageId.make(startedTurn.messageId);
           if (followUpDelivery === "steer" && turnAlreadyRunning) {
-            yield* t3
+            const steered = yield* t3
               .steerQueuedMessage({
                 threadId: existing.t3ThreadId,
                 messageId: t3MessageId,
@@ -953,6 +955,7 @@ const make = (botConfig: DiscordBotConfig) =>
                     messageId: startedTurn.messageId,
                   }),
                 ),
+                Effect.as(true),
                 Effect.catch((error) =>
                   Effect.logWarning(
                     "Steer after startTurn failed; message may remain server-queued",
@@ -961,9 +964,29 @@ const make = (botConfig: DiscordBotConfig) =>
                       messageId: startedTurn.messageId,
                       error: String(error),
                     },
-                  ),
+                  ).pipe(Effect.as(false)),
                 ),
               );
+            // If steer raced pending turn-start (or similar), keep the Discord-side
+            // registry + 📥 badge so /omegent steernow can flush without waiting on
+            // a lagging HTTP thread snapshot.
+            if (!steered) {
+              const discordMessageId =
+                typeof input.mentionMessage?.id === "string" ? input.mentionMessage.id : null;
+              if (discordMessageId !== null) {
+                const authorUserId =
+                  typeof input.mentionMessage?.author?.id === "string"
+                    ? input.mentionMessage.author.id
+                    : null;
+                yield* markDiscordPromptQueued({
+                  discordChannelId: input.discordThreadId,
+                  discordMessageId,
+                  t3ThreadId: existing.t3ThreadId,
+                  t3MessageId,
+                  authorUserId,
+                });
+              }
+            }
           } else if (followUpDelivery === "queue" && turnAlreadyRunning) {
             const discordMessageId =
               typeof input.mentionMessage?.id === "string" ? input.mentionMessage.id : null;
@@ -2835,32 +2858,51 @@ const make = (botConfig: DiscordBotConfig) =>
                 });
               }
 
+              // Server snapshot is authoritative after restart; local registry covers
+              // HTTP lag / soft-failed fetchThreadDetail so just-queued 📥 items still flush.
               const detail = yield* t3.fetchThreadDetail(link.t3ThreadId);
-              const queued = detail?.thread.queuedMessages ?? [];
-              if (queued.length === 0) {
-                return slashReply("Nothing is queued on this thread.", { ephemeral: true });
+              const resolved = resolveSteernowMessageIds({
+                serverQueued: detail?.thread.queuedMessages ?? [],
+                localPending: queuedPrompts.listForThread(link.t3ThreadId),
+                detailLoaded: detail !== null,
+              });
+              if (resolved.messageIds.length === 0) {
+                return slashReply(
+                  formatSteernowEmptyQueueMessage({
+                    snapshotMissing: resolved.snapshotMissing,
+                  }),
+                  { ephemeral: true },
+                );
+              }
+
+              if (resolved.source === "local") {
+                yield* Effect.logInfo("steernow using local queued-prompt registry fallback", {
+                  t3ThreadId: link.t3ThreadId,
+                  count: resolved.messageIds.length,
+                  snapshotMissing: resolved.snapshotMissing,
+                });
               }
 
               let steered = 0;
               const failures: string[] = [];
-              for (const message of queued) {
+              for (const messageId of resolved.messageIds) {
                 const result = yield* t3
                   .steerQueuedMessage({
                     threadId: link.t3ThreadId,
-                    messageId: message.messageId,
+                    messageId,
                   })
                   .pipe(Effect.result);
                 if (Result.isSuccess(result)) {
                   steered += 1;
-                  const pending = queuedPrompts.forgetT3Message(link.t3ThreadId, message.messageId);
+                  const pending = queuedPrompts.forgetT3Message(link.t3ThreadId, messageId);
                   if (pending !== null) {
                     yield* clearQueuedBadge(pending);
                   }
                 } else {
-                  failures.push(String(message.messageId));
+                  failures.push(String(messageId));
                   yield* Effect.logWarning("steernow failed for queued message", {
                     t3ThreadId: link.t3ThreadId,
-                    messageId: message.messageId,
+                    messageId,
                     error: String(result.failure),
                   });
                 }
@@ -2868,7 +2910,7 @@ const make = (botConfig: DiscordBotConfig) =>
 
               if (steered === 0) {
                 return slashReply(
-                  `Could not steer the queue (${failures.length} failed). Try again when the turn is running.`,
+                  `Could not steer the queue (${failures.length} failed). Try again when the turn is running, or use \`/agent steer prompt:…\` to inject a new mid-turn prompt.`,
                   { ephemeral: true },
                 );
               }
