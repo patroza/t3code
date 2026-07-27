@@ -1628,6 +1628,9 @@ const make = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
     );
+    // Startup recovery must finish before server startup settles orphaned
+    // sessions. Otherwise the orphan audit can clear the persisted recovery
+    // marker or stop the replacement process while it is being started.
     yield* reconcileStartup().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("provider restart reconciliation failed", {
@@ -1635,7 +1638,6 @@ const make = Effect.gen(function* () {
         }),
       ),
       Effect.ensuring(Deferred.succeed(startupReconciliationDone, undefined).pipe(Effect.ignore)),
-      Effect.forkScoped,
     );
   });
 
