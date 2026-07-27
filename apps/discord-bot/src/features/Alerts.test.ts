@@ -2,8 +2,11 @@ import * as Cause from "effect/Cause";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  chunkAlertContent,
   classifySessionLastError,
   formatAlertCause,
+  formatBridgeAlertContent,
+  formatFatalAlertContent,
   isExpectedSessionLastError,
   selectSessionErrorsForAlert,
   sessionErrorAlertKey,
@@ -61,6 +64,35 @@ describe("formatAlertCause", () => {
   it("falls back for plain Errors and strings", () => {
     expect(formatAlertCause(new Error("boom"))).toContain("boom");
     expect(formatAlertCause("plain")).toBe("plain");
+  });
+});
+
+describe("Discord alert content", () => {
+  it("preserves a full stack trace across ordered Discord-sized chunks", () => {
+    const trace = [
+      "Error: Invalid params",
+      ...Array.from(
+        { length: 80 },
+        (_, index) =>
+          `    at decodeFrame${index} (file:///var/lib/t3/src/t3code/node_modules/effect/frame-${index}.js:877:8)`,
+      ),
+    ].join("\n");
+    const content = formatFatalAlertContent(
+      "T3 session error",
+      `thread=\`2d9ccf35-a36a-41bc-a762-523f5e423f41\`\n${trace}`,
+    );
+    const chunks = chunkAlertContent(content);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 1900)).toBe(true);
+    expect(chunks.join("")).toBe(content);
+    expect(chunks.at(-1)).toContain("decodeFrame79");
+  });
+
+  it("does not truncate fatal or bridge details before delivery", () => {
+    const detail = `start\n${"x".repeat(4_000)}\nend`;
+    expect(formatFatalAlertContent("failure", detail)).toContain(detail);
+    expect(formatBridgeAlertContent("failure", detail)).toContain(detail);
   });
 });
 

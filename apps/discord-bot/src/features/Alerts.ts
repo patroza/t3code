@@ -28,6 +28,8 @@ const FATAL_COOLDOWN_MS = 2 * 60 * 1000;
 const SESSION_ERROR_FATAL_COOLDOWN_MS = 30 * 60 * 1000;
 /** Cap distinct session-error posts per watchdog tick. */
 const SESSION_ERROR_ALERT_MAX = 5;
+/** Leave headroom below Discord's 2,000-character message-content limit. */
+const DISCORD_ALERT_MESSAGE_LIMIT = 1900;
 
 const LOAD_RATIO = 0.75;
 const CPU_PERCENT_ALERT = 85;
@@ -584,6 +586,44 @@ let poster: Poster | null = null;
 const BRIDGE_ALERT_COOLDOWN_MS = 3 * 60 * 1000;
 
 /**
+ * Split an alert without discarding any of its contents. Prefer line or word
+ * boundaries so stack frames remain readable, while preserving the separators
+ * verbatim across the resulting messages.
+ */
+export function chunkAlertContent(
+  content: string,
+  limit = DISCORD_ALERT_MESSAGE_LIMIT,
+): ReadonlyArray<string> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new RangeError("Discord alert chunk limit must be a positive integer");
+  }
+  if (content.length <= limit) return [content];
+
+  const chunks: string[] = [];
+  let offset = 0;
+  while (content.length - offset > limit) {
+    const hardEnd = offset + limit;
+    const preferredStart = offset + Math.floor(limit * 0.5);
+    const newlineEnd = content.lastIndexOf("\n", hardEnd - 1) + 1;
+    const spaceEnd = content.lastIndexOf(" ", hardEnd - 1) + 1;
+    const end =
+      newlineEnd > preferredStart ? newlineEnd : spaceEnd > preferredStart ? spaceEnd : hardEnd;
+    chunks.push(content.slice(offset, end));
+    offset = end;
+  }
+  chunks.push(content.slice(offset));
+  return chunks;
+}
+
+export function formatFatalAlertContent(title: string, detail: string): string {
+  return [`**FATAL: ${title}**`, detail].join("\n");
+}
+
+export function formatBridgeAlertContent(title: string, detail: string): string {
+  return [`**BRIDGE: ${title}**`, detail].join("\n");
+}
+
+/**
  * Render an Effect `Cause` (or any thrown value) for Discord / logs.
  * Logging `{ cause }` alone shows `{ _id: 'Cause', failures: [ [Object] ] }`.
  */
@@ -619,11 +659,7 @@ export const postFatalAlert = (key: string, title: string, detail: string) =>
       yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail });
       return;
     }
-    yield* p(
-      `fatal:${key}`,
-      [`**FATAL: ${title}**`, detail.slice(0, 1500)].join("\n"),
-      FATAL_COOLDOWN_MS,
-    );
+    yield* p(`fatal:${key}`, formatFatalAlertContent(title, detail), FATAL_COOLDOWN_MS);
   });
 
 /**
@@ -638,11 +674,7 @@ export const postBridgeAlert = (key: string, title: string, detail: string) =>
       yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail });
       return;
     }
-    yield* p(
-      `bridge:${key}`,
-      [`**BRIDGE: ${title}**`, detail.slice(0, 1500)].join("\n"),
-      BRIDGE_ALERT_COOLDOWN_MS,
-    );
+    yield* p(`bridge:${key}`, formatBridgeAlertContent(title, detail), BRIDGE_ALERT_COOLDOWN_MS);
   });
 
 // --- Watchdog ----------------------------------------------------------------
@@ -670,9 +702,22 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
         const prev = lastSent.get(key) ?? 0;
         if (now - prev < cooldownMs) return;
         lastSent.set(key, now);
-        const body = content.length > 1900 ? `${content.slice(0, 1900)}…` : content;
-        yield* rest.createMessage(channelId, { content: body }).pipe(
-          Effect.tap(() => Effect.logInfo("Posted Discord ops alert", { key, channelId })),
+        const chunks = chunkAlertContent(content);
+        yield* Effect.forEach(
+          chunks,
+          (body, index) =>
+            rest.createMessage(channelId, { content: body }).pipe(
+              Effect.tap(() =>
+                Effect.logInfo("Posted Discord ops alert", {
+                  key,
+                  channelId,
+                  chunk: index + 1,
+                  chunkCount: chunks.length,
+                }),
+              ),
+            ),
+          { concurrency: 1, discard: true },
+        ).pipe(
           Effect.catchCause((cause) =>
             Effect.logError("Failed to post Discord ops alert").pipe(
               Effect.andThen(Effect.logError(cause)),
