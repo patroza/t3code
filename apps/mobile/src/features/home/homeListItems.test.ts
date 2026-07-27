@@ -253,4 +253,39 @@ describe("buildHomeListLayout", () => {
     expect(layout.items[0]).toMatchObject({ type: "thread", projectTitle: "Alpha" });
     expect(layout.stickyHeaderIndices).toEqual([]);
   });
+
+  it("builds recency sections with Today / Older headers", () => {
+    const now = new Date(2026, 2, 15, 12, 0, 0);
+    const startToday = new Date(2026, 2, 15).getTime();
+    const todayIso = new Date(startToday + 3_600_000).toISOString();
+    const olderIso = new Date(startToday - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const todayThread = {
+      ...makeThread("t-today", ProjectId.make("alpha")),
+      updatedAt: todayIso,
+      latestUserMessageAt: todayIso,
+    };
+    const olderThread = {
+      ...makeThread("t-older", ProjectId.make("beta")),
+      updatedAt: olderIso,
+      latestUserMessageAt: olderIso,
+    };
+    const layout = buildHomeRecentListLayout({
+      pendingTasks: [],
+      entries: [
+        { thread: todayThread, projectTitle: "Alpha" },
+        { thread: olderThread, projectTitle: "Beta" },
+      ],
+      groupByRecency: true,
+      now,
+    });
+    expect(itemTypes(layout.items)).toEqual([
+      "section-header",
+      "thread",
+      "section-header",
+      "thread",
+    ]);
+    expect(layout.items[0]).toMatchObject({ type: "section-header", title: "Today" });
+    expect(layout.items[2]).toMatchObject({ type: "section-header", title: "Older" });
+    expect(layout.stickyHeaderIndices).toEqual([0, 2]);
+  });
 });
