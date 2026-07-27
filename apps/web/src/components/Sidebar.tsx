@@ -246,7 +246,10 @@ import {
   type WebListMode,
   type WebThreadGrouping,
 } from "./listEnvironmentFilter";
-import { groupSortedThreadsByRecency } from "@t3tools/client-runtime/state/thread-recency-groups";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import { Toggle, ToggleGroup } from "./ui/toggle-group";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import {
@@ -3602,7 +3605,10 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
 
 const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   recentThreads: readonly SidebarRecentThread[];
-  /** When true, wrap threads in Today / Yesterday / … section headers. */
+  /**
+   * When true, partition by recency. Section headers render only when more
+   * than one non-empty bucket is present (Last Hour / Earlier Today / …).
+   */
   groupByRecency: boolean;
   routeThreadKey: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
@@ -3660,12 +3666,24 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   const recencyGroups = groupSortedThreadsByRecency(
     props.recentThreads.map((entry) => entry.thread),
   );
+  const showSectionHeaders = shouldShowRecencySectionHeaders(recencyGroups);
   const entryByThreadKey = new Map(
     props.recentThreads.map((entry) => [
       scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
       entry,
     ]),
   );
+
+  // Single non-empty bucket: skip headers (e.g. everything is "Last Hour").
+  if (!showSectionHeaders) {
+    return (
+      <SidebarGroup className="px-2 pt-1 pb-1">
+        <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+          {props.recentThreads.map(renderThreadRow)}
+        </SidebarMenuSub>
+      </SidebarGroup>
+    );
+  }
 
   return (
     <>
