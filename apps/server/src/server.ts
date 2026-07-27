@@ -106,6 +106,12 @@ import * as GitHubAppConfig from "./github/GitHubAppConfig.ts";
 import * as GitHubDeliveryStore from "./github/GitHubDeliveryStore.ts";
 import * as GitHubPrBridge from "./github/GitHubPrBridge.ts";
 import { githubWebhookRouteLayer } from "./github/http.ts";
+import * as JiraAppClient from "./jira/JiraAppClient.ts";
+import * as JiraAppConfig from "./jira/JiraAppConfig.ts";
+import * as JiraDeliveryStore from "./jira/JiraDeliveryStore.ts";
+import * as JiraIssueBridge from "./jira/JiraIssueBridge.ts";
+import { jiraWebhookRouteLayer } from "./jira/http.ts";
+import * as ThreadWorkItemStore from "./workItems/ThreadWorkItemStore.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -239,12 +245,28 @@ const ReviewLayerLive = ReviewService.layer.pipe(
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
 
+/** Shared once for GitHub + Jira bridges (Jira keys / PR URLs → threads). */
+const ThreadWorkItemStoreLive = ThreadWorkItemStore.layer;
+
 const GitHubAppDependenciesLive = Layer.mergeAll(
   GitHubAppClient.layer,
   GitHubDeliveryStore.layer,
 ).pipe(Layer.provideMerge(GitHubAppConfig.layer));
 
-const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(Layer.provideMerge(GitHubAppDependenciesLive));
+const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(
+  Layer.provideMerge(GitHubAppDependenciesLive),
+  Layer.provideMerge(ThreadWorkItemStoreLive),
+);
+
+const JiraAppDependenciesLive = Layer.mergeAll(JiraAppClient.layer, JiraDeliveryStore.layer).pipe(
+  Layer.provideMerge(JiraAppConfig.layer),
+);
+
+const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
+  Layer.provideMerge(JiraAppDependenciesLive),
+  // Prefer the instance already provided by GitHubPrBridgeLive when merged below.
+  Layer.provideMerge(ThreadWorkItemStoreLive),
+);
 
 const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(VcsProjectConfig.layer),
@@ -375,7 +397,11 @@ const RuntimeCoreWithGitHubLive = GitHubPrBridgeLive.pipe(
   Layer.provideMerge(RuntimeCoreDependenciesLive),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreWithGitHubLive.pipe(
+const RuntimeCoreWithIntegrationsLive = JiraIssueBridgeLive.pipe(
+  Layer.provideMerge(RuntimeCoreWithGitHubLive),
+);
+
+const RuntimeDependenciesLive = RuntimeCoreWithIntegrationsLive.pipe(
   // Misc.
   Layer.provideMerge(ProcessDiagnostics.layer),
   Layer.provideMerge(HostResourceProbe.layer),
@@ -412,7 +438,11 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(browserApiCorsLayer),
 );
 
-const productionRoutesLayer = Layer.mergeAll(makeRoutesLayer, githubWebhookRouteLayer);
+const productionRoutesLayer = Layer.mergeAll(
+  makeRoutesLayer,
+  githubWebhookRouteLayer,
+  jiraWebhookRouteLayer,
+);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
