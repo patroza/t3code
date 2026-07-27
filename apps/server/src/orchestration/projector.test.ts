@@ -503,6 +503,121 @@ describe("orchestration projector", () => {
     expect(message?.updatedAt).toBe(completeAt);
   });
 
+  it("does not rebind an assistant message turnId when a later complete races under the next turn", async () => {
+    // Production race (t3vm thread 16feaadd…): queue drain re-emits
+    // assistant.complete for the same segment id under the new turnId with empty
+    // text. The body must stay, and turnId must stay on the completed turn so
+    // Discord/web do not swallow the final under the next Working tip.
+    const createdAt = "2026-07-27T05:54:00.000Z";
+    const completeAt = "2026-07-27T05:57:21.174Z";
+    const restampAt = "2026-07-27T05:57:32.206Z";
+    const model = createEmptyReadModel(createdAt);
+
+    // Single runPromise so we stay within the file's LEGACY_BASELINE for
+    // t3code/no-manual-effect-runtime-in-tests.
+    const afterRestamp = await Effect.runPromise(
+      Effect.gen(function* () {
+        const afterCreate = yield* projectEvent(
+          model,
+          makeEvent({
+            sequence: 1,
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: createdAt,
+            commandId: "cmd-create",
+            payload: {
+              threadId: "thread-1",
+              projectId: "project-1",
+              title: "demo",
+              modelSelection: {
+                provider: ProviderDriverKind.make("codex"),
+                model: "gpt-5.3-codex",
+              },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          }),
+        );
+
+        const afterFinal = yield* projectEvent(
+          afterCreate,
+          makeEvent({
+            sequence: 2,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: completeAt,
+            commandId: "cmd-final-delta",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "**Yes — the bug is almost entirely a naming/dual-use problem.**",
+              turnId: "turn-prior",
+              streaming: true,
+              createdAt: completeAt,
+              updatedAt: completeAt,
+            },
+          }),
+        );
+
+        const afterComplete = yield* projectEvent(
+          afterFinal,
+          makeEvent({
+            sequence: 3,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: completeAt,
+            commandId: "cmd-final-complete",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "",
+              turnId: "turn-prior",
+              streaming: false,
+              createdAt: completeAt,
+              updatedAt: completeAt,
+            },
+          }),
+        );
+
+        return yield* projectEvent(
+          afterComplete,
+          makeEvent({
+            sequence: 4,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: restampAt,
+            commandId: "cmd-restamp-complete",
+            payload: {
+              threadId: "thread-1",
+              messageId: "assistant:run:segment:5",
+              role: "assistant",
+              text: "",
+              turnId: "turn-next",
+              streaming: false,
+              createdAt: restampAt,
+              updatedAt: restampAt,
+            },
+          }),
+        );
+      }),
+    );
+
+    const message = firstThread(afterRestamp)?.messages[0];
+    expect(message?.id).toBe("assistant:run:segment:5");
+    expect(message?.text).toBe("**Yes — the bug is almost entirely a naming/dual-use problem.**");
+    expect(message?.turnId).toBe("turn-prior");
+    expect(message?.streaming).toBe(false);
+  });
+
   it("prunes reverted turn messages from in-memory thread snapshot", async () => {
     const createdAt = "2026-02-23T10:00:00.000Z";
     const model = createEmptyReadModel(createdAt);
