@@ -1537,6 +1537,8 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
         // Integration overlays must be based on the new tip for compose. Surface a
         // hard error when a registered overlay could not be rebased, instead of
         // failing later with a less actionable compose-time message.
+        // "Already based" / identical-tip skips are success — see
+        // isSuccessfulFeatureRebaseSkip (must match actual skip reason strings).
         if (manifest.integrationOverlays.length > 0) {
           const overlayBranches = new Set(manifest.integrationOverlays.map(({ branch }) => branch));
           const failedOverlays = featureResult.conflicts.filter((entry) =>
@@ -1545,9 +1547,7 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
           const skippedOverlays = featureResult.skipped.filter(
             (entry) =>
               overlayBranches.has(entry.branch) &&
-              entry.reason !== "already based on new fork/changes" &&
-              entry.reason !== "remote already based on new fork/changes after concurrent update" &&
-              entry.reason !== "rebase produced identical tip",
+              !isSuccessfulFeatureRebaseSkip(entry.reason, manifest.forkChangesBranch),
           );
           if (failedOverlays.length > 0 || skippedOverlays.length > 0) {
             const details = [
@@ -1582,6 +1582,23 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
   }
 
   return result;
+}
+
+/**
+ * Skip reasons from {@link rebaseOpenFeaturePullRequests} that mean the branch
+ * is already correctly based on its parent (no further work needed).
+ *
+ * Keep these strings in sync with the `skipped.push({ reason: ... })` sites in
+ * that function. The post-sync overlay gate must treat them as success, not as
+ * "incomplete" failures — otherwise a no-op cascade hard-fails when overlays
+ * are already on the new tip and blocks compose/dispatch.
+ */
+export function isSuccessfulFeatureRebaseSkip(reason: string, baseBranch: string): boolean {
+  return (
+    reason === `already based on ${baseBranch}` ||
+    reason === `remote already based on ${baseBranch} after concurrent update` ||
+    reason === "rebase produced identical tip"
+  );
 }
 
 /**
