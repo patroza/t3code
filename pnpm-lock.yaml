@@ -188,7 +188,7 @@ importers:
         version: link:../../packages/shared
       dfx:
         specifier: 'catalog:'
-        version: 1.0.14(effect@4.0.0-beta.102(patch_hash=71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488))
+        version: 1.0.15(effect@4.0.0-beta.102(patch_hash=71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488))
       effect:
         specifier: 4.0.0-beta.102
         version: 4.0.0-beta.102(patch_hash=71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488)
@@ -10535,10 +10535,11 @@ packages:
     peerDependencies:
       '@types/emscripten': '>=1.39.6'
 
-  dfx@1.0.14:
-    resolution: {integrity: sha512-7dhY8yN8pCk3Id3L4YKAIbiOJrcFEiHe9ttgNpD989iu7zwp+i4ttfmEgBhSNWNpql6fthicM/m/aGE1vuE1iw==}
+  dfx@1.0.15:
+    resolution: {integrity: sha512-LqHeOZLcOJB5D0+BUiy6XkthunolbJoSAAIOjXEiux5P6CzXPbJl0EkaWSDXTbkj/F/pdW9lk1zCC4XAl8yG+w==}
     peerDependencies:
-      effect: 4.0.0-beta.102
+      effect: '>=4.0.0-beta.101 <5.0.0'
+
 
   dompurify@3.4.12:
     resolution: {integrity: sha512-zQvGet8Z2sWbQhCmfFz/T5QWH2oBmjnqK3qvOjaqaNLrLEF912WamU+ohnTp0TCep/MFVHpdJuCZEdFOdTnEFg==}
@@ -21840,7 +21841,7 @@ snapshots:
     dependencies:
       '@types/emscripten': 1.41.5
       type-fest: 5.7.0
-  dfx@1.0.14(effect@4.0.0-beta.102(patch_hash=71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488)):
+  dfx@1.0.15(effect@4.0.0-beta.102(patch_hash=71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488)):
     dependencies:
       discord-api-types: 0.38.50
       effect: 4.0.0-beta.102(patch_hash=71215759e1ac0a7f65d7b75d816986687ae6c3a6cba02d928d184ca71790d488)
