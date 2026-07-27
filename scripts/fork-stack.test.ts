@@ -15,6 +15,7 @@ import {
   planLocalSyncWithRemote,
   registerPullRequest,
   registerIntegrationOverlay,
+  resolveFeaturePullRequestBaseBranch,
   shouldRetargetPullRequestBase,
   stackParentBranch,
   uniqueLocalCommitsFromCherry,
@@ -41,6 +42,27 @@ describe("fork stack helpers", () => {
     expect(featurePullRequestBaseBranch(manifest)).toBe("fork/changes");
     expect(shouldRetargetPullRequestBase("main", "fork/changes")).toBe(true);
     expect(shouldRetargetPullRequestBase("fork/changes", "fork/changes")).toBe(false);
+  });
+
+  it("preserves an intentional overlay parent for dependent PR updates", () => {
+    const withOverlay: StackManifest = {
+      ...manifest,
+      integrationOverlays: [{ number: 80, branch: "fork/discord" }],
+    };
+    expect(
+      resolveFeaturePullRequestBaseBranch({
+        manifest: withOverlay,
+        currentBase: "fork/discord",
+        baseHasOpenPullRequest: true,
+      }),
+    ).toBe("fork/discord");
+    expect(
+      resolveFeaturePullRequestBaseBranch({
+        manifest: withOverlay,
+        currentBase: "main",
+        baseHasOpenPullRequest: false,
+      }),
+    ).toBe("fork/changes");
   });
 
   it("plans a simple rebase when behind an ancestor base", () => {
