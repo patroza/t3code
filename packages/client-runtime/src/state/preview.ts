@@ -80,6 +80,22 @@ export function createPreviewEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
+    /**
+     * Asks the environment for a URL this client can actually open for one of
+     * its local ports. Deduped per port rather than serialized with the tab
+     * lifecycle: resolving may publish a tailnet route, and two tabs opening
+     * the same port must not race to publish it twice.
+     */
+    resolvePort: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:resolve-port",
+      tag: WS_METHODS.previewResolvePort,
+      scheduler: lifecycleScheduler,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }: { environmentId: string; input: { port: number } }) =>
+          JSON.stringify([environmentId, input.port]),
+      },
+    }),
     reportStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:preview:report-status",
       tag: WS_METHODS.previewReportStatus,
