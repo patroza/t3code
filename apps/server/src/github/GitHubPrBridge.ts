@@ -35,6 +35,7 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
+import { ThreadWorkItemStore } from "../workItems/ThreadWorkItemStore.ts";
 import { GitHubAppClient } from "./GitHubAppClient.ts";
 import { GitHubAppConfig, type GitHubRepositoryPermission } from "./GitHubAppConfig.ts";
 import { GitHubDeliveryStore, type StoredGitHubDelivery } from "./GitHubDeliveryStore.ts";
@@ -475,6 +476,7 @@ export const make = Effect.gen(function* () {
   const config = yield* GitHubAppConfig;
   const github = yield* GitHubAppClient;
   const deliveries = yield* GitHubDeliveryStore;
+  const workItems = yield* ThreadWorkItemStore;
   const projection = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const engine = yield* OrchestrationEngineService;
@@ -1244,6 +1246,16 @@ export const make = Effect.gen(function* () {
       return;
     }
     const thread = outcome.thread;
+
+    // Durable server-native PR ↔ thread association (not Discord-only).
+    yield* workItems
+      .appendForThread({
+        threadId: thread.id,
+        githubPullRequests: [input.invocation.pullRequestUrl],
+        source: "github-webhook",
+      })
+      .pipe(Effect.ignore);
+
     if (isThreadBusy(thread)) {
       yield* Effect.logInfo("GitHub PR invocation matched a busy T3 thread", {
         deliveryId: input.deliveryId,
