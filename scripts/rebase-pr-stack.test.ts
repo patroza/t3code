@@ -523,6 +523,41 @@ describe("rebase-pr-stack", () => {
     assert.deepStrictEqual(remoteTips(fixture), before);
   });
 
+  it("applies an exact manifest conflict resolution and completes the atomic update", async () => {
+    const fixture = createFixture({ conflict: true });
+    const conflictingCommit = remoteTip(fixture.origin, "feature/pr-4");
+    const manifest: StackManifest = {
+      ...fixture.manifest,
+      conflictResolutions: [
+        {
+          branch: "feature/pr-4",
+          commit: conflictingCommit,
+          path: "shared.txt",
+          strategy: "theirs",
+        },
+      ],
+    };
+    write(
+      NodePath.join(fixture.work, ".github", "pr-stack.json"),
+      `${JSON.stringify(manifest, undefined, 2)}\n`,
+    );
+
+    await syncStack({
+      sourceRoot: fixture.work,
+      push: true,
+      validatePullRequests: false,
+    });
+
+    assert.equal(runGit(fixture.origin, ["show", "feature/pr-4:shared.txt"]), "from pr 4");
+    assert.ok(
+      isAncestor(
+        fixture.origin,
+        remoteTip(fixture.upstream, "main"),
+        remoteTip(fixture.origin, "feature/pr-4"),
+      ),
+    );
+  });
+
   it("aborts every ref update when a force-with-lease becomes stale", async () => {
     const fixture = createFixture();
     const before = remoteTips(fixture);
