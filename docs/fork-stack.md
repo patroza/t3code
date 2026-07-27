@@ -41,6 +41,8 @@ pnpm fork:stack overlay-promote 10 upstream/desktop-deep-links
 
 To change an overlay, commit directly to its branch or create a child PR with the overlay branch as
 its base and merge the child into the overlay PR. Do not put the same change into `fork/changes`.
+When `fork/changes` rewrites, stack automation rebases the overlay first and then recursively rebases
+its child and descendant PRs onto their rewritten parents. A conflict blocks only that PR's subtree.
 Landing an overlay is deliberate: remove its manifest entry in the same reviewed change that lands
 the implementation in `fork/changes`, then verify that the resulting `fork/integration` tree is
 unchanged.
@@ -112,8 +114,8 @@ editing central metadata.
 
 ### Keeping feature PRs up to date
 
-Feature branches drift when `fork/changes` moves (upstream mirror sync or merged siblings). Agents
-must leave PRs mergeable at handoff:
+Feature branches drift when their parent moves (`fork/changes` for ordinary features, or another
+feature/overlay branch for dependent PRs). Agents must leave PRs mergeable at handoff:
 
 ```sh
 # Current branch + its open PR
@@ -128,15 +130,12 @@ pnpm fork:stack update
 
 `update` will:
 
-1. fetch latest `origin/fork/changes` and the durable base-history ref
-   (`refs/t3/stack/base-history/fork-changes`);
+1. resolve and fetch the PR's intended parent branch;
 2. **rebase** when the branch already descends from the new tip but is behind;
-3. when history diverged (normal after a stack rewrite): recover the **old base tip** this PR was
-   built on — the newest recorded historical `fork/changes` tip that is still an ancestor of
-   HEAD — then `git rebase --onto newBase oldBase`. Feature commits are exactly `oldBase..HEAD`
-   (the commits that were on top of the old base), not a file-count guess and not the full GitHub
-   PR commit list;
-4. **retarget** the PR base to `fork/changes` if it still points at `main` or another wrong branch;
+3. when history diverged (normal after a stack rewrite), recover the **old parent tip** this PR was
+   built on—from the durable `fork/changes` history or the parent PR's force-push history—then run
+   `git rebase --onto newParent oldParent`. The replay contains only this PR's commits;
+4. preserve intentional dependent/overlay-child bases and retarget only invalid bases;
 5. **force-with-lease push** when `--push` is set;
 6. print `gh pr view` mergeability JSON.
 

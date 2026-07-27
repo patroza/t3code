@@ -499,6 +499,57 @@ export async function fetchPullRequestSnapshots(
   });
 }
 
+async function fetchPullRequestHeadHistory(
+  pullRequestNumber: number,
+): Promise<ReadonlyArray<string>> {
+  const tips: Array<string> = [];
+  for (let page = 1; ; page += 1) {
+    const value = await githubRequest(
+      `/repos/${EXPECTED_REPOSITORY}/issues/${pullRequestNumber}/events?per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(value)) {
+      throw new StackError(`GitHub returned invalid events for PR #${pullRequestNumber}.`);
+    }
+    for (const event of value) {
+      if (
+        typeof event === "object" &&
+        event !== null &&
+        "event" in event &&
+        event.event === "head_ref_force_pushed" &&
+        "commit_id" in event &&
+        typeof event.commit_id === "string"
+      ) {
+        tips.unshift(event.commit_id);
+      }
+    }
+    if (value.length < 100) break;
+  }
+  return appendBaseHistory([], tips);
+}
+
+async function fetchBaseHistoryByBranch(
+  openPulls: ReadonlyArray<{
+    readonly number: number;
+    readonly headBranch: string;
+  }>,
+  features: ReadonlyArray<OpenFeaturePullRequestTreeNode>,
+): Promise<Readonly<Record<string, ReadonlyArray<string>>>> {
+  const pullByBranch = new Map(openPulls.map((pull) => [pull.headBranch, pull]));
+  const baseBranches = new Set(
+    features.filter(({ depth }) => depth > 0).map(({ baseBranch }) => baseBranch),
+  );
+  const entries = await Promise.all(
+    [...baseBranches].map(async (branch) => {
+      const pull = pullByBranch.get(branch);
+      return [
+        branch,
+        pull === undefined ? [] : await fetchPullRequestHeadHistory(pull.number),
+      ] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
 async function validatePullRequests(
   manifest: StackManifest,
   supplied?: ReadonlyArray<PullRequestSnapshot>,
@@ -959,47 +1010,84 @@ export function selectOpenFeaturePullRequests(input: {
   readonly manifest: StackManifest;
   readonly expectedRepository: string;
 }): ReadonlyArray<{ readonly number: number; readonly branch: string }> {
+  return selectOpenFeaturePullRequestTree(input).map(({ number, branch }) => ({
+    number,
+    branch,
+  }));
+}
+
+export interface OpenFeaturePullRequestTreeNode {
+  readonly number: number;
+  readonly branch: string;
+  readonly baseBranch: string;
+  readonly depth: number;
+}
+
+/**
+ * Select the complete same-repository PR tree rooted at `fork/changes`.
+ * Parents always precede children so rewritten heads can cascade through
+ * overlay children and deeper dependent PRs.
+ */
+export function selectOpenFeaturePullRequestTree(input: {
+  readonly openPulls: ReadonlyArray<{
+    readonly number: number;
+    readonly headBranch: string;
+    readonly baseBranch: string;
+    readonly headRepository?: string | null;
+    readonly draft?: boolean;
+  }>;
+  readonly manifest: StackManifest;
+  readonly expectedRepository: string;
+}): ReadonlyArray<OpenFeaturePullRequestTreeNode> {
   const stackBranches = new Set([
     input.manifest.upstreamBranch,
     input.manifest.integrationBranch,
     ...input.manifest.pullRequests.map(({ branch }) => branch),
   ]);
   const overlayBranches = new Set(input.manifest.integrationOverlays.map(({ branch }) => branch));
-  const selected = input.openPulls
-    .filter((pull) => {
-      if (pull.baseBranch !== input.manifest.forkChangesBranch) return false;
-      if (stackBranches.has(pull.headBranch)) return false;
-      if (
-        pull.headRepository !== undefined &&
-        pull.headRepository !== null &&
-        pull.headRepository !== input.expectedRepository
-      ) {
-        return false;
-      }
-      return true;
-    })
-    .map((pull) => ({ number: pull.number, branch: pull.headBranch }));
-
-  const overlays: Array<{ readonly number: number; readonly branch: string }> = [];
-  const features: Array<{ readonly number: number; readonly branch: string }> = [];
-  for (const entry of selected) {
-    if (overlayBranches.has(entry.branch)) {
-      overlays.push(entry);
-    } else {
-      features.push(entry);
+  const eligible = input.openPulls.filter((pull) => {
+    if (stackBranches.has(pull.headBranch)) return false;
+    if (
+      pull.headRepository !== undefined &&
+      pull.headRepository !== null &&
+      pull.headRepository !== input.expectedRepository
+    ) {
+      return false;
     }
+    return true;
+  });
+  const byBase = new Map<string, Array<(typeof eligible)[number]>>();
+  for (const pull of eligible) {
+    const children = byBase.get(pull.baseBranch) ?? [];
+    children.push(pull);
+    byBase.set(pull.baseBranch, children);
   }
+  const roots = byBase.get(input.manifest.forkChangesBranch) ?? [];
+  const overlays = roots.filter((entry) => overlayBranches.has(entry.headBranch));
+  const features = roots.filter((entry) => !overlayBranches.has(entry.headBranch));
   // Preserve manifest overlay order for deterministic composition inputs.
   overlays.sort((left, right) => {
     const leftIndex = input.manifest.integrationOverlays.findIndex(
-      (overlay) => overlay.branch === left.branch,
+      (overlay) => overlay.branch === left.headBranch,
     );
     const rightIndex = input.manifest.integrationOverlays.findIndex(
-      (overlay) => overlay.branch === right.branch,
+      (overlay) => overlay.branch === right.headBranch,
     );
     return leftIndex - rightIndex;
   });
-  return [...overlays, ...features];
+  const selected: Array<OpenFeaturePullRequestTreeNode> = [];
+  const visit = (pull: (typeof eligible)[number], depth: number): void => {
+    selected.push({
+      number: pull.number,
+      branch: pull.headBranch,
+      baseBranch: pull.baseBranch,
+      depth,
+    });
+    const children = byBase.get(pull.headBranch) ?? [];
+    for (const child of children) visit(child, depth + 1);
+  };
+  for (const root of [...overlays, ...features]) visit(root, 0);
+  return selected;
 }
 
 export interface FeaturePullRequestRebaseResult {
@@ -1037,13 +1125,10 @@ export async function rebaseOpenFeaturePullRequests(options: {
     readonly baseBranch: string;
     readonly headRepository?: string | null;
   }>;
+  readonly baseHistoryByBranch?: Readonly<Record<string, ReadonlyArray<string>>>;
 }): Promise<FeaturePullRequestRebaseResult> {
   const sourceRoot = NodePath.resolve(options.sourceRoot ?? process.cwd());
   const manifest = options.manifest ?? readManifest(sourceRoot);
-  if (options.oldForkChangesTip === options.newForkChangesTip) {
-    return { updated: [], conflicts: [], skipped: [] };
-  }
-
   const openPulls =
     options.openPulls ??
     (await fetchPullRequestSnapshots(manifest)).map((snapshot) => ({
@@ -1055,11 +1140,14 @@ export async function rebaseOpenFeaturePullRequests(options: {
         : `${snapshot.headOwner}/${EXPECTED_REPOSITORY.split("/")[1] ?? "t3code"}`,
     }));
 
-  const features = selectOpenFeaturePullRequests({
+  const features = selectOpenFeaturePullRequestTree({
     openPulls,
     manifest,
     expectedRepository: EXPECTED_REPOSITORY,
   });
+  const baseHistoryByBranch =
+    options.baseHistoryByBranch ??
+    (options.openPulls === undefined ? await fetchBaseHistoryByBranch(openPulls, features) : {});
 
   const updated: Array<{ number: number; branch: string }> = [];
   const conflicts: Array<{ number: number; branch: string; message: string }> = [];
@@ -1079,7 +1167,10 @@ export async function rebaseOpenFeaturePullRequests(options: {
   git(repoDir, ["config", "commit.gpgsign", "false"]);
   git(repoDir, ["remote", "add", "origin", originUrl]);
 
-  const branchesToFetch = [manifest.forkChangesBranch, ...features.map(({ branch }) => branch)];
+  const branchesToFetch = [
+    manifest.forkChangesBranch,
+    ...new Set(features.flatMap(({ branch, baseBranch }) => [baseBranch, branch])),
+  ];
   git(repoDir, [
     "fetch",
     "--quiet",
@@ -1108,7 +1199,7 @@ export async function rebaseOpenFeaturePullRequests(options: {
     "rev-parse",
     `refs/remotes/origin/${manifest.forkChangesBranch}`,
   ]);
-  const newBase =
+  const forkChangesBase =
     fetchedForkTip === options.newForkChangesTip ||
     run("git", ["cat-file", "-e", `${options.newForkChangesTip}^{commit}`], {
       cwd: repoDir,
@@ -1117,8 +1208,26 @@ export async function rebaseOpenFeaturePullRequests(options: {
       ? fetchedForkTip
       : options.newForkChangesTip;
 
+  const initialRemoteTips = new Map(
+    branchesToFetch.map((branch) => [
+      branch,
+      git(repoDir, ["rev-parse", `refs/remotes/origin/${branch}`], { allowFailure: true }),
+    ]),
+  );
+  const rewrittenTips = new Map<string, string>([[manifest.forkChangesBranch, forkChangesBase]]);
+  const blockedBranches = new Set<string>();
+
   for (const feature of features) {
     try {
+      if (blockedBranches.has(feature.baseBranch)) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason: `parent branch ${feature.baseBranch} was not rebased`,
+        });
+        blockedBranches.add(feature.branch);
+        continue;
+      }
       const remoteTip = git(repoDir, ["rev-parse", `refs/remotes/origin/${feature.branch}`], {
         allowFailure: true,
       });
@@ -1128,9 +1237,21 @@ export async function rebaseOpenFeaturePullRequests(options: {
           branch: feature.branch,
           reason: "missing remote branch",
         });
+        blockedBranches.add(feature.branch);
         continue;
       }
 
+      const newBase =
+        rewrittenTips.get(feature.baseBranch) ?? initialRemoteTips.get(feature.baseBranch) ?? "";
+      if (!newBase) {
+        skipped.push({
+          number: feature.number,
+          branch: feature.branch,
+          reason: `missing base branch ${feature.baseBranch}`,
+        });
+        blockedBranches.add(feature.branch);
+        continue;
+      }
       const hasNewBase = run("git", ["merge-base", "--is-ancestor", newBase, remoteTip], {
         cwd: repoDir,
         allowFailure: true,
@@ -1139,20 +1260,21 @@ export async function rebaseOpenFeaturePullRequests(options: {
         skipped.push({
           number: feature.number,
           branch: feature.branch,
-          reason: "already based on new fork/changes",
+          reason: `already based on ${feature.baseBranch}`,
         });
+        rewrittenTips.set(feature.branch, remoteTip);
         continue;
       }
 
-      // Recover the old fork/changes tip this PR was built on: newest known historical
-      // tip that is still an ancestor of the feature head. Feature commits are then
-      // exactly oldBase..head. Multi-generation recovery walks base-history so a
-      // PR that missed several fork/changes merges still replays only its own
-      // commits (cherry-equivalent of rebase --onto).
-      const historicalTips = appendBaseHistory(baseHistoryTips, [
-        options.oldForkChangesTip,
-        newBase,
-      ]);
+      // Recover the old tip of this PR's direct parent. For roots this is a
+      // historical fork/changes tip. Descendants first try the parent's
+      // pre-cascade remote tip, then recorded force-push history.
+      const historicalTips =
+        feature.baseBranch === manifest.forkChangesBranch
+          ? appendBaseHistory(baseHistoryTips, [options.oldForkChangesTip, forkChangesBase])
+          : appendBaseHistory(baseHistoryByBranch[feature.baseBranch] ?? [], [
+              initialRemoteTips.get(feature.baseBranch) ?? "",
+            ]);
       const recoveredOldBase = recoverOldBaseTip({
         historicalBaseTipsNewestFirst: historicalTips.filter(
           (tip) => tip.toLowerCase() !== newBase.toLowerCase(),
@@ -1168,9 +1290,9 @@ export async function rebaseOpenFeaturePullRequests(options: {
         skipped.push({
           number: feature.number,
           branch: feature.branch,
-          reason:
-            "cannot recover old fork/changes tip (no known historical base tip is an ancestor of this head)",
+          reason: `cannot recover old ${feature.baseBranch} tip (no known historical base tip is an ancestor of this head)`,
         });
+        blockedBranches.add(feature.branch);
         continue;
       }
 
@@ -1198,6 +1320,7 @@ export async function rebaseOpenFeaturePullRequests(options: {
             ? `conflict rebasing onto new base from ${recoveredOldBase.slice(0, 12)}: ${conflictPaths.split("\n").join(", ")}`
             : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase --onto failed"),
         });
+        blockedBranches.add(feature.branch);
         continue;
       }
 
@@ -1208,6 +1331,7 @@ export async function rebaseOpenFeaturePullRequests(options: {
           branch: feature.branch,
           reason: "rebase produced identical tip",
         });
+        rewrittenTips.set(feature.branch, remoteTip);
         continue;
       }
 
@@ -1247,8 +1371,9 @@ export async function rebaseOpenFeaturePullRequests(options: {
             skipped.push({
               number: feature.number,
               branch: feature.branch,
-              reason: "remote already based on new fork/changes after concurrent update",
+              reason: `remote already based on ${feature.baseBranch} after concurrent update`,
             });
+            rewrittenTips.set(feature.branch, latestRemote);
             continue;
           }
           conflicts.push({
@@ -1258,10 +1383,12 @@ export async function rebaseOpenFeaturePullRequests(options: {
               pushResult.stderr || pushResult.stdout || "force-with-lease rejected",
             )}`,
           });
+          blockedBranches.add(feature.branch);
           continue;
         }
       }
       updated.push({ number: feature.number, branch: feature.branch });
+      rewrittenTips.set(feature.branch, newTip);
     } catch (error) {
       if (rebaseInProgress(repoDir)) {
         run("git", ["rebase", "--abort"], { cwd: repoDir, allowFailure: true });
@@ -1271,6 +1398,7 @@ export async function rebaseOpenFeaturePullRequests(options: {
         branch: feature.branch,
         message: error instanceof Error ? error.message : String(error),
       });
+      blockedBranches.add(feature.branch);
     }
   }
 
