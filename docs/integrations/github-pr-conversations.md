@@ -72,6 +72,15 @@ The app:
 If the chosen T3 thread is already running, the app asks the user to retry instead of queuing. Edited
 comments, mention-free comments, normal issue comments (non-PR), and app-authored comments are ignored.
 
+## Work-item store
+
+When a GitHub invocation successfully resolves a T3 thread, the server records the PR URL in the
+shared **ThreadWorkItemStore** (`stateDir/thread-work-items.json`) alongside any Jira issue keys.
+That store is platform-agnostic (not Discord-only) and can later support reverse lookup, UI, and
+agent tools without reading Discord bot state.
+
+Live PR resolution below remains the primary GitHub link path for this MVP.
+
 ## Link definition
 
 A PR is linked only while exactly one active T3 thread satisfies all of these conditions:
