@@ -187,7 +187,10 @@ export function deriveBoardColumn(input: BoardColumnInput): BoardColumnId {
     // `effectiveSettled` upstream. When that is unavailable (pinned active,
     // server without the settlement capability) the branch classifies by its
     // git state alone, since it could not be moved out of Settled anyway.
-    const pr = resolveThreadPr(input.threadBranch, input.gitStatus);
+    const pr = resolveThreadPr({
+      threadBranch: input.threadBranch,
+      gitStatus: input.gitStatus,
+    });
     const isCleanPushedFeatureBranch =
       gitStatus.aheadCount === 0 && gitStatus.hasUpstream && !gitStatus.isDefaultRef;
     if (pr?.state === "open" || isCleanPushedFeatureBranch) {
