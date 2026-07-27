@@ -503,7 +503,19 @@ export function projectEvent(
                         : entry.text,
                     streaming: message.streaming,
                     updatedAt: message.updatedAt,
-                    turnId: message.turnId,
+                    // Once an assistant bubble is bound to a turn, never rebind it
+                    // to a different turn. Queue drain races re-emit
+                    // assistant.complete for the same messageId under the next
+                    // activeTurnId (empty text + streaming:false), which would
+                    // otherwise orphan the real final from its completed turn and
+                    // hide it under the next Working tip (Discord/web fold).
+                    turnId:
+                      entry.role === "assistant" &&
+                      entry.turnId !== null &&
+                      message.turnId !== null &&
+                      entry.turnId !== message.turnId
+                        ? entry.turnId
+                        : message.turnId,
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
