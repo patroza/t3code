@@ -162,32 +162,54 @@ export function terminalStatusFromRunningIds(
 
 export function ThreadWorktreeIndicator({
   thread,
+  onCreateSession,
 }: {
   thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  onCreateSession?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const worktreePath = thread.worktreePath?.trim();
-  if (!worktreePath) {
+  if (!worktreePath && !onCreateSession) {
     return null;
   }
 
-  const displayPath = formatWorktreePathForDisplay(worktreePath);
-  const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+  const tooltip = worktreePath
+    ? thread.branch
+      ? `Worktree: ${formatWorktreePathForDisplay(worktreePath)} (${thread.branch})`
+      : `Worktree: ${formatWorktreePathForDisplay(worktreePath)}`
+    : thread.branch
+      ? `New worktree from ${thread.branch}`
+      : "New worktree";
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <span
-            role="img"
-            aria-label={tooltip}
-            data-testid={`thread-worktree-${thread.id}`}
-            className="inline-flex items-center justify-center"
-          />
+          onCreateSession ? (
+            <button
+              type="button"
+              aria-label={worktreePath ? "New session on this worktree" : tooltip}
+              data-testid={`thread-worktree-new-session-${thread.id}`}
+              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={onCreateSession}
+            />
+          ) : (
+            <span
+              role="img"
+              aria-label={tooltip}
+              data-testid={`thread-worktree-${thread.id}`}
+              className="inline-flex items-center justify-center"
+            />
+          )
         }
       >
-        <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        {onCreateSession ? (
+          <FolderPlusIcon className="size-3" />
+        ) : (
+          <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        )}
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>
