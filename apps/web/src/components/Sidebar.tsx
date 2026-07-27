@@ -3464,7 +3464,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               <TooltipPopup>{props.jumpLabel}</TooltipPopup>
             </Tooltip>
           ) : null}
-          <ThreadWorktreeIndicator thread={thread} />
+          <ThreadWorktreeIndicator thread={thread} onCreateSession={createThreadFromRecent} />
           {terminalStatus ? (
             <Tooltip>
               <TooltipTrigger
