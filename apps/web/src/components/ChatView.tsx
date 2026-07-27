@@ -4128,7 +4128,10 @@ function ChatViewContent(props: ChatViewProps) {
   // so the banner and the sidebar row never disagree.
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
-  const activeThreadPr = resolveThreadPr(activeThread?.branch ?? null, gitStatusQuery.data ?? null);
+  const activeThreadPr = resolveThreadPr({
+    threadBranch: activeThread?.branch ?? null,
+    gitStatus: gitStatusQuery.data ?? null,
+  });
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -6107,9 +6110,7 @@ function ChatViewContent(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
-            isPreparingWorktree={isPreparingWorktreeUi}
-            activeThreadDriverKind={activeThreadModelPresentation?.driverKind ?? null}
-            activeThreadModel={activeThread.modelSelection.model}
+            onNewThreadInProject={handleStartNewThread}
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
