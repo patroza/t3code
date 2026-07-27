@@ -724,6 +724,42 @@ export function startsNewStreamDelivery(input: {
 }
 
 /**
+ * When a new user turn / Working ack starts, any substantial stream tip body
+ * that was never finalized must be posted as a durable final **before** the
+ * tip is cleared. Queue-drain races finish the prior answer into the tip and
+ * immediately open the next Working epoch — without this, the final only
+ * lived as an editable tip and is deleted when the new epoch starts.
+ *
+ * Mirrors the server/web queue-drain final orphan problem (turnId restamp /
+ * fold rehome): Discord's presentation boundary is the Working tip lifecycle.
+ */
+export function shouldFinalizeStreamBeforeNewDelivery(input: {
+  readonly startsNewDelivery: boolean;
+  readonly lastAssistantText: string;
+  readonly t3AssistantMessageId: string | null;
+  readonly finalizedTurnId: string | null;
+  readonly currentTurnId: string | null;
+}): boolean {
+  if (!input.startsNewDelivery) return false;
+  if (input.t3AssistantMessageId === null || input.t3AssistantMessageId.trim() === "") {
+    return false;
+  }
+  // Already finalized this tip's turn — nothing left to promote.
+  if (
+    input.finalizedTurnId !== null &&
+    input.currentTurnId !== null &&
+    input.finalizedTurnId === input.currentTurnId
+  ) {
+    return false;
+  }
+  const text = input.lastAssistantText.trim();
+  if (text === "" || text === "…") return false;
+  // Working-only placeholder with no prose yet.
+  if (/^_Working/i.test(text) && text.length < 40) return false;
+  return true;
+}
+
+/**
  * Pure state patch when a Discord Working.. ack is adopted for a new user turn
  * (or mid-turn steer) on a reused bridge. Clears prior stream body and points the
  * live tip at the new Working ack only.
@@ -3024,7 +3060,7 @@ export const runBridge = (
     }) =>
       Effect.gen(function* () {
         const { turnId, t3MessageId, text, streaming, images, worktreePath } = args;
-        const state = yield* Ref.get(stateRef);
+        let state = yield* Ref.get(stateRef);
         const reopensFinalizedDelivery = shouldReopenFinalizedDelivery({
           finalizedTurnId: state.finalizedTurnId,
           currentAssistantMessageId: state.t3AssistantMessageId,
@@ -3099,6 +3135,55 @@ export const runBridge = (
             reopensFinalizedDelivery,
             seededWorkingAckPending: state.seededWorkingAckPending,
           });
+
+          // Queue drain / new Working: promote the prior tip body to a durable final
+          // before we wipe tip state. Otherwise the real answer only lived as an
+          // editable tip and vanishes when the next epoch starts (t3vm
+          // 16feaadd… / segment:5 lost under Working).
+          if (
+            shouldFinalizeStreamBeforeNewDelivery({
+              startsNewDelivery,
+              lastAssistantText: state.lastAssistantText,
+              t3AssistantMessageId: state.t3AssistantMessageId,
+              finalizedTurnId: state.finalizedTurnId,
+              currentTurnId: state.currentTurnId,
+            })
+          ) {
+            const priorText = state.lastAssistantText;
+            const priorAssistantId = state.t3AssistantMessageId!;
+            const priorTurnId = state.currentTurnId;
+            yield* Effect.logInfo(
+              "Finalizing prior stream tip before new delivery (queue-drain / turn boundary)",
+              {
+                t3ThreadId: input.t3ThreadId,
+                priorTurnId,
+                priorAssistantId,
+                nextTurnId: turnId,
+                textLen: priorText.length,
+              },
+            );
+            yield* finalizeAssistantMessage({
+              turnId: priorTurnId,
+              t3MessageId: priorAssistantId,
+              text: priorText,
+              images: [],
+              streamHistoryText: priorText,
+              worktreePath,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("Failed to finalize prior stream before new delivery", {
+                  t3ThreadId: input.t3ThreadId,
+                  priorTurnId,
+                  priorAssistantId,
+                  cause: formatAlertCause(cause, 300),
+                }),
+              ),
+              Effect.asVoid,
+            );
+            // Re-read state after finalize (tips deleted, lastFinalized updated).
+            const afterPriorFinalize = yield* Ref.get(stateRef);
+            state = afterPriorFinalize;
+          }
 
           // Multi-step agents open a new assistant id per bubble while the turn runs.
           // Keep the same Discord tip(s) and edit them — never delete/recreate mid-turn
