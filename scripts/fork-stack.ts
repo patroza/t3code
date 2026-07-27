@@ -108,6 +108,23 @@ export function featurePullRequestBaseBranch(manifest: StackManifest): string {
   return manifest.forkChangesBranch;
 }
 
+export function resolveFeaturePullRequestBaseBranch(input: {
+  readonly manifest: StackManifest;
+  readonly currentBase: string | null | undefined;
+  readonly baseHasOpenPullRequest: boolean;
+}): string {
+  const currentBase = input.currentBase?.trim();
+  if (
+    currentBase &&
+    (currentBase === input.manifest.forkChangesBranch ||
+      input.manifest.integrationOverlays.some(({ branch }) => branch === currentBase) ||
+      input.baseHasOpenPullRequest)
+  ) {
+    return currentBase;
+  }
+  return featurePullRequestBaseBranch(input.manifest);
+}
+
 export function shouldRetargetPullRequestBase(
   currentBase: string | null | undefined,
   expectedBase: string,
@@ -340,6 +357,31 @@ function fetchBaseHistory(sourceRoot: string): ReadonlyArray<string> {
   return parseBaseHistory(stripAnsi(blob.stdout));
 }
 
+function fetchPullRequestHeadHistory(
+  sourceRoot: string,
+  pullRequestNumber: number,
+): ReadonlyArray<string> {
+  const output = run(
+    "gh",
+    [
+      "api",
+      "--paginate",
+      `repos/${FORK_REPOSITORY}/issues/${pullRequestNumber}/events`,
+      "--jq",
+      '.[] | select(.event == "head_ref_force_pushed") | .commit_id',
+    ],
+    sourceRoot,
+  );
+  return appendBaseHistory(
+    [],
+    output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .reverse(),
+  );
+}
+
 /**
  * After a remote force-push rebase, decide how to update the local checkout.
  *
@@ -397,8 +439,6 @@ function updateFeatureBranch(
   },
 ): void {
   ensureClean(sourceRoot);
-  const expectedBase = featurePullRequestBaseBranch(manifest);
-  run("git", ["fetch", "origin", expectedBase], sourceRoot);
 
   let branch = currentBranchName(sourceRoot);
   let prNumber: number | null = options.pullRequestNumber ?? null;
@@ -431,6 +471,14 @@ function updateFeatureBranch(
     }
   }
 
+  const basePullRequest =
+    prBaseRefName === null ? null : resolveOpenPullRequestForBranch(sourceRoot, prBaseRefName);
+  const expectedBase = resolveFeaturePullRequestBaseBranch({
+    manifest,
+    currentBase: prBaseRefName,
+    baseHasOpenPullRequest: basePullRequest !== null,
+  });
+  run("git", ["fetch", "origin", expectedBase], sourceRoot);
   const baseRef = `origin/${expectedBase}`;
   const newBaseOid = run("git", ["rev-parse", baseRef], sourceRoot);
   const newBaseIsAncestorOfHead =
@@ -438,8 +486,15 @@ function updateFeatureBranch(
     0;
   const behindCount = Number(run("git", ["rev-list", "--count", `HEAD..${baseRef}`], sourceRoot));
 
-  // Historical fork/changes tips (newest first), plus the current tip as a candidate.
-  const history = fetchBaseHistory(sourceRoot);
+  // Historical tips of this PR's direct parent (newest first), plus the
+  // current parent tip. Overlay children recover from the parent PR's
+  // force-push timeline; ordinary features use the durable fork/changes ref.
+  const history =
+    expectedBase === manifest.forkChangesBranch
+      ? fetchBaseHistory(sourceRoot)
+      : basePullRequest === null
+        ? []
+        : fetchPullRequestHeadHistory(sourceRoot, basePullRequest.number);
   const historicalTips = appendBaseHistory(history, [newBaseOid]);
   const recoveredOldBaseOid = recoverOldBaseTip({
     historicalBaseTipsNewestFirst: historicalTips,
