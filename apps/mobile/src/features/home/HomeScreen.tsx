@@ -35,6 +35,7 @@ import {
   PendingTaskListRow,
   ThreadListGroupHeader,
   ThreadListRow,
+  ThreadListSectionHeader,
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import { ThreadListV2Row } from "../threads/thread-list-v2-items";
@@ -56,7 +57,12 @@ import {
   type HomeGroupDisplayState,
   type HomeListItem,
 } from "./homeListItems";
-import type { HomeListMode } from "./homeListMode";
+import {
+  usesFlatThreadGrouping,
+  usesProjectThreadGrouping,
+  type HomeListMode,
+  type HomeThreadGrouping,
+} from "./homeListMode";
 import { buildHomeRecentListEntries, buildHomeRecentPendingEntries } from "./homeRecentList";
 import {
   buildHomeProjectScopes,
@@ -79,11 +85,12 @@ interface HomeScreenProps {
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
   readonly searchQuery: string;
   readonly listMode: HomeListMode;
+  readonly threadGrouping: HomeThreadGrouping;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   /**
-   * When true, omit settled threads from the active list mode. Recent defaults
-   * on; Projects defaults off (call site). Toggle in the filter menu.
+   * When true, omit settled threads from the Threads list. Recency/none default
+   * on; project grouping defaults off (call site). Toggle in the filter menu.
    */
   readonly hideSettledThreads: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
@@ -194,9 +201,10 @@ export function HomeScreen(props: HomeScreenProps) {
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  // Thread List v2 only applies in Projects mode; Recent/Board use fixed layouts.
+  // Thread List v2 only applies when Threads are grouped by project.
   const threadListV2Enabled =
-    props.listMode === "projects" &&
+    props.listMode === "threads" &&
+    usesProjectThreadGrouping(props.threadGrouping) &&
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -325,9 +333,14 @@ export function HomeScreen(props: HomeScreenProps) {
     [props.pendingTasks, selectedProjectRefKeys],
   );
 
+  const showFlatThreadList =
+    props.listMode === "threads" && usesFlatThreadGrouping(props.threadGrouping);
+  const showProjectThreadList =
+    props.listMode === "threads" && usesProjectThreadGrouping(props.threadGrouping);
+
   const recentEntries = useMemo(
     () =>
-      props.listMode === "recent"
+      showFlatThreadList
         ? buildHomeRecentListEntries({
             projects: scopedProjects,
             threads: scopedThreads,
@@ -337,17 +350,17 @@ export function HomeScreen(props: HomeScreenProps) {
           })
         : [],
     [
-      props.listMode,
       props.searchQuery,
       props.selectedEnvironmentIds,
       scopedProjects,
       scopedThreads,
       selectedProjectRefKeys,
+      showFlatThreadList,
     ],
   );
   const recentPendingEntries = useMemo(
     () =>
-      props.listMode === "recent"
+      showFlatThreadList
         ? buildHomeRecentPendingEntries({
             pendingTasks: scopedPendingTasks,
             selectedEnvironmentIds: props.selectedEnvironmentIds,
@@ -356,11 +369,11 @@ export function HomeScreen(props: HomeScreenProps) {
           })
         : [],
     [
-      props.listMode,
       props.searchQuery,
       props.selectedEnvironmentIds,
       scopedPendingTasks,
       selectedProjectRefKeys,
+      showFlatThreadList,
     ],
   );
 
@@ -498,8 +511,7 @@ export function HomeScreen(props: HomeScreenProps) {
   // next wake boundary re-runs the partition with a fresh clock so a woken
   // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
-  const needsSettlementClock =
-    threadListV2Enabled || props.listMode === "recent" || props.listMode === "projects";
+  const needsSettlementClock = threadListV2Enabled || props.listMode === "threads";
   useEffect(() => {
     if (!needsSettlementClock) return;
     // Refresh immediately on enable: the mount-time value can be hours old
@@ -563,7 +575,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const projectGroups = useMemo(
     () =>
-      props.listMode === "projects" && !threadListV2Enabled
+      showProjectThreadList && !threadListV2Enabled
         ? buildHomeThreadGroups({
             projects: scopedProjects,
             threads: threadsForProjectList,
@@ -576,7 +588,6 @@ export function HomeScreen(props: HomeScreenProps) {
           })
         : [],
     [
-      props.listMode,
       props.projectGroupingMode,
       props.projectSortOrder,
       props.searchQuery,
@@ -584,13 +595,14 @@ export function HomeScreen(props: HomeScreenProps) {
       props.threadSortOrder,
       scopedPendingTasks,
       scopedProjects,
+      showProjectThreadList,
       threadListV2Enabled,
       threadsForProjectList,
     ],
   );
 
   const visibleRecentEntries = useMemo(() => {
-    if (props.listMode !== "recent") return [];
+    if (!showFlatThreadList) return [];
     return recentEntries.flatMap((entry) => {
       const key = scopedThreadKey(entry.thread.environmentId, entry.thread.id);
       if (props.hideSettledThreads && settledThreadKeys.has(key)) {
@@ -598,16 +610,17 @@ export function HomeScreen(props: HomeScreenProps) {
       }
       return [{ thread: entry.thread, projectTitle: entry.project.title }];
     });
-  }, [props.hideSettledThreads, props.listMode, recentEntries, settledThreadKeys]);
+  }, [props.hideSettledThreads, recentEntries, settledThreadKeys, showFlatThreadList]);
 
   const listLayout = useMemo(() => {
-    if (props.listMode === "recent") {
+    if (showFlatThreadList) {
       return buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
         entries: visibleRecentEntries,
+        groupByRecency: props.threadGrouping === "recency",
       });
     }
-    if (props.listMode !== "projects") {
+    if (!showProjectThreadList) {
       return { items: [] as HomeListItem[], stickyHeaderIndices: [] as number[] };
     }
     return buildHomeListLayout({
@@ -619,8 +632,10 @@ export function HomeScreen(props: HomeScreenProps) {
     effectiveGroupDisplayStates,
     hasSearchQuery,
     projectGroups,
-    props.listMode,
+    props.threadGrouping,
     recentPendingEntries,
+    showFlatThreadList,
+    showProjectThreadList,
     visibleRecentEntries,
   ]);
   const threadListV2Layout = useMemo(() => {
@@ -769,6 +784,8 @@ export function HomeScreen(props: HomeScreenProps) {
               title={item.group.title}
             />
           );
+        case "section-header":
+          return <ThreadListSectionHeader variant="compact" title={item.title} />;
         case "pending-task":
           return (
             <PendingTaskListRow
@@ -851,10 +868,9 @@ export function HomeScreen(props: HomeScreenProps) {
   // so the v1 check already covers v2.
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
-  const hasResults =
-    props.listMode === "recent"
-      ? visibleRecentEntries.length > 0 || recentPendingEntries.length > 0
-      : projectGroups.length > 0;
+  const hasResults = showFlatThreadList
+    ? visibleRecentEntries.length > 0 || recentPendingEntries.length > 0
+    : projectGroups.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentIds.length === 0
       ? null

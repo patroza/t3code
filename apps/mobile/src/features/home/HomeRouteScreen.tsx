@@ -64,13 +64,14 @@ export function HomeRouteScreen() {
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
     setListMode,
+    setThreadGrouping,
     setProjectSortOrder,
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  // Recent defaults to hide settled; Projects defaults to show settled.
+  // Recency/none default to hide settled; project grouping defaults to show.
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
     ? resolveHideSettledOnRecent(preferencesResult.value)
     : true;
@@ -78,16 +79,16 @@ export function HomeRouteScreen() {
     ? resolveHideSettledOnProjects(preferencesResult.value)
     : false;
   const hideSettledThreads =
-    listOptions.listMode === "projects" ? hideSettledOnProjects : hideSettledOnRecent;
+    listOptions.threadGrouping === "project" ? hideSettledOnProjects : hideSettledOnRecent;
   const setHideSettledThreads = useCallback(
     (hide: boolean) => {
-      if (listOptions.listMode === "projects") {
+      if (listOptions.threadGrouping === "project") {
         savePreferences({ hideSettledOnProjects: hide });
         return;
       }
       savePreferences({ hideSettledOnRecent: hide });
     },
-    [listOptions.listMode, savePreferences],
+    [listOptions.threadGrouping, savePreferences],
   );
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
@@ -144,12 +145,14 @@ export function HomeRouteScreen() {
           projects={projectFilterOptions}
           searchQuery={searchQuery}
           listMode={listOptions.listMode}
+          threadGrouping={listOptions.threadGrouping}
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
           hideSettledThreads={hideSettledThreads}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
           onListModeChange={setListMode}
+          onThreadGroupingChange={setThreadGrouping}
           onClearEnvironments={clearSelectedEnvironments}
           onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
@@ -165,6 +168,7 @@ export function HomeRouteScreen() {
           catalogState={catalogState}
           environments={environments}
           listMode={listOptions.listMode}
+          threadGrouping={listOptions.threadGrouping}
           hideSettledThreads={hideSettledThreads}
           onAddConnection={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
