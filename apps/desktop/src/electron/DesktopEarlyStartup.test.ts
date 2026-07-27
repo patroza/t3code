@@ -7,48 +7,17 @@ import {
 } from "./DesktopEarlyStartup.ts";
 
 function makeApp() {
-  const appendSwitch = vi.fn();
   const exit = vi.fn();
   const getVersion = vi.fn(() => "1.2.3");
   const app: DesktopEarlyStartupApp = {
-    commandLine: { appendSwitch },
     exit,
     getVersion,
   };
 
-  return { app, appendSwitch, exit, getVersion };
+  return { app, exit, getVersion };
 }
 
 describe("configureDesktopEarlyStartup", () => {
-  it("forces the libsecret password store on Linux", () => {
-    const { app, appendSwitch } = makeApp();
-
-    configureDesktopEarlyStartup({
-      app,
-      argv: ["t3code"],
-      platform: "linux",
-      writeStdout: vi.fn(),
-    });
-
-    assert.deepStrictEqual(appendSwitch.mock.calls, [["password-store", "gnome-libsecret"]]);
-  });
-
-  it.each(["darwin", "win32"] as const)(
-    "does not override the password store on %s",
-    (platform: "darwin" | "win32") => {
-      const { app, appendSwitch } = makeApp();
-
-      configureDesktopEarlyStartup({
-        app,
-        argv: ["t3code"],
-        platform,
-        writeStdout: vi.fn(),
-      });
-
-      assert.strictEqual(appendSwitch.mock.calls.length, 0);
-    },
-  );
-
   it.each(["--version", "-v"] as const)(
     "prints the packaged version for %s",
     (flag: "--version" | "-v") => {
@@ -58,7 +27,6 @@ describe("configureDesktopEarlyStartup", () => {
       configureDesktopEarlyStartup({
         app,
         argv: ["t3code", flag],
-        platform: "linux",
         writeStdout,
       });
 
@@ -67,4 +35,19 @@ describe("configureDesktopEarlyStartup", () => {
       assert.deepStrictEqual(exit.mock.calls, [[0]]);
     },
   );
+
+  it("does nothing for an ordinary launch", () => {
+    const { app, exit, getVersion } = makeApp();
+    const writeStdout = vi.fn();
+
+    configureDesktopEarlyStartup({
+      app,
+      argv: ["t3code"],
+      writeStdout,
+    });
+
+    assert.strictEqual(getVersion.mock.calls.length, 0);
+    assert.strictEqual(writeStdout.mock.calls.length, 0);
+    assert.strictEqual(exit.mock.calls.length, 0);
+  });
 });
