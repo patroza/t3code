@@ -223,6 +223,10 @@ const slashCommands = requiredElement<HTMLElement>("slash-commands");
 const send = requiredElement<HTMLButtonElement>("send");
 const pendingAttachments = requiredElement<HTMLElement>("pending-attachments");
 const pendingInteractions = requiredElement<HTMLElement>("pending-interactions");
+const stashControl = requiredElement<HTMLDetailsElement>("stash-control");
+const stashNow = requiredElement<HTMLButtonElement>("stash-now");
+const stashPopup = requiredElement<HTMLElement>("stash-popup");
+const stashCount = requiredElement<HTMLElement>("stash-count");
 const planReady = requiredElement<HTMLElement>("plan-ready");
 const interactionModeSelect = requiredElement<HTMLSelectElement>("interaction-mode");
 const contextButton = requiredElement<HTMLButtonElement>("context");
@@ -271,6 +275,23 @@ const inputHistoryByScopeKey = new Map<string, ComposerInputHistoryState>();
 let inputHistoryScopeKey = "__none__";
 let inputHistory: ComposerInputHistoryState = EMPTY_COMPOSER_INPUT_HISTORY;
 let editingQueuedMessage: { readonly messageId: string; readonly previousDraft: string } | null =
+  null;
+interface PromptStashEntry {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly prompt: string;
+  readonly images: ReadonlyArray<Omit<PendingImage, "key">>;
+  readonly droppedImageNames: ReadonlyArray<string>;
+  readonly providerInstanceId: string | null;
+  readonly modelSelection: null | {
+    readonly instanceId: string;
+    readonly model: string;
+    readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+  };
+  readonly interactionMode: "default" | "plan";
+}
+let promptStash: ReadonlyArray<PromptStashEntry> = [];
+let pendingStash: { readonly prompt: string; readonly imageKeys: ReadonlyArray<string> } | null =
   null;
 
 function restoreDraftAfterQueuedEdit(): void {
@@ -365,6 +386,73 @@ function requiredElement<A extends HTMLElement>(id: string): A {
 
 function post(message: unknown): void {
   vscode.postMessage(message);
+}
+
+function stashProviderInstanceId(): string | null {
+  return currentState === null ? null : (currentSelection(currentState)?.instanceId ?? null);
+}
+
+function requestPromptStash(): void {
+  post({ type: "listPromptStash", providerInstanceId: stashProviderInstanceId() });
+}
+
+function renderPromptStash(): void {
+  stashCount.textContent = String(promptStash.length);
+  stashPopup.replaceChildren();
+  if (promptStash.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "stash-empty";
+    empty.textContent = "No stashed prompts for this provider.";
+    stashPopup.append(empty);
+    return;
+  }
+  for (const entry of promptStash) {
+    const row = document.createElement("div");
+    row.className = "stash-entry";
+    const restore = document.createElement("button");
+    restore.className = "stash-restore";
+    restore.title = "Restore and remove from stash";
+    const preview = document.createElement("span");
+    preview.className = "stash-preview";
+    preview.textContent = entry.prompt.trim() || `${entry.images.length} image(s)`;
+    const meta = document.createElement("span");
+    meta.className = "stash-meta";
+    const dropped =
+      entry.droppedImageNames.length === 0
+        ? ""
+        : ` · ${entry.droppedImageNames.length} image(s) omitted`;
+    meta.textContent = `${new Date(entry.createdAt).toLocaleString()}${dropped}`;
+    restore.append(preview, meta);
+    restore.addEventListener("click", () => post({ type: "restorePromptStash", id: entry.id }));
+    const remove = document.createElement("button");
+    remove.className = "stash-remove";
+    remove.textContent = "×";
+    remove.title = "Delete stashed prompt";
+    remove.addEventListener("click", () =>
+      post({
+        type: "removePromptStash",
+        id: entry.id,
+        providerInstanceId: stashProviderInstanceId(),
+      }),
+    );
+    row.append(restore, remove);
+    stashPopup.append(row);
+  }
+}
+
+function stashCurrentPrompt(): void {
+  if (editingQueuedMessage !== null || !hasComposerInput() || currentState === null) return;
+  const selection = currentSelection(currentState);
+  const images = uploadImages();
+  pendingStash = { prompt: prompt.value, imageKeys: pendingImages.map((image) => image.key) };
+  post({
+    type: "stashPrompt",
+    prompt: prompt.value,
+    images,
+    providerInstanceId: selection?.instanceId ?? null,
+    modelSelection: selection,
+    interactionMode: composerInteractionMode,
+  });
 }
 
 function emptyMessage(text: string): HTMLElement {
@@ -1436,6 +1524,7 @@ function showPlanFollowUp(): boolean {
 function renderComposerAction(): void {
   const planFollowUp = showPlanFollowUp();
   const stopping = isRunning() && !hasComposerInput() && !planFollowUp;
+  stashNow.disabled = editingQueuedMessage !== null || !hasComposerInput();
   if (stopping) {
     send.textContent = "Stop";
     send.title = "Stop active turn";
@@ -1844,6 +1933,46 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (event.data.type === "hostResources" && "snapshot" in event.data) {
     renderHostResources(event.data.snapshot as ServerHostResourceSnapshot | null);
   }
+  if (event.data.type === "promptStash" && "entries" in event.data) {
+    promptStash = event.data.entries as ReadonlyArray<PromptStashEntry>;
+    renderPromptStash();
+    if ("stashed" in event.data && event.data.stashed === true && pendingStash !== null) {
+      if (prompt.value === pendingStash.prompt) prompt.value = "";
+      const stashedKeys = new Set(pendingStash.imageKeys);
+      pendingImages = pendingImages.filter((image) => !stashedKeys.has(image.key));
+      pendingStash = null;
+      renderPendingImages();
+      renderComposerAction();
+    }
+  }
+  if (event.data.type === "restorePromptStash" && "entry" in event.data) {
+    const entry = event.data.entry as PromptStashEntry;
+    prompt.value = entry.prompt;
+    pendingImages = entry.images.map((image, index) => ({
+      ...image,
+      key: `stash:${entry.id}:${index}`,
+    }));
+    setComposerInteractionMode(entry.interactionMode, false);
+    if (entry.modelSelection !== null && currentState !== null) {
+      const options = [...(entry.modelSelection.options ?? [])];
+      if (draftSelection !== null) {
+        draftSelection = { ...entry.modelSelection, options };
+        render(currentState);
+      } else {
+        post({
+          type: "selectModel",
+          instanceId: entry.modelSelection.instanceId,
+          model: entry.modelSelection.model,
+          options,
+        });
+      }
+    }
+    renderPendingImages();
+    renderComposerAction();
+    stashControl.open = false;
+    prompt.focus();
+    prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+  }
   if (event.data.type === "sent") {
     prompt.value = "";
     clearPendingImages();
@@ -1878,7 +2007,12 @@ provider.addEventListener("change", () => {
   if (firstModel === undefined) return;
   draftSelection = { instanceId: firstModel.instanceId, model: firstModel.model, options: [] };
   render(currentState);
+  requestPromptStash();
 });
+stashControl.addEventListener("toggle", () => {
+  if (stashControl.open) requestPromptStash();
+});
+stashNow.addEventListener("click", stashCurrentPrompt);
 model.addEventListener("change", () => {
   if (model.value === "" || currentState === null) return;
   const selection = currentSelection(currentState);
@@ -1959,6 +2093,15 @@ document.addEventListener("pointerdown", (event) => {
   closeComposerPopovers();
 });
 document.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    if (hasComposerInput()) stashCurrentPrompt();
+    else {
+      stashControl.open = true;
+      requestPromptStash();
+    }
+    return;
+  }
   if (event.key === "Escape" && (usageExpanded || tasksExpanded)) {
     closeComposerPopovers();
     event.preventDefault();
