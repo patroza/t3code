@@ -170,6 +170,7 @@ import {
   Menu,
   MenuCheckboxItem,
   MenuGroup,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -3838,16 +3839,82 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     [updateSettings],
   );
 
+  const { isMobile, setOpenMobile } = useSidebar();
+  const canCreateThread = sortedProjects.length > 0;
+  const scopedNewThreadProject =
+    selectedProjectFilterKey === null
+      ? null
+      : (sortedProjects.find((project) => project.projectKey === selectedProjectFilterKey) ?? null);
+  // Multi-project: show a project picker menu (especially useful when
+  // grouping by project). Single project or a project filter: create immediately.
+  const needsNewThreadProjectMenu = scopedNewThreadProject === null && sortedProjects.length > 1;
+
+  const createThreadInProject = useCallback(
+    (project: SidebarProjectSnapshot) => {
+      const member = project.memberProjects[0];
+      if (!member) return;
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      void settlePromise(() =>
+        handleNewThread(scopeProjectRef(member.environmentId, member.id)),
+      ).then((result) => {
+        if (result._tag === "Failure") {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [handleNewThread, isMobile, setOpenMobile],
+  );
+
+  const handleHeaderNewThreadClick = useCallback(() => {
+    if (!canCreateThread) return;
+    if (scopedNewThreadProject) {
+      createThreadInProject(scopedNewThreadProject);
+      return;
+    }
+    if (sortedProjects.length === 1) {
+      createThreadInProject(sortedProjects[0]!);
+      return;
+    }
+    // Multi-project without a scope: prefer the command palette "New thread
+    // in…" flow (same as Sidebar V2) when not in project grouping; when
+    // grouping by project we still offer an inline menu below.
+    if (!usesProjectThreadGrouping(threadGrouping)) {
+      if (isMobile) setOpenMobile(false);
+      openCommandPalette({ open: "new-thread-in" });
+    }
+  }, [
+    canCreateThread,
+    createThreadInProject,
+    isMobile,
+    scopedNewThreadProject,
+    setOpenMobile,
+    sortedProjects,
+    threadGrouping,
+  ]);
+
+  const newThreadButtonClassName =
+    "relative inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
+
   return (
     <SidebarContent className="gap-0">
       <SidebarGroup className="px-2 pt-2 pb-1">
-        <SidebarMenu>
-          <SidebarMenuItem>
+        {/* Search + New thread on one row (Sidebar V2 layout). */}
+        <div className="flex items-center gap-1">
+          <div className="min-w-0 flex-1">
             <CommandDialogTrigger
               render={
                 <SidebarMenuButton
                   size="sm"
-                  className="h-8 gap-2 rounded-md px-2 py-1.5 text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-0"
+                  className="h-8 w-full gap-2 rounded-md px-2 py-1.5 text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-0"
                   data-testid="command-palette-trigger"
                 />
               }
@@ -3860,10 +3927,87 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 </Kbd>
               ) : null}
             </CommandDialogTrigger>
-          </SidebarMenuItem>
-        </SidebarMenu>
-        {/* Compact chrome (Sidebar V2–style): one slim row instead of stacked
-            full-width filters that ate vertical space. */}
+          </div>
+          {needsNewThreadProjectMenu ? (
+            <Menu>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <MenuTrigger
+                      type="button"
+                      disabled={!canCreateThread}
+                      className={newThreadButtonClassName}
+                      data-testid="sidebar-new-thread-trigger"
+                      aria-label="New thread"
+                    />
+                  }
+                >
+                  <SquarePenIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+                </TooltipPopup>
+              </Tooltip>
+              <MenuPopup align="end" side="bottom" className="min-w-52">
+                <MenuGroup>
+                  <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                    New thread in
+                  </div>
+                  {sortedProjects.map((project) => (
+                    <MenuItem
+                      key={project.projectKey}
+                      closeOnClick
+                      className="min-h-7 py-1 sm:text-xs"
+                      data-testid={`sidebar-new-thread-${project.projectKey}`}
+                      onClick={() => createThreadInProject(project)}
+                    >
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <ProjectFavicon
+                          environmentId={project.environmentId}
+                          cwd={project.workspaceRoot}
+                          className="size-3.5 shrink-0"
+                        />
+                        <span className="truncate">{project.displayName}</span>
+                      </span>
+                    </MenuItem>
+                  ))}
+                </MenuGroup>
+                <MenuSeparator />
+                <MenuItem
+                  closeOnClick
+                  className="min-h-7 py-1 sm:text-xs"
+                  onClick={() => {
+                    if (isMobile) setOpenMobile(false);
+                    openCommandPalette({ open: "new-thread-in" });
+                  }}
+                >
+                  Browse all…
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    disabled={!canCreateThread}
+                    className={newThreadButtonClassName}
+                    data-testid="sidebar-new-thread-trigger"
+                    aria-label="New thread"
+                    onClick={handleHeaderNewThreadClick}
+                  />
+                }
+              >
+                <SquarePenIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+              </TooltipPopup>
+            </Tooltip>
+          )}
+        </div>
+        {/* Compact chrome: Threads|Board + view/filter menu. */}
         <div className="mt-1.5 flex items-center gap-1 px-0.5">
           <ToggleGroup
             className="min-w-0 flex-1"
