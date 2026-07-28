@@ -555,7 +555,7 @@ print(json.dumps(out))
   return (parsed as Array<{ threadId: string; turnId: string; ageMin: number }>) ?? [];
 }
 
-function listSessionErrors(dbPath: string): ReadonlyArray<{
+export function listSessionErrors(dbPath: string): ReadonlyArray<{
   threadId: string;
   lastError: string;
   status: string | null;
@@ -569,7 +569,7 @@ cur = db.execute(
   "ORDER BY updated_at DESC LIMIT 40"
 )
 print(json.dumps([
-  {"threadId": r[0], "lastError": (r[1] or "")[:300], "status": r[2]}
+  {"threadId": r[0], "lastError": r[1] or "", "status": r[2]}
   for r in cur
 ]))
 `,
