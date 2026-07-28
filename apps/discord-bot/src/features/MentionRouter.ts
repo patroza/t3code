@@ -48,6 +48,11 @@ import {
 } from "../presentation/jiraLinks.ts";
 import { extractPullRequestUrlsFromDiscordMessage } from "../presentation/prLinks.ts";
 import {
+  assignPullRequestAssignees,
+  formatAssignSlashReply,
+  resolveAssignGithubLogin,
+} from "../presentation/prAssign.ts";
+import {
   idleMessageFields,
   stripBotMention,
   truncateTitle,
@@ -3286,6 +3291,113 @@ const make = (botConfig: DiscordBotConfig) =>
                 Effect.succeed(
                   slashReply(
                     `Refresh-indicators failed: ${error instanceof Error ? error.message : String(error)}`,
+                    { ephemeral: true },
+                  ),
+                ),
+              ),
+            ),
+
+            assign: Effect.gen(function* () {
+              const interaction = yield* Ix.Interaction;
+              const channelId = interaction.channel_id;
+              if (channelId === undefined || channelId.length === 0) {
+                return slashReply("Assign only works inside a linked Discord thread.", {
+                  ephemeral: true,
+                });
+              }
+
+              const channel = yield* rest.getChannel(channelId);
+              if (!isThreadChannel(channel.type)) {
+                return slashReply("Assign is only supported inside a linked Discord thread.", {
+                  ephemeral: true,
+                });
+              }
+
+              const existing = yield* links.getByDiscordThreadId(channelId);
+              if (existing === null) {
+                return slashReply(
+                  "This Discord thread is not linked to a T3 thread, so there are no PRs to assign.",
+                  { ephemeral: true },
+                );
+              }
+
+              const githubOption = (
+                Option.getOrElse(HashMap.get(ix.optionsMap, "github"), () => "") ?? ""
+              ).trim();
+              const requesterId = interaction.member?.user?.id ?? interaction.user?.id ?? null;
+              const resolved = resolveAssignGithubLogin({
+                githubOption: githubOption.length > 0 ? githubOption : undefined,
+                requesterDiscordId: requesterId,
+                resolveByDiscordId: (discordId) => identityMap.resolveByDiscordId(discordId),
+              });
+              if (!resolved.ok) {
+                return slashReply(resolved.message, { ephemeral: true });
+              }
+
+              const prUrls = existing.prUrls ?? [];
+              if (prUrls.length === 0) {
+                return slashReply(
+                  `No linked pull requests on this thread yet. Open or post a PR first, then run \`/agent assign\`.`,
+                  { ephemeral: true },
+                );
+              }
+
+              // gh API can exceed Discord's ~3s window when multiple PRs are linked.
+              const applicationId = interaction.application_id;
+              const token = interaction.token;
+              const login = resolved.login;
+              yield* forkSlashBackground(
+                Effect.gen(function* () {
+                  yield* Effect.sleep("250 millis");
+                  // assignPullRequestAssignees is best-effort (per-URL results; does not throw).
+                  const results = yield* Effect.promise(() =>
+                    assignPullRequestAssignees({
+                      prUrls,
+                      login,
+                    }),
+                  );
+                  const content = formatAssignSlashReply({ login, results });
+                  yield* Effect.logInfo("Discord slash assign completed", {
+                    discordThreadId: channelId,
+                    t3ThreadId: existing.t3ThreadId,
+                    login,
+                    source: resolved.source,
+                    assigned: results.filter((r) => r.status === "assigned").length,
+                    errors: results.filter((r) => r.status === "error").length,
+                    actorId: requesterId,
+                  });
+                  yield* rest
+                    .updateOriginalWebhookMessage(applicationId, token, {
+                      payload: { content },
+                    })
+                    .pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning("Failed to edit deferred assign response", {
+                          channelId,
+                          error: String(error),
+                        }),
+                      ),
+                    );
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    rest
+                      .updateOriginalWebhookMessage(applicationId, token, {
+                        payload: {
+                          content: `Assign failed: ${formatAlertCause(cause, 300)}`,
+                        },
+                      })
+                      .pipe(Effect.ignore),
+                  ),
+                ),
+              );
+
+              // Public so the thread sees who assigned whom.
+              return slashDefer();
+            }).pipe(
+              Effect.catch((error: unknown) =>
+                Effect.succeed(
+                  slashReply(
+                    `Assign failed: ${error instanceof Error ? error.message : String(error)}`,
                     { ephemeral: true },
                   ),
                 ),
