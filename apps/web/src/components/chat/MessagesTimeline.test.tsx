@@ -9,6 +9,7 @@ vi.mock("@legendapp/list/react", async () => {
 
   const LegendList = (props: {
     data: Array<{ id: string }>;
+    extraData?: unknown;
     keyExtractor: (item: { id: string }) => string;
     renderItem: (args: { item: { id: string } }) => ReactNode;
     ListHeaderComponent?: ReactNode;
@@ -48,6 +49,7 @@ vi.mock("@legendapp/list/react", async () => {
     return (
       <div
         data-testid={legendListTestId}
+        data-extra-data-matches-rows={props.extraData === props.data}
         data-anchor-index={props.anchoredEndSpace?.anchorIndex}
         data-anchor-max-size={props.anchoredEndSpace?.anchorMaxSize}
         data-anchor-offset={props.anchoredEndSpace?.anchorOffset}
@@ -396,6 +398,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-anchor-on-ready="true"');
     expect(markup).not.toContain("data-anchor-max-size=");
     expect(markup).toContain('data-content-inset-end="144"');
+    expect(markup).toContain('data-extra-data-matches-rows="true"');
     expect(markup).toContain("[overflow-anchor:none]");
     expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
     expect(markup).toContain('data-maintain-visible-content-position="object"');
