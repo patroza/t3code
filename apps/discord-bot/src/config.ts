@@ -59,6 +59,14 @@ export interface DiscordBotConfig {
    * (e.g. `https://example.atlassian.net`).
    */
   readonly jiraBrowseBaseUrl: string | undefined;
+  /** Optional Microsoft Teams intake module (Graph channel polling → Discord/T3). */
+  readonly teamsEnabled: boolean;
+  readonly teamsTenantId: string | undefined;
+  readonly teamsClientId: string | undefined;
+  readonly teamsClientSecret: string | undefined;
+  readonly teamsChannelsPath: string | undefined;
+  readonly teamsPollIntervalSeconds: number;
+  readonly teamsBotDisplayName: string | undefined;
 }
 
 const RuntimeModeConfig = Schema.Literals([
@@ -167,6 +175,30 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
         return undefined;
       }),
     );
+    const teamsEnabled = yield* Config.boolean("TEAMS_ENABLED").pipe(Config.withDefault(false));
+    const teamsTenantId = yield* Config.string("TEAMS_TENANT_ID").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsClientId = yield* Config.string("TEAMS_CLIENT_ID").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsClientSecret = yield* Config.redacted("TEAMS_CLIENT_SECRET").pipe(
+      Config.option,
+      Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
+    );
+    const teamsChannelsPath = yield* Config.string("TEAMS_CHANNELS_PATH").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsPollIntervalSeconds = yield* Config.int("TEAMS_POLL_INTERVAL_SECONDS").pipe(
+      Config.withDefault(60),
+    );
+    const teamsBotDisplayName = yield* Config.string("TEAMS_BOT_DISPLAY_NAME").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
 
     return {
       discordToken,
@@ -191,6 +223,13 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       browserFfmpegPath,
       browserAllowedOrigins,
       jiraBrowseBaseUrl,
+      teamsEnabled,
+      teamsTenantId,
+      teamsClientId,
+      teamsClientSecret,
+      teamsChannelsPath,
+      teamsPollIntervalSeconds,
+      teamsBotDisplayName,
     } satisfies DiscordBotConfig;
   },
 );

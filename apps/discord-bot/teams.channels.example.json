@@ -1,0 +1,22 @@
+{
+  "channels": [
+    {
+      "teamId": "00000000-0000-0000-0000-000000000000",
+      "channelId": "19:examplechannel@thread.tacv2",
+      "channelName": "Acme Prod Incidents",
+      "projectShortName": "macs-scanner",
+      "discordChannelId": "123456789012345678",
+      "company": "Acme",
+      "environment": "prod",
+      "companyKeywords": ["acme", "kunde acme"],
+      "environmentKeywords": ["prod", "produktion", "live"],
+      "problemKeywords": ["fehler", "störung", "ausfall", "geht nicht"],
+      "automaticAssessmentEnabled": true,
+      "internalUserIds": ["11111111-1111-1111-1111-111111111111"],
+      "reactionTriggerTypes": ["eyes", "🚨"],
+      "messageTagTriggers": ["#investigate", "#triage"],
+      "respondToMentions": true,
+      "teamsIncomingWebhookUrl": "https://example.webhook.office.com/webhookb2/..."
+    }
+  ]
+}

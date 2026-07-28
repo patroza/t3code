@@ -373,9 +373,23 @@ That PR should:
 - convert storage and rendering boundaries to platform-neutral interfaces
 - leave the repo in a state where a Teams adapter can be added without reworking the Discord app again
 
+## Related work already in this branch
+
+- **Teams Graph intake module** (ported from aaaomega/t3code-pvt#1):
+  `apps/discord-bot/src/features/TeamsModule.ts`,
+  `docs/integrations/microsoft-teams-discord-bot.md`
+- **Teams message-action plan** (ported from aaaomega/t3code-pvt#6):
+  `docs/integrations/microsoft-teams-message-action-plan.md`
+- Shared start/continue helper for Discord + Teams intake:
+  `apps/discord-bot/src/features/LinkedTurnRouter.ts`
+
+The intake module is a near-term path that escalates Teams traffic into Discord/T3 without waiting for a full Bot Framework adapter. The message-action plan covers the preferred long-term low-noise trigger model. Both feed into the phased adapter extraction above.
+
 ## References
 
 - Current Discord integration: `docs/integrations/discord-bot.md`
+- Teams intake module: `docs/integrations/microsoft-teams-discord-bot.md`
+- Teams message actions plan: `docs/integrations/microsoft-teams-message-action-plan.md`
 - Current Discord router: `apps/discord-bot/src/features/MentionRouter.ts`
 - Current bridge implementation: `apps/discord-bot/src/features/ResponseBridge.ts`
 - Current T3 transport layer: `apps/discord-bot/src/t3/T3Session.ts`
