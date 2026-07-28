@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import * as Cause from "effect/Cause";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -12,6 +18,7 @@ import {
   fatalAlertDelivery,
   formatAlertCause,
   isExpectedSessionLastError,
+  listSessionErrors,
   selectSessionErrorsForAlert,
   sessionErrorAlertDelivery,
   sessionErrorAlertKey,
@@ -82,6 +89,38 @@ describe("formatAlertCause", () => {
 });
 
 describe("Discord alert content", () => {
+  it("reads the complete persisted session error before attaching it", () => {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-alert-trace-"));
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    const trace = `Error: Invalid params\n${"    at decodeFrame (file:///long/path.js:1:1)\n".repeat(80)}`;
+
+    try {
+      NodeChildProcess.execFileSync(
+        "python3",
+        [
+          "-c",
+          [
+            "import sqlite3, sys",
+            "db = sqlite3.connect(sys.argv[1])",
+            "db.execute('CREATE TABLE projection_thread_sessions (thread_id TEXT, last_error TEXT, status TEXT, updated_at TEXT)')",
+            "db.execute('INSERT INTO projection_thread_sessions VALUES (?, ?, ?, ?)', ('thread-1', sys.argv[2], 'error', '2026-07-28T00:00:00Z'))",
+            "db.commit()",
+          ].join("\n"),
+          dbPath,
+          trace,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(trace.length).toBeGreaterThan(300);
+      expect(listSessionErrors(dbPath)).toEqual([
+        { threadId: "thread-1", lastError: trace, status: "error" },
+      ]);
+    } finally {
+      NodeFS.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("attaches the complete T3 session stack as one text file", () => {
     const trace = [
       "Error: Invalid params",
