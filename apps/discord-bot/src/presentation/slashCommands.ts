@@ -185,6 +185,19 @@ export const OMEGENT_SLASH_COMMAND = {
       name: "refresh-indicators",
       description: "Refresh Discord thread title badges (PR/VCS indicators)",
     },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "assign",
+      description: "Assign linked PR(s) on this thread (default: you via identity map)",
+      options: [
+        {
+          type: Discord.ApplicationCommandOptionType.STRING,
+          name: "github",
+          description: "GitHub login (default: you / @me from the identity map)",
+          required: false,
+        },
+      ],
+    },
   ],
 } as const;
 
