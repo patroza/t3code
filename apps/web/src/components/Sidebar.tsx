@@ -2,6 +2,7 @@ import {
   ArchiveIcon,
   ArrowUpDownIcon,
   BotIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CloudIcon,
   ContainerIcon,
@@ -13,6 +14,7 @@ import {
   ListFilterIcon,
   LoaderIcon,
   PinIcon,
+  PlusIcon,
   SearchIcon,
   ServerIcon,
   SettingsIcon,
@@ -214,8 +216,11 @@ import {
   resolveThreadStatusPill,
   isThreadSettledForDisplay,
   orderItemsByPreferredIds,
+  SETTLED_TAIL_INITIAL_COUNT,
+  SETTLED_TAIL_PAGE_COUNT,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  sortSettledThreadsForSidebarV2,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
@@ -230,6 +235,7 @@ import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings"
 import {
   DEFAULT_HIDE_SETTLED_PROJECTS,
   DEFAULT_HIDE_SETTLED_RECENT,
+  DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
   DEFAULT_WEB_LIST_MODE,
   DEFAULT_WEB_THREAD_GROUPING,
   EMPTY_LIST_ENVIRONMENT_FILTER,
@@ -243,6 +249,7 @@ import {
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
   ListProjectFilterSchema,
+  SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_LIST_MODE_LABELS,
   WEB_LIST_MODES,
   WEB_THREAD_GROUPING_LABELS,
@@ -3646,6 +3653,11 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
    * than one non-empty bucket is present (Last Hour / Earlier Today / …).
    */
   groupByRecency: boolean;
+  /**
+   * When true, settled threads leave the main list and sit in a collapsible
+   * shelf at the bottom (same idea as Sidebar V2 — out of the way, never gone).
+   */
+  hideSettledThreads: boolean;
   routeThreadKey: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
@@ -3657,6 +3669,119 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   threadByKey: ReadonlyMap<string, SidebarThreadSummary>;
 }) {
+  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+    ListHideSettledSchema,
+  );
+  const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
+
+  const { activeEntries, settledEntries } = useMemo(() => {
+    if (!props.hideSettledThreads) {
+      return {
+        activeEntries: props.recentThreads,
+        settledEntries: [] as SidebarRecentThread[],
+      };
+    }
+    const active: SidebarRecentThread[] = [];
+    const settled: SidebarRecentThread[] = [];
+    for (const entry of props.recentThreads) {
+      const threadKey = scopedThreadKey(
+        scopeThreadRef(entry.thread.environmentId, entry.thread.id),
+      );
+      if (props.settledThreadKeys.has(threadKey)) {
+        settled.push(entry);
+      } else {
+        active.push(entry);
+      }
+    }
+    // Settled is history: order by when work ended, matching V2 shelf sort.
+    if (settled.length <= 1) {
+      return { activeEntries: active, settledEntries: settled };
+    }
+    const sortedThreads = sortSettledThreadsForSidebarV2(settled.map((entry) => entry.thread));
+    const entryByKey = new Map(
+      settled.map((entry) => [
+        scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+        entry,
+      ]),
+    );
+    return {
+      activeEntries: active,
+      settledEntries: sortedThreads.flatMap((thread) => {
+        const entry = entryByKey.get(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        );
+        return entry ? [entry] : [];
+      }),
+    };
+  }, [props.hideSettledThreads, props.recentThreads, props.settledThreadKeys]);
+
+  // When hide-settled turns off or the settled tail empties, drop a deep page
+  // so the next shelf open starts from the initial window again.
+  const settledPagingActive = props.hideSettledThreads && settledEntries.length > 0;
+  const lastSettledPagingActiveRef = useRef(settledPagingActive);
+  if (lastSettledPagingActiveRef.current !== settledPagingActive) {
+    lastSettledPagingActiveRef.current = settledPagingActive;
+    if (!settledPagingActive && settledVisibleCount !== SETTLED_TAIL_INITIAL_COUNT) {
+      setSettledVisibleCount(SETTLED_TAIL_INITIAL_COUNT);
+    }
+  }
+
+  const pagedSettledEntries = useMemo(() => {
+    if (settledEntries.length <= settledVisibleCount) return settledEntries;
+    const visible = settledEntries.slice(0, settledVisibleCount);
+    // Open thread must stay reachable under "Show more".
+    if (props.routeThreadKey !== null) {
+      const routeEntry = settledEntries
+        .slice(settledVisibleCount)
+        .find(
+          (entry) =>
+            scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)) ===
+            props.routeThreadKey,
+        );
+      if (routeEntry !== undefined) visible.push(routeEntry);
+    }
+    return visible;
+  }, [props.routeThreadKey, settledEntries, settledVisibleCount]);
+
+  const renderedSettledEntries = useMemo(() => {
+    if (!props.hideSettledThreads || settledEntries.length === 0) return [];
+    if (settledShelfExpanded) return pagedSettledEntries;
+    if (props.routeThreadKey === null) return [];
+    const routeEntry = pagedSettledEntries.find(
+      (entry) =>
+        scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)) ===
+        props.routeThreadKey,
+    );
+    return routeEntry === undefined ? [] : [routeEntry];
+  }, [
+    pagedSettledEntries,
+    props.hideSettledThreads,
+    props.routeThreadKey,
+    settledEntries.length,
+    settledShelfExpanded,
+  ]);
+
+  const hiddenSettledCount = settledEntries.length - pagedSettledEntries.length;
+  const showMoreSettled = useCallback(
+    () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
+    [],
+  );
+  const toggleSettledShelf = useCallback(
+    () => setSettledShelfExpanded((value) => !value),
+    [setSettledShelfExpanded],
+  );
+
+  // Multi-select range walks rendered rows only (collapsed shelf is out).
+  const orderedRecentThreadKeys = useMemo(
+    () =>
+      [...activeEntries, ...renderedSettledEntries].map(({ thread }) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      ),
+    [activeEntries, renderedSettledEntries],
+  );
+
   if (props.recentThreads.length === 0) {
     return (
       <SidebarGroup className="px-2 pt-4 pb-1">
@@ -3664,9 +3789,6 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
       </SidebarGroup>
     );
   }
-  const orderedRecentThreadKeys = props.recentThreads.map(({ thread }) =>
-    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-  );
 
   const renderThreadRow = (entry: SidebarRecentThread) => {
     const threadKey = scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id));
@@ -3689,55 +3811,111 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     );
   };
 
-  if (!props.groupByRecency) {
+  const renderActiveList = () => {
+    if (activeEntries.length === 0) {
+      return null;
+    }
+
+    if (!props.groupByRecency) {
+      return (
+        <SidebarGroup className="px-2 pt-1 pb-1">
+          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+            {activeEntries.map(renderThreadRow)}
+          </SidebarMenuSub>
+        </SidebarGroup>
+      );
+    }
+
+    const recencyGroups = groupSortedThreadsByRecency(activeEntries.map((entry) => entry.thread));
+    const showSectionHeaders = shouldShowRecencySectionHeaders(recencyGroups);
+    const entryByThreadKey = new Map(
+      activeEntries.map((entry) => [
+        scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+        entry,
+      ]),
+    );
+
+    // Single non-empty bucket: skip headers (e.g. everything is "Last Hour").
+    if (!showSectionHeaders) {
+      return (
+        <SidebarGroup className="px-2 pt-1 pb-1">
+          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+            {activeEntries.map(renderThreadRow)}
+          </SidebarMenuSub>
+        </SidebarGroup>
+      );
+    }
+
+    return (
+      <>
+        {recencyGroups.map((group) => (
+          <SidebarGroup key={group.id} className="px-2 pt-2 pb-1">
+            <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-sidebar-muted-foreground/70">
+              {group.label}
+            </div>
+            <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+              {group.threads.flatMap((thread) => {
+                const entry = entryByThreadKey.get(
+                  scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                );
+                return entry ? [renderThreadRow(entry)] : [];
+              })}
+            </SidebarMenuSub>
+          </SidebarGroup>
+        ))}
+      </>
+    );
+  };
+
+  const renderSettledShelf = () => {
+    if (!props.hideSettledThreads || settledEntries.length === 0) {
+      return null;
+    }
     return (
       <SidebarGroup className="px-2 pt-1 pb-1">
-        <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
-          {props.recentThreads.map(renderThreadRow)}
-        </SidebarMenuSub>
+        <button
+          type="button"
+          onClick={toggleSettledShelf}
+          aria-expanded={settledShelfExpanded}
+          data-testid="sidebar-v1-settled-shelf-toggle"
+          className="mb-1 mt-2 flex w-full cursor-pointer items-center gap-2 px-2 text-left"
+        >
+          <span className="text-xs font-medium text-muted-foreground/50">
+            {settledShelfExpanded ? "Settled" : `Settled (${settledEntries.length})`}
+          </span>
+          <span className="h-px flex-1 bg-sidebar-border/60" />
+          <ChevronDownIcon
+            aria-hidden
+            className={cn(
+              "size-3 text-muted-foreground/50 transition-transform",
+              settledShelfExpanded && "rotate-180",
+            )}
+          />
+        </button>
+        {renderedSettledEntries.length > 0 ? (
+          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+            {renderedSettledEntries.map(renderThreadRow)}
+          </SidebarMenuSub>
+        ) : null}
+        {settledShelfExpanded && hiddenSettledCount > 0 ? (
+          <button
+            type="button"
+            onClick={showMoreSettled}
+            data-testid="sidebar-v1-settled-show-more"
+            className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2 text-left text-sm text-sidebar-muted-foreground/55 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+          >
+            <PlusIcon aria-hidden className="size-4 shrink-0" />
+            Show {Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT)} more
+          </button>
+        ) : null}
       </SidebarGroup>
     );
-  }
-
-  const recencyGroups = groupSortedThreadsByRecency(
-    props.recentThreads.map((entry) => entry.thread),
-  );
-  const showSectionHeaders = shouldShowRecencySectionHeaders(recencyGroups);
-  const entryByThreadKey = new Map(
-    props.recentThreads.map((entry) => [
-      scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
-      entry,
-    ]),
-  );
-
-  // Single non-empty bucket: skip headers (e.g. everything is "Last Hour").
-  if (!showSectionHeaders) {
-    return (
-      <SidebarGroup className="px-2 pt-1 pb-1">
-        <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
-          {props.recentThreads.map(renderThreadRow)}
-        </SidebarMenuSub>
-      </SidebarGroup>
-    );
-  }
+  };
 
   return (
     <>
-      {recencyGroups.map((group) => (
-        <SidebarGroup key={group.id} className="px-2 pt-2 pb-1">
-          <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-sidebar-muted-foreground/70">
-            {group.label}
-          </div>
-          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
-            {group.threads.flatMap((thread) => {
-              const entry = entryByThreadKey.get(
-                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-              );
-              return entry ? [renderThreadRow(entry)] : [];
-            })}
-          </SidebarMenuSub>
-        </SidebarGroup>
-      ))}
+      {renderActiveList()}
+      {renderSettledShelf()}
     </>
   );
 });
@@ -4229,6 +4407,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         <SidebarRecentThreads
           recentThreads={recentThreads}
           groupByRecency={threadGrouping === "recency"}
+          hideSettledThreads={hideSettledThreads}
           routeThreadKey={routeThreadKey}
           navigateToThread={navigateToThread}
           handleNewThread={handleNewThread}
@@ -4842,7 +5021,11 @@ export default function Sidebar() {
       })),
     [sortedProjects],
   );
-  /** Flat/recency groupings: unarchived threads sorted by latest activity, optional filters. */
+  /**
+   * Flat/recency groupings: unarchived threads sorted by latest activity.
+   * Settled rows stay in this list; when hide-settled is on, the recent list
+   * shelves them at the bottom instead of omitting them.
+   */
   const recentThreads = useMemo<SidebarRecentThread[]>(() => {
     const memberKeysForSelectedProject =
       selectedProjectFilterKey === null
@@ -4854,14 +5037,6 @@ export default function Sidebar() {
             ).map((member) => scopedProjectKey(scopeProjectRef(member.environmentId, member.id))),
           );
     return sortThreads(visibleThreads, "updated_at").flatMap((thread) => {
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (
-        usesFlatThreadGrouping(storedThreadGrouping) &&
-        hideSettledRecent &&
-        settledThreadKeys.has(threadKey)
-      ) {
-        return [];
-      }
       const memberKey = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
       const physicalKey = projectPhysicalKeyByScopedRef.get(memberKey) ?? memberKey;
       const projectKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
@@ -4876,22 +5051,29 @@ export default function Sidebar() {
       return project ? [{ thread, project }] : [];
     });
   }, [
-    hideSettledRecent,
     physicalToLogicalKey,
     projectPhysicalKeyByScopedRef,
     selectedProjectFilterKey,
-    settledThreadKeys,
     sidebarProjectByKey,
     sortedProjects,
-    storedThreadGrouping,
     visibleThreads,
   ]);
+  // Jump shortcuts target the main inbox only when settled are shelved —
+  // collapsed history shouldn't consume 1–9 slots.
   const recentThreadKeys = useMemo(
     () =>
-      recentThreads.map(({ thread }) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      ),
-    [recentThreads],
+      recentThreads.flatMap(({ thread }) => {
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        if (
+          hideSettledRecent &&
+          usesFlatThreadGrouping(storedThreadGrouping) &&
+          settledThreadKeys.has(threadKey)
+        ) {
+          return [];
+        }
+        return [threadKey];
+      }),
+    [hideSettledRecent, recentThreads, settledThreadKeys, storedThreadGrouping],
   );
   const visibleSidebarThreadKeys = useMemo(
     () =>
