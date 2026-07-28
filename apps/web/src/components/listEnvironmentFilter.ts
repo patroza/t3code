@@ -101,6 +101,15 @@ export const LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY = "t3code:list:hide-settled-
 export const DEFAULT_HIDE_SETTLED_RECENT = true;
 export const DEFAULT_HIDE_SETTLED_PROJECTS = false;
 
+/** Sidebar V2: show Last Hour / Yesterday / … under Settled when multi-bucket. */
+export const SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY =
+  "t3code:sidebar-v2:settled-recency-headers:v1";
+export const DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS = true;
+/** Sidebar V2: settled shelf expanded vs collapsed (persists last toggle). */
+export const SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY =
+  "t3code:sidebar-v2:settled-shelf-expanded:v1";
+export const DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED = true;
+
 /** Persisted env multi-select; empty array means all environments. */
 export const ListEnvironmentFilterSchema = Schema.Array(Schema.String);
 export type ListEnvironmentFilterStored = typeof ListEnvironmentFilterSchema.Type;
