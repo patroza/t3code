@@ -462,8 +462,9 @@ export function formatIdentityAttributionBlock(input: {
   );
 
   const lines: string[] = [
-    "### Identity map (git / GitHub / Jira attribution)",
-    "Operator-maintained map from Discord users to GitHub (and optional Jira). Use this for commit/PR attribution — do not invent emails or logins.",
+    "### Identity map (git / GitHub / Jira attribution) — REQUIRED",
+    "Operator-maintained map from Discord users to GitHub (and optional Jira).",
+    "**Do not invent emails or logins.** Attribution is mandatory for Discord-originated commits/PRs when trailers are listed below.",
   ];
 
   for (const p of participants) {
@@ -502,21 +503,24 @@ export function formatIdentityAttributionBlock(input: {
   }
 
   lines.push("");
-  lines.push("When creating commits for this Discord work:");
+  lines.push("**REQUIRED when creating commits for this Discord work:**");
   lines.push("1. Keep the environment default author/committer (usually the GitHub App bot).");
   lines.push(
-    "2. Append these `Co-authored-by` trailers for **mapped** participants (thread starter and/or current requester). Skip unmapped people — do not invent emails.",
+    "2. **Every** new commit message MUST end with the `Co-authored-by` trailers below for **mapped** participants (thread starter and/or current requester). Skip unmapped people — do not invent emails.",
   );
   lines.push(
-    "3. Put trailers at the end of the commit message after a blank line. Prefer the exact lines below.",
+    "3. Put trailers at the end of the commit message after a blank line. Use the exact lines below.",
   );
   lines.push(
-    "4. When opening a PR, you may also list co-authors in the body; GitHub primarily uses commit trailers for multi-author avatars.",
+    "4. Verify with `git log -1 --format=%B` before push/PR. Commits missing these trailers are incomplete.",
+  );
+  lines.push(
+    "5. When opening a PR: include the Discord description footer from AGENTS.md (opened by … in chat thread **Discord**). The bot may hard-append the footer later — still write it on create. GitHub multi-author avatars come from **commit** trailers, not PR body prose alone.",
   );
 
   if (trailers.length > 0) {
     lines.push("");
-    lines.push("Ready-to-paste trailers for this turn:");
+    lines.push("**Mandatory** ready-to-paste trailers for this turn (append to every new commit):");
     lines.push("```");
     for (const t of trailers) lines.push(t);
     lines.push("```");

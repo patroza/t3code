@@ -127,15 +127,32 @@ When implementation work for a user request is done (code, docs, config — not 
      `fork/changes`.
 5. Never assume an earlier PR in the session is still open.
 
-## Discord-originated pull requests
+## Discord-originated commits (REQUIRED)
 
-When opening a PR from a Discord thread request, append this footer at the end of the PR description (use the current requester and that thread’s real jump link):
+When the Discord turn includes an **Identity map** block with ready-to-paste `Co-authored-by` trailers, attribution is **mandatory**, not optional:
+
+1. Keep the environment default **author/committer** (usually the GitHub App bot).
+2. **Every** `git commit` you create for that work MUST end with those exact trailers after a blank line. Do not invent emails for unmapped people.
+3. Before `git push` / opening a PR, verify with `git log -1 --format=%B` that the trailers are present on each new commit.
+4. A Discord-originated commit **without** the mapped trailers is incomplete — fix it (amend if not pushed, or a follow-up commit is not enough for GitHub multi-author on already-pushed SHAs; amend/rebase when safe).
+
+GitHub multi-author avatars (`bot & human`) come from commit trailers, not from PR body prose alone.
+
+## Discord-originated pull requests (REQUIRED)
+
+When opening or updating a PR from a Discord thread:
+
+1. **Discord footer (required in the PR description).** Append this exact footer form at the end of the PR body (use the **thread starter** when known, otherwise the current requester, and that thread’s real jump link):
 
 ```md
 opened by [<displayName>](discord_user_id) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>)
 ```
 
-If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
+Prefer the thread starter’s Discord id/display name from turn context. Do not skip this because the bot _might_ patch the body later — still write it when you create the PR so the first revision is correct. The bot may also hard-append the footer when a PR URL is linked; that is a safety net, not a reason to omit it.
+
+2. If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
+
+3. Prefer opening the PR only after commits already include the Identity map `Co-authored-by` trailers (see above).
 
 ## Task Completion Requirements
 
