@@ -518,7 +518,7 @@ export function formatIdentityAttributionBlock(input: {
     "5. When opening a PR: include the Discord description footer from AGENTS.md (opened by … in chat thread **Discord**). The bot may hard-append the footer later — still write it on create. GitHub multi-author avatars come from **commit** trailers. Optional PR-body co-author list: use profile links that look like mentions (`[@login](https://github.com/login)`), **never** bare `@login` (bare mentions notify people).",
   );
   lines.push(
-    "6. **Always open a PR** for this work once there are commits (or the change is clearly intended to land). Prefer a **draft PR** until full lint / typecheck / focused tests / `vp check` are done; do not hold the PR closed waiting for perfect green.",
+    "6. **Always open a PR** for this work once there are commits (or the change is clearly intended to land). Prefer a **draft PR** until full lint / typecheck / focused tests / `vp check` are done; then **you must mark it ready** (draft is not done). Do not leave drafts abandoned and do not hold the PR closed waiting for perfect green.",
   );
 
   if (trailers.length > 0) {

@@ -160,7 +160,7 @@ Trailers remain mandatory for credit; the optional body list is display-only.
 
 When Discord work produces commits (or is clearly intended to land):
 
-0. **Always open a PR — do not wait for perfect green.** Create the PR as soon as there is something to review or track. If full lint / typecheck / focused tests / `vp check` are not finished yet, open it as a **draft**. Convert to ready for review only after those gates. A missing PR while work sits only on a remote branch is incomplete handoff.
+0. **Always open a PR — do not wait for perfect green.** Create the PR as soon as there is something to review or track. If full lint / typecheck / focused tests / `vp check` are not finished yet, open it as a **draft**. **A draft is not done:** after local gates (preferably right after focused tests + `vp check` / package typecheck), you **must** convert it to ready for review (or merge path). Leaving a draft abandoned after the work is finished is incomplete handoff. A missing PR while work sits only on a remote branch is also incomplete.
 
 When opening or updating a PR from a Discord thread:
 
