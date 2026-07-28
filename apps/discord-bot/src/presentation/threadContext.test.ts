@@ -148,6 +148,8 @@ describe("buildDiscordTurnPrompt", () => {
 
     expect(prompt).toContain("originated from a Discord thread");
     expect(prompt).toContain("posted back into the same Discord thread");
+    expect(prompt).toContain("Always open a GitHub PR");
+    expect(prompt).toContain("draft PR");
     expect(prompt).toContain('"you"');
     expect(prompt).toContain('"id": "user-1"');
     expect(prompt).toContain('"username": "example-user"');
