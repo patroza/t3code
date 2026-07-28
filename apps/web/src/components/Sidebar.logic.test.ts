@@ -35,6 +35,8 @@ import {
   shouldClearThreadSelectionOnMouseDown,
   sortLogicalProjectsForSidebar,
   groupSettledThreadsByRecencyForSidebarV2,
+  isThreadSettledForDisplay,
+  resolveSettledTimestamp,
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
   sortProjectsForSidebar,
@@ -1161,6 +1163,98 @@ describe("sortSettledThreadsForSidebarV2", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("resolveSettledTimestamp", () => {
+  it("prefers explicit settledAt over later message activity", () => {
+    expect(
+      resolveSettledTimestamp({
+        settledAt: "2026-03-09T10:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T12:00:00.000Z",
+        latestTurn: null,
+        updatedAt: "2026-03-09T13:00:00.000Z",
+      }),
+    ).toBe("2026-03-09T10:00:00.000Z");
+  });
+
+  it("falls back to the latest activity stamp when settledAt is missing", () => {
+    expect(
+      resolveSettledTimestamp({
+        settledAt: null,
+        latestUserMessageAt: "2026-03-09T09:00:00.000Z",
+        latestTurn: makeLatestTurn({ completedAt: "2026-03-09T11:00:00.000Z" }),
+        updatedAt: "2026-03-09T08:00:00.000Z",
+      }),
+    ).toBe("2026-03-09T11:00:00.000Z");
+  });
+});
+
+describe("isThreadSettledForDisplay", () => {
+  const now = "2026-04-10T00:00:00.000Z";
+  const baseThread = {
+    id: ThreadId.make("thread-settled-display"),
+    environmentId: localEnvironmentId,
+    projectId: ProjectId.make("project-1"),
+    title: "Settled display",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    interactionMode: DEFAULT_INTERACTION_MODE,
+    session: null,
+    createdAt: "2026-04-01T00:00:00.000Z",
+    updatedAt: now,
+    archivedAt: null,
+    latestTurn: null,
+    latestUserMessageAt: "2026-04-01T00:00:00.000Z",
+    branch: null,
+    worktreePath: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    settledOverride: "settled" as const,
+    settledAt: now,
+  };
+
+  it("never treats threads as settled when the server lacks threadSettlement", () => {
+    const serverConfigs = {
+      get(_environmentId: string) {
+        return {
+          environment: {
+            capabilities: { threadSettlement: false },
+          },
+        };
+      },
+    };
+
+    expect(
+      isThreadSettledForDisplay(baseThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: 7,
+        changeRequestState: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("honors settled override when the server supports settlement", () => {
+    const serverConfigs = {
+      get(_environmentId: string) {
+        return {
+          environment: {
+            capabilities: { threadSettlement: true },
+          },
+        };
+      },
+    };
+
+    expect(
+      isThreadSettledForDisplay(baseThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: 7,
+        changeRequestState: null,
+      }),
+    ).toBe(true);
   });
 });
 
