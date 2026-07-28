@@ -333,28 +333,34 @@ export function parseManifest(source: string): StackManifest {
   });
   const parsedConflictResolutions = conflictResolutions.map((entry, index) => {
     assertObject(entry, `conflictResolutions[${index}]`);
+    const branch = entry.branch;
+    const commitValue = entry.commit;
+    const path = entry.path;
+    const strategy = entry.strategy;
     const commitOk =
-      typeof entry.commit === "string" &&
-      (entry.commit === "*" || /^[0-9a-f]{40}$/i.test(entry.commit));
+      typeof commitValue === "string" &&
+      (commitValue === "*" || /^[0-9a-f]{40}$/i.test(commitValue));
     if (
-      typeof entry.branch !== "string" ||
-      entry.branch.length === 0 ||
+      typeof branch !== "string" ||
+      branch.length === 0 ||
       !commitOk ||
-      typeof entry.path !== "string" ||
-      entry.path.length === 0 ||
-      NodePath.isAbsolute(entry.path) ||
-      entry.path.split("/").includes("..") ||
-      (entry.strategy !== "ours" && entry.strategy !== "theirs")
+      typeof path !== "string" ||
+      path.length === 0 ||
+      NodePath.isAbsolute(path) ||
+      path.split("/").includes("..") ||
+      (strategy !== "ours" && strategy !== "theirs")
     ) {
       throw new StackError(
         `conflictResolutions[${index}] is invalid (need branch, commit SHA or "*", relative path, ours|theirs).`,
       );
     }
+    // commitValue narrowed by commitOk (string + shape check).
+    const commit = commitValue as string;
     return {
-      branch: entry.branch,
-      commit: entry.commit === "*" ? "*" : entry.commit.toLowerCase(),
-      path: entry.path,
-      strategy: entry.strategy,
+      branch,
+      commit: commit === "*" ? "*" : commit.toLowerCase(),
+      path,
+      strategy: strategy as "ours" | "theirs",
     } satisfies StackConflictResolution;
   });
 
