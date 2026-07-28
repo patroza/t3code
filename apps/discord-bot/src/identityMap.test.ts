@@ -1,0 +1,250 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  formatCoAuthoredByTrailer,
+  formatIdentityAttributionBlock,
+  loadIdentityMapFromFileSync,
+  parseIdentityMapDocument,
+  parseSimpleIdentityYaml,
+  resolveGitHubCoAuthorEmail,
+  resolveParticipantIdentity,
+} from "./identityMap.ts";
+
+describe("parseIdentityMapDocument", () => {
+  it("parses people array with nested identities", () => {
+    const people = parseIdentityMapDocument({
+      people: [
+        {
+          name: "Patrick Roza",
+          discord: { id: "95218063095377920", username: "patroza" },
+          github: { login: "patroza", id: "12345" },
+          jira: { accountId: "712020:abc", email: "patrick@example.com" },
+        },
+      ],
+    });
+    expect(people).toEqual([
+      {
+        name: "Patrick Roza",
+        discord: { id: "95218063095377920", username: "patroza" },
+        github: { login: "patroza", id: "12345" },
+        jira: { accountId: "712020:abc", email: "patrick@example.com" },
+      },
+    ]);
+  });
+
+  it("parses people map keyed by discord id with flat fields", () => {
+    const people = parseIdentityMapDocument({
+      people: {
+        "95218063095377920": {
+          name: "Patrick Roza",
+          githubLogin: "patroza",
+          githubId: "12345",
+        },
+      },
+    });
+    expect(people[0]?.discord?.id).toBe("95218063095377920");
+    expect(people[0]?.github?.login).toBe("patroza");
+    expect(people[0]?.github?.id).toBe("12345");
+  });
+
+  it("parses top-level map keyed by discord id", () => {
+    const people = parseIdentityMapDocument({
+      "111": { name: "Davide", githubLogin: "davide", githubId: "9" },
+    });
+    expect(people).toHaveLength(1);
+    expect(people[0]?.name).toBe("Davide");
+    expect(people[0]?.discord?.id).toBe("111");
+  });
+
+  it("rejects entries without name", () => {
+    expect(() =>
+      parseIdentityMapDocument({
+        people: [{ discord: { id: "1" }, github: { login: "x" } }],
+      }),
+    ).toThrow(/name/i);
+  });
+});
+
+describe("parseSimpleIdentityYaml", () => {
+  it("parses people block with nested fields", () => {
+    const doc = parseSimpleIdentityYaml(`
+# comment
+people:
+  "95218063095377920":
+    name: Patrick Roza
+    githubLogin: patroza
+    githubId: "12345"
+    jiraAccountId: 712020:abc
+`);
+    const people = parseIdentityMapDocument(doc);
+    expect(people).toHaveLength(1);
+    expect(people[0]?.name).toBe("Patrick Roza");
+    expect(people[0]?.discord?.id).toBe("95218063095377920");
+    expect(people[0]?.github?.login).toBe("patroza");
+    expect(people[0]?.github?.id).toBe("12345");
+    expect(people[0]?.jira?.accountId).toBe("712020:abc");
+  });
+});
+
+describe("co-author trailers", () => {
+  it("derives noreply email from github id + login", () => {
+    expect(resolveGitHubCoAuthorEmail({ login: "patroza", id: "12345" })).toBe(
+      "12345+patroza@users.noreply.github.com",
+    );
+  });
+
+  it("prefers explicit email", () => {
+    expect(
+      resolveGitHubCoAuthorEmail({
+        login: "patroza",
+        id: "12345",
+        email: "me@example.com",
+      }),
+    ).toBe("me@example.com");
+  });
+
+  it("formats Co-authored-by trailer", () => {
+    expect(
+      formatCoAuthoredByTrailer({
+        name: "Patrick Roza",
+        github: { login: "patroza", id: "12345" },
+      }),
+    ).toBe("Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>");
+  });
+
+  it("returns null without resolvable email", () => {
+    expect(
+      formatCoAuthoredByTrailer({
+        name: "X",
+        github: { login: "x" },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
+  const people = parseIdentityMapDocument({
+    people: [
+      {
+        name: "Patrick Roza",
+        discord: { id: "95218063095377920", username: "patroza" },
+        github: { login: "patroza", id: "12345" },
+      },
+      {
+        name: "Davide",
+        discord: { id: "222", username: "davide" },
+        github: { login: "davide", id: "99" },
+      },
+    ],
+  });
+
+  it("resolves by discord id", () => {
+    const resolved = resolveParticipantIdentity({
+      role: "requester",
+      discordId: "95218063095377920",
+      discordUsername: "patroza",
+      discordDisplayName: "Patrick Roza",
+      people,
+    });
+    expect(resolved.person?.name).toBe("Patrick Roza");
+    expect(resolved.coAuthoredBy).toContain("patroza");
+  });
+
+  it("marks unmapped users", () => {
+    const resolved = resolveParticipantIdentity({
+      role: "requester",
+      discordId: "999",
+      people,
+    });
+    expect(resolved.person).toBeNull();
+    expect(resolved.unmappedReason).toContain("not present");
+  });
+
+  it("builds attribution block with ready trailers", () => {
+    const block = formatIdentityAttributionBlock({
+      participants: [
+        resolveParticipantIdentity({
+          role: "thread_starter",
+          discordId: "222",
+          discordDisplayName: "Davide",
+          people,
+        }),
+        resolveParticipantIdentity({
+          role: "requester",
+          discordId: "95218063095377920",
+          discordDisplayName: "Patrick Roza",
+          people,
+        }),
+      ],
+    });
+    expect(block).toContain("Identity map");
+    expect(block).toContain("Thread starter");
+    expect(block).toContain("Current requester");
+    expect(block).toContain("Co-authored-by: Davide <99+davide@users.noreply.github.com>");
+    expect(block).toContain(
+      "Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>",
+    );
+    expect(block).toContain("do not invent emails");
+  });
+
+  it("dedupes identical trailers when starter is also requester", () => {
+    const same = resolveParticipantIdentity({
+      role: "requester",
+      discordId: "222",
+      people,
+    });
+    const starter = resolveParticipantIdentity({
+      role: "thread_starter",
+      discordId: "222",
+      people,
+    });
+    const block = formatIdentityAttributionBlock({ participants: [starter, same] });
+    const matches = block?.match(/Co-authored-by: Davide/g) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+});
+
+describe("loadIdentityMapFromFileSync", () => {
+  it("loads JSON files", async () => {
+    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-identity-"));
+    const path = NodePath.join(dir, "identity-map.json");
+    await NodeFSP.writeFile(
+      path,
+      JSON.stringify({
+        people: [
+          {
+            name: "A",
+            discord: { id: "1" },
+            github: { login: "a", id: "2" },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const people = loadIdentityMapFromFileSync(path);
+    expect(people).toHaveLength(1);
+    expect(people[0]?.github?.login).toBe("a");
+  });
+
+  it("loads YAML files", async () => {
+    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-identity-"));
+    const path = NodePath.join(dir, "identity-map.yaml");
+    await NodeFSP.writeFile(
+      path,
+      `people:
+  "1":
+    name: A
+    githubLogin: a
+    githubId: "2"
+`,
+      "utf8",
+    );
+    const people = loadIdentityMapFromFileSync(path);
+    expect(people[0]?.discord?.id).toBe("1");
+    expect(people[0]?.github?.id).toBe("2");
+  });
+});
