@@ -321,6 +321,7 @@ export function activate(context: vscode.ExtensionContext): void {
       onFavoritesChanged: desktopFavorites.onDidChange,
     },
     context.extensionUri,
+    context.storageUri,
   );
 
   const handler: vscode.ChatRequestHandler = async (request, _chatContext, response, token) => {
