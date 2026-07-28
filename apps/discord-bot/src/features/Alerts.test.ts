@@ -1,11 +1,19 @@
 import * as Cause from "effect/Cause";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("dfx", () => ({
+  DiscordConfig: { DiscordConfig: {} },
+  DiscordREST: {},
+}));
 
 import {
+  bridgeAlertDelivery,
   classifySessionLastError,
+  fatalAlertDelivery,
   formatAlertCause,
   isExpectedSessionLastError,
   selectSessionErrorsForAlert,
+  sessionErrorAlertDelivery,
   sessionErrorAlertKey,
   trackSustainedHotProcesses,
   type ProcInfo,
@@ -61,6 +69,48 @@ describe("formatAlertCause", () => {
   it("falls back for plain Errors and strings", () => {
     expect(formatAlertCause(new Error("boom"))).toContain("boom");
     expect(formatAlertCause("plain")).toBe("plain");
+  });
+
+  it("keeps complete causes by default while honoring explicit preview limits", () => {
+    const cause = `start\n${"x".repeat(4_000)}\nend`;
+    expect(formatAlertCause(cause)).toBe(cause);
+    expect(formatAlertCause(cause, 20)).toBe(`${cause.slice(0, 20)}…`);
+  });
+});
+
+describe("Discord alert content", () => {
+  it("attaches the complete T3 session stack as one text file", () => {
+    const trace = [
+      "Error: Invalid params",
+      ...Array.from(
+        { length: 80 },
+        (_, index) =>
+          `    at decodeFrame${index} (file:///var/lib/t3/src/t3code/node_modules/effect/frame-${index}.js:877:8)`,
+      ),
+    ].join("\n");
+    const delivery = sessionErrorAlertDelivery("2d9ccf35-a36a-41bc-a762-523f5e423f41", trace);
+
+    expect(delivery.content).toContain("thread=`2d9ccf35-a36a-41bc-a762-523f5e423f41`");
+    expect(delivery.content).not.toContain("Invalid params");
+    expect(delivery.files).toHaveLength(1);
+    expect(delivery.files[0]?.name).toBe(
+      "t3-session-error-2d9ccf35-a36a-41bc-a762-523f5e423f41.txt",
+    );
+    expect(delivery.files[0]?.mimeType).toBe("text/plain;charset=utf-8");
+    expect(new TextDecoder().decode(delivery.files[0]?.data)).toBe(trace);
+  });
+
+  it("keeps fatal and bridge traces out of message content and intact in attachments", () => {
+    const trace = `start\n${"x".repeat(4_000)}\nend`;
+    for (const delivery of [
+      fatalAlertDelivery("failure", trace),
+      bridgeAlertDelivery("failure", trace),
+    ]) {
+      expect(delivery.content).not.toContain(trace);
+      expect(delivery.files).toHaveLength(1);
+      expect(delivery.files[0]?.name.endsWith(".txt")).toBe(true);
+      expect(new TextDecoder().decode(delivery.files[0]?.data)).toBe(trace);
+    }
   });
 });
 

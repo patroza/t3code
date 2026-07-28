@@ -9,13 +9,20 @@
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import { DiscordREST } from "dfx";
+import { DiscordConfig, DiscordREST } from "dfx";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 
 import type { DiscordBotConfig } from "../config.ts";
+import {
+  createMessageWithAttachments,
+  DiscordUploadError,
+  textFile,
+  type DiscordUploadFile,
+} from "../presentation/discordFiles.ts";
 
 const POLL = "60 seconds";
 const COOLDOWN_MS = 10 * 60 * 1000;
@@ -28,6 +35,8 @@ const FATAL_COOLDOWN_MS = 2 * 60 * 1000;
 const SESSION_ERROR_FATAL_COOLDOWN_MS = 30 * 60 * 1000;
 /** Cap distinct session-error posts per watchdog tick. */
 const SESSION_ERROR_ALERT_MAX = 5;
+/** Leave headroom below Discord's 2,000-character message-content limit. */
+const DISCORD_ALERT_MESSAGE_LIMIT = 1900;
 
 const LOAD_RATIO = 0.75;
 const CPU_PERCENT_ALERT = 85;
@@ -576,18 +585,53 @@ export function collectHostSnapshot(input: {
 
 // --- Fatal / bridge alert bus (callable from bridge / main) ------------------
 
-type Poster = (key: string, content: string, cooldownMs?: number) => Effect.Effect<void>;
+type Poster = (
+  key: string,
+  content: string,
+  cooldownMs?: number,
+  files?: ReadonlyArray<DiscordUploadFile>,
+) => Effect.Effect<void>;
 
 let poster: Poster | null = null;
 
 /** Bridge snapshot handler failures: short enough to notice, long enough to avoid spam. */
 const BRIDGE_ALERT_COOLDOWN_MS = 3 * 60 * 1000;
+const TRACE_MIME_TYPE = "text/plain;charset=utf-8";
+
+export interface AlertTraceDelivery {
+  readonly content: string;
+  readonly files: ReadonlyArray<DiscordUploadFile>;
+}
+
+function alertTraceDelivery(content: string, filename: string, trace: string): AlertTraceDelivery {
+  return {
+    content: `${content}\n_Complete trace attached as \`${filename}\`._`,
+    files: [textFile(filename, trace, TRACE_MIME_TYPE)],
+  };
+}
+
+export function fatalAlertDelivery(title: string, trace: string): AlertTraceDelivery {
+  return alertTraceDelivery(`**FATAL: ${title}**`, "fatal-trace.txt", trace);
+}
+
+export function bridgeAlertDelivery(title: string, trace: string): AlertTraceDelivery {
+  return alertTraceDelivery(`**BRIDGE: ${title}**`, "bridge-trace.txt", trace);
+}
+
+export function sessionErrorAlertDelivery(threadId: string, trace: string): AlertTraceDelivery {
+  const filename = `t3-session-error-${threadId}.txt`;
+  return alertTraceDelivery(
+    ["**FATAL: T3 session error**", `thread=\`${threadId}\``].join("\n"),
+    filename,
+    trace,
+  );
+}
 
 /**
  * Render an Effect `Cause` (or any thrown value) for Discord / logs.
  * Logging `{ cause }` alone shows `{ _id: 'Cause', failures: [ [Object] ] }`.
  */
-export function formatAlertCause(cause: unknown, maxLen = 1200): string {
+export function formatAlertCause(cause: unknown, maxLen?: number): string {
   let text: string;
   try {
     if (Cause.isCause(cause)) {
@@ -604,7 +648,7 @@ export function formatAlertCause(cause: unknown, maxLen = 1200): string {
   }
   const trimmed = text.replace(/\s+$/u, "").trim();
   if (trimmed === "") return "(empty cause)";
-  return trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
+  return maxLen !== undefined && trimmed.length > maxLen ? `${trimmed.slice(0, maxLen)}…` : trimmed;
 }
 
 /**
@@ -619,11 +663,8 @@ export const postFatalAlert = (key: string, title: string, detail: string) =>
       yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail });
       return;
     }
-    yield* p(
-      `fatal:${key}`,
-      [`**FATAL: ${title}**`, detail.slice(0, 1500)].join("\n"),
-      FATAL_COOLDOWN_MS,
-    );
+    const delivery = fatalAlertDelivery(title, detail);
+    yield* p(`fatal:${key}`, delivery.content, FATAL_COOLDOWN_MS, delivery.files);
   });
 
 /**
@@ -638,11 +679,8 @@ export const postBridgeAlert = (key: string, title: string, detail: string) =>
       yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail });
       return;
     }
-    yield* p(
-      `bridge:${key}`,
-      [`**BRIDGE: ${title}**`, detail.slice(0, 1500)].join("\n"),
-      BRIDGE_ALERT_COOLDOWN_MS,
-    );
+    const delivery = bridgeAlertDelivery(title, detail);
+    yield* p(`bridge:${key}`, delivery.content, BRIDGE_ALERT_COOLDOWN_MS, delivery.files);
   });
 
 // --- Watchdog ----------------------------------------------------------------
@@ -662,17 +700,44 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
     }
 
     const rest = yield* DiscordREST;
+    const discordConfig = yield* DiscordConfig.DiscordConfig;
     const lastSent = new Map<string, number>();
 
-    const postAlert: Poster = (key, content, cooldownMs = COOLDOWN_MS) =>
+    const postAlert: Poster = (key, content, cooldownMs = COOLDOWN_MS, files = []) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const prev = lastSent.get(key) ?? 0;
         if (now - prev < cooldownMs) return;
         lastSent.set(key, now);
-        const body = content.length > 1900 ? `${content.slice(0, 1900)}…` : content;
-        yield* rest.createMessage(channelId, { content: body }).pipe(
-          Effect.tap(() => Effect.logInfo("Posted Discord ops alert", { key, channelId })),
+        const body =
+          content.length > DISCORD_ALERT_MESSAGE_LIMIT
+            ? `${content.slice(0, DISCORD_ALERT_MESSAGE_LIMIT)}…`
+            : content;
+        yield* Effect.gen(function* () {
+          if (files.length === 0) {
+            yield* rest.createMessage(channelId, { content: body });
+          } else {
+            yield* Effect.tryPromise({
+              try: () =>
+                createMessageWithAttachments({
+                  baseUrl: discordConfig.rest.baseUrl,
+                  botToken: Redacted.value(discordConfig.token),
+                  channelId,
+                  content: body,
+                  files,
+                }),
+              catch: (cause) =>
+                cause instanceof DiscordUploadError
+                  ? cause
+                  : new DiscordUploadError(cause instanceof Error ? cause.message : String(cause)),
+            });
+          }
+          yield* Effect.logInfo("Posted Discord ops alert", {
+            key,
+            channelId,
+            fileCount: files.length,
+          });
+        }).pipe(
           Effect.catchCause((cause) =>
             Effect.logError("Failed to post Discord ops alert").pipe(
               Effect.andThen(Effect.logError(cause)),
@@ -830,10 +895,12 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
         // --- session last_error (real fatals only; skip orphan-restart recover spam) ---
         const sessionSelection = selectSessionErrorsForAlert(snap.sessionErrors);
         for (const err of sessionSelection.fatals) {
+          const delivery = sessionErrorAlertDelivery(err.threadId, err.lastError);
           yield* postAlert(
             sessionErrorAlertKey(err.threadId, err.lastError),
-            ["**FATAL: T3 session error**", `thread=\`${err.threadId}\``, err.lastError].join("\n"),
+            delivery.content,
             SESSION_ERROR_FATAL_COOLDOWN_MS,
+            delivery.files,
           );
         }
         // Expected recoveries are intentionally not posted — high volume after restarts
