@@ -10,16 +10,38 @@ import * as NodeURL from "node:url";
 
 import { readManifest, StackError } from "./rebase-pr-stack.ts";
 
-function git(cwd: string, args: ReadonlyArray<string>): string {
-  const result = NodeChildProcess.spawnSync("git", [...args], {
+function run(
+  command: string,
+  args: ReadonlyArray<string>,
+  cwd: string,
+  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const result = NodeChildProcess.spawnSync(command, [...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" },
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_EDITOR: "true",
+      ...options.env,
+    },
   });
-  if (result.status !== 0) {
-    throw new StackError(`git ${args.join(" ")} failed: ${result.stderr.trim()}`);
+  const stdout = (result.stdout ?? "").trim();
+  const stderr = (result.stderr ?? "").trim();
+  if (!options.allowFailure && result.status !== 0) {
+    throw new StackError(
+      `${command} ${args.join(" ")} failed: ${stderr || stdout || `exit ${result.status}`}`,
+    );
   }
-  return result.stdout.trim();
+  return { status: result.status, stdout, stderr };
+}
+
+function git(
+  cwd: string,
+  args: ReadonlyArray<string>,
+  options: { allowFailure?: boolean } = {},
+): string {
+  return run("git", args, cwd, options).stdout;
 }
 
 export function overlayCommitList(revListOutput: string): ReadonlyArray<string> {
@@ -27,6 +49,118 @@ export function overlayCommitList(revListOutput: string): ReadonlyArray<string> 
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+export function isLockfileOnlyCommit(paths: ReadonlyArray<string>): boolean {
+  return paths.length > 0 && paths.every((path) => path === "pnpm-lock.yaml");
+}
+
+function commitPaths(repoDir: string, commit: string): ReadonlyArray<string> {
+  return git(repoDir, ["diff-tree", "--no-commit-id", "--name-only", "-r", commit])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function conflictingPaths(repoDir: string): ReadonlyArray<string> {
+  return git(repoDir, ["diff", "--name-only", "--diff-filter=U"])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function cherryPickInProgress(repoDir: string): boolean {
+  return (
+    NodeFS.existsSync(NodePath.join(repoDir, ".git", "CHERRY_PICK_HEAD")) ||
+    NodeFS.existsSync(NodePath.join(repoDir, ".git", "sequencer", "todo"))
+  );
+}
+
+/**
+ * Cherry-pick overlay commits onto the integration base.
+ * Lockfile-only commits are skipped (combined tree is regenerated after compose).
+ * If a mixed commit conflicts only on `pnpm-lock.yaml`, keep the current lock and continue.
+ */
+export function cherryPickOverlayCommits(
+  repoDir: string,
+  commits: ReadonlyArray<string>,
+): { skippedLockfileOnly: number; deferredLockfileConflicts: number } {
+  let skippedLockfileOnly = 0;
+  let deferredLockfileConflicts = 0;
+  for (const commit of commits) {
+    const paths = commitPaths(repoDir, commit);
+    if (isLockfileOnlyCommit(paths)) {
+      console.log(`Skipping lockfile-only overlay commit ${commit.slice(0, 12)}`);
+      skippedLockfileOnly += 1;
+      continue;
+    }
+    const result = run("git", ["-c", "commit.gpgsign=false", "cherry-pick", commit], repoDir, {
+      allowFailure: true,
+    });
+    if (result.status === 0) continue;
+    if (!cherryPickInProgress(repoDir)) {
+      throw new StackError(
+        `git cherry-pick ${commit.slice(0, 12)} failed: ${result.stderr || result.stdout}`,
+      );
+    }
+    const conflicts = conflictingPaths(repoDir);
+    if (conflicts.length === 1 && conflicts[0] === "pnpm-lock.yaml") {
+      // Keep the lock as-of previous overlay; regenerate once at the end.
+      git(repoDir, ["checkout", "--ours", "--", "pnpm-lock.yaml"]);
+      git(repoDir, ["add", "--", "pnpm-lock.yaml"]);
+      const cont = run(
+        "git",
+        ["-c", "commit.gpgsign=false", "cherry-pick", "--continue"],
+        repoDir,
+        { allowFailure: true },
+      );
+      if (cont.status !== 0 && cherryPickInProgress(repoDir)) {
+        throw new StackError(
+          `Could not continue cherry-pick after deferring lockfile for ${commit.slice(0, 12)}: ${cont.stderr || cont.stdout}`,
+        );
+      }
+      console.log(
+        `Deferred pnpm-lock.yaml conflict for ${commit.slice(0, 12)} (will regenerate after compose)`,
+      );
+      deferredLockfileConflicts += 1;
+      continue;
+    }
+    throw new StackError(
+      `Overlay cherry-pick conflict on ${commit.slice(0, 12)}: ${conflicts.join(", ") || "(unknown paths)"}. ` +
+        `Record a durable resolution policy if this is a known product conflict, or fix the overlay tip.`,
+    );
+  }
+  return { skippedLockfileOnly, deferredLockfileConflicts };
+}
+
+function regenerateIntegrationLockfile(repoDir: string): boolean {
+  console.log("Regenerating pnpm-lock.yaml for composed integration tree…");
+  const install = run("pnpm", ["install", "--no-frozen-lockfile"], repoDir, {
+    allowFailure: true,
+    env: { ...process.env, CI: "" },
+  });
+  if (install.status !== 0) {
+    throw new StackError(
+      `pnpm install --no-frozen-lockfile failed after overlay compose: ${install.stderr || install.stdout}`,
+    );
+  }
+  const dirty = run("git", ["status", "--porcelain", "--", "pnpm-lock.yaml"], repoDir, {
+    allowFailure: true,
+  }).stdout;
+  if (!dirty) {
+    console.log("pnpm-lock.yaml already matched the composed tree.");
+    return false;
+  }
+  git(repoDir, ["add", "--", "pnpm-lock.yaml"]);
+  git(repoDir, [
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-m",
+    "chore(integration): regenerate pnpm-lock.yaml after overlay compose",
+  ]);
+  console.log("Committed regenerated integration lockfile.");
+  return true;
 }
 
 export function composeIntegration(sourceRoot = process.cwd(), push = true): string {
@@ -56,6 +190,7 @@ export function composeIntegration(sourceRoot = process.cwd(), push = true): str
     const base = git(repoDir, ["rev-parse", `origin/${manifest.forkChangesBranch}`]);
     const previous = git(repoDir, ["rev-parse", `origin/${manifest.integrationBranch}`]);
     git(repoDir, ["checkout", "--quiet", "--detach", base]);
+    let needsLockfileRegen = false;
     for (const overlay of manifest.integrationOverlays) {
       const tip = git(repoDir, ["rev-parse", `origin/${overlay.branch}`]);
       const ancestor = NodeChildProcess.spawnSync(
@@ -76,7 +211,13 @@ export function composeIntegration(sourceRoot = process.cwd(), push = true): str
           `Overlay PR #${overlay.number} has no commits above ${manifest.forkChangesBranch}.`,
         );
       }
-      git(repoDir, ["cherry-pick", ...commits]);
+      const result = cherryPickOverlayCommits(repoDir, commits);
+      if (result.skippedLockfileOnly > 0 || result.deferredLockfileConflicts > 0) {
+        needsLockfileRegen = true;
+      }
+    }
+    if (needsLockfileRegen) {
+      regenerateIntegrationLockfile(repoDir);
     }
     const next = git(repoDir, ["rev-parse", "HEAD"]);
     if (push && next !== previous) {
