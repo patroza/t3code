@@ -136,6 +136,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDesktopName: () => Effect.void,
     setDockIcon: () => Effect.void,
     appendCommandLineSwitch: () => Effect.void,
+    onBeforeQuitForUpdate: () => Effect.void,
     on: () => Effect.void as any,
   } satisfies ElectronApp.ElectronApp["Service"]);
 
