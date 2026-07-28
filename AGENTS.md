@@ -99,7 +99,9 @@ branches.
 - **Integration compose lockfiles:** overlay lock commits diverge by design. Compose skips
   lockfile-only commits, defers lock-only conflicts, and regenerates one integration
   `pnpm-lock.yaml` at the end. Never push a partial `fork/integration` after a lock conflict.
-  See [docs/fork-stack.md](./docs/fork-stack.md) ("Integration overlay compose and lockfiles").
+  Compose seeds `node_modules` via `cp -a --reflink=auto` from a warm tree into a **home-side**
+  work dir (`~/.t3/compose-work`, not tmpfs `/tmp`) before install. See
+  [docs/fork-stack.md](./docs/fork-stack.md) ("Integration overlay compose and lockfiles").
 
 ## Pull requests (required handoff)
 
