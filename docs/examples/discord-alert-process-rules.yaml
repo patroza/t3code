@@ -1,0 +1,18 @@
+# Optional Discord bot per-process alert thresholds.
+# Loaded by the Discord bot watchdog only:
+#
+#   export T3_DISCORD_ALERT_PROCESS_RULES_PATH=~/.t3/discord-bot/alert-process-rules.yaml
+#
+# Rules match case-insensitive substrings against the full command line and
+# the shortened label shown in alerts.
+
+rules:
+  - id: jaeger-linux
+    match: jaeger-linux
+    rss: 4gb
+    duration: 5m
+
+#  - id: busy-worker
+#    match: worker.js
+#    cpu: 90
+#    duration: 3m
