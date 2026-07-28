@@ -85,12 +85,20 @@ branches.
      like `ERR_PNPM_OUTDATED_LOCKFILE` / "specifiers in the lockfile don't match package.json".
      Prefer regenerating the lockfile over repeatedly choosing ours/theirs on `pnpm-lock.yaml` during
      multi-commit rebases of `fork/changes`.
-- **Per-layer green before next layer (required):** when rebasing, rewriting, or composing the
-  stack, **every layer must be fully green before you advance**. That means local pre-push gates
-  **and** Fork CI (all jobs that apply to that ref) on that layer's tip — not “push and hope.” Order:
-  `fork/tim` → `fork/candidates` → `fork/changes` → each overlay → compose `fork/integration`.
-  Do not stack work on a red tip. Full detail: [docs/fork-stack.md](./docs/fork-stack.md)
-  ("Per-layer green gate").
+- **Per-layer full CI gate after stack rebase (required — stop the line):** when rebasing,
+  replaying, or rewriting the stack, **every layer must pass the full local CI gate before you
+  touch the next layer**. Do **not** rebase, compose, or push a child layer onto a parent that is
+  still red. Do **not** “finish the stack rewrite first and green it later.”
+  - Order: `fork/tim` → `fork/candidates` → `fork/changes` → each integration overlay → compose
+    `fork/integration` last.
+  - On **each** layer tip after it is rewritten: install/lock consistent, then run the **full**
+    local Fork CI gate (not only `vp check`) — see **Per-layer stack CI (stop the line)** under
+    Task Completion Requirements and [docs/fork-stack.md](./docs/fork-stack.md)
+    (“Per-layer full CI after stack rebase”).
+  - Fix **all** failures on that layer, commit, force-with-lease push if the layer is shared, then
+    and only then advance.
+  - Same stop-the-line rule for feature / overlay-child PRs after `pnpm fork:stack update`: rebase
+    onto the fixed parent, run the full pre-push gate on the feature tip, then push/merge.
 - **Conflict resolutions (required when stack hits conflicts):** do **not** only hand-resolve and
   resume. Update `.github/pr-stack.json` `conflictResolutions` so the next sync auto-applies the
   same side. Prefer durable `commit: "*"` + path policies; exact SHAs go stale after every rewrite.
@@ -112,15 +120,18 @@ When implementation work for a user request is done (code, docs, config — not 
 2. **Open or update a PR against `fork/changes`** before handing off. Do not target `main` unless
    the change is intentionally an upstream-mirror / promote projection.
 3. **Keep the PR mergeable** before saying “updated the PR” or finishing:
-   - Complete the **mandatory pre-push verification** (see Task Completion Requirements) — never
-     push knowing only “the tests I thought of” passed while check/typecheck were skipped.
+   - **Mandatory pre-push gate** (see Task Completion Requirements): run **`vp check`** and the
+     **full monorepo typecheck** locally, fix every failure (including pre-existing breakage your
+     tip inherits from the base), then push. Do not use Fork CI as the first formatter, linter, or
+     typechecker. Scoped package typecheck alone is **not** enough.
    - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>`
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
    - `baseRefName` must be `fork/changes` for ordinary features or the intended parent branch for a
      dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be `UNSTABLE`
      while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
-   - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push.
+   - If the PR is **open** → re-run the mandatory pre-push gate, update that branch (prefer
+     `fork:stack update --push`), and push.
    - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
      `pnpm fork:stack start <new-branch>`, re-apply unmerged work, and open a **new PR** against
      `fork/changes`.
@@ -138,81 +149,115 @@ If Discord turn context lists **Linked work items** / Jira issues for the thread
 
 ## Task Completion Requirements
 
-### Mandatory pre-push verification (every push)
+### Mandatory pre-push / PR handoff gate (no exceptions)
 
-**Before every `git push` / force-with-lease / PR open / PR update / stack layer push, complete the
-full local gate below and fix failures.** Do not push red work “for CI to catch.” Fork CI is a
-second line of defense, not the first typecheck or formatter.
+**Before every `git push`, `fork:stack update --push`, PR open, or “handoff / done” claim**, the agent
+**must** run the local gates that mirror Fork CI’s **Check** job (format/lint/typecheck/desktop
+build pieces you can run on the host), fix all failures, then push. Fork CI is a safety net, not
+the first typechecker.
 
-Run from the repository root on the commit you are about to push (after install/lockfile are
-consistent with that tree):
+Run from the repository root, in order:
 
-1. **Root Check gate (always):** `vp check`  
-   Exact formatter/linter gate used by Fork CI **Check**. Focused format/lint while iterating is
-   fine; it is **not** a substitute for root `vp check` right before push.
-2. **Package typecheck (always for touched scope):** run the package typecheck for **every**
-   package whose types can break from the change (import-extension, `exactOptionalPropertyTypes`,
-   cross-package consumers). Prefer package filters / binaries, e.g.:
-   - `pnpm --filter @t3tools/client-runtime exec tsgo --noEmit`
-   - `apps/web` → `tsgo --noEmit` (or workspace filter)
-   - `apps/mobile` → `tsc --noEmit`
-   - `apps/server` / package name `t3` → that package’s typecheck
-   - If `pnpm exec` is blocked by prepare hooks, use `node_modules/.bin/tsgo` / `tsc` from the
-     package directory.
-3. **Focused tests (always when behavior/tests exist):** `vp test run <test-files>` for changed
-   behavior. Backend changes must include and run focused tests for the changed behavior. Use
-   `vp run test` only when that package’s `test` script is the right tool.
-4. **Lockfile (when manifests or deps changed):** regenerate until frozen install would succeed
-   (`CI= pnpm install --no-frozen-lockfile` as needed) and commit a matching `pnpm-lock.yaml`.
+1. **`vp check`** — exact formatter/linter gate used by Fork CI **Check**. A focused format/lint
+   while iterating is fine; it is **not** a substitute for this root command before push.
+2. **Full monorepo typecheck** (matches Fork CI):
 
-**Explicitly do not skip** check, typecheck, or focused tests to save time. **Do not** treat
-“unit tests passed” as enough if typecheck was not run.
+   ```bash
+   ELECTRON_SKIP_BINARY_DOWNLOAD=1 vp run -r --cache --log labeled typecheck
+   ```
 
-**Heavy / optional (do not run as routine pre-push unless the user asks or the change requires it):**
+   Equivalent: `vp run typecheck` / root `pnpm` typecheck script that runs recursive package
+   typechecks. **Scoped** typecheck of only the package you edited is allowed **while iterating**,
+   but **before push you must run the full recursive typecheck**. Failures in packages you did not
+   touch still block push: your tip inherits the base; fix or land a fix on the tip so CI is green.
 
-- Full-repo `vp run typecheck`, `vp run test`, or monorepo-wide test matrix
-- Integrated browser/mobile verification (see below — required only for user-visible client changes)
-- Long E2E, full mobile native suites, release packaging
+3. **Desktop Check pieces when the tip can break them** (Fork CI **Check** also runs these): after
+   desktop or preload-adjacent changes, run `vp run --cache build:desktop` and the preload verify
+   steps from `.github/workflows/fork-ci.yml`. When in doubt on a stack layer rewrite, run them.
+4. **Focused tests for behavior you changed** (not always the full workspace suite — see stack
+   rule below):
+   - `vp test run <test-files>` for built-in Vite+ tests, or the package’s `test` script when that
+     is what the package uses.
+   - Backend / contracts / runtime behavior changes **must** include and run focused tests for the
+     changed behavior.
+5. **Do not push** if steps 1–2 fail, or if required steps 3–4 fail. Fix first.
 
-### After push: stack layers must be fully CI-green before the next layer
+**Ordinary feature PRs (based on `fork/changes`):** full-workspace `vp run test` is optional unless
+the user asks or the change clearly needs the whole suite. **Do not** skip steps 1–2 to save time.
 
-When working the fork stack (rebase, rewrite, overlay update, compose, recovery):
+**Explicitly forbidden before handoff:**
+
+- Pushing after only unit tests, only scoped package typecheck, or only a partial lint.
+- Opening/updating a PR knowing typecheck or `vp check` was skipped or red.
+- Treating “CI will catch it” as a substitute for local gates.
+- Advancing a stack rewrite to the next layer while the current layer is red (see below).
+
+While iterating mid-task (not yet pushing), keep feedback loops small: format/lint the files you
+touch, typecheck the packages you edit, run the smallest relevant tests. **The bar rises to the
+full pre-push gate the moment you push or hand off.**
+
+### Per-layer stack CI (stop the line — no exceptions)
+
+When rebasing, replaying, conflict-resolving, or otherwise rewriting **any** fork stack layer
+(`fork/tim`, `fork/candidates`, `fork/changes`, an integration overlay, or composed
+`fork/integration`):
+
+1. Finish **only the current layer** (rebase/replay complete, lockfile consistent, conflicts
+   resolved and recorded in `conflictResolutions` when applicable).
+2. On that layer’s tip, run the **full local CI gate** — every step you can run on the host that
+   Fork CI runs for a green PR tip:
+   - `vp check`
+   - `ELECTRON_SKIP_BINARY_DOWNLOAD=1 vp run -r --cache --log labeled typecheck`
+   - `vp run --cache build:desktop` and preload verify (same as Fork CI **Check**)
+   - `ELECTRON_SKIP_BINARY_DOWNLOAD=1 vp run test` (Fork CI **Test** — **required on every stack
+     layer**, not optional)
+   - On macOS hosts when mobile/desktop shell is in play: `vp run lint:mobile` and the Open With
+     test from Fork CI **Mobile Native Static Analysis** when those paths are available
+   - `node scripts/release-smoke.ts` when release/workflow packaging paths may have changed
+3. **All of those steps must pass on the current layer.** Fix failures on **this** layer (commit +
+   force-with-lease push the layer branch if it is shared). Do not paper over with a fix only on a
+   child layer.
+4. **Only after the current layer is fully green**, rebase/replay/compose the **next** layer onto
+   it. Repeat from step 1.
+
+**Layer order (never skip ahead):**
 
 ```text
-main (mirror only)
+main (upstream mirror — do not hand-edit product fixes)
   → fork/tim
   → fork/candidates
   → fork/changes
-  → each overlay (desktop, discord, vscode)
-  → fork/integration (compose last)
+  → each integration overlay (in manifest order) onto fork/changes
+  → fork/integration (compose last; full CI on the composed tip)
 ```
 
-**Rules (required):**
+**Hard rules:**
 
-1. Finish **local pre-push verification** on the layer tip, then push that layer.
-2. **Wait for Fork CI on that layer’s tip to pass every applicable job** (Check, Test, and any
-   other jobs that run for that ref — not only a subset). Fix failures and re-push until green.
-3. **Only then** rebase/update the next layer onto the green parent (or compose integration).
-4. **Never** advance with “CI still running / red, fix later.” Cascading red layers is a process
-   failure.
-5. Feature PRs: same local gate before every push; do not open/update a PR knowing typecheck or
-   `vp check` was skipped.
+- **One red layer blocks the entire rest of the rewrite.** Stop. Fix. Re-run the full gate on that
+  layer. Then continue.
+- **Never** stack “green later” commits, push a known-red parent, or compose `fork/integration`
+  from layers that have not each passed the full gate.
+- **Never** treat “the next layer will fix typecheck/lint/tests” as acceptable progress.
+- Feature PRs and overlay children: after rebasing onto a parent, the **child tip** must also pass
+  the ordinary pre-push gate (and stack-layer full test gate if you are rewriting stack automation
+  itself) before push.
 
-Confirm CI with `gh run list` / `gh pr checks` / `gh run view` for the exact SHA you pushed.
+Full narrative and examples: [docs/fork-stack.md](./docs/fork-stack.md)
+(“Per-layer full CI after stack rebase”).
 
-### Client verification (user-visible UI only)
+### Client-visible verification
 
 After frontend feature development or any user-visible frontend behavior change, the primary agent
 must run one integrated verification pass for each affected client surface after integrating the
 work:
 
-- Web: use the `test-t3-app` skill. Launch one isolated environment, authenticate through the
-  printed pairing URL, and verify the affected flow in the controlled browser.
+- Web: use the `test-t3-app` skill. Launch one isolated environment, authenticate through the printed
+  pairing URL, and verify the affected flow in the controlled browser.
 - Mobile: use the `test-t3-mobile` skill. Connect one representative iOS Simulator or Android
   Emulator available on the host to one isolated environment and verify the affected flow. On
   compatible macOS hosts, prefer iOS for cross-platform changes and stream it through serve-sim in
-  the T3 Code in-app browser or another available agent browser; use Android when it is the
-  affected or viable platform.
+  the T3 Code in-app browser or another available agent browser; use Android when it is the affected
+  or viable platform.
 - Subagents must not independently launch dev servers or repeat integrated client verification
   unless their delegated task explicitly requires it.
 - Stop dev servers, watchers, and other long-running verification processes when the focused
