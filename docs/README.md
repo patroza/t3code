@@ -15,5 +15,6 @@
 - [Integrations](./integrations/source-control-providers.md)
 - [Mobile](./mobile/app.md)
 - [Operations](./operations/ci.md)
+  - [Macroscope setup](./operations/macroscope.md)
 - [Providers](./providers/codex.md)
 - [Reference](./reference/encyclopedia.md)
