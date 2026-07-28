@@ -15,6 +15,8 @@ import { runAlertWatchdog } from "./features/Alerts.ts";
 import { layer as bridgeHubLayer } from "./features/BridgeHub.ts";
 import { DiscordBotRunning, MentionRouterLive } from "./features/MentionRouter.ts";
 import { runBridge } from "./features/ResponseBridge.ts";
+import { runTeamsModule } from "./features/TeamsModule.ts";
+import { runTeamsNativeApp } from "./features/TeamsNativeApp.ts";
 import { backfillThreadInfoPins } from "./features/ThreadInfoPin.ts";
 import { rehydrateBridges } from "./features/ThreadRestore.ts";
 import { layerFromOptionalPath as identityMapStoreLayer, IdentityMapStore } from "./identityMap.ts";
@@ -22,6 +24,7 @@ import {
   layerFromOptionalPath as projectAliasStoreLayer,
   ProjectAliasStore,
 } from "./projectAliases.ts";
+import { layer as teamsSeenStoreLayer } from "./store/TeamsSeenStore.ts";
 import { layer as threadLinkStoreLayer } from "./store/ThreadLinkStore.ts";
 import { layer as threadWarmCacheStoreLayer } from "./store/ThreadWarmCacheStore.ts";
 import { T3Session, layer as t3SessionLayer } from "./t3/T3Session.ts";
@@ -53,11 +56,20 @@ const BotObservabilityLive = Layer.unwrap(
 const MainLayer = Layer.unwrap(
   Effect.gen(function* () {
     const botConfig = yield* DiscordBotConfig;
-    const discord = makeDiscordLayer(botConfig.discordToken);
+    const discordToken = botConfig.discordToken;
+    if (discordToken === undefined) {
+      return yield* Effect.die(
+        new Error(
+          "DISCORD_BOT_TOKEN is required by the Discord entrypoint. Use start:teams for Teams-only deployments.",
+        ),
+      );
+    }
+    const discord = makeDiscordLayer(discordToken);
     const bridgeHub = bridgeHubLayer(runBridge);
     const core = Layer.mergeAll(
       t3SessionLayer(botConfig),
       threadLinkStoreLayer(botConfig.dataDir),
+      teamsSeenStoreLayer(botConfig.dataDir),
       threadWarmCacheStoreLayer(botConfig.dataDir),
       projectAliasStoreLayer(botConfig.projectAliasesPath),
       identityMapStoreLayer(botConfig.identityMapPath),
@@ -154,6 +166,22 @@ const program = Effect.gen(function* () {
       channelId: botConfig.alertsChannelId,
     });
   }
+
+  // Optional Teams Graph intake → Discord/T3 (off unless TEAMS_ENABLED=1).
+  yield* Effect.forkDetach(
+    runTeamsModule(botConfig).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Teams module stopped").pipe(Effect.andThen(Effect.logError(cause))),
+      ),
+    ),
+  );
+
+  // Optional native Teams SDK endpoint. This can run beside Discord during migration.
+  yield* runTeamsNativeApp(botConfig).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logError("Native Teams app stopped").pipe(Effect.andThen(Effect.logError(cause))),
+    ),
+  );
 
   // Keep process alive; router fibers are scoped to this layer lifetime.
   return yield* Effect.never;
