@@ -1,5 +1,8 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { groupSortedThreadsByRecency } from "@t3tools/client-runtime/state/thread-recency-groups";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import type { HomeThreadGroup } from "./homeThreadList";
@@ -230,7 +233,9 @@ export function buildHomeListLayout(input: {
  * Each thread row can carry a project title for multi-project context.
  * Callers apply hide-settled / project filters before building entries.
  *
- * When `groupByRecency` is true, inserts Today / Yesterday / … section headers.
+ * When `groupByRecency` is true and more than one non-empty bucket has threads,
+ * inserts Last Hour / Earlier Today / Yesterday / … section headers. A single
+ * bucket renders flat (headers would only repeat the obvious).
  */
 export function buildHomeRecentListLayout(input: {
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
@@ -243,6 +248,20 @@ export function buildHomeRecentListLayout(input: {
 }): HomeListLayout {
   const items: HomeListItem[] = [];
   const stickyHeaderIndices: number[] = [];
+
+  const appendFlatThreads = () => {
+    const total = input.pendingTasks.length + input.entries.length;
+    for (const [index, entry] of input.entries.entries()) {
+      const absoluteIndex = input.pendingTasks.length + index;
+      items.push({
+        type: "thread",
+        key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
+        thread: entry.thread,
+        projectTitle: entry.projectTitle,
+        isLast: absoluteIndex === total - 1,
+      });
+    }
+  };
 
   for (const [index, pendingTask] of input.pendingTasks.entries()) {
     items.push({
@@ -257,17 +276,7 @@ export function buildHomeRecentListLayout(input: {
   }
 
   if (input.groupByRecency !== true) {
-    const total = input.pendingTasks.length + input.entries.length;
-    for (const [index, entry] of input.entries.entries()) {
-      const absoluteIndex = input.pendingTasks.length + index;
-      items.push({
-        type: "thread",
-        key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
-        thread: entry.thread,
-        projectTitle: entry.projectTitle,
-        isLast: absoluteIndex === total - 1,
-      });
-    }
+    appendFlatThreads();
     return { items, stickyHeaderIndices: [] };
   }
 
@@ -281,6 +290,23 @@ export function buildHomeRecentListLayout(input: {
     input.entries.map((entry) => entry.thread),
     input.now,
   );
+
+  // One non-empty bucket (or none): no section headers.
+  if (!shouldShowRecencySectionHeaders(recencyGroups)) {
+    // Pending isLast was computed assuming multi-bucket; fix for flat path.
+    if (input.pendingTasks.length > 0) {
+      const lastPendingIndex = input.pendingTasks.length - 1;
+      const lastPending = items[lastPendingIndex];
+      if (lastPending?.type === "pending-task") {
+        items[lastPendingIndex] = {
+          ...lastPending,
+          isLast: input.entries.length === 0,
+        };
+      }
+    }
+    appendFlatThreads();
+    return { items, stickyHeaderIndices: [] };
+  }
 
   for (const [groupIndex, group] of recencyGroups.entries()) {
     stickyHeaderIndices.push(items.length);
