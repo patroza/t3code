@@ -45,6 +45,10 @@
             {
               "title": "deny",
               "description": "Deny a pending T3 request by request id."
+            },
+            {
+              "title": "answer",
+              "description": "Answer a T3 user-input request with a JSON object."
             }
           ]
         }

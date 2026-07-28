@@ -22,6 +22,7 @@ tag triggers. Its per-channel `deliveryMode` can be `discord`, `t3-only`, or `na
 | Final answer posted to Teams         | Yes                                          | No; follow in T3 Code   | Optional workflow webhook acknowledgement |
 | Stop a turn                          | `stop`                                       | In T3 Code              | In T3 Code                                |
 | Approve/deny                         | `approve <request-id>` / `deny <request-id>` | In T3 Code              | In T3 Code                                |
+| Answer requested input               | `answer <request-id> {"id":"answer"}`        | In T3 Code              | In T3 Code                                |
 | Automatic/reaction/tag triggers      | Optional Graph poller                        | Explicit message action | Yes                                       |
 
 Microsoft requires a Teams app to be installed in a team or group chat before its bot can send
@@ -150,6 +151,7 @@ The manifest enables personal, team, and group-chat bot scopes plus the
    stop
    approve <request-id>
    deny <request-id>
+   answer <request-id> {"question-id":"answer"}
    ```
 
 The native entrypoint is:

@@ -1,9 +1,11 @@
 // @effect-diagnostics anyUnknownInErrorContext:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off globalPromise:off missingEffectContext:off tryCatchInEffectGen:off preferSchemaOverJson:off
 import { App } from "@microsoft/teams.apps";
-import type { ThreadId } from "@t3tools/contracts";
+import { ProviderUserInputAnswers, type ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { derivePendingInteractions } from "../presentation/pendingInteractions.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
@@ -75,6 +77,7 @@ const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (input: {
   readonly send: (text: string) => Promise<unknown>;
 }) {
   const t3 = yield* T3Session;
+  const announcedRequests = new Set<string>();
   while (true) {
     yield* Effect.sleep("1 second");
     const snapshot = yield* t3.fetchThreadDetail(input.t3ThreadId).pipe(
@@ -86,6 +89,47 @@ const waitForFinalAnswer = Effect.fn("waitForFinalAnswer")(function* (input: {
       ),
     );
     if (snapshot === null) continue;
+    for (const interaction of derivePendingInteractions(snapshot.thread.activities)) {
+      if (announcedRequests.has(interaction.requestId)) continue;
+      announcedRequests.add(interaction.requestId);
+      if (interaction.kind === "approval") {
+        yield* Effect.tryPromise({
+          try: () =>
+            input.send(
+              [
+                `T3 needs **${interaction.requestKind}** approval.`,
+                interaction.detail,
+                `Reply \`approve ${interaction.requestId}\` or \`deny ${interaction.requestId}\`.`,
+              ]
+                .filter((line): line is string => line !== null)
+                .join("\n\n"),
+            ),
+          catch: (cause) => new Error(String(cause)),
+        });
+      } else {
+        const questions = interaction.questions
+          .map(
+            (question) =>
+              `- \`${question.id}\`: ${question.question}${
+                question.options.length === 0
+                  ? ""
+                  : ` (${question.options.map((option) => option.label).join(", ")})`
+              }`,
+          )
+          .join("\n");
+        yield* Effect.tryPromise({
+          try: () =>
+            input.send(
+              [
+                "T3 needs more information:",
+                questions,
+                `Reply \`answer ${interaction.requestId} {"question-id":"answer"}\`.`,
+              ].join("\n\n"),
+            ),
+          catch: (cause) => new Error(String(cause)),
+        });
+      }
+    }
     const answer = finalAnswerText(snapshot.thread);
     const latestTurnId = snapshot.thread.latestTurn?.turnId ?? null;
     if (
@@ -222,6 +266,23 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
             approval[1]!.toLowerCase() === "approve" ? "accept" : "decline",
           );
           yield* Effect.promise(() => reply(`Approval ${approval[1]!.toLowerCase()}ed.`));
+          return;
+        }
+
+        const userInput = /^(?:\/?)answer\s+(\S+)\s+(.+)$/isu.exec(prompt);
+        if (userInput !== null) {
+          if (existing === null) {
+            yield* Effect.promise(() =>
+              reply("There is no linked T3 thread for that input request."),
+            );
+            return;
+          }
+          const parsed = yield* Effect.try({
+            try: () => JSON.parse(userInput[2]!) as unknown,
+            catch: () => new Error("Answers must be a JSON object."),
+          }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ProviderUserInputAnswers)));
+          yield* t3.respondToUserInput(existing.t3ThreadId, userInput[1]!, parsed);
+          yield* Effect.promise(() => reply("Submitted the requested input to T3."));
           return;
         }
 
