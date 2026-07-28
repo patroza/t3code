@@ -79,6 +79,18 @@
       "commit": "4d97aafb8e216dd27b6835b13ad20fca2884691e",
       "path": "apps/mobile/src/features/home/HomeScreen.tsx",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "*",
+      "path": "pnpm-lock.yaml",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "286efa51172d3cbf46684c9923ca9d2b003d0967",
+      "path": "pnpm-lock.yaml",
+      "strategy": "theirs"
     }
   ]
 }
