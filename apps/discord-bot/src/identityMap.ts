@@ -462,8 +462,9 @@ export function formatIdentityAttributionBlock(input: {
   );
 
   const lines: string[] = [
-    "### Identity map (git / GitHub / Jira attribution)",
-    "Operator-maintained map from Discord users to GitHub (and optional Jira). Use this for commit/PR attribution — do not invent emails or logins.",
+    "### Identity map (git / GitHub / Jira attribution) — REQUIRED",
+    "Operator-maintained map from Discord users to GitHub (and optional Jira).",
+    "**Do not invent emails or logins.** Attribution is mandatory for Discord-originated commits/PRs when trailers are listed below.",
   ];
 
   for (const p of participants) {
@@ -502,21 +503,24 @@ export function formatIdentityAttributionBlock(input: {
   }
 
   lines.push("");
-  lines.push("When creating commits for this Discord work:");
+  lines.push("**REQUIRED when creating commits for this Discord work:**");
   lines.push("1. Keep the environment default author/committer (usually the GitHub App bot).");
   lines.push(
-    "2. Append these `Co-authored-by` trailers for **mapped** participants (thread starter and/or current requester). Skip unmapped people — do not invent emails.",
+    "2. **Every** new commit message MUST end with the `Co-authored-by` trailers below for **mapped** participants (thread starter and/or current requester). Skip unmapped people — do not invent emails.",
   );
   lines.push(
-    "3. Put trailers at the end of the commit message after a blank line. Prefer the exact lines below.",
+    "3. Put trailers at the end of the commit message after a blank line. Use the exact lines below.",
   );
   lines.push(
-    "4. When opening a PR, you may also list co-authors in the body; GitHub primarily uses commit trailers for multi-author avatars.",
+    "4. Verify with `git log -1 --format=%B` before push/PR. Commits missing these trailers are incomplete.",
+  );
+  lines.push(
+    "5. When opening a PR: include the Discord description footer from AGENTS.md (opened by … in chat thread **Discord**). The bot may hard-append the footer later — still write it on create. GitHub multi-author avatars come from **commit** trailers, not PR body prose alone.",
   );
 
   if (trailers.length > 0) {
     lines.push("");
-    lines.push("Ready-to-paste trailers for this turn:");
+    lines.push("**Mandatory** ready-to-paste trailers for this turn (append to every new commit):");
     lines.push("```");
     for (const t of trailers) lines.push(t);
     lines.push("```");
@@ -563,9 +567,14 @@ export class IdentityMapStore extends Context.Service<IdentityMapStore, Identity
   "@t3tools/discord-bot/identityMap/IdentityMapStore",
 ) {}
 
-export const makeIdentityMapStore = (
-  people: ReadonlyArray<PersonIdentity>,
-): IdentityMapStoreService => {
+/** How long a loaded identity map stays hot before re-reading the file (no bot restart). */
+export const IDENTITY_MAP_CACHE_TTL_MS = 60_000;
+
+function indexesFromPeople(people: ReadonlyArray<PersonIdentity>): {
+  readonly people: ReadonlyArray<PersonIdentity>;
+  readonly byId: ReadonlyMap<string, PersonIdentity>;
+  readonly byUsername: ReadonlyMap<string, PersonIdentity>;
+} {
   const byId = new Map<string, PersonIdentity>();
   const byUsername = new Map<string, PersonIdentity>();
   for (const person of people) {
@@ -576,21 +585,94 @@ export const makeIdentityMapStore = (
       byUsername.set(person.discord.username.toLowerCase(), person);
     }
   }
+  return { people, byId, byUsername };
+}
+
+export const makeIdentityMapStore = (
+  people: ReadonlyArray<PersonIdentity>,
+): IdentityMapStoreService => {
+  const index = indexesFromPeople(people);
 
   return IdentityMapStore.of({
-    list: () => people,
-    resolveByDiscordId: (discordId) => byId.get(discordId.trim()) ?? null,
-    resolveByDiscordUsername: (username) => byUsername.get(username.trim().toLowerCase()) ?? null,
+    list: () => index.people,
+    resolveByDiscordId: (discordId) => index.byId.get(discordId.trim()) ?? null,
+    resolveByDiscordUsername: (username) =>
+      index.byUsername.get(username.trim().toLowerCase()) ?? null,
     resolveParticipant: (input) =>
       resolveParticipantIdentity({
         role: input.role,
         discordId: input.discordId,
         discordUsername: input.discordUsername,
         discordDisplayName: input.discordDisplayName,
-        people,
+        people: index.people,
       }),
   });
 };
+
+/**
+ * File-backed identity map with a short TTL cache so operators can edit
+ * identity-map.yaml without restarting the Discord bot.
+ *
+ * - Eager-loads once at construction (throws on first failure).
+ * - Re-reads the file at most every `ttlMs` (default 60s) on access.
+ * - On later load failures, keeps the last good snapshot and waits another TTL.
+ */
+export function makeRefreshingIdentityMapStore(input: {
+  readonly filePath: string;
+  readonly ttlMs?: number;
+  readonly now?: () => number;
+  readonly load?: (path: string) => ReadonlyArray<PersonIdentity>;
+  /** Optional hook when a reload succeeds (for tests / diagnostics). */
+  readonly onReload?: (people: ReadonlyArray<PersonIdentity>) => void;
+}): IdentityMapStoreService {
+  const ttlMs = input.ttlMs ?? IDENTITY_MAP_CACHE_TTL_MS;
+  const now = input.now ?? (() => Date.now());
+  const load = input.load ?? loadIdentityMapFromFileSync;
+  const path = input.filePath.trim();
+
+  let index = indexesFromPeople(load(path));
+  let loadedAt = now();
+  input.onReload?.(index.people);
+
+  const refreshIfStale = () => {
+    const t = now();
+    if (t - loadedAt < ttlMs) return;
+    try {
+      const nextPeople = load(path);
+      index = indexesFromPeople(nextPeople);
+      loadedAt = t;
+      input.onReload?.(index.people);
+    } catch {
+      // Keep serving the last good map; delay the next retry by a full TTL.
+      loadedAt = t;
+    }
+  };
+
+  return IdentityMapStore.of({
+    list: () => {
+      refreshIfStale();
+      return index.people;
+    },
+    resolveByDiscordId: (discordId) => {
+      refreshIfStale();
+      return index.byId.get(discordId.trim()) ?? null;
+    },
+    resolveByDiscordUsername: (username) => {
+      refreshIfStale();
+      return index.byUsername.get(username.trim().toLowerCase()) ?? null;
+    },
+    resolveParticipant: (participant) => {
+      refreshIfStale();
+      return resolveParticipantIdentity({
+        role: participant.role,
+        discordId: participant.discordId,
+        discordUsername: participant.discordUsername,
+        discordDisplayName: participant.discordDisplayName,
+        people: index.people,
+      });
+    },
+  });
+}
 
 export const layerFromOptionalPath = (filePath: string | undefined) =>
   Layer.effect(
@@ -602,19 +684,21 @@ export const layerFromOptionalPath = (filePath: string | undefined) =>
         );
         return makeIdentityMapStore([]);
       }
-      const people = yield* Effect.try({
-        try: () => loadIdentityMapFromFileSync(filePath),
+      const resolvedPath = filePath.trim();
+      const store = yield* Effect.try({
+        try: () => makeRefreshingIdentityMapStore({ filePath: resolvedPath }),
         catch: (cause) => {
           if (isIdentityMapLoadError(cause)) return cause;
           return new IdentityMapLoadError({
-            path: filePath,
+            path: resolvedPath,
             message: cause instanceof Error ? cause.message : String(cause),
           });
         },
       });
+      const count = store.list().length;
       yield* Effect.logInfo(
-        `Loaded ${people.length} identity map entr${people.length === 1 ? "y" : "ies"} from ${filePath}`,
+        `Loaded ${count} identity map entr${count === 1 ? "y" : "ies"} from ${resolvedPath} (reload TTL ${IDENTITY_MAP_CACHE_TTL_MS / 1000}s)`,
       );
-      return makeIdentityMapStore(people);
+      return store;
     }),
   );
