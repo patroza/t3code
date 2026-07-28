@@ -17,6 +17,7 @@ import { DiscordBotRunning, MentionRouterLive } from "./features/MentionRouter.t
 import { runBridge } from "./features/ResponseBridge.ts";
 import { backfillThreadInfoPins } from "./features/ThreadInfoPin.ts";
 import { rehydrateBridges } from "./features/ThreadRestore.ts";
+import { layerFromOptionalPath as identityMapStoreLayer, IdentityMapStore } from "./identityMap.ts";
 import {
   layerFromOptionalPath as projectAliasStoreLayer,
   ProjectAliasStore,
@@ -59,6 +60,7 @@ const MainLayer = Layer.unwrap(
       threadLinkStoreLayer(botConfig.dataDir),
       threadWarmCacheStoreLayer(botConfig.dataDir),
       projectAliasStoreLayer(botConfig.projectAliasesPath),
+      identityMapStoreLayer(botConfig.identityMapPath),
       bridgeHub,
     ).pipe(Layer.provideMerge(discord));
 
@@ -80,6 +82,7 @@ const program = Effect.gen(function* () {
     t3HttpBaseUrl: botConfig.t3HttpBaseUrl,
     dataDir: botConfig.dataDir,
     projectAliasesPath: botConfig.projectAliasesPath ?? "(unset)",
+    identityMapPath: botConfig.identityMapPath ?? "(unset)",
   });
 
   // Force acquisition of MentionRouter + Discord gateway (must not be pruned).
@@ -89,7 +92,10 @@ const program = Effect.gen(function* () {
   const t3 = yield* T3Session;
   yield* t3.connect();
   const aliasStore = yield* ProjectAliasStore;
-  yield* Effect.logInfo(`Connected to T3; bot project aliases=${aliasStore.list().length}`);
+  const identityStore = yield* IdentityMapStore;
+  yield* Effect.logInfo(
+    `Connected to T3; bot project aliases=${aliasStore.list().length}; identity map entries=${identityStore.list().length}`,
+  );
 
   // Capture ambient services so T3 auto-reconnect can rehydrate Discord bridges.
   // provideContext erases R at runtime; cast so Effect.runPromise accepts the program.
