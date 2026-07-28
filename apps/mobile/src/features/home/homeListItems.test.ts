@@ -254,15 +254,16 @@ describe("buildHomeListLayout", () => {
     expect(layout.stickyHeaderIndices).toEqual([]);
   });
 
-  it("builds recency sections with Today / Older headers", () => {
-    const now = new Date(2026, 2, 15, 12, 0, 0);
-    const startToday = new Date(2026, 2, 15).getTime();
-    const todayIso = new Date(startToday + 3_600_000).toISOString();
-    const olderIso = new Date(startToday - 40 * 24 * 60 * 60 * 1000).toISOString();
-    const todayThread = {
-      ...makeThread("t-today", ProjectId.make("alpha")),
-      updatedAt: todayIso,
-      latestUserMessageAt: todayIso,
+  it("builds recency sections with Last Hour / Older headers when multiple buckets", () => {
+    const now = new Date(2026, 2, 15, 14, 30, 0);
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const olderIso = new Date(
+      new Date(2026, 2, 15).getTime() - 40 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const lastHourThread = {
+      ...makeThread("t-hour", ProjectId.make("alpha")),
+      updatedAt: lastHourIso,
+      latestUserMessageAt: lastHourIso,
     };
     const olderThread = {
       ...makeThread("t-older", ProjectId.make("beta")),
@@ -272,7 +273,7 @@ describe("buildHomeListLayout", () => {
     const layout = buildHomeRecentListLayout({
       pendingTasks: [],
       entries: [
-        { thread: todayThread, projectTitle: "Alpha" },
+        { thread: lastHourThread, projectTitle: "Alpha" },
         { thread: olderThread, projectTitle: "Beta" },
       ],
       groupByRecency: true,
@@ -284,8 +285,38 @@ describe("buildHomeListLayout", () => {
       "section-header",
       "thread",
     ]);
-    expect(layout.items[0]).toMatchObject({ type: "section-header", title: "Today" });
+    expect(layout.items[0]).toMatchObject({ type: "section-header", title: "Last Hour" });
     expect(layout.items[2]).toMatchObject({ type: "section-header", title: "Older" });
     expect(layout.stickyHeaderIndices).toEqual([0, 2]);
+  });
+
+  it("omits recency section headers when all threads share one bucket", () => {
+    const now = new Date(2026, 2, 15, 14, 30, 0);
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const layout = buildHomeRecentListLayout({
+      pendingTasks: [],
+      entries: [
+        {
+          thread: {
+            ...makeThread("t1", ProjectId.make("alpha")),
+            updatedAt: lastHourIso,
+            latestUserMessageAt: lastHourIso,
+          },
+          projectTitle: "Alpha",
+        },
+        {
+          thread: {
+            ...makeThread("t2", ProjectId.make("beta")),
+            updatedAt: lastHourIso,
+            latestUserMessageAt: lastHourIso,
+          },
+          projectTitle: "Beta",
+        },
+      ],
+      groupByRecency: true,
+      now,
+    });
+    expect(itemTypes(layout.items)).toEqual(["thread", "thread"]);
+    expect(layout.stickyHeaderIndices).toEqual([]);
   });
 });
