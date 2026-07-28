@@ -147,6 +147,7 @@ When the Discord turn includes an **Identity map** block with ready-to-paste `Co
 4. A Discord-originated commit **without** the mapped trailers is incomplete — fix it (amend if not pushed, or a follow-up commit is not enough for GitHub multi-author on already-pushed SHAs; amend/rebase when safe).
 
 GitHub multi-author avatars (`bot & human`) come from commit trailers, not from PR body prose alone.
+**Do not** put `@github-login` mentions or a “Co-authors” bullet list in the PR description — that spams notification inboxes. Trailers are enough.
 
 ## Discord-originated pull requests (REQUIRED)
 
@@ -166,7 +167,7 @@ Prefer the thread starter’s Discord id/display name from turn context. Do not 
 
 2. If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
 
-3. Prefer opening the PR only after commits already include the Identity map `Co-authored-by` trailers (see above).
+3. Prefer opening the PR only after commits already include the Identity map `Co-authored-by` trailers (see above). Do not restate co-authors as `@mentions` in the PR body.
 
 ## Task Completion Requirements
 
