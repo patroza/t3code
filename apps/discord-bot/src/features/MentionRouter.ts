@@ -76,7 +76,7 @@ import { IdentityMapStore } from "../identityMap.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { newMessageId } from "../t3/ids.ts";
-import { T3Session, T3SessionError } from "../t3/T3Session.ts";
+import { T3_STILL_CONNECTING_MESSAGE, T3Session, T3SessionError } from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
@@ -596,6 +596,10 @@ const make = (botConfig: DiscordBotConfig) =>
         }
         const project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
         if (project === null) {
+          const ready = yield* t3.isReady();
+          if (!ready) {
+            return yield* Effect.fail(T3_STILL_CONNECTING_MESSAGE);
+          }
           return yield* Effect.fail(
             `No T3 project registered at ${alias.workspaceRoot} (alias '${shortName}'). Add the project in T3 first.` as const,
           );
@@ -646,6 +650,14 @@ const make = (botConfig: DiscordBotConfig) =>
         }
         const project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
         if (project === null) {
+          const ready = yield* t3.isReady();
+          if (!ready) {
+            return {
+              kind: "t3-connecting" as const,
+              shortName,
+              workspaceRoot: alias.workspaceRoot,
+            };
+          }
           return {
             kind: "no-project" as const,
             shortName,
@@ -1257,12 +1269,16 @@ const make = (botConfig: DiscordBotConfig) =>
       });
     });
 
-    const reportError = (channelId: string, error: unknown) =>
-      rest
-        .createMessage(channelId, {
-          content: `Could not start T3 turn: ${error instanceof Error ? error.message : String(error)}`,
-        })
+    const reportError = (channelId: string, error: unknown) => {
+      const raw = error instanceof Error ? error.message : String(error);
+      const content =
+        raw === T3_STILL_CONNECTING_MESSAGE || /not connected|still connecting/i.test(raw)
+          ? T3_STILL_CONNECTING_MESSAGE
+          : `Could not start T3 turn: ${raw}`;
+      return rest
+        .createMessage(channelId, { content })
         .pipe(Effect.catchCause(Effect.logError), Effect.asVoid);
+    };
 
     /**
      * dfx InteractionsRegistry runs Ix handlers with a Discord-only context — app
@@ -2980,6 +2996,9 @@ const make = (botConfig: DiscordBotConfig) =>
                   `Channel topic resolves to alias \`${binding.shortName}\`, but that alias is not in the bot aliases file (\`T3_PROJECT_ALIASES_PATH\`).`,
                   { ephemeral: true },
                 );
+              }
+              if (binding.kind === "t3-connecting") {
+                return slashReply(T3_STILL_CONNECTING_MESSAGE, { ephemeral: true });
               }
               if (binding.kind === "no-project") {
                 return slashReply(
