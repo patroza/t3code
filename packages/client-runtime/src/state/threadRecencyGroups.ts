@@ -33,8 +33,30 @@ export const THREAD_RECENCY_BUCKET_LABELS: Record<ThreadRecencyBucketId, string>
 const MS_PER_HOUR = 60 * 60 * 1000;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
 
+function makeLocalDate(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hours = 0,
+  minutes = 0,
+  seconds = 0,
+): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date(year, monthIndex, day, hours, minutes, seconds);
+}
+
+function makeDateFromEpochMs(ms: number): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date(ms);
+}
+
+function makeNow(): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date();
+}
+
 export function startOfLocalDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return makeLocalDate(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 /**
@@ -44,7 +66,7 @@ export function startOfLocalDay(date: Date): Date {
  */
 export function getThreadRecencyBucketId(
   timestampMs: number,
-  now: Date = new Date(),
+  now: Date = makeNow(),
 ): ThreadRecencyBucketId {
   if (!Number.isFinite(timestampMs)) {
     return "older";
@@ -103,7 +125,7 @@ export function shouldShowRecencySectionHeaders(
 export function groupThreadsByRecency<T>(
   threads: readonly T[],
   getTimestampMs: (thread: T) => number,
-  now: Date = new Date(),
+  now: Date = makeNow(),
 ): ReadonlyArray<ThreadRecencyGroup<T>> {
   const buckets = new Map<ThreadRecencyBucketId, T[]>();
   for (const id of THREAD_RECENCY_BUCKET_ORDER) {
@@ -134,7 +156,7 @@ export function groupThreadsByRecency<T>(
  */
 export function groupSortedThreadsByRecency<T extends { readonly id: string } & ThreadSortInput>(
   threads: readonly T[],
-  now: Date = new Date(),
+  now: Date = makeNow(),
 ): ReadonlyArray<ThreadRecencyGroup<T>> {
   return groupThreadsByRecency(
     threads,
