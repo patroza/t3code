@@ -1,5 +1,5 @@
 /* oxlint-disable unicorn/require-post-message-target-origin -- VS Code Webview.postMessage is not Window.postMessage. */
-// @effect-diagnostics globalTimers:off
+// @effect-diagnostics globalTimers:off globalDate:off cryptoRandomUUID:off
 import type {
   ModelSelection,
   OrchestrationThread,
@@ -19,6 +19,8 @@ import {
 import { resolveChangeRequestIndicator } from "@t3tools/shared/sourceControl";
 import { composePrompt, type TextContext } from "./editorContext.ts";
 import { derivePendingInteractions } from "./pendingInteractions.ts";
+import { fitPromptStashImages } from "./promptStashModel.ts";
+import { PromptStashStore, type PromptStashEntry } from "./promptStashStore.ts";
 import type { T3Client } from "./t3Client.ts";
 import { resolveThreadDisplayStatus } from "./threadStatus.ts";
 import { presentTasks } from "./taskPresentation.ts";
@@ -97,7 +99,22 @@ type WebviewRequest =
       readonly images: ReadonlyArray<UploadChatAttachment>;
       readonly interactionMode?: "default" | "plan";
     }
-  | { readonly type: "setInteractionMode"; readonly interactionMode: "default" | "plan" };
+  | { readonly type: "setInteractionMode"; readonly interactionMode: "default" | "plan" }
+  | {
+      readonly type: "stashPrompt";
+      readonly prompt: string;
+      readonly images: ReadonlyArray<UploadChatAttachment>;
+      readonly providerInstanceId: string | null;
+      readonly modelSelection: ModelSelection | null;
+      readonly interactionMode: "default" | "plan";
+    }
+  | { readonly type: "listPromptStash"; readonly providerInstanceId: string | null }
+  | { readonly type: "restorePromptStash"; readonly id: string }
+  | {
+      readonly type: "removePromptStash";
+      readonly id: string;
+      readonly providerInstanceId: string | null;
+    };
 
 function hasImageArray(value: object): boolean {
   return (
@@ -226,6 +243,32 @@ function isRequest(value: unknown): value is WebviewRequest {
       (value.interactionMode === "default" || value.interactionMode === "plan")
     );
   }
+  if (type === "listPromptStash") {
+    return (
+      "providerInstanceId" in value &&
+      (value.providerInstanceId === null || typeof value.providerInstanceId === "string")
+    );
+  }
+  if (type === "restorePromptStash") return "id" in value && typeof value.id === "string";
+  if (type === "removePromptStash") {
+    return (
+      "id" in value &&
+      typeof value.id === "string" &&
+      "providerInstanceId" in value &&
+      (value.providerInstanceId === null || typeof value.providerInstanceId === "string")
+    );
+  }
+  if (type === "stashPrompt") {
+    return (
+      "prompt" in value &&
+      typeof value.prompt === "string" &&
+      hasImageArray(value) &&
+      "providerInstanceId" in value &&
+      (value.providerInstanceId === null || typeof value.providerInstanceId === "string") &&
+      "interactionMode" in value &&
+      (value.interactionMode === "default" || value.interactionMode === "plan")
+    );
+  }
   if (type === "send") {
     if (!("text" in value) || typeof value.text !== "string" || !hasImageArray(value)) {
       return false;
@@ -258,11 +301,18 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
   readonly #disposables: vscode.Disposable[];
   readonly #attachmentUrls = new Map<string, string>();
   readonly #attachmentLoads = new Set<string>();
+  readonly #promptStash: PromptStashStore;
 
-  constructor(client: T3Client, actions: ChatViewActions, extensionUri: vscode.Uri) {
+  constructor(
+    client: T3Client,
+    actions: ChatViewActions,
+    extensionUri: vscode.Uri,
+    storageUri: vscode.Uri | undefined,
+  ) {
     this.client = client;
     this.actions = actions;
     this.extensionUri = extensionUri;
+    this.#promptStash = new PromptStashStore(storageUri);
     this.#disposables = [
       client.onShellChanged(() => this.#publish()),
       client.onThreadChanged(() => this.#publish()),
@@ -351,6 +401,35 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
           await this.openInT3();
           return;
         }
+        case "listPromptStash":
+          await this.#publishPromptStash(message.providerInstanceId);
+          return;
+        case "stashPrompt": {
+          const entry: PromptStashEntry = {
+            id: globalThis.crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            prompt: message.prompt,
+            ...fitPromptStashImages(message.images),
+            providerInstanceId: message.providerInstanceId,
+            modelSelection: message.modelSelection,
+            interactionMode: message.interactionMode,
+          };
+          const entries = await this.#promptStash.add(entry);
+          await this.#view?.webview.postMessage({ type: "promptStash", entries, stashed: true });
+          return;
+        }
+        case "restorePromptStash": {
+          const entry = await this.#promptStash.take(message.id);
+          if (entry !== null) {
+            await this.#view?.webview.postMessage({ type: "restorePromptStash", entry });
+            await this.#publishPromptStash(entry.providerInstanceId);
+          }
+          return;
+        }
+        case "removePromptStash":
+          await this.#promptStash.remove(message.id);
+          await this.#publishPromptStash(message.providerInstanceId);
+          return;
         case "archiveThread": {
           const thread = this.client.activeThread;
           if (thread === null) return;
@@ -551,6 +630,11 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       this.#error = cause instanceof Error ? cause.message : String(cause);
       this.#publish();
     }
+  }
+
+  async #publishPromptStash(providerInstanceId: string | null): Promise<void> {
+    const entries = await this.#promptStash.list(providerInstanceId);
+    await this.#view?.webview.postMessage({ type: "promptStash", entries });
   }
 
   async #refresh(): Promise<void> {
@@ -1036,6 +1120,18 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     #usage-toggle.warning { --usage-primary-color: var(--vscode-charts-orange); }
     #usage-toggle.critical { --usage-primary-color: var(--vscode-charts-red); }
     .composer-actions select { border: 0; padding: 3px 18px 3px 0; color: var(--vscode-descriptionForeground); background-color: transparent; font-size: 11px; text-overflow: ellipsis; }
+    .stash-control { position: relative; }
+    .stash-control > summary { list-style: none; cursor: pointer; padding: 3px 6px; color: var(--vscode-descriptionForeground); }
+    .stash-control > summary::-webkit-details-marker { display: none; }
+    .stash-control[open] > summary, .stash-control > summary:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); border-radius: 4px; }
+    .stash-popup { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 20; width: min(330px, 82vw); max-height: 260px; overflow-y: auto; padding: 6px; border: 1px solid var(--vscode-editorWidget-border); border-radius: 7px; background: var(--vscode-editorWidget-background); box-shadow: 0 4px 14px var(--vscode-widget-shadow); }
+    .stash-empty { padding: 8px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .stash-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 5px; border-radius: 4px; }
+    .stash-entry:hover { background: var(--vscode-list-hoverBackground); }
+    .stash-restore { min-width: 0; border: 0; padding: 2px; background: transparent; color: var(--vscode-foreground); text-align: left; }
+    .stash-preview { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stash-meta { display: block; color: var(--vscode-descriptionForeground); font-size: 10px; }
+    .stash-remove { border: 0; background: transparent; color: var(--vscode-descriptionForeground); }
     #provider { max-width: 9rem; font-weight: 600; }
     #model { max-width: 14rem; }
     #provider:disabled, #model:disabled { opacity: .72; }
@@ -1074,7 +1170,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
       <div id="pending-interactions"></div>
       <div class="context"><button id="context" title="Toggle active editor context"><span id="context-label"></span></button><div class="context-trailing"><button id="change-request" type="button" hidden><svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"/></svg><span id="change-request-label"></span></button><div id="host-resources-control" class="host-resources-control"><button id="host-resources-toggle" type="button" hidden></button><div id="host-resources-details" class="host-resources-details"></div></div><button id="context-window" hidden><span id="context-window-label"></span></button></div></div>
       <div class="prompt-wrap"><div id="slash-commands" hidden></div><textarea id="prompt" placeholder="Ask T3 Code…" aria-label="Message T3 Code"></textarea></div>
-      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><select id="interaction-mode" aria-label="Interaction mode"><option value="default">Build</option><option value="plan">Plan</option></select><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="tasks-control" class="tasks-control"><button id="tasks-toggle" title="Thread tasks" aria-label="Thread tasks"><span class="tasks-icon">☑</span><span id="tasks-label">Tasks</span></button><div id="tasks-details" class="tasks-details"></div></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button class="primary" id="send">Send</button></div>
+      <div class="composer-actions"><span class="provider-identity"><span id="provider-icon"></span></span><select id="interaction-mode" aria-label="Interaction mode"><option value="default">Build</option><option value="plan">Plan</option></select><span class="favorite-select"><select id="provider" aria-label="Thread provider"><option>Select a provider</option></select><button id="favorite-provider" class="favorite-toggle" title="Add provider to favorites" aria-label="Add provider to favorites">☆</button></span><span class="favorite-select"><select id="model" aria-label="Thread model"><option>Select a model</option></select><button id="favorite-model" class="favorite-toggle" title="Add model to favorites" aria-label="Add model to favorites">☆</button></span><div id="model-options"></div><div id="tasks-control" class="tasks-control"><button id="tasks-toggle" title="Thread tasks" aria-label="Thread tasks"><span class="tasks-icon">☑</span><span id="tasks-label">Tasks</span></button><div id="tasks-details" class="tasks-details"></div></div><div id="usage-control" class="usage-control"><button id="usage-toggle" title="Provider usage" aria-label="Provider usage"><span class="usage-ring primary"></span><span class="usage-ring secondary"></span><span id="usage-label">—</span></button><div id="usage-details" class="usage-details"></div></div><button id="stash-now" type="button" title="Stash current prompt (Ctrl/Cmd+S)">Stash</button><details id="stash-control" class="stash-control"><summary id="stash-toggle" title="Show stashed prompts" aria-label="Show prompt stash"><span id="stash-count">0</span></summary><div id="stash-popup" class="stash-popup"><div class="stash-empty">Open to load stashed prompts.</div></div></details><button class="primary" id="send">Send</button></div>
     </div>
   </div>
   <script nonce="${scriptNonce}" src="${scriptUri}"></script>
