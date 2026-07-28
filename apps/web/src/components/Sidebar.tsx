@@ -218,6 +218,7 @@ import {
   orderItemsByPreferredIds,
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
+  groupSettledThreadsByRecencyForSidebarV2,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   sortSettledThreadsForSidebarV2,
@@ -235,6 +236,7 @@ import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings"
 import {
   DEFAULT_HIDE_SETTLED_PROJECTS,
   DEFAULT_HIDE_SETTLED_RECENT,
+  DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
   DEFAULT_WEB_LIST_MODE,
   DEFAULT_WEB_THREAD_GROUPING,
@@ -249,6 +251,7 @@ import {
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
   ListProjectFilterSchema,
+  SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_LIST_MODE_LABELS,
   WEB_LIST_MODES,
@@ -3674,7 +3677,13 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
     ListHideSettledSchema,
   );
+  const [settledRecencyHeadersEnabled] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+    ListHideSettledSchema,
+  );
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
+  const nowMinute = useNowMinute();
 
   const { activeEntries, settledEntries } = useMemo(() => {
     if (!props.hideSettledThreads) {
@@ -3773,6 +3782,32 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     [setSettledShelfExpanded],
   );
 
+  // Date headers under Settled (Last Hour / Earlier Today / …) — same helper
+  // and rules as Sidebar V2. Single-bucket pages omit headers; View menu can
+  // disable headers without changing settle-time sort order.
+  const settledRecencyLayout = useMemo(() => {
+    void nowMinute;
+    const layout = groupSettledThreadsByRecencyForSidebarV2(
+      renderedSettledEntries.map((entry) => entry.thread),
+      new Date(),
+    );
+    if (!settledRecencyHeadersEnabled) {
+      return { groups: layout.groups, showHeaders: false };
+    }
+    return layout;
+  }, [nowMinute, renderedSettledEntries, settledRecencyHeadersEnabled]);
+
+  const settledEntryByThreadKey = useMemo(
+    () =>
+      new Map(
+        renderedSettledEntries.map((entry) => [
+          scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id)),
+          entry,
+        ]),
+      ),
+    [renderedSettledEntries],
+  );
+
   // Multi-select range walks rendered rows only (collapsed shelf is out).
   const orderedRecentThreadKeys = useMemo(
     () =>
@@ -3808,6 +3843,38 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
         orderedRecentThreadKeys={orderedRecentThreadKeys}
         threadByKey={props.threadByKey}
       />
+    );
+  };
+
+  const renderSettledRows = () => {
+    if (renderedSettledEntries.length === 0) {
+      return null;
+    }
+    if (settledRecencyLayout.showHeaders) {
+      return (
+        <>
+          {settledRecencyLayout.groups.map((group) => (
+            <div key={group.id} data-testid={`sidebar-v1-settled-recency-${group.id}`}>
+              <div className="mb-0.5 px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/45 first:pt-1">
+                {group.label}
+              </div>
+              <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+                {group.threads.flatMap((thread) => {
+                  const entry = settledEntryByThreadKey.get(
+                    scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                  );
+                  return entry ? [renderThreadRow(entry)] : [];
+                })}
+              </SidebarMenuSub>
+            </div>
+          ))}
+        </>
+      );
+    }
+    return (
+      <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+        {renderedSettledEntries.map(renderThreadRow)}
+      </SidebarMenuSub>
     );
   };
 
@@ -3892,11 +3959,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
             )}
           />
         </button>
-        {renderedSettledEntries.length > 0 ? (
-          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
-            {renderedSettledEntries.map(renderThreadRow)}
-          </SidebarMenuSub>
-        ) : null}
+        {renderSettledRows()}
         {settledShelfExpanded && hiddenSettledCount > 0 ? (
           <button
             type="button"
@@ -3992,11 +4055,18 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   const defaultHideSettled = usesProjectThreadGrouping(threadGrouping)
     ? DEFAULT_HIDE_SETTLED_PROJECTS
     : DEFAULT_HIDE_SETTLED_RECENT;
+  const [settledRecencyHeadersEnabled, setSettledRecencyHeadersEnabled] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+    ListHideSettledSchema,
+  );
   const listOptionsActive =
     !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
     selectedProjectFilterKey !== null ||
     threadGrouping !== DEFAULT_WEB_THREAD_GROUPING ||
-    hideSettledThreads !== defaultHideSettled;
+    hideSettledThreads !== defaultHideSettled ||
+    (showFlatOrRecencyList &&
+      settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS);
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -4374,6 +4444,17 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 >
                   Hide settled
                 </MenuCheckboxItem>
+                {showFlatOrRecencyList && hideSettledThreads ? (
+                  <MenuCheckboxItem
+                    checked={settledRecencyHeadersEnabled}
+                    closeOnClick={false}
+                    className="min-h-7 py-1 sm:text-xs"
+                    data-testid="sidebar-v1-settled-recency-headers"
+                    onCheckedChange={(checked) => setSettledRecencyHeadersEnabled(checked === true)}
+                  >
+                    Date headers on settled
+                  </MenuCheckboxItem>
+                ) : null}
               </MenuPopup>
             </Menu>
           ) : null}
