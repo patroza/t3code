@@ -218,6 +218,33 @@ gh workflow run fork-ci.yml --repo patroza/t3code --ref fork/integration
 Prefer one deliberate lockfile regeneration at the end of a multi-commit `fork/changes` rebase over
 resolving the lockfile at every intermediate conflict.
 
+### Per-layer `vp check` after stack rebase (required)
+
+When you manually rebase or rewrite the stack, **do not advance to the next layer until the current
+layer is clean**. After each layer is rebased onto its parent, install/lock is consistent, and
+conflicts are resolved:
+
+1. Check out that layer's tip.
+2. Run root **`vp check`** (the same formatter/linter gate Fork CI uses).
+3. Fix every failure on **that layer** (format, lint, lockfile, type-level breakage the check
+   surfaces). Commit and force-with-lease push the layer if needed.
+4. Only then rebase the **next** layer onto the fixed parent.
+
+Layer order for this gate:
+
+```text
+main (upstream mirror — skip product fixes; do not hand-edit)
+  → fork/tim
+  → fork/candidates
+  → fork/changes
+  → each integration overlay (desktop, discord, vscode) onto fork/changes
+  → fork/integration (compose last)
+```
+
+Skipping `vp check` and stacking "fix it later" commits is how lockfile and lint failures cascade
+into every PR and block merge. Feature PRs (e.g. based on `fork/changes`) get the same treatment
+after `pnpm fork:stack update`: rebase onto the fixed parent, then `vp check` before push/merge.
+
 `register` is used during the one-time cutover and only when intentionally building an advanced,
 dependent integration chain:
 
