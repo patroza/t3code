@@ -7,9 +7,22 @@ import {
   type ConnectionCatalogEntry,
 } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
+// @effect-diagnostics nodeBuiltinImport:off - existence contract reads source text on disk.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveRemoteVscodeOpenTarget, shouldShowOpenInPicker } from "./ChatHeader";
+import {
+  resolveRemoteVscodeOpenTarget,
+  shouldOfferRemoteVscodeOpen,
+  shouldShowOpenInPicker,
+} from "./ChatHeader";
+
+const chatHeaderSource = NodeFS.readFileSync(
+  NodePath.join(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "ChatHeader.tsx"),
+  "utf8",
+);
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -50,6 +63,35 @@ describe("shouldShowOpenInPicker", () => {
         activeProjectName: undefined,
         activeThreadEnvironmentId: primaryEnvironmentId,
         primaryEnvironmentId,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldOfferRemoteVscodeOpen", () => {
+  it("offers remote open for a named project when the local picker is hidden", () => {
+    expect(
+      shouldOfferRemoteVscodeOpen({
+        activeProjectName: "codething-mvp",
+        showOpenInPicker: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("never offers remote open when the local OpenInPicker is shown", () => {
+    expect(
+      shouldOfferRemoteVscodeOpen({
+        activeProjectName: "codething-mvp",
+        showOpenInPicker: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never offers remote open without an active project", () => {
+    expect(
+      shouldOfferRemoteVscodeOpen({
+        activeProjectName: undefined,
+        showOpenInPicker: false,
       }),
     ).toBe(false);
   });
@@ -118,5 +160,63 @@ describe("resolveRemoteVscodeOpenTarget", () => {
       authority: "tester@remote.example.test",
       uri: "vscode://vscode-remote/ssh-remote+tester%40remote.example.test/home/tester/project%20with%20spaces?windowId=_blank",
     });
+  });
+
+  it("returns null for non-absolute cwd, missing entry, or empty hostname", () => {
+    expect(
+      resolveRemoteVscodeOpenTarget({
+        entry: null,
+        cwd: "/home/tester/projects/example",
+      }),
+    ).toBeNull();
+    expect(
+      resolveRemoteVscodeOpenTarget({
+        entry: {
+          target: new BearerConnectionTarget({
+            environmentId,
+            label: "remote-vm",
+            connectionId: "bearer:remote-vm",
+          }),
+          profile: Option.none(),
+        },
+        cwd: "/home/tester/projects/example",
+      }),
+    ).toBeNull();
+    expect(
+      resolveRemoteVscodeOpenTarget({
+        entry: {
+          target: new BearerConnectionTarget({
+            environmentId,
+            label: "remote-vm",
+            connectionId: "bearer:remote-vm",
+          }),
+          profile: Option.some(
+            new BearerConnectionProfile({
+              connectionId: "bearer:remote-vm",
+              environmentId,
+              label: "remote-vm",
+              httpBaseUrl: "http://gateway.example.test:8080/",
+              wsBaseUrl: "ws://gateway.example.test:8080/",
+            }),
+          ),
+        },
+        cwd: "relative/path",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("ChatHeader remote Open in VS Code surface (anti stack-drop)", () => {
+  it("still wires the remote control through the pure gate into header JSX", () => {
+    // Pure helpers alone are not enough: #154 proved stack recovery can keep
+    // resolveRemoteVscodeOpenTarget while deleting the button. These markers
+    // must remain co-located in ChatHeader.tsx.
+    expect(chatHeaderSource).toContain("shouldOfferRemoteVscodeOpen");
+    expect(chatHeaderSource).toContain("resolveRemoteVscodeOpenTarget");
+    expect(chatHeaderSource).toContain("remoteVscodeTarget");
+    expect(chatHeaderSource).toContain("Open in VS Code Remote SSH on");
+    expect(chatHeaderSource).toContain("Open VS Code Remote SSH:");
+    expect(chatHeaderSource).toContain("shell.openExternal");
+    expect(chatHeaderSource).toContain("VisualStudioCode");
   });
 });

@@ -35,4 +35,30 @@ describe("deriveProjectGroupLabel", () => {
       "macs-holding/internal",
     );
   });
+
+  it("falls back to the representative title when there is no repository identity", () => {
+    const project = {
+      title: "Local sandbox",
+      repositoryIdentity: null,
+    };
+
+    expect(deriveProjectGroupLabel({ representative: project, members: [project] })).toBe(
+      "Local sandbox",
+    );
+  });
+
+  it("falls back to the representative title when members disagree on repo names", () => {
+    const left = {
+      title: "Workspace title",
+      repositoryIdentity: repositoryIdentity("pingdotgg", "t3code"),
+    };
+    const right = {
+      title: "Workspace title",
+      repositoryIdentity: repositoryIdentity("other", "different"),
+    };
+
+    expect(deriveProjectGroupLabel({ representative: left, members: [left, right] })).toBe(
+      "Workspace title",
+    );
+  });
 });

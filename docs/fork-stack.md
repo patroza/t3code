@@ -250,6 +250,32 @@ Required workflow when automation stops on a conflict:
 
 The stack conflict summary prints ready-to-paste JSON for both `*` and exact-SHA forms.
 
+### Product conflicts (shared UI / app code — never blind whole-file)
+
+`conflictResolutions` with whole-file `ours`/`theirs` is appropriate for **fork-owned** paths and
+boilerplate (`pnpm-lock.yaml`, pure fork-only modules). It is **not** safe for shared product files
+where both the new base and the replayed commit carry real behavior (classic example:
+`apps/web/src/components/chat/ChatHeader.tsx` — recovery once kept
+`resolveRemoteVscodeOpenTarget` + unit tests and **dropped the remote Open in VS Code header
+button**, so CI stayed green while the control vanished; restored in #154).
+
+When a conflict touches `apps/**` or `packages/**` product code:
+
+1. **Do not** apply a durable whole-file `*` policy unless the path is documented as always taking
+   one side for every rewrite.
+2. **3-way merge or re-apply** the known-good feature commit after a clean base; do not invent a
+   partial hand merge that keeps helpers/tests and drops JSX / wiring.
+3. **Parity check** before resume/push: `git diff` the pre-rewrite tip vs the resolved path; if a
+   symbol remains only in tests (or pure helpers) while the product surface is gone, the resolution
+   is incomplete.
+4. **Tests that would have failed #154:** every fork product change needs an existence or behavior
+   assertion for the surface users see — pure URI/helper tests alone are insufficient. Prefer:
+   - exported pure gates (`shouldOfferRemoteVscodeOpen`, list defaults, …), **and**
+   - one existence check (`aria-label` / `data-testid` via `renderToStaticMarkup`, or source markers
+     in `apps/web/src/forkSurfaceExistence.test.ts` for chrome that is hard to mount).
+5. After resolving, run the focused tests for the conflicted package **and** the root pre-push gate
+   for the layer (see AGENTS.md).
+
 ### Integration overlay compose and lockfiles
 
 `node scripts/compose-integration-overlays.ts` rebuilds `fork/integration` by cherry-picking each
