@@ -52,6 +52,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
@@ -59,7 +60,6 @@ import * as Socket from "effect/unstable/socket/Socket";
 import type { DiscordBotConfig } from "../config.ts";
 import { preferredModelSelection } from "../config.ts";
 import { BrowserAutomationHost } from "../browser/BrowserAutomationHost.ts";
-import { formatAlertCause } from "../features/Alerts.ts";
 import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
@@ -83,6 +83,23 @@ function messageFromCause(cause: unknown): string {
   if (cause instanceof Error && cause.message.trim() !== "") return cause.message;
   return String(cause);
 }
+
+/**
+ * Detect dead/transient socket failures that should force a reconnect when
+ * `RpcSession.closed` did not fire (or fired too late). Used for soft recovery
+ * on dispatch errors — we do **not** auto-retry the command (double-start risk).
+ */
+export function isT3TransportError(cause: unknown): boolean {
+  const msg = messageFromCause(cause);
+  if (/SocketCloseError|ConnectionTransientError|SocketError/i.test(msg)) return true;
+  if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|ETIMEDOUT/i.test(msg)) return true;
+  if (/websocket/i.test(msg) && /close|closed|reset|refused|not connected/i.test(msg)) return true;
+  return false;
+}
+
+/** User-facing copy when the bot is online but T3 is still (re)connecting. */
+export const T3_STILL_CONNECTING_MESSAGE =
+  "T3 is still connecting after a server restart (or first boot). Try again in a few seconds.";
 
 export function shouldPersistThreadModelSelectionForNextTurn(input: {
   readonly currentModelSelection?: ModelSelection;
@@ -109,10 +126,23 @@ export class T3SessionError extends Error {
 export interface T3SessionService {
   readonly connect: () => Effect.Effect<void, T3SessionError>;
   /**
+   * Keep retrying {@link connect} with the same backoff as mid-life reconnect
+   * until the shell snapshot is live. Used at boot so the process does not exit
+   * when Discord comes up before T3 (guest restart race).
+   */
+  readonly connectUntilReady: () => Effect.Effect<void>;
+  /**
    * Register a callback invoked after a successful automatic reconnect
    * (socket drop → reconnectLoop). Used to rehydrate Discord bridges.
    */
   readonly setOnReconnected: (handler: (() => Promise<void>) | null) => void;
+  /**
+   * True when a live RpcSession exists (may still be waiting for shell on a
+   * race; prefer {@link isReady} before project lookups).
+   */
+  readonly isConnected: () => Effect.Effect<boolean>;
+  /** True when connected and the orchestration shell snapshot has arrived. */
+  readonly isReady: () => Effect.Effect<boolean>;
   readonly shell: () => Effect.Effect<OrchestrationShellSnapshot | null>;
   readonly serverConfig: () => Effect.Effect<ServerConfig | null>;
   readonly findProjectByWorkspaceRoot: (
@@ -241,6 +271,13 @@ export class T3Session extends Context.Service<T3Session, T3SessionService>()(
  */
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 
+/** How long to wait for the first shell snapshot after the WS is up (ms poll × attempts). */
+const SHELL_SNAPSHOT_POLL_MS = 100;
+const SHELL_SNAPSHOT_MAX_ATTEMPTS = 150; // 15s — guest T3 can lag Discord on restart
+
+/** Brief wait for shell when a mention races reconnect completion. */
+const PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS = 30; // 3s
+
 export const makeT3Session = (botConfig: DiscordBotConfig) =>
   Effect.sync(() => {
     const runtime = ManagedRuntime.make(
@@ -265,7 +302,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
     const threadFibers = new Map<string, Fiber.Fiber<void, unknown>>();
 
     const requireSession = (): RpcSession => {
-      if (session === null) throw new T3SessionError("T3 Code is not connected.");
+      if (session === null) throw new T3SessionError(T3_STILL_CONNECTING_MESSAGE);
       return session;
     };
 
@@ -307,6 +344,23 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       if (previousBrowserHost !== null) {
         await previousBrowserHost.close().catch(() => {});
       }
+    };
+
+    /**
+     * When the socket is dead but `closed` never fired (or dispatch saw the failure
+     * first), tear down and enter reconnectLoop. Does not re-run the failed command.
+     */
+    const scheduleReconnectFromTransportError = (cause: unknown) => {
+      if (reconnecting) return;
+      void (async () => {
+        await runtime
+          .runPromise(
+            Effect.logWarning(`T3 transport error; forcing reconnect: ${messageFromCause(cause)}`),
+          )
+          .catch(() => {});
+        await teardown();
+        await reconnectLoop();
+      })();
     };
 
     /**
@@ -367,6 +421,9 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         connected.closed.pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
+              // Another fiber may already have torn down and started reconnect
+              // (e.g. soft recovery from a transport error on dispatch).
+              if (session !== connected) return;
               yield* Effect.logWarning(`T3 connection lost: ${messageFromCause(cause)}`);
               yield* Effect.promise(() => teardown());
               yield* Effect.promise(() => reconnectLoop());
@@ -385,8 +442,12 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           runtime.runPromise(
             requireSession().client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
           ),
-        catch: (cause) =>
-          new T3SessionError(`dispatch failed: ${messageFromCause(cause)}`, { cause }),
+        catch: (cause) => {
+          if (isT3TransportError(cause)) {
+            scheduleReconnectFromTransportError(cause);
+          }
+          return new T3SessionError(`dispatch failed: ${messageFromCause(cause)}`, { cause });
+        },
       }).pipe(Effect.asVoid);
 
     const claimBrowserHost = (threadId: ThreadId) =>
@@ -412,7 +473,11 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       Effect.tryPromise({
         try: async () => {
           const normalizedBaseUrl = new URL(baseUrl).toString();
-          if (session !== null) return;
+          // Half-open: session without shell must never short-circuit (stuck forever).
+          if (session !== null && shell !== null) return;
+          if (session !== null && shell === null) {
+            await teardown();
+          }
 
           let environmentId = EnvironmentId.make(PRIMARY_LOCAL_ENVIRONMENT_ID);
           let socketUrl = localSocketUrl(normalizedBaseUrl);
@@ -547,15 +612,27 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             }
 
             // `shell` is updated by the concurrently running subscription fiber.
-            // eslint-disable-next-line no-unmodified-loop-condition
-            for (let attempt = 0; attempt < 50 && shell === null; attempt += 1) {
-              await Effect.runPromise(Effect.sleep("100 millis"));
+            for (let attempt = 0; attempt < SHELL_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
+              // eslint-disable-next-line no-unmodified-loop-condition -- shell is set by shellFiber
+              if (shell !== null) break;
+              await Effect.runPromise(Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS)));
+            }
+            if (shell === null) {
+              throw new T3SessionError(
+                "Connected to T3 but the orchestration shell snapshot did not arrive in time",
+              );
             }
           } catch (cause) {
-            await runtime.runPromise(Scope.close(nextScope, Exit.void));
-            throw new T3SessionError(`Could not connect to T3 Code: ${messageFromCause(cause)}`, {
-              cause,
-            });
+            // Full teardown is required: a partial connect leaves session non-null and
+            // the next connectPrepared early-returns forever (stuck bot after restart).
+            await teardown();
+            // nextScope may not have been published to `scope` yet (fail before assign).
+            await runtime.runPromise(Scope.close(nextScope, Exit.void)).catch(() => {});
+            throw cause instanceof T3SessionError
+              ? cause
+              : new T3SessionError(`Could not connect to T3 Code: ${messageFromCause(cause)}`, {
+                  cause,
+                });
           }
         },
         catch: (cause) =>
@@ -590,6 +667,24 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           return;
         }
         yield* connectPrepared(botConfig.t3HttpBaseUrl);
+      });
+
+    /**
+     * Boot path: Discord may start before guest T3 is listening. Retry forever
+     * with the same schedule as mid-life reconnect instead of exiting the process.
+     */
+    const connectUntilReady = () =>
+      Effect.gen(function* () {
+        for (let attempt = 0; ; attempt += 1) {
+          const outcome = yield* Effect.result(connect());
+          if (Result.isSuccess(outcome)) return;
+          const delay =
+            RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 16_000;
+          yield* Effect.logWarning(
+            `T3 boot connect attempt ${attempt + 1} failed: ${messageFromCause(outcome.failure)}; retrying in ${delay}ms`,
+          );
+          yield* Effect.sleep(Duration.millis(delay));
+        }
       });
 
     const providersForSelection = (): ReadonlyArray<ServerProvider> =>
@@ -629,13 +724,22 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
 
     return T3Session.of({
       connect,
+      connectUntilReady,
       setOnReconnected: (handler) => {
         onReconnected = handler;
       },
+      isConnected: () => Effect.sync(() => session !== null),
+      isReady: () => Effect.sync(() => session !== null && shell !== null),
       shell: () => Effect.succeed(shell),
       serverConfig: () => Effect.succeed(serverConfig),
       findProjectByWorkspaceRoot: (workspaceRoot) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          // Mentions can land while shell is still filling after reconnect.
+          for (let attempt = 0; attempt < PROJECT_LOOKUP_SHELL_WAIT_ATTEMPTS; attempt += 1) {
+            // shell/session are mutated by connect/teardown/shellFiber, not this loop body.
+            if (shell !== null || session === null) break;
+            yield* Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS));
+          }
           if (shell === null) return null;
           const target = normalizeWorkspacePath(workspaceRoot);
           return (
