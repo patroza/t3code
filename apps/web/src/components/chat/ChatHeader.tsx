@@ -61,6 +61,19 @@ export function shouldShowOpenInPicker(input: {
   );
 }
 
+/**
+ * Remote Open-in-VS-Code is mutually exclusive with the local OpenInPicker:
+ * only offer it for a named project when the local picker is hidden (non-primary
+ * environments). Pure gate so stack recovery cannot keep the URI helper while
+ * dropping the product surface without a failing unit test.
+ */
+export function shouldOfferRemoteVscodeOpen(input: {
+  readonly activeProjectName: string | undefined;
+  readonly showOpenInPicker: boolean;
+}): boolean {
+  return Boolean(input.activeProjectName) && !input.showOpenInPicker;
+}
+
 function encodeRemotePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
@@ -136,7 +149,7 @@ export const ChatHeader = memo(function ChatHeader({
   });
   const remoteVscodeTarget = useMemo(
     () =>
-      activeProjectName && !showOpenInPicker
+      shouldOfferRemoteVscodeOpen({ activeProjectName, showOpenInPicker })
         ? resolveRemoteVscodeOpenTarget({
             entry: activeEnvironment?.entry ?? null,
             cwd: openInCwd,
