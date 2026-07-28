@@ -40,6 +40,18 @@ export function buildDesktopThreadNavigationUrl(input: {
   return `${origin}/#/${environmentSegment}/${threadSegment}`;
 }
 
+export function buildDesktopProjectNavigationUrl(input: {
+  readonly isDevelopment: boolean;
+  readonly project: string;
+  readonly action: "reveal" | "latest" | "new";
+}): string {
+  const search = new URLSearchParams({ project: input.project });
+  if (input.action !== "reveal") {
+    search.set("action", input.action);
+  }
+  return `${getDesktopOrigin(input.isDevelopment)}/#/jump?${search.toString()}`;
+}
+
 export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
   "ElectronProtocolRegistrationError",
   {
