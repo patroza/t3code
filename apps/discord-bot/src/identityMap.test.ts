@@ -8,6 +8,7 @@ import {
   formatCoAuthoredByTrailer,
   formatIdentityAttributionBlock,
   loadIdentityMapFromFileSync,
+  makeRefreshingIdentityMapStore,
   parseIdentityMapDocument,
   parseSimpleIdentityYaml,
   resolveGitHubCoAuthorEmail,
@@ -246,5 +247,77 @@ describe("loadIdentityMapFromFileSync", () => {
     const people = loadIdentityMapFromFileSync(path);
     expect(people[0]?.discord?.id).toBe("1");
     expect(people[0]?.github?.id).toBe("2");
+  });
+});
+
+describe("makeRefreshingIdentityMapStore", () => {
+  it("reloads after the TTL expires and keeps the prior map on load failure", async () => {
+    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-identity-ttl-"));
+    const path = NodePath.join(dir, "identity-map.json");
+    await NodeFSP.writeFile(
+      path,
+      JSON.stringify({
+        people: [
+          {
+            name: "A",
+            discord: { id: "1" },
+            github: { login: "a", id: "11" },
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    let now = 1_000_000;
+    let loads = 0;
+    const store = makeRefreshingIdentityMapStore({
+      filePath: path,
+      ttlMs: 60_000,
+      now: () => now,
+      load: (p) => {
+        loads += 1;
+        return loadIdentityMapFromFileSync(p);
+      },
+    });
+
+    expect(store.list()).toHaveLength(1);
+    expect(store.resolveByDiscordId("1")?.name).toBe("A");
+    expect(loads).toBe(1);
+
+    // Within TTL — no reload
+    now += 30_000;
+    expect(store.list()).toHaveLength(1);
+    expect(loads).toBe(1);
+
+    // After TTL — pick up new file contents
+    await NodeFSP.writeFile(
+      path,
+      JSON.stringify({
+        people: [
+          {
+            name: "A",
+            discord: { id: "1" },
+            github: { login: "a", id: "11" },
+          },
+          {
+            name: "Davide Di Pumpo",
+            discord: { id: "150802733316702208" },
+            github: { login: "MakhBeth", id: "2373426" },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    now += 60_000;
+    expect(store.list()).toHaveLength(2);
+    expect(store.resolveByDiscordId("150802733316702208")?.github?.login).toBe("MakhBeth");
+    expect(loads).toBe(2);
+
+    // Corrupt file after TTL — keep last good snapshot
+    await NodeFSP.writeFile(path, "{ not valid json", "utf8");
+    now += 60_000;
+    expect(store.list()).toHaveLength(2);
+    expect(store.resolveByDiscordId("150802733316702208")?.name).toBe("Davide Di Pumpo");
+    expect(loads).toBe(3);
   });
 });
