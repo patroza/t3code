@@ -23,7 +23,7 @@ import {
 const TICK_MS = 60_000;
 const CPU_THRESHOLD = 50;
 const RSS_THRESHOLD = 768;
-const SUSTAINED_TICKS = 5;
+const SUSTAINED_FOR_MS = 4 * TICK_MS;
 
 const proc = (over: Partial<ProcInfo> & { pid: number }): ProcInfo => ({
   pid: over.pid,
@@ -48,9 +48,12 @@ function run(
       prev: state,
       procs,
       nowMs: startMs + index * TICK_MS,
-      cpuPercentThreshold: CPU_THRESHOLD,
-      rssMbThreshold: RSS_THRESHOLD,
-      sustainedTicks: SUSTAINED_TICKS,
+      resolveRule: () => ({
+        id: "default",
+        cpuPercentThreshold: CPU_THRESHOLD,
+        rssMbThreshold: RSS_THRESHOLD,
+        sustainedForMs: SUSTAINED_FOR_MS,
+      }),
     });
     state = result.next;
     hot = result.hot;
@@ -188,23 +191,20 @@ describe("trackSustainedHotProcesses", () => {
 
   it("alerts once a process stays CPU-hot for the sustained window", () => {
     // A full core busy: +60s of CPU per 60s tick = ~100%.
-    const ticks = Array.from({ length: SUSTAINED_TICKS + 1 }, (_unused, i) => [
+    const ticks = Array.from({ length: 6 }, (_unused, i) => [
       proc({ pid: 900, rssMb: 200, cpuSeconds: i * 60 }),
     ]);
     const hot = run(ticks).hot;
     expect(hot).toHaveLength(1);
     expect(hot[0]!.pid).toBe(900);
     expect(hot[0]!.cpuPercent).toBeGreaterThanOrEqual(CPU_THRESHOLD);
-    // SUSTAINED_TICKS consecutive hot samples span SUSTAINED_TICKS-1 intervals of
-    // wall time (the first tick only primes the rate baseline).
-    expect(Math.round(hot[0]!.sustainedMs / TICK_MS)).toBe(SUSTAINED_TICKS - 1);
+    expect(Math.round(hot[0]!.sustainedMs / TICK_MS)).toBe(4);
   });
 
   it("does not alert before the sustained window elapses", () => {
-    const ticks = Array.from({ length: SUSTAINED_TICKS }, (_unused, i) => [
+    const ticks = Array.from({ length: 5 }, (_unused, i) => [
       proc({ pid: 900, cpuSeconds: i * 60 }),
     ]);
-    // Only SUSTAINED_TICKS-1 measurable hot ticks so far (first tick has no rate).
     expect(run(ticks).hot).toEqual([]);
   });
 
@@ -217,9 +217,7 @@ describe("trackSustainedHotProcesses", () => {
   });
 
   it("alerts on sustained high RSS even at zero CPU", () => {
-    const ticks = Array.from({ length: SUSTAINED_TICKS + 1 }, () => [
-      proc({ pid: 950, rssMb: 900, cpuSeconds: 5 }),
-    ]);
+    const ticks = Array.from({ length: 5 }, () => [proc({ pid: 950, rssMb: 900, cpuSeconds: 5 })]);
     const hot = run(ticks).hot;
     expect(hot).toHaveLength(1);
     expect(hot[0]!.rssMb).toBe(900);

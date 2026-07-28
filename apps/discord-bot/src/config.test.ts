@@ -18,6 +18,7 @@ const baseConfig = {
   identityMapPath: undefined,
   honeycombTraceUrlTemplate: undefined,
   alertsChannelId: undefined,
+  alertProcessRulesPath: undefined,
   stateSqlitePath: "/var/lib/t3/userdata/state.sqlite",
   browserEnabled: false,
   browserProfile: "default",
