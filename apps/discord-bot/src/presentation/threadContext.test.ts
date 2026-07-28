@@ -233,6 +233,56 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).not.toContain("Jira issues observed");
   });
 
+  it("injects identity map co-author trailers for starter + requester", () => {
+    const prompt = buildDiscordTurnPrompt({
+      mentionPrompt: "open a PR",
+      starter: {
+        id: "starter-1",
+        author: { id: "222", username: "davide", displayName: "Davide" },
+      },
+      requester: {
+        id: "mention-1",
+        author: {
+          id: "95218063095377920",
+          username: "patroza",
+          displayName: "Patrick Roza",
+        },
+      },
+      identityPeople: [
+        {
+          name: "Davide",
+          discord: { id: "222", username: "davide" },
+          github: { login: "davide", id: "99" },
+        },
+        {
+          name: "Patrick Roza",
+          discord: { id: "95218063095377920", username: "patroza" },
+          github: { login: "patroza", id: "12345" },
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Identity map");
+    expect(prompt).toContain("Co-authored-by: Davide <99+davide@users.noreply.github.com>");
+    expect(prompt).toContain(
+      "Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>",
+    );
+    expect(prompt).toContain("do not invent emails");
+  });
+
+  it("omits identity block when the map is empty/unset", () => {
+    const prompt = buildDiscordTurnPrompt({
+      mentionPrompt: "hello",
+      requester: {
+        id: "m1",
+        author: { id: "1", username: "x" },
+      },
+      identityPeople: [],
+    });
+    expect(prompt).not.toContain("Identity map");
+    expect(prompt).not.toContain("Co-authored-by");
+  });
+
   it("falls back to bare keys when browse base is unset", () => {
     const block = formatLinkedJiraWorkItemsBlock({
       jiraIssueKeys: ["proj-367"],
