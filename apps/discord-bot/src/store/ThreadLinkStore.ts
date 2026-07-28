@@ -22,6 +22,10 @@ export type ThreadLinkStatus = typeof ThreadLinkStatus.Type;
  * and adds restore hints (activity, tombstone, last finalized assistant).
  */
 export const ThreadLink = Schema.Struct({
+  /** Originating chat platform; defaults to discord when omitted (older links.json). */
+  sourceKind: Schema.optional(Schema.Literals(["discord", "teams"])),
+  /** Stable external conversation key (Teams root message id, or Discord thread id). */
+  sourceThreadId: Schema.optional(Schema.String),
   discordThreadId: Schema.String,
   t3ThreadId: Schema.String,
   projectId: Schema.String,
@@ -81,6 +85,8 @@ export const ThreadLink = Schema.Struct({
   modelSinceAt: Schema.optional(Schema.String),
 });
 export type ThreadLink = {
+  readonly sourceKind?: "discord" | "teams" | undefined;
+  readonly sourceThreadId?: string | undefined;
   readonly discordThreadId: string;
   readonly t3ThreadId: ThreadId;
   readonly projectId: ProjectId;
@@ -108,6 +114,8 @@ export type ThreadLink = {
 
 /** Fields callers may omit on put — filled with durable defaults. */
 export type ThreadLinkInput = {
+  readonly sourceKind?: "discord" | "teams" | undefined;
+  readonly sourceThreadId?: string | undefined;
   readonly discordThreadId: string;
   readonly t3ThreadId: ThreadId;
   readonly projectId: ProjectId;
@@ -229,6 +237,8 @@ function normalizeStoredPrUrl(raw: string): string | null {
 }
 
 function asThreadLink(link: {
+  readonly sourceKind?: "discord" | "teams" | undefined;
+  readonly sourceThreadId?: string | undefined;
   readonly discordThreadId: string;
   readonly t3ThreadId: string;
   readonly projectId: string;
@@ -254,6 +264,8 @@ function asThreadLink(link: {
   readonly modelSinceAt?: string | undefined;
 }): ThreadLink {
   return {
+    sourceKind: link.sourceKind,
+    sourceThreadId: link.sourceThreadId,
     discordThreadId: link.discordThreadId,
     t3ThreadId: link.t3ThreadId as ThreadId,
     projectId: link.projectId as ProjectId,
@@ -329,6 +341,8 @@ export function migrateV1Link(link: {
 export function normalizeThreadLinkInput(link: ThreadLinkInput): ThreadLink {
   const createdAt = link.createdAt;
   return asThreadLink({
+    sourceKind: link.sourceKind,
+    sourceThreadId: link.sourceThreadId,
     discordThreadId: link.discordThreadId,
     t3ThreadId: link.t3ThreadId,
     projectId: link.projectId,
@@ -417,6 +431,10 @@ function serializeLinksDocument(links: ReadonlyArray<ThreadLink>): string {
 export interface ThreadLinkStoreService {
   readonly getByDiscordThreadId: (discordThreadId: string) => Effect.Effect<ThreadLink | null>;
   readonly getByT3ThreadId: (t3ThreadId: string) => Effect.Effect<ThreadLink | null>;
+  readonly getBySourceThread: (
+    sourceKind: "discord" | "teams",
+    sourceThreadId: string,
+  ) => Effect.Effect<ThreadLink | null>;
   readonly put: (link: ThreadLinkInput) => Effect.Effect<void>;
   readonly touch: (discordThreadId: string, at?: string) => Effect.Effect<ThreadLink | null>;
   readonly tombstone: (discordThreadId: string) => Effect.Effect<ThreadLink | null>;
@@ -564,6 +582,20 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
           }),
         ),
 
+      getBySourceThread: (sourceKind, sourceThreadId) =>
+        Ref.get(state).pipe(
+          Effect.map((map) => {
+            for (const link of map.values()) {
+              const linkSourceKind = link.sourceKind ?? "discord";
+              const linkSourceThreadId = link.sourceThreadId ?? link.discordThreadId;
+              if (linkSourceKind === sourceKind && linkSourceThreadId === sourceThreadId) {
+                return link;
+              }
+            }
+            return null;
+          }),
+        ),
+
       put: (link) =>
         writeLock.withPermit(
           Effect.gen(function* () {
@@ -577,6 +609,12 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
                   : asThreadLink({
                       ...normalized,
                       // Never wipe durable hints on a minimal re-put (overlapping writers).
+                      sourceKind:
+                        link.sourceKind !== undefined ? normalized.sourceKind : existing.sourceKind,
+                      sourceThreadId:
+                        link.sourceThreadId !== undefined
+                          ? normalized.sourceThreadId
+                          : existing.sourceThreadId,
                       lastFinalizedAssistantId:
                         link.lastFinalizedAssistantId !== undefined
                           ? normalized.lastFinalizedAssistantId
