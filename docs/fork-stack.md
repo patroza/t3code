@@ -283,19 +283,19 @@ inherits a SOCKS proxy). Compose therefore:
 On btrfs/xfs same-filesystem copies this is CoW (seconds for multi‑GB trees). On other FS it falls
 back to a full copy. Optional: `COMPOSE_WORK_ROOT` overrides the work directory parent.
 
-### Per-layer `vp check` after stack rebase (required)
+### Per-layer green gate (required)
 
-When you manually rebase or rewrite the stack, **do not advance to the next layer until the current
-layer is clean**. After each layer is rebased onto its parent, install/lock is consistent, and
-conflicts are resolved:
+When you manually rebase, rewrite, or compose the stack, **do not advance to the next layer until
+the current layer is fully green**. “Green” means:
 
-1. Check out that layer's tip.
-2. Run root **`vp check`** (the same formatter/linter gate Fork CI uses).
-3. Fix every failure on **that layer** (format, lint, lockfile, type-level breakage the check
-   surfaces). Commit and force-with-lease push the layer if needed.
-4. Only then rebase the **next** layer onto the fixed parent.
+1. **Local pre-push gate** on that tip (see `AGENTS.md` Task Completion Requirements): root
+   `vp check`, package typechecks for the affected scope, focused tests, matching lockfile.
+2. **Push** the layer tip.
+3. **Fork CI on that exact tip passes every applicable job** (Check, Test, and any other jobs that
+   run for that ref). Do not proceed while CI is red, cancelled, or still running “for later.”
+4. **Only then** rebase the next layer onto the green parent (or compose `fork/integration`).
 
-Layer order for this gate:
+Layer order:
 
 ```text
 main (upstream mirror — skip product fixes; do not hand-edit)
@@ -306,9 +306,9 @@ main (upstream mirror — skip product fixes; do not hand-edit)
   → fork/integration (compose last)
 ```
 
-Skipping `vp check` and stacking "fix it later" commits is how lockfile and lint failures cascade
-into every PR and block merge. Feature PRs (e.g. based on `fork/changes`) get the same treatment
-after `pnpm fork:stack update`: rebase onto the fixed parent, then `vp check` before push/merge.
+Skipping local gates or stacking on a red tip is how lockfile, typecheck, and lint failures cascade
+into every PR and block deploy. Feature PRs after `pnpm fork:stack update` use the same local
+pre-push gate before every push.
 
 `register` is used during the one-time cutover and only when intentionally building an advanced,
 dependent integration chain:
