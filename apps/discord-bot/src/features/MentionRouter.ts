@@ -820,6 +820,8 @@ const make = (botConfig: DiscordBotConfig) =>
             jiraIssueKeys: turnJiraIssueKeys,
             jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
             identityPeople: identityMap.list(),
+            guildId: input.guildId,
+            discordThreadId: input.discordThreadId,
           });
           if (stagedFiles.skipped.length > 0) {
             yield* Effect.logWarning("Skipped some Discord file attachments", {
@@ -1127,6 +1129,8 @@ const make = (botConfig: DiscordBotConfig) =>
           jiraIssueKeys: firstTurnJiraIssueKeys,
           jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
           identityPeople: identityMap.list(),
+          guildId: input.guildId,
+          discordThreadId: input.discordThreadId,
         });
 
         yield* Effect.logInfo("Creating T3 thread with worktree bootstrap", {
