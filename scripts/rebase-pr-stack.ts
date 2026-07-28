@@ -64,8 +64,16 @@ export interface StackPullRequest {
   readonly branch: string;
 }
 
+/**
+ * Automatic conflict resolution for protected stack rebases.
+ *
+ * - `commit` is a full 40-char SHA for a one-shot replay of that exact commit, or `"*"` to
+ *   match any commit on `branch` for `path` (durable across layer rewrites).
+ * - During `git rebase`, `ours` is the new base and `theirs` is the commit being replayed.
+ */
 export interface StackConflictResolution {
   readonly branch: string;
+  /** Full 40-char SHA, or `"*"` for any commit on this branch+path. */
   readonly commit: string;
   readonly path: string;
   readonly strategy: "ours" | "theirs";
@@ -325,22 +333,26 @@ export function parseManifest(source: string): StackManifest {
   });
   const parsedConflictResolutions = conflictResolutions.map((entry, index) => {
     assertObject(entry, `conflictResolutions[${index}]`);
+    const commitOk =
+      typeof entry.commit === "string" &&
+      (entry.commit === "*" || /^[0-9a-f]{40}$/i.test(entry.commit));
     if (
       typeof entry.branch !== "string" ||
       entry.branch.length === 0 ||
-      typeof entry.commit !== "string" ||
-      !/^[0-9a-f]{40}$/i.test(entry.commit) ||
+      !commitOk ||
       typeof entry.path !== "string" ||
       entry.path.length === 0 ||
       NodePath.isAbsolute(entry.path) ||
       entry.path.split("/").includes("..") ||
       (entry.strategy !== "ours" && entry.strategy !== "theirs")
     ) {
-      throw new StackError(`conflictResolutions[${index}] is invalid.`);
+      throw new StackError(
+        `conflictResolutions[${index}] is invalid (need branch, commit SHA or "*", relative path, ours|theirs).`,
+      );
     }
     return {
       branch: entry.branch,
-      commit: entry.commit.toLowerCase(),
+      commit: entry.commit === "*" ? "*" : entry.commit.toLowerCase(),
       path: entry.path,
       strategy: entry.strategy,
     } satisfies StackConflictResolution;
@@ -842,12 +854,29 @@ function conflictError(
           allowFailure: true,
           stateDir,
         });
-  return new RebaseConflictError(
-    operation,
-    stateDir,
-    commit,
-    commitSubject || "unknown commit",
-    conflictingPaths,
+  const subject = commitSubject || "unknown commit";
+  if (conflictingPaths.length > 0) {
+    console.error(conflictResolutionManifestSnippet(operation.branch, commit, conflictingPaths));
+  }
+  return new RebaseConflictError(operation, stateDir, commit, subject, conflictingPaths);
+}
+
+function matchConflictResolution(
+  configured: ReadonlyArray<StackConflictResolution>,
+  branch: string,
+  commit: string,
+  path: string,
+): StackConflictResolution | undefined {
+  const exact = configured.find(
+    (entry) =>
+      entry.branch === branch &&
+      entry.commit !== "*" &&
+      entry.commit === commit &&
+      entry.path === path,
+  );
+  if (exact) return exact;
+  return configured.find(
+    (entry) => entry.branch === branch && entry.commit === "*" && entry.path === path,
   );
 }
 
@@ -866,12 +895,7 @@ function applyConfiguredConflictResolutions(
   }).toLowerCase();
   const configured = state.manifest.conflictResolutions ?? [];
   const resolutions = conflictingPaths.map((path) =>
-    configured.find(
-      (entry) =>
-        entry.branch === operation.branch &&
-        entry.commit.toLowerCase() === commit &&
-        entry.path === path,
-    ),
+    matchConflictResolution(configured, operation.branch, commit, path),
   );
   if (resolutions.some((entry) => entry === undefined)) {
     return false;
@@ -883,8 +907,9 @@ function applyConfiguredConflictResolutions(
       stateDir,
     });
     git(state.repoDir, ["add", "--", resolution.path], { stateDir });
+    const scope = resolution.commit === "*" ? "any-commit" : commit.slice(0, 12);
     console.log(
-      `Applied configured ${resolution.strategy} resolution for ${operation.branch} ${commit.slice(0, 12)} ${resolution.path}`,
+      `Applied configured ${resolution.strategy} resolution for ${operation.branch} ${scope} ${resolution.path}`,
     );
   }
   return true;
@@ -1775,6 +1800,52 @@ export async function checkStack(
   validateRemoteTopology(sourceRoot, manifest);
 }
 
+function conflictResolutionManifestSnippet(
+  branch: string,
+  commit: string,
+  paths: ReadonlyArray<string>,
+  strategy: "ours" | "theirs" = "theirs",
+): string {
+  const entries = paths.map(
+    (path) => `    {
+      "branch": ${JSON.stringify(branch)},
+      "commit": "*",
+      "path": ${JSON.stringify(path)},
+      "strategy": ${JSON.stringify(strategy)}
+    }`,
+  );
+  const exact = paths.map(
+    (path) => `    {
+      "branch": ${JSON.stringify(branch)},
+      "commit": ${JSON.stringify(commit)},
+      "path": ${JSON.stringify(path)},
+      "strategy": ${JSON.stringify(strategy)}
+    }`,
+  );
+  return `### Record in \`.github/pr-stack.json\` (required before the next stack sync)
+
+Do **not** only resume once. Exact SHAs go stale after every successful layer rewrite.
+Prefer durable \`commit: "*"\` path policies when the same file always takes the same side:
+
+\`\`\`json
+  "conflictResolutions": [
+${entries.join(",\n")}
+  ]
+\`\`\`
+
+One-shot resume for this exact replay only (optional, in addition):
+
+\`\`\`json
+  "conflictResolutions": [
+${exact.join(",\n")}
+  ]
+\`\`\`
+
+During rebase: \`theirs\` = commit being replayed, \`ours\` = new base. After editing the
+manifest, merge that change to \`fork/changes\` so the next scheduled sync can auto-resolve.
+`;
+}
+
 function appendConflictSummary(error: RebaseConflictError): void {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (!summaryPath) return;
@@ -1786,6 +1857,10 @@ function appendConflictSummary(error: RebaseConflictError): void {
     error.conflictingPaths.length === 0
       ? "- Git did not report a conflicted path."
       : error.conflictingPaths.map((path) => `- \`${path}\``).join("\n");
+  const record =
+    error.conflictingPaths.length === 0
+      ? ""
+      : `\n${conflictResolutionManifestSnippet(error.branch, error.commit, error.conflictingPaths)}\n`;
   NodeFS.appendFileSync(
     summaryPath,
     `## PR stack rebase conflict
@@ -1797,12 +1872,13 @@ function appendConflictSummary(error: RebaseConflictError): void {
 ### Conflicting paths
 
 ${paths}
-
+${record}
 ### Local reproduction
 
 \`\`\`sh
 node scripts/rebase-pr-stack.ts sync --push
-# Resolve and stage the reported files, then:
+# 1) Add conflictResolutions to .github/pr-stack.json (see above) and merge to fork/changes
+# 2) Resolve and stage the reported files in the preserved state dir, then:
 node scripts/rebase-pr-stack.ts resume --state ${error.stateDir ?? "<temporary-directory>"} --push
 \`\`\`
 `,
