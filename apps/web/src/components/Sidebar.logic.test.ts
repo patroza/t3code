@@ -34,6 +34,7 @@ import {
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
   sortLogicalProjectsForSidebar,
+  groupSettledThreadsByRecencyForSidebarV2,
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
   sortProjectsForSidebar,
@@ -1160,6 +1161,62 @@ describe("sortSettledThreadsForSidebarV2", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("groupSettledThreadsByRecencyForSidebarV2", () => {
+  // Fixed local afternoon so last-hour and earlier-today both fit the day.
+  const now = new Date(2026, 2, 15, 14, 30, 0);
+
+  const settled = (input: {
+    id: string;
+    settledAt?: string | null;
+    latestUserMessageAt?: string | null;
+    updatedAt?: string;
+  }) => ({
+    id: input.id,
+    settledAt: input.settledAt ?? null,
+    latestUserMessageAt: input.latestUserMessageAt ?? null,
+    latestTurn: null,
+    updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
+  });
+
+  it("groups by settle/activity time and shows headers when multiple buckets", () => {
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const olderIso = new Date(
+      new Date(2026, 2, 15).getTime() - 40 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const ordered = sortSettledThreadsForSidebarV2([
+      settled({ id: "old", settledAt: olderIso }),
+      settled({ id: "fresh", settledAt: lastHourIso }),
+    ]);
+    const layout = groupSettledThreadsByRecencyForSidebarV2(ordered, now);
+    expect(layout.showHeaders).toBe(true);
+    expect(layout.groups.map((group) => group.id)).toEqual(["last_hour", "older"]);
+    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["fresh"]);
+    expect(layout.groups[1]?.threads.map((thread) => thread.id)).toEqual(["old"]);
+  });
+
+  it("suppresses headers when every row is in one bucket", () => {
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const layout = groupSettledThreadsByRecencyForSidebarV2(
+      [settled({ id: "a", settledAt: lastHourIso }), settled({ id: "b", settledAt: lastHourIso })],
+      now,
+    );
+    expect(layout.showHeaders).toBe(false);
+    expect(layout.groups).toHaveLength(1);
+    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+
+  it("preserves input order within a bucket", () => {
+    const t1 = new Date(now.getTime() - 2 * 60_000).toISOString();
+    const t2 = new Date(now.getTime() - 10 * 60_000).toISOString();
+    // Caller is expected to pre-sort; newer first.
+    const layout = groupSettledThreadsByRecencyForSidebarV2(
+      [settled({ id: "newer", settledAt: t1 }), settled({ id: "older-hour", settledAt: t2 })],
+      now,
+    );
+    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["newer", "older-hour"]);
   });
 });
 
