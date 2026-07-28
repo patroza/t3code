@@ -23,6 +23,30 @@ export T3_PROJECT_ALIASES_PATH=~/.t3/discord-bot/project-aliases.yaml
 
 The bot resolves channel topics → shortName → workspace path, then finds the matching T3 project in the server shell snapshot by `workspaceRoot`.
 
+## Optional per-process alert rules
+
+Guest ops alerts can also use a dedicated YAML or JSON file for process-specific
+RSS / CPU / sustained-duration ceilings:
+
+```bash
+export T3_DISCORD_ALERT_PROCESS_RULES_PATH=~/.t3/discord-bot/alert-process-rules.yaml
+```
+
+Example:
+
+```yaml
+rules:
+  - id: jaeger-linux
+    match: jaeger-linux
+    rss: 4gb
+    duration: 5m
+```
+
+Rules match case-insensitive substrings against the full process command line
+and the shortened label shown in Discord alerts. `rss` is interpreted in MiB
+units (`4gb` => `4096` MiB). `cpu` is percent of a single core averaged across
+poll windows.
+
 ## Channel binding
 
 Set the Discord channel **topic** to include:
@@ -40,6 +64,7 @@ cd apps/discord-bot
 export DISCORD_BOT_TOKEN=...
 export T3_HTTP_BASE_URL=http://127.0.0.1:3773
 export T3_PROJECT_ALIASES_PATH=~/.t3/discord-bot/project-aliases.yaml
+export T3_DISCORD_ALERT_PROCESS_RULES_PATH=~/.t3/discord-bot/alert-process-rules.yaml
 
 # Pair once and reuse a token, or bootstrap:
 export T3_BOOTSTRAP_CREDENTIAL=...   # from local-bootstrap-credential / pairing
