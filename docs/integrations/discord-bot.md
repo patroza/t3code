@@ -241,6 +241,15 @@ finalize only deletes stored stream tip ids — it never scans the channel for o
 markers. Design notes:
 [`apps/discord-bot/DESIGN-thread-restore.md`](../../apps/discord-bot/DESIGN-thread-restore.md).
 
+**Guest restart / Discord-before-T3 race** (implemented): the Discord gateway can come READY
+before the guest T3 process is listening. Boot uses `connectUntilReady` (same backoff as
+mid-life reconnect) and does **not** exit the process when T3 is late. Connect is only
+considered successful once the orchestration **shell snapshot** has arrived (so project
+lookups are not empty). Mid-life drops still tear down + reconnect; transport errors on
+dispatch also force reconnect when `RpcSession.closed` is slow/missed. Mentions that land
+while T3 is reconnecting get a transient “still connecting… try again” reply instead of a
+false “no T3 project registered at this path” error.
+
 ## Architecture notes
 
 - Project shortName mapping lives **only on the Discord bot** — not in T3 server config/DB.
