@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 
+import { loadAlertProcessRulesFromFileSync, type AlertProcessRule } from "../alertProcessRules.ts";
 import type { DiscordBotConfig } from "../config.ts";
 import {
   createMessageWithAttachments,
@@ -24,6 +25,7 @@ import {
   type DiscordUploadFile,
 } from "../presentation/discordFiles.ts";
 
+const POLL_MS = 60 * 1000;
 const POLL = "60 seconds";
 const COOLDOWN_MS = 10 * 60 * 1000;
 /** Fatal errors use a shorter cooldown so distinct keys still surface quickly. */
@@ -46,11 +48,11 @@ const DISK_FREE_MIN_GB = 2;
 /** Alert when a legacy stdio Sentry MCP process exceeds this RSS. */
 const SENTRY_RSS_ALERT_MB = 512;
 const SENTRY_COUNT_ALERT = 2;
-const STUCK_RSS_ALERT_MB = 768;
 /**
- * A process is "hot" when it holds ≥STUCK_RSS_ALERT_MB of RSS or averages
- * ≥SUSTAINED_CPU_PERCENT of a core, and it only alerts once it has stayed hot
- * for SUSTAINED_TICKS consecutive ticks.
+ * Default generic process rule for "unexpectedly hot" processes.
+ * The sustained duration preserves the prior five-sample window semantics:
+ * the first sample establishes the CPU-rate baseline, then four 60s intervals
+ * must stay hot before alerting.
  *
  * This measures a *rate* (Δcpu / Δwall between ticks), not cumulative CPU time:
  * a long-lived-but-idle process (e.g. one that gathered 200s of CPU over hours
@@ -58,8 +60,9 @@ const STUCK_RSS_ALERT_MB = 768;
  * forever. What we want to catch is a process actually pegging CPU or memory for
  * a sustained stretch.
  */
-const SUSTAINED_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
-const SUSTAINED_TICKS = 5; // consecutive hot ticks before alerting (~5 min at POLL=60s)
+const DEFAULT_PROCESS_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
+const DEFAULT_PROCESS_RSS_ALERT_MB = 768;
+const DEFAULT_PROCESS_SUSTAINED_FOR_MS = 4 * POLL_MS;
 const TURN_RUNNING_MIN_MS = 15 * 60 * 1000;
 
 /** Paths to check for free space (guest rootfs is tiny; data volume is the real store). */
@@ -95,8 +98,7 @@ export interface ProcInfo {
 export interface ProcSustainState {
   readonly cpuSeconds: number;
   readonly sampledAtMs: number;
-  /** Consecutive ticks this process has been hot; 0 resets the streak. */
-  readonly hotTicks: number;
+  readonly wasHot: boolean;
   /** When the current hot streak began, for reporting how long it has lasted. */
   readonly hotSinceMs: number;
 }
@@ -107,10 +109,28 @@ export interface SustainedHotProcess {
   readonly rssMb: number;
   /** Average CPU over the last tick gap, as percent of a single core. */
   readonly cpuPercent: number;
+  readonly ruleId: string;
+  readonly rssMbThreshold: number | null;
+  readonly cpuPercentThreshold: number | null;
+  readonly sustainedForMs: number;
   /** How long it has been continuously hot. */
   readonly sustainedMs: number;
   readonly label: string;
 }
+
+interface ResolvedProcessAlertRule {
+  readonly id: string;
+  readonly rssMbThreshold: number | null;
+  readonly cpuPercentThreshold: number | null;
+  readonly sustainedForMs: number;
+}
+
+const DEFAULT_PROCESS_ALERT_RULE: ResolvedProcessAlertRule = {
+  id: "default",
+  rssMbThreshold: DEFAULT_PROCESS_RSS_ALERT_MB,
+  cpuPercentThreshold: DEFAULT_PROCESS_CPU_PERCENT,
+  sustainedForMs: DEFAULT_PROCESS_SUSTAINED_FOR_MS,
+};
 
 /**
  * Advance the per-process hotness tracker by one tick.
@@ -123,9 +143,7 @@ export function trackSustainedHotProcesses(input: {
   readonly prev: ReadonlyMap<number, ProcSustainState>;
   readonly procs: ReadonlyArray<ProcInfo>;
   readonly nowMs: number;
-  readonly cpuPercentThreshold: number;
-  readonly rssMbThreshold: number;
-  readonly sustainedTicks: number;
+  readonly resolveRule: (proc: ProcInfo) => ResolvedProcessAlertRule;
 }): {
   readonly next: Map<number, ProcSustainState>;
   readonly hot: ReadonlyArray<SustainedHotProcess>;
@@ -134,6 +152,7 @@ export function trackSustainedHotProcesses(input: {
   const hot: SustainedHotProcess[] = [];
 
   for (const proc of input.procs) {
+    const rule = input.resolveRule(proc);
     const prior = input.prev.get(proc.pid);
     // A counter that went backwards means the pid was reused; ignore the prior.
     const reused = prior !== undefined && proc.cpuSeconds < prior.cpuSeconds;
@@ -146,27 +165,28 @@ export function trackSustainedHotProcesses(input: {
         : null;
 
     const isHot =
-      (cpuPercent !== null && cpuPercent >= input.cpuPercentThreshold) ||
-      proc.rssMb >= input.rssMbThreshold;
-    const hotTicks = isHot ? (previous?.hotTicks ?? 0) + 1 : 0;
-    const hotSinceMs = isHot
-      ? previous?.hotTicks
-        ? previous.hotSinceMs
-        : input.nowMs
-      : input.nowMs;
+      (rule.cpuPercentThreshold !== null &&
+        cpuPercent !== null &&
+        cpuPercent >= rule.cpuPercentThreshold) ||
+      (rule.rssMbThreshold !== null && proc.rssMb >= rule.rssMbThreshold);
+    const hotSinceMs = isHot ? (previous?.wasHot ? previous.hotSinceMs : input.nowMs) : input.nowMs;
 
     next.set(proc.pid, {
       cpuSeconds: proc.cpuSeconds,
       sampledAtMs: input.nowMs,
-      hotTicks,
+      wasHot: isHot,
       hotSinceMs,
     });
 
-    if (hotTicks >= input.sustainedTicks) {
+    if (isHot && input.nowMs - hotSinceMs >= rule.sustainedForMs) {
       hot.push({
         pid: proc.pid,
         rssMb: proc.rssMb,
         cpuPercent: cpuPercent ?? 0,
+        ruleId: rule.id,
+        rssMbThreshold: rule.rssMbThreshold,
+        cpuPercentThreshold: rule.cpuPercentThreshold,
+        sustainedForMs: rule.sustainedForMs,
         sustainedMs: input.nowMs - hotSinceMs,
         label: proc.label,
       });
@@ -446,6 +466,7 @@ let sustainState: ReadonlyMap<number, ProcSustainState> = new Map();
 function listFatProcesses(
   procs: ReadonlyArray<ProcInfo>,
   nowMs: number,
+  rules: ReadonlyArray<AlertProcessRule>,
 ): ReadonlyArray<SustainedHotProcess> {
   // Generic sustained high RSS / CPU alerts (never auto-kill). Our own long-lived
   // services are excluded — they are expected to run hot and are handled by
@@ -459,13 +480,27 @@ function listFatProcesses(
     cmd.includes("cloud-hypervisor") ||
     cmd.includes("virtiofsd");
 
+  const resolveRule = (proc: ProcInfo): ResolvedProcessAlertRule => {
+    const normalizedCmd = proc.cmd.toLowerCase();
+    const normalizedLabel = proc.label.toLowerCase();
+    const custom = rules.find((rule) => {
+      const match = rule.match.toLowerCase();
+      return normalizedCmd.includes(match) || normalizedLabel.includes(match);
+    });
+    if (custom === undefined) return DEFAULT_PROCESS_ALERT_RULE;
+    return {
+      id: custom.id,
+      rssMbThreshold: custom.rssMbThreshold ?? null,
+      cpuPercentThreshold: custom.cpuPercentThreshold ?? null,
+      sustainedForMs: custom.sustainedForMs,
+    };
+  };
+
   const { next, hot } = trackSustainedHotProcesses({
     prev: sustainState,
     procs: procs.filter((p) => !skip(p.cmd)),
     nowMs,
-    cpuPercentThreshold: SUSTAINED_CPU_PERCENT,
-    rssMbThreshold: STUCK_RSS_ALERT_MB,
-    sustainedTicks: SUSTAINED_TICKS,
+    resolveRule,
   });
   sustainState = next;
   return hot;
@@ -561,6 +596,7 @@ function listFailedSystemdUnits(): ReadonlyArray<string> {
 export function collectHostSnapshot(input: {
   readonly stateSqlitePath: string | undefined;
   readonly nowMs: number;
+  readonly alertProcessRules: ReadonlyArray<AlertProcessRule>;
 }): HostSnapshot {
   const mem = readMemMb();
   const load = readLoad();
@@ -576,7 +612,7 @@ export function collectHostSnapshot(input: {
     memAvailableMb: mem.available,
     disks,
     runaways: listRunaways(procs),
-    fatProcesses: listFatProcesses(procs, input.nowMs),
+    fatProcesses: listFatProcesses(procs, input.nowMs, input.alertProcessRules),
     longTurns: listLongRunningTurns(db, TURN_RUNNING_MIN_MS),
     sessionErrors: listSessionErrors(db),
     failedUnits: listFailedSystemdUnits(),
@@ -701,6 +737,7 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
 
     const rest = yield* DiscordREST;
     const discordConfig = yield* DiscordConfig.DiscordConfig;
+    const alertProcessRules = loadAlertProcessRulesFromFileSync(botConfig.alertProcessRulesPath);
     const lastSent = new Map<string, number>();
 
     const postAlert: Poster = (key, content, cooldownMs = COOLDOWN_MS, files = []) =>
@@ -758,6 +795,7 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
         const snap = collectHostSnapshot({
           stateSqlitePath: botConfig.stateSqlitePath,
           nowMs,
+          alertProcessRules,
         });
         const loadLimit = snap.nproc * LOAD_RATIO;
 
@@ -874,7 +912,14 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
                   `• pid=${p.pid} rss=${p.rssMb.toFixed(0)}MiB cpu≈${p.cpuPercent.toFixed(0)}% ` +
                   `for ${Math.round(p.sustainedMs / 60_000)}m ${p.label}`,
               ),
-              `_Sustained ≥${SUSTAINED_TICKS} ticks with RSS≥${STUCK_RSS_ALERT_MB}MiB or CPU≥${SUSTAINED_CPU_PERCENT}% of a core (not auto-killed)._`,
+              ...fatNonRunaway.map((p) => {
+                const parts = [];
+                if (p.rssMbThreshold !== null) parts.push(`RSS≥${p.rssMbThreshold.toFixed(0)}MiB`);
+                if (p.cpuPercentThreshold !== null) {
+                  parts.push(`CPU≥${p.cpuPercentThreshold.toFixed(0)}% of a core`);
+                }
+                return `_rule=${p.ruleId}; sustained ≥${Math.round(p.sustainedForMs / 60_000)}m; ${parts.join(" or ")}._`;
+              }),
             ].join("\n"),
           );
         }
