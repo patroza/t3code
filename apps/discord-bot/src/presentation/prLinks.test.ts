@@ -6,6 +6,7 @@ import {
   formatPullRequestLabel,
   formatPullRequestLinksForDiscord,
   mergePullRequestUrls,
+  sortPullRequestUrlsForDisplay,
   normalizeGithubRepoSlug,
   normalizePullRequestUrl,
 } from "./prLinks.ts";
@@ -142,5 +143,36 @@ describe("formatPullRequestLinksForDiscord", () => {
 
   it("returns null for empty lists", () => {
     expect(formatPullRequestLinksForDiscord([])).toBeNull();
+  });
+
+  it("sorts current-project PRs above foreign repos while keeping first-seen order within groups", () => {
+    expect(
+      formatPullRequestLinksForDiscord(
+        [
+          "https://github.com/example-org/configurator/pull/10",
+          "https://github.com/example-org/scanner/pull/2",
+          "https://github.com/other/repo/pull/99",
+          "https://github.com/example-org/scanner/pull/1",
+          "https://github.com/example-org/configurator/pull/11",
+        ],
+        { channelRepoSlug: "example-org/scanner" },
+      ),
+    ).toBe(
+      [
+        "**PRs**",
+        "• [PR #2](https://github.com/example-org/scanner/pull/2)",
+        "• [PR #1](https://github.com/example-org/scanner/pull/1)",
+        "• [example-org/configurator PR #10](https://github.com/example-org/configurator/pull/10)",
+        "• [other/repo PR #99](https://github.com/other/repo/pull/99)",
+        "• [example-org/configurator PR #11](https://github.com/example-org/configurator/pull/11)",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("sortPullRequestUrlsForDisplay", () => {
+  it("leaves order unchanged when channel repo is unknown", () => {
+    const urls = ["https://github.com/a/b/pull/1", "https://github.com/c/d/pull/2"];
+    expect(sortPullRequestUrlsForDisplay(urls, null)).toEqual(urls);
   });
 });
