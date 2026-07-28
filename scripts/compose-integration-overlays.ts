@@ -14,11 +14,12 @@ function run(
   command: string,
   args: ReadonlyArray<string>,
   cwd: string,
-  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: { allowFailure?: boolean; env?: NodeJS.ProcessEnv; stdioInherit?: boolean } = {},
 ): { status: number | null; stdout: string; stderr: string } {
   const result = NodeChildProcess.spawnSync(command, [...args], {
     cwd,
     encoding: "utf8",
+    stdio: options.stdioInherit ? "inherit" : "pipe",
     env: {
       ...process.env,
       GIT_TERMINAL_PROMPT: "0",
@@ -26,8 +27,8 @@ function run(
       ...options.env,
     },
   });
-  const stdout = (result.stdout ?? "").trim();
-  const stderr = (result.stderr ?? "").trim();
+  const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
   if (!options.allowFailure && result.status !== 0) {
     throw new StackError(
       `${command} ${args.join(" ")} failed: ${stderr || stdout || `exit ${result.status}`}`,
@@ -53,6 +54,90 @@ export function overlayCommitList(revListOutput: string): ReadonlyArray<string> 
 
 export function isLockfileOnlyCommit(paths: ReadonlyArray<string>): boolean {
   return paths.length > 0 && paths.every((path) => path === "pnpm-lock.yaml");
+}
+
+/** Drop proxy vars so install hits the registry directly (agent sessions may inherit SOCKS). */
+export function envWithoutProxy(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, CI: "" };
+  for (const key of Object.keys(env)) {
+    if (/^(https?|all|no)_?proxy$/i.test(key)) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+/**
+ * Prefer a work directory on the same filesystem as warm `node_modules` so
+ * `cp --reflink=auto` can clone CoW extents (btrfs/xfs). `/tmp` is often tmpfs —
+ * never use it when a home-side cache dir exists.
+ */
+export function composeWorkRoot(sourceRoot: string): string {
+  const fromEnv = process.env.COMPOSE_WORK_ROOT?.trim();
+  if (fromEnv) {
+    NodeFS.mkdirSync(fromEnv, { recursive: true });
+    return fromEnv;
+  }
+  const home = process.env.HOME?.trim();
+  if (home) {
+    const preferred = NodePath.join(home, ".t3", "compose-work");
+    try {
+      NodeFS.mkdirSync(preferred, { recursive: true });
+      return preferred;
+    } catch {
+      // fall through
+    }
+  }
+  const sourceParent = NodePath.dirname(NodePath.resolve(sourceRoot));
+  try {
+    NodeFS.accessSync(sourceParent, NodeFS.constants.W_OK);
+    return sourceParent;
+  } catch {
+    return NodeOS.tmpdir();
+  }
+}
+
+export function candidateNodeModulesDirs(sourceRoot: string): ReadonlyArray<string> {
+  const fromEnv = process.env.COMPOSE_NODE_MODULES_SOURCE?.trim();
+  const candidates = [
+    ...(fromEnv ? [fromEnv] : []),
+    NodePath.join(sourceRoot, "node_modules"),
+    NodePath.join(NodePath.resolve(sourceRoot, ".."), "node_modules"),
+    NodePath.join(NodeOS.homedir(), "pj", "t3code", "node_modules"),
+    NodePath.join(NodeOS.homedir(), "deploy", "t3code", "node_modules"),
+  ];
+  return candidates.filter((dir, index) => candidates.indexOf(dir) === index);
+}
+
+/**
+ * Seed `repoDir/node_modules` from a warm tree via `cp -a --reflink=auto`
+ * (btrfs/xfs CoW when same FS; falls back to full copy).
+ */
+export function seedNodeModules(repoDir: string, sourceRoot: string): string | undefined {
+  const dest = NodePath.join(repoDir, "node_modules");
+  if (NodeFS.existsSync(dest)) return dest;
+  for (const source of candidateNodeModulesDirs(sourceRoot)) {
+    if (!NodeFS.existsSync(source) || !NodeFS.statSync(source).isDirectory()) continue;
+    console.log(`Seeding node_modules from ${source} (cp -a --reflink=auto)…`);
+    const started = Date.now();
+    const result = run("cp", ["-a", "--reflink=auto", source, dest], repoDir, {
+      allowFailure: true,
+    });
+    if (result.status === 0 && NodeFS.existsSync(dest)) {
+      console.log(`Seeded node_modules in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      return dest;
+    }
+    console.warn(
+      `Reflink/copy from ${source} failed (${result.stderr || result.stdout || `exit ${result.status}`}); trying next candidate.`,
+    );
+    try {
+      NodeFS.rmSync(dest, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+  console.warn("No warm node_modules seed available; pnpm install will be cold.");
+  return undefined;
 }
 
 function commitPaths(repoDir: string, commit: string): ReadonlyArray<string> {
@@ -105,7 +190,6 @@ export function cherryPickOverlayCommits(
     }
     const conflicts = conflictingPaths(repoDir);
     if (conflicts.length === 1 && conflicts[0] === "pnpm-lock.yaml") {
-      // Keep the lock as-of previous overlay; regenerate once at the end.
       git(repoDir, ["checkout", "--ours", "--", "pnpm-lock.yaml"]);
       git(repoDir, ["add", "--", "pnpm-lock.yaml"]);
       const cont = run(
@@ -133,15 +217,17 @@ export function cherryPickOverlayCommits(
   return { skippedLockfileOnly, deferredLockfileConflicts };
 }
 
-function regenerateIntegrationLockfile(repoDir: string): boolean {
+function regenerateIntegrationLockfile(repoDir: string, sourceRoot: string): boolean {
+  seedNodeModules(repoDir, sourceRoot);
   console.log("Regenerating pnpm-lock.yaml for composed integration tree…");
-  const install = run("pnpm", ["install", "--no-frozen-lockfile"], repoDir, {
+  const install = run("pnpm", ["install", "--no-frozen-lockfile", "--prefer-offline"], repoDir, {
     allowFailure: true,
-    env: { ...process.env, CI: "" },
+    env: envWithoutProxy(),
+    stdioInherit: true,
   });
   if (install.status !== 0) {
     throw new StackError(
-      `pnpm install --no-frozen-lockfile failed after overlay compose: ${install.stderr || install.stdout}`,
+      `pnpm install --no-frozen-lockfile failed after overlay compose (exit ${install.status}).`,
     );
   }
   const dirty = run("git", ["status", "--porcelain", "--", "pnpm-lock.yaml"], repoDir, {
@@ -166,9 +252,11 @@ function regenerateIntegrationLockfile(repoDir: string): boolean {
 export function composeIntegration(sourceRoot = process.cwd(), push = true): string {
   const manifest = readManifest(sourceRoot);
   const originUrl = git(sourceRoot, ["remote", "get-url", "origin"]);
-  const workDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "compose-overlays-"));
+  const workRoot = composeWorkRoot(sourceRoot);
+  const workDir = NodeFS.mkdtempSync(NodePath.join(workRoot, "compose-overlays-"));
   const repoDir = NodePath.join(workDir, "repo");
   NodeFS.mkdirSync(repoDir);
+  console.log(`Compose work dir: ${workDir}`);
   try {
     git(repoDir, ["init", "--quiet"]);
     git(repoDir, ["config", "user.name", "T3 Code PR Stack"]);
@@ -216,8 +304,9 @@ export function composeIntegration(sourceRoot = process.cwd(), push = true): str
         needsLockfileRegen = true;
       }
     }
-    if (needsLockfileRegen) {
-      regenerateIntegrationLockfile(repoDir);
+    // Always regenerate when overlays land packages: product trees must match frozen CI.
+    if (needsLockfileRegen || manifest.integrationOverlays.length > 0) {
+      regenerateIntegrationLockfile(repoDir, sourceRoot);
     }
     const next = git(repoDir, ["rev-parse", "HEAD"]);
     if (push && next !== previous) {
