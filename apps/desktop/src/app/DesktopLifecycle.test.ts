@@ -78,6 +78,7 @@ describe("DesktopLifecycle", () => {
         flushMainWindowBounds: Effect.void,
         dispatchMenuAction: () => Effect.void,
         syncAppearance: Effect.void,
+        navigateToThread: () => Effect.void,
       });
 
       const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
