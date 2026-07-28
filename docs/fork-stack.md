@@ -259,12 +259,29 @@ overlay only needs its own workspace package). Compose therefore:
 1. **Skips** commits that only touch `pnpm-lock.yaml`.
 2. On a mixed commit that conflicts **only** on `pnpm-lock.yaml`, keeps the current lock (`--ours`)
    and continues the product files from the overlay.
-3. **Regenerates** a single integration lockfile with `CI= pnpm install --no-frozen-lockfile` and
-   commits it when needed.
+3. **Seeds `node_modules`** before install when a warm tree is available (see below).
+4. **Regenerates** a single integration lockfile with
+   `pnpm install --no-frozen-lockfile --prefer-offline` (proxy env stripped) and commits it.
 
 Do not treat overlay lockfile commits as product truth for integration. Do not leave a partial
 compose tip pushed after a lockfile conflict — finish compose (or re-run the script) so the
 regenerated lock is on `fork/integration`.
+
+#### Warm `node_modules` seed (`cp --reflink=auto`)
+
+Cold `pnpm install` in a temp compose clone is multi‑minute (or hung if the agent session still
+inherits a SOCKS proxy). Compose therefore:
+
+1. Puts the compose worktree under **`~/.t3/compose-work/`** (btrfs home), **not** `/tmp` (often
+   tmpfs — reflink cannot share extents with `/home`).
+2. **Clones** an existing `node_modules` with `cp -a --reflink=auto` from, in order:
+   - `COMPOSE_NODE_MODULES_SOURCE` (if set)
+   - `<sourceRoot>/node_modules` (the checkout running the script)
+   - sibling / `~/pj/t3code` / `~/deploy/t3code` warm trees
+3. Runs install against that seed so resolution is mostly offline and fast.
+
+On btrfs/xfs same-filesystem copies this is CoW (seconds for multi‑GB trees). On other FS it falls
+back to a full copy. Optional: `COMPOSE_WORK_ROOT` overrides the work directory parent.
 
 ### Per-layer `vp check` after stack rebase (required)
 
