@@ -13,7 +13,7 @@ import {
 } from "./discordPrAttribution.ts";
 
 describe("formatDiscordPrAttributionFooter", () => {
-  it("formats starter + thread title + jump link", () => {
+  it("formats starter profile URL + full thread jump link", () => {
     expect(
       formatDiscordPrAttributionFooter({
         starterDisplayName: "joshuadima",
@@ -23,7 +23,20 @@ describe("formatDiscordPrAttributionFooter", () => {
           "https://discord.com/channels/1083767712431480922/1531376362399465595/1531376362399465595",
       }),
     ).toBe(
-      "opened by [joshuadima](593167616273809448) in chat thread **Discord** · [Open Random PR Test](https://discord.com/channels/1083767712431480922/1531376362399465595/1531376362399465595)",
+      "opened by [joshuadima](https://discord.com/users/593167616273809448) in chat thread **Discord** · [Open Random PR Test](https://discord.com/channels/1083767712431480922/1531376362399465595/1531376362399465595)",
+    );
+  });
+
+  it("omits broken/truncated thread links", () => {
+    expect(
+      formatDiscordPrAttributionFooter({
+        starterDisplayName: "joshuadima",
+        starterUserId: "593167616273809448",
+        threadTitle: "Thread",
+        threadJumpUrl: "https://discord.com/channels",
+      }),
+    ).toBe(
+      "opened by [joshuadima](https://discord.com/users/593167616273809448) in chat thread **Discord**",
     );
   });
 
@@ -34,7 +47,7 @@ describe("formatDiscordPrAttributionFooter", () => {
       threadTitle: "Title [x]",
       threadJumpUrl: "https://discord.com/channels/1/2/3",
     });
-    expect(footer).toContain("[a\\[b\\]c](1)");
+    expect(footer).toContain("[a\\[b\\]c](https://discord.com/users/1)");
     expect(footer).toContain("[Title \\[x\\]](https://discord.com/channels/1/2/3)");
   });
 });
