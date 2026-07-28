@@ -12,7 +12,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ScopedThreadRef,
+  SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -27,6 +31,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListFilterIcon,
   MessageSquareIcon,
   PlusIcon,
   SearchIcon,
@@ -155,7 +160,32 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Kbd } from "./ui/kbd";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+  DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+  EMPTY_LIST_ENVIRONMENT_FILTER,
+  LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  ListEnvironmentFilterSchema,
+  ListHideSettledSchema,
+  SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+  SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+  isAllEnvironmentsSelected,
+  isEnvironmentSelected,
+  matchesEnvironmentFilter,
+  resolveSelectedEnvironmentIds,
+  toggleEnvironmentId,
+} from "./listEnvironmentFilter";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -1130,6 +1160,21 @@ export default function SidebarV2() {
     null,
   );
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
+    LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+    EMPTY_LIST_ENVIRONMENT_FILTER,
+    ListEnvironmentFilterSchema,
+  );
+  const [settledRecencyHeadersEnabled, setSettledRecencyHeadersEnabled] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+    ListHideSettledSchema,
+  );
+  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+    ListHideSettledSchema,
+  );
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
@@ -1169,6 +1214,22 @@ export default function SidebarV2() {
       ),
     [environments],
   );
+  const availableEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  const selectedEnvironmentIds = useMemo(
+    () =>
+      resolveSelectedEnvironmentIds(
+        storedEnvironmentFilter as readonly EnvironmentId[],
+        availableEnvironmentIds,
+      ),
+    [availableEnvironmentIds, storedEnvironmentFilter],
+  );
+  const listOptionsActive =
+    !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
+    settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS ||
+    settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED;
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1466,6 +1527,7 @@ export default function SidebarV2() {
     const visible = threads.filter(
       (thread) =>
         thread.archivedAt === null &&
+        matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
@@ -1513,6 +1575,7 @@ export default function SidebarV2() {
     changeRequestStateByKey,
     nowMinute,
     scopedProjectKeys,
+    selectedEnvironmentIds,
     serverConfigs,
     snoozeWakeTick,
     threads,
@@ -1541,7 +1604,7 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = `${projectScopeKey ?? "all"}:${selectedEnvironmentIds.join(",")}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -1569,8 +1632,10 @@ export default function SidebarV2() {
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
   );
-  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
-  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  const toggleSettledShelf = useCallback(
+    () => setSettledShelfExpanded((value) => !value),
+    [setSettledShelfExpanded],
+  );
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
     if (routeThreadKey === null) return [];
@@ -1583,11 +1648,16 @@ export default function SidebarV2() {
 
   // Date headers on the settled tail only (lifecycle spine stays intact).
   // Recompute when the minute clock advances so Last Hour / Earlier Today
-  // boundaries stay honest. Single-bucket pages omit headers.
+  // boundaries stay honest. Single-bucket pages omit headers. View menu can
+  // disable headers entirely without changing settle order.
   const settledRecencyLayout = useMemo(() => {
     void nowMinute;
-    return groupSettledThreadsByRecencyForSidebarV2(renderedSettledThreads, new Date());
-  }, [nowMinute, renderedSettledThreads]);
+    const layout = groupSettledThreadsByRecencyForSidebarV2(renderedSettledThreads, new Date());
+    if (!settledRecencyHeadersEnabled) {
+      return { groups: layout.groups, showHeaders: false };
+    }
+    return layout;
+  }, [nowMinute, renderedSettledThreads, settledRecencyHeadersEnabled]);
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -2392,8 +2462,8 @@ export default function SidebarV2() {
                 </Tooltip>
               </div>
             </div>
-            {projectGroups.length > 0 ? (
-              <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1">
+              {projectGroups.length > 0 ? (
                 <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                   <MenuTrigger
                     render={
@@ -2465,6 +2535,109 @@ export default function SidebarV2() {
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+              ) : (
+                <div className="min-w-0 flex-1" />
+              )}
+              <Menu>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <MenuTrigger
+                        render={
+                          <SidebarMenuButton
+                            size="icon"
+                            type="button"
+                            className={cn(
+                              "relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
+                              listOptionsActive && "bg-sidebar-row-hover text-sidebar-foreground",
+                            )}
+                            aria-label="View and filters"
+                            data-testid="sidebar-v2-view-options-trigger"
+                          />
+                        }
+                      />
+                    }
+                  >
+                    <ListFilterIcon />
+                    {listOptionsActive ? (
+                      <span
+                        aria-hidden
+                        className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
+                      />
+                    ) : null}
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">View & filters</TooltipPopup>
+                </Tooltip>
+                <MenuPopup align="end" side="bottom" className="min-w-56">
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      Settled shelf
+                    </div>
+                    <MenuCheckboxItem
+                      checked={settledRecencyHeadersEnabled}
+                      closeOnClick={false}
+                      className="min-h-7 py-1 sm:text-xs"
+                      data-testid="sidebar-v2-settled-recency-headers"
+                      onCheckedChange={(checked) =>
+                        setSettledRecencyHeadersEnabled(checked === true)
+                      }
+                    >
+                      Date headers on settled
+                    </MenuCheckboxItem>
+                    <MenuCheckboxItem
+                      checked={settledShelfExpanded}
+                      closeOnClick={false}
+                      className="min-h-7 py-1 sm:text-xs"
+                      data-testid="sidebar-v2-settled-shelf-expanded"
+                      onCheckedChange={(checked) => setSettledShelfExpanded(checked === true)}
+                    >
+                      Expand settled shelf
+                    </MenuCheckboxItem>
+                  </MenuGroup>
+                  {environments.length > 1 ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                          Environment
+                        </div>
+                        <MenuCheckboxItem
+                          checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
+                          closeOnClick={false}
+                          className="min-h-7 py-1 sm:text-xs"
+                          data-testid="sidebar-v2-environment-filter-all"
+                          onCheckedChange={() => setStoredEnvironmentFilter([])}
+                        >
+                          All environments
+                        </MenuCheckboxItem>
+                        {environments.map((environment) => (
+                          <MenuCheckboxItem
+                            key={environment.environmentId}
+                            checked={isEnvironmentSelected(
+                              selectedEnvironmentIds,
+                              environment.environmentId,
+                            )}
+                            closeOnClick={false}
+                            className="min-h-7 py-1 sm:text-xs"
+                            data-testid={`sidebar-v2-environment-filter-${environment.environmentId}`}
+                            onCheckedChange={() => {
+                              setStoredEnvironmentFilter([
+                                ...toggleEnvironmentId(
+                                  selectedEnvironmentIds,
+                                  environment.environmentId,
+                                ),
+                              ]);
+                            }}
+                          >
+                            {environment.label}
+                          </MenuCheckboxItem>
+                        ))}
+                      </MenuGroup>
+                    </>
+                  ) : null}
+                </MenuPopup>
+              </Menu>
+              {projectGroups.length > 0 ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -2485,8 +2658,8 @@ export default function SidebarV2() {
                   </TooltipTrigger>
                   <TooltipPopup side="right">New project</TooltipPopup>
                 </Tooltip>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </SidebarGroup>
         }
       >
