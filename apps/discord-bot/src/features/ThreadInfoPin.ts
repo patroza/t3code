@@ -11,6 +11,14 @@ import {
   mergeJiraIssueKeys,
 } from "../presentation/jiraLinks.ts";
 import {
+  buildDiscordThreadJumpUrl,
+  ensureDiscordPrAttributionFooters,
+  formatDiscordPrAttributionFooter,
+  starterDisplayName,
+  starterUserId,
+  type DiscordThreadStarterLike,
+} from "../presentation/discordPrAttribution.ts";
+import {
   extractPullRequestUrlsFromDiscordMessage,
   mergePullRequestUrls,
   normalizeGithubRepoSlug,
@@ -36,8 +44,20 @@ interface DiscordMessageSummary {
     readonly description?: string | null;
     readonly footer?: { readonly text?: string | null } | null;
   }> | null;
-  readonly author?: { readonly id?: string; readonly bot?: boolean } | null;
+  readonly author?: {
+    readonly id?: string;
+    readonly bot?: boolean;
+    readonly username?: string;
+    readonly global_name?: string | null;
+  } | null;
   readonly timestamp?: string | null;
+}
+
+interface DiscordChannelSummary {
+  readonly id: string;
+  readonly name?: string | null;
+  readonly parent_id?: string | null;
+  readonly owner_id?: string | null;
 }
 
 export interface ThreadInfoPinMessageRef {
@@ -194,6 +214,185 @@ const resolveChannelGithubRepoSlug = (input: {
     }).pipe(Effect.orElseSucceed(() => null as string | null));
 
     return normalizeGithubRepoSlug(githubUrl);
+  });
+
+/**
+ * Load Discord thread starter (public-thread parent message or oldest thread message)
+ * and the current thread title for hardcoded PR attribution footers.
+ */
+const loadDiscordThreadAttributionContext = (input: {
+  readonly discordThreadId: string;
+  readonly parentChannelId: string | null;
+  readonly guildId: string;
+  readonly baseUrl: string;
+  readonly botToken: string;
+}) =>
+  Effect.gen(function* () {
+    const channel = yield* Effect.tryPromise({
+      try: () =>
+        discordApiJson<DiscordChannelSummary>({
+          baseUrl: input.baseUrl,
+          botToken: input.botToken,
+          path: `/channels/${input.discordThreadId}`,
+        }),
+      catch: (cause) => cause,
+    }).pipe(Effect.orElseSucceed((): DiscordChannelSummary | null => null));
+
+    const parentChannelId =
+      input.parentChannelId ??
+      (channel?.parent_id !== null && channel?.parent_id !== undefined && channel.parent_id !== ""
+        ? channel.parent_id
+        : null);
+
+    let starter: DiscordThreadStarterLike | null = null;
+    if (parentChannelId !== null) {
+      // Public threads created from a message use the starter message id as the thread id.
+      starter = yield* Effect.tryPromise({
+        try: () =>
+          discordApiJson<DiscordMessageSummary>({
+            baseUrl: input.baseUrl,
+            botToken: input.botToken,
+            path: `/channels/${parentChannelId}/messages/${input.discordThreadId}`,
+          }),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.map(
+          (message): DiscordThreadStarterLike => ({
+            id: message.id,
+            author: {
+              id: message.author?.id,
+              username: message.author?.username,
+              displayName: message.author?.global_name ?? message.author?.username,
+            },
+          }),
+        ),
+        Effect.orElseSucceed((): DiscordThreadStarterLike | null => null),
+      );
+    }
+
+    if (starter === null) {
+      const listed = yield* Effect.tryPromise({
+        try: () =>
+          discordApiJson<ReadonlyArray<DiscordMessageSummary>>({
+            baseUrl: input.baseUrl,
+            botToken: input.botToken,
+            path: `/channels/${input.discordThreadId}/messages?limit=5&after=0`,
+          }),
+        catch: (cause) => cause,
+      }).pipe(Effect.orElseSucceed((): ReadonlyArray<DiscordMessageSummary> => []));
+
+      const oldest = listed.at(-1) ?? listed[0];
+      if (oldest !== undefined) {
+        starter = {
+          id: oldest.id,
+          author: {
+            id: oldest.author?.id,
+            username: oldest.author?.username,
+            displayName: oldest.author?.global_name ?? oldest.author?.username,
+          },
+        };
+      }
+    }
+
+    const threadTitle =
+      channel?.name !== null && channel?.name !== undefined && channel.name.trim() !== ""
+        ? channel.name.trim()
+        : "Discord thread";
+
+    const userId = starterUserId(starter);
+    if (userId === null) return null;
+
+    return {
+      footer: formatDiscordPrAttributionFooter({
+        starterDisplayName: starterDisplayName(starter),
+        starterUserId: userId,
+        threadTitle,
+        threadJumpUrl: buildDiscordThreadJumpUrl({
+          guildId: input.guildId,
+          discordThreadId: input.discordThreadId,
+          messageId: starter?.id ?? null,
+        }),
+      }),
+      threadTitle,
+      starterUserId: userId,
+    } as const;
+  });
+
+/**
+ * When GitHub PR URLs are observed on a Discord-linked thread, hard-append the
+ * Discord attribution footer using the **thread starter** + thread title.
+ * Idempotent (skips bodies that already have the footer). Best-effort only.
+ */
+const ensureAttributionFootersForIncomingPrs = (input: {
+  readonly discordThreadId: string;
+  readonly link: ThreadLink | null;
+  readonly incomingPrUrls: ReadonlyArray<string>;
+}) =>
+  Effect.gen(function* () {
+    const prUrls = mergePullRequestUrls([], input.incomingPrUrls);
+    if (prUrls.length === 0) return;
+
+    const links = yield* ThreadLinkStore;
+    const link = input.link ?? (yield* links.getByDiscordThreadId(input.discordThreadId));
+    if (link === null) {
+      yield* Effect.logWarning("Skipping Discord PR attribution footer: no thread link", {
+        discordThreadId: input.discordThreadId,
+        prCount: prUrls.length,
+      });
+      return;
+    }
+
+    const discordConfig = yield* DiscordConfig.DiscordConfig;
+    const botToken = Redacted.value(discordConfig.token);
+    const baseUrl = discordConfig.rest.baseUrl;
+
+    const attribution = yield* loadDiscordThreadAttributionContext({
+      discordThreadId: input.discordThreadId,
+      parentChannelId: link.channelId,
+      guildId: link.guildId,
+      baseUrl,
+      botToken,
+    });
+    if (attribution === null) {
+      yield* Effect.logWarning("Skipping Discord PR attribution footer: no thread starter", {
+        discordThreadId: input.discordThreadId,
+        prCount: prUrls.length,
+      });
+      return;
+    }
+
+    const results = yield* Effect.tryPromise({
+      try: () =>
+        ensureDiscordPrAttributionFooters({
+          prUrls,
+          footer: attribution.footer,
+        }),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Discord PR attribution footer ensure failed", {
+          discordThreadId: input.discordThreadId,
+          error: String(error),
+        }).pipe(Effect.as([] as const)),
+      ),
+    );
+
+    for (const result of results) {
+      if (result.status === "updated") {
+        yield* Effect.logInfo("Appended Discord PR attribution footer", {
+          discordThreadId: input.discordThreadId,
+          prUrl: result.url,
+          threadTitle: attribution.threadTitle,
+          starterUserId: attribution.starterUserId,
+        });
+      } else if (result.status === "error") {
+        yield* Effect.logWarning("Failed to append Discord PR attribution footer", {
+          discordThreadId: input.discordThreadId,
+          prUrl: result.url,
+          detail: result.detail ?? null,
+        });
+      }
+    }
   });
 
 /**
@@ -358,6 +557,22 @@ export const upsertThreadInfoPin = (input: {
         prUrls = updated.prUrls ?? prUrls;
       }
     }
+
+    // Hardcode Discord PR attribution (thread starter + title) — no agent prompt.
+    // Only runs for *incoming* PR URLs this call (pin refresh with empty incoming is a no-op).
+    // ensureDiscordPrAttributionFooters is idempotent if the footer is already present.
+    yield* ensureAttributionFootersForIncomingPrs({
+      discordThreadId: input.discordThreadId,
+      link: existing,
+      incomingPrUrls: input.incomingPrUrls ?? [],
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Discord PR attribution side-effect failed", {
+          discordThreadId: input.discordThreadId,
+          error: String(error),
+        }),
+      ),
+    );
 
     const nextModelLine =
       input.modelSelection === null || input.modelSelection === undefined

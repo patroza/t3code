@@ -149,6 +149,33 @@ export function mergePullRequestUrls(
   return result;
 }
 
+/**
+ * Order PR URLs for the pinned thread header: current project/repo first,
+ * then everything else. Within each group, preserve first-seen order.
+ */
+export function sortPullRequestUrlsForDisplay(
+  urls: ReadonlyArray<string>,
+  channelRepoSlug?: string | null,
+): ReadonlyArray<string> {
+  const ordered = mergePullRequestUrls([], urls);
+  if (ordered.length === 0) return ordered;
+
+  const channel = normalizeGithubRepoSlug(channelRepoSlug);
+  if (channel === null) return ordered;
+
+  const current: string[] = [];
+  const other: string[] = [];
+  for (const url of ordered) {
+    const normalized = normalizePullRequestUrl(url);
+    if (normalized !== null && normalized.repoSlug === channel) {
+      current.push(normalized.url);
+    } else {
+      other.push(normalized?.url ?? url);
+    }
+  }
+  return [...current, ...other];
+}
+
 export function formatPullRequestLinksForDiscord(
   urls: ReadonlyArray<string>,
   options?: {
@@ -156,7 +183,7 @@ export function formatPullRequestLinksForDiscord(
     readonly channelRepoSlug?: string | null;
   },
 ): string | null {
-  const ordered = mergePullRequestUrls([], urls);
+  const ordered = sortPullRequestUrlsForDisplay(urls, options?.channelRepoSlug);
   if (ordered.length === 0) return null;
 
   const lines = ordered.map((url) => {
