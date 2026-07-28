@@ -9,9 +9,27 @@ import {
   THREAD_RECENCY_BUCKET_LABELS,
 } from "./threadRecencyGroups.ts";
 
+/** Local calendar fixture; Date APIs are intentional for bucket tests. */
+function localDate(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hours = 0,
+  minutes = 0,
+  seconds = 0,
+): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date(year, monthIndex, day, hours, minutes, seconds);
+}
+
+function dateFromMs(ms: number): Date {
+  // @effect-diagnostics-next-line globalDate:off
+  return new Date(ms);
+}
+
 describe("getThreadRecencyBucketId", () => {
   // Fixed local afternoon so last-hour and earlier-today both fit in the day.
-  const now = new Date(2026, 2, 15, 14, 30, 0); // 2026-03-15 14:30 local
+  const now = localDate(2026, 2, 15, 14, 30, 0); // 2026-03-15 14:30 local
 
   it("splits today into last hour vs earlier today", () => {
     const startToday = startOfLocalDay(now).getTime();
@@ -40,7 +58,7 @@ describe("getThreadRecencyBucketId", () => {
 });
 
 describe("groupThreadsByRecency", () => {
-  const now = new Date(2026, 2, 15, 14, 30, 0);
+  const now = localDate(2026, 2, 15, 14, 30, 0);
   const startToday = startOfLocalDay(now).getTime();
   const nowMs = now.getTime();
 
@@ -104,10 +122,10 @@ describe("shouldShowRecencySectionHeaders", () => {
 
 describe("groupSortedThreadsByRecency", () => {
   it("groups using activity timestamps from ThreadSortInput", () => {
-    const now = new Date(2026, 2, 15, 14, 30, 0);
+    const now = localDate(2026, 2, 15, 14, 30, 0);
     const startToday = startOfLocalDay(now);
-    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
-    const olderIso = new Date(startToday.getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const lastHourIso = dateFromMs(now.getTime() - 5 * 60_000).toISOString();
+    const olderIso = dateFromMs(startToday.getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
 
     const groups = groupSortedThreadsByRecency(
       [
