@@ -93,7 +93,9 @@ export const LIST_THREAD_GROUPING_STORAGE_KEY = "t3code:list:thread-grouping:v1"
 export const LIST_PROJECT_FILTER_STORAGE_KEY = "t3code:list:project-filter:v1";
 export const LIST_PROJECT_FILTER_ALL = "all";
 /**
- * Per organization: when true, settled threads are omitted.
+ * Per organization: when true, settled threads leave the main list.
+ * Classic recency/none shelves them in a collapsible Settled section (like V2);
+ * project groups still omit them from each project’s thread list.
  * Recency/none default to hide (cleaner inbox); project groups default to show.
  */
 export const LIST_HIDE_SETTLED_RECENT_STORAGE_KEY = "t3code:list:hide-settled-recent:v1";
