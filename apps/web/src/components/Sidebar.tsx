@@ -11,6 +11,7 @@ import {
   LoaderIcon,
   PinIcon,
   SearchIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -3406,8 +3407,26 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                 <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
               )}
             </div>
-            <span className="truncate text-[10px] text-muted-foreground/60">
-              {project.displayName}
+            {/* Cross-project recency rows: project · server, matching mobile +
+                Sidebar V2's environment context (icon when remote). */}
+            <span className="flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground/60">
+              <span className="truncate">{project.displayName}</span>
+              {environment?.label ? (
+                <>
+                  <span aria-hidden className="shrink-0 text-muted-foreground/40">
+                    ·
+                  </span>
+                  <span className="inline-flex min-w-0 items-center gap-0.5 truncate">
+                    {isRemoteThread ? (
+                      <ServerIcon
+                        aria-hidden
+                        className="size-2.5 shrink-0 text-muted-foreground/50"
+                      />
+                    ) : null}
+                    <span className="truncate">{environment.label}</span>
+                  </span>
+                </>
+              ) : null}
             </span>
           </div>
         </div>
@@ -3533,7 +3552,9 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             </Tooltip>
           ) : null}
           <div className="relative flex min-w-16 shrink-0 items-center justify-end">
-            {isRemoteThread && !isDesktopLocalThread ? (
+            {/* Trailing remote cue kept for parity with project-thread rows;
+                subtitle already names the server when the label is available. */}
+            {isRemoteThread && !isDesktopLocalThread && !environment?.label ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -3545,7 +3566,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                 >
                   <CloudIcon className="size-3 text-muted-foreground/40" />
                 </TooltipTrigger>
-                <TooltipPopup>{environment?.label ?? "Remote"}</TooltipPopup>
+                <TooltipPopup>Remote</TooltipPopup>
               </Tooltip>
             ) : null}
             <span
