@@ -626,6 +626,7 @@ export function makeRefreshingIdentityMapStore(input: {
   readonly onReload?: (people: ReadonlyArray<PersonIdentity>) => void;
 }): IdentityMapStoreService {
   const ttlMs = input.ttlMs ?? IDENTITY_MAP_CACHE_TTL_MS;
+  // @effect-diagnostics-next-line globalDate:off
   const now = input.now ?? (() => Date.now());
   const load = input.load ?? loadIdentityMapFromFileSync;
   const path = input.filePath.trim();
