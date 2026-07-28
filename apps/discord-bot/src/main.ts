@@ -83,6 +83,7 @@ const program = Effect.gen(function* () {
     dataDir: botConfig.dataDir,
     projectAliasesPath: botConfig.projectAliasesPath ?? "(unset)",
     identityMapPath: botConfig.identityMapPath ?? "(unset)",
+    alertProcessRulesPath: botConfig.alertProcessRulesPath ?? "(unset)",
   });
 
   // Force acquisition of MentionRouter + Discord gateway (must not be pruned).
