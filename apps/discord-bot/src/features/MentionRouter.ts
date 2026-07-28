@@ -72,6 +72,7 @@ import {
   looksLikeSentryContext,
   type DiscordMessageLike,
 } from "../presentation/threadContext.ts";
+import { IdentityMapStore } from "../identityMap.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { newMessageId } from "../t3/ids.ts";
@@ -461,6 +462,7 @@ const make = (botConfig: DiscordBotConfig) =>
     const t3 = yield* T3Session;
     const links = yield* ThreadLinkStore;
     const aliases = yield* ProjectAliasStore;
+    const identityMap = yield* IdentityMapStore;
     const registry = yield* InteractionsRegistry;
     const bridgeHub = yield* BridgeHub;
     const turnCoordinator = yield* makeDiscordThreadTurnCoordinator;
@@ -786,13 +788,21 @@ const make = (botConfig: DiscordBotConfig) =>
               content: input.prompt,
             }),
           );
+          // Re-load thread starter so co-author trailers stay available mid-thread.
+          const continueStarter = yield* loadThreadStarter({
+            discordThreadId: input.discordThreadId,
+            parentChannelId: input.parentChannelId,
+            ...(input.mentionMessage === undefined ? {} : { mentionMessage: input.mentionMessage }),
+          });
           const prompt = buildDiscordTurnPrompt({
             mentionPrompt: promptWithAttachments,
             requester: input.mentionMessage,
+            starter: continueStarter,
             referencedMessage: input.referencedMessage,
             referencedMessageUrl: input.referencedMessageUrl,
             jiraIssueKeys: turnJiraIssueKeys,
             jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
+            identityPeople: identityMap.list(),
           });
           if (stagedFiles.skipped.length > 0) {
             yield* Effect.logWarning("Skipped some Discord file attachments", {
@@ -1099,6 +1109,7 @@ const make = (botConfig: DiscordBotConfig) =>
           honeycombTraceUrlTemplate: botConfig.honeycombTraceUrlTemplate,
           jiraIssueKeys: firstTurnJiraIssueKeys,
           jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
+          identityPeople: identityMap.list(),
         });
 
         yield* Effect.logInfo("Creating T3 thread with worktree bootstrap", {
