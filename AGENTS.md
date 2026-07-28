@@ -104,6 +104,14 @@ branches.
   same side. Prefer durable `commit: "*"` + path policies; exact SHAs go stale after every rewrite.
   During rebase, `theirs` = commit being replayed, `ours` = new base. Documented in
   [docs/fork-stack.md](./docs/fork-stack.md) ("Conflict resolutions").
+- **Product conflicts (shared UI / app code):** never blind whole-file `ours`/`theirs` on shared
+  product paths. 3-way merge or re-apply the feature commit; run a pre/post parity check so helpers
+  and tests cannot survive while JSX/wiring is dropped (see #154 remote Open in VS Code button).
+  Full rules: [docs/fork-stack.md](./docs/fork-stack.md) ("Product conflicts").
+- **Fork product changes need existence/behavior tests:** every user-visible or behavioral fork
+  change must land with a test that fails if the surface disappears (pure helpers alone are not
+  enough). Prefer pure gates + `aria-label`/`data-testid` existence, or markers in
+  `apps/web/src/forkSurfaceExistence.test.ts` for chrome.
 - **Integration compose lockfiles:** overlay lock commits diverge by design. Compose skips
   lockfile-only commits, defers lock-only conflicts, and regenerates one integration
   `pnpm-lock.yaml` at the end. Never push a partial `fork/integration` after a lock conflict.
@@ -180,6 +188,9 @@ Run from the repository root, in order:
      is what the package uses.
    - Backend / contracts / runtime behavior changes **must** include and run focused tests for the
      changed behavior.
+   - Fork product / UI changes **must** include an existence or behavior assertion that fails if
+     the surface is dropped (not only pure helpers). See `apps/web/src/forkSurfaceExistence.test.ts`
+     and [docs/fork-stack.md](./docs/fork-stack.md) (“Product conflicts”).
 5. **Do not push** if steps 1–2 fail, or if required steps 3–4 fail. Fix first.
 
 **Ordinary feature PRs (based on `fork/changes`):** full-workspace `vp run test` is optional unless
