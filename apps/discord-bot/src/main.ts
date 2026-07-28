@@ -86,20 +86,18 @@ const program = Effect.gen(function* () {
   });
 
   // Force acquisition of MentionRouter + Discord gateway (must not be pruned).
+  // Discord can become READY before guest T3 is listening — that is expected on
+  // restart. Mentions that land early get a transient "still connecting" reply.
   const running = yield* DiscordBotRunning;
   yield* Effect.logInfo("Discord gateway active", { botUserId: running.botUserId });
 
   const t3 = yield* T3Session;
-  yield* t3.connect();
-  const aliasStore = yield* ProjectAliasStore;
-  const identityStore = yield* IdentityMapStore;
-  yield* Effect.logInfo(
-    `Connected to T3; bot project aliases=${aliasStore.list().length}; identity map entries=${identityStore.list().length}`,
-  );
 
   // Capture ambient services so T3 auto-reconnect can rehydrate Discord bridges.
-  // provideContext erases R at runtime; cast so Effect.runPromise accepts the program.
-  // (setOnReconnected is a Promise callback outside the Effect runtime, so runPromise is intentional.)
+  // Register before connectUntilReady so a drop immediately after first success
+  // still rehydrates. provideContext erases R at runtime; cast so Effect.runPromise
+  // accepts the program. (setOnReconnected is a Promise callback outside the Effect
+  // runtime, so runPromise is intentional.)
   const services = yield* Effect.context();
   t3.setOnReconnected(() =>
     // @effect-diagnostics-next-line runEffectInsideEffect:off
@@ -114,6 +112,14 @@ const program = Effect.gen(function* () {
         Effect.asVoid,
       ) as Effect.Effect<void, never, never>,
     ),
+  );
+
+  // Retry forever until shell is ready — do not exit the process when T3 is late.
+  yield* t3.connectUntilReady();
+  const aliasStore = yield* ProjectAliasStore;
+  const identityStore = yield* IdentityMapStore;
+  yield* Effect.logInfo(
+    `Connected to T3; bot project aliases=${aliasStore.list().length}; identity map entries=${identityStore.list().length}`,
   );
 
   // Restore running/pending bridges + catch-up finalize for open stream tips.
