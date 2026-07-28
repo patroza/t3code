@@ -8,7 +8,7 @@ import {
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
-import { memo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -17,10 +17,13 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
+import { Button } from "../ui/button";
+import { VisualStudioCode } from "../Icons";
+import { readLocalApi } from "~/localApi";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -121,6 +124,7 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeEnvironment = useEnvironment(activeThreadEnvironmentId);
   const fileScripts = useT3ProjectFileScripts(
     activeThreadEnvironmentId,
     activeProjectScripts ? activeProjectCwd : null,
@@ -130,6 +134,20 @@ export const ChatHeader = memo(function ChatHeader({
     activeThreadEnvironmentId,
     primaryEnvironmentId,
   });
+  const remoteVscodeTarget = useMemo(
+    () =>
+      activeProjectName && !showOpenInPicker
+        ? resolveRemoteVscodeOpenTarget({
+            entry: activeEnvironment?.entry ?? null,
+            cwd: openInCwd,
+          })
+        : null,
+    [activeEnvironment?.entry, activeProjectName, openInCwd, showOpenInPicker],
+  );
+  const openRemoteVscode = useCallback(() => {
+    if (!remoteVscodeTarget) return;
+    void readLocalApi()?.shell.openExternal(remoteVscodeTarget.uri);
+  }, [remoteVscodeTarget]);
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -203,6 +221,28 @@ export const ChatHeader = memo(function ChatHeader({
             availableEditors={availableEditors}
             openInCwd={openInCwd}
           />
+        )}
+        {remoteVscodeTarget && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  aria-label={`Open in VS Code Remote SSH on ${remoteVscodeTarget.authority}`}
+                  size="xs"
+                  variant="outline"
+                  onClick={openRemoteVscode}
+                >
+                  <VisualStudioCode aria-hidden="true" className="size-3.5" />
+                  <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                    Open
+                  </span>
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">
+              Open VS Code Remote SSH: {remoteVscodeTarget.authority}
+            </TooltipPopup>
+          </Tooltip>
         )}
         {activeProjectName && (
           <GitActionsControl
