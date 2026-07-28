@@ -245,7 +245,7 @@ Required workflow when automation stops on a conflict:
 4. Open/merge a PR to `fork/changes` with that manifest update **before** calling the stack “done”.
 5. Resolve/stage files and `node scripts/rebase-pr-stack.ts resume --state <dir> --push`, **or**
    re-run `sync --push` after the manifest is on the tip the sync reads.
-6. Run **per-layer `vp check`** (below). Lockfile conflicts still need
+6. Run **per-layer full CI** (below). Lockfile conflicts still need
    `CI= pnpm install --no-frozen-lockfile` — never leave a mismatched lock as the “resolution”.
 
 The stack conflict summary prints ready-to-paste JSON for both `*` and exact-SHA forms.
@@ -283,19 +283,27 @@ inherits a SOCKS proxy). Compose therefore:
 On btrfs/xfs same-filesystem copies this is CoW (seconds for multi‑GB trees). On other FS it falls
 back to a full copy. Optional: `COMPOSE_WORK_ROOT` overrides the work directory parent.
 
-### Per-layer green gate (required)
+### Per-layer full CI after stack rebase (required — stop the line)
 
-When you manually rebase, rewrite, or compose the stack, **do not advance to the next layer until
-the current layer is fully green**. “Green” means:
+When you manually rebase or rewrite the stack, **do not advance to the next layer until the current
+layer passes the full local CI gate** (not only `vp check`). A red parent must never receive more
+layers on top of it.
 
-1. **Local pre-push gate** on that tip (see `AGENTS.md` Task Completion Requirements): root
-   `vp check`, package typechecks for the affected scope, focused tests, matching lockfile.
-2. **Push** the layer tip.
-3. **Fork CI on that exact tip passes every applicable job** (Check, Test, and any other jobs that
-   run for that ref). Do not proceed while CI is red, cancelled, or still running “for later.”
-4. **Only then** rebase the next layer onto the green parent (or compose `fork/integration`).
+After each layer is rebased onto its parent, install/lock is consistent, and conflicts are resolved
+(and `conflictResolutions` updated when you hand-resolved):
 
-Layer order:
+1. Check out that layer’s tip.
+2. Run the **full local Fork CI gate** on that tip:
+   - `vp check`
+   - `ELECTRON_SKIP_BINARY_DOWNLOAD=1 vp run -r --cache --log labeled typecheck`
+   - `vp run --cache build:desktop` + preload verify steps from `.github/workflows/fork-ci.yml`
+   - `ELECTRON_SKIP_BINARY_DOWNLOAD=1 vp run test` (**required per stack layer**)
+   - On macOS when applicable: mobile native lint / Open With pieces from Fork CI
+   - `node scripts/release-smoke.ts` when release/packaging paths may have changed
+3. Fix **every** failure on **that layer**. Commit and force-with-lease push the layer if needed.
+4. **Only then** rebase, replay, or compose the **next** layer onto the fixed parent.
+
+Layer order for this gate:
 
 ```text
 main (upstream mirror — skip product fixes; do not hand-edit)
@@ -303,12 +311,14 @@ main (upstream mirror — skip product fixes; do not hand-edit)
   → fork/candidates
   → fork/changes
   → each integration overlay (desktop, discord, vscode) onto fork/changes
-  → fork/integration (compose last)
+  → fork/integration (compose last; full CI on the composed tip)
 ```
 
-Skipping local gates or stacking on a red tip is how lockfile, typecheck, and lint failures cascade
-into every PR and block deploy. Feature PRs after `pnpm fork:stack update` use the same local
-pre-push gate before every push.
+Skipping CI on a layer and stacking “fix it later” commits is how lockfile, typecheck, and test
+failures cascade into every PR and block merge. **One red layer stops the rewrite.** Feature PRs
+(e.g. based on `fork/changes`) after `pnpm fork:stack update`: rebase onto the fixed parent, then
+run the mandatory pre-push gate (and full tests when rewriting stack layers themselves) before
+push/merge. Agent-facing requirements: [AGENTS.md](../AGENTS.md) (“Per-layer stack CI”).
 
 `register` is used during the one-time cutover and only when intentionally building an advanced,
 dependent integration chain:
