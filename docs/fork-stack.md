@@ -218,6 +218,38 @@ gh workflow run fork-ci.yml --repo patroza/t3code --ref fork/integration
 Prefer one deliberate lockfile regeneration at the end of a multi-commit `fork/changes` rebase over
 resolving the lockfile at every intermediate conflict.
 
+### Conflict resolutions (`.github/pr-stack.json`)
+
+Protected stack rebases stop on the first unresolved conflict unless the path is listed under
+`conflictResolutions`. **Resuming once without updating the manifest leaves a bomb for the next
+upstream sync** — exact commit SHAs change every time a layer is rewritten.
+
+Each entry:
+
+| Field      | Meaning                                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `branch`   | Layer being rebased (`fork/tim`, `fork/candidates`, `fork/changes`, or an overlay branch)                      |
+| `commit`   | Full 40-char SHA of the commit being replayed (`REBASE_HEAD`), **or** `"*"` for any commit on that branch+path |
+| `path`     | Repo-relative conflicted file                                                                                  |
+| `strategy` | `theirs` = take the commit being replayed; `ours` = keep the new base (rebase semantics)                       |
+
+Prefer **`commit: "*"`** for known permanent policies (e.g. always take the mobile feed from the
+downstream commit). Use a full SHA only for a one-shot resume of the current replay.
+
+Required workflow when automation stops on a conflict:
+
+1. Note branch, `REBASE_HEAD` SHA, subject, and conflicted paths from the job summary / logs.
+2. Decide `ours` vs `theirs` (or a hand-merged tree) for each path.
+3. **Append** matching `conflictResolutions` entries to `.github/pr-stack.json` (durable `*` when
+   the same path will keep that side on future rebases).
+4. Open/merge a PR to `fork/changes` with that manifest update **before** calling the stack “done”.
+5. Resolve/stage files and `node scripts/rebase-pr-stack.ts resume --state <dir> --push`, **or**
+   re-run `sync --push` after the manifest is on the tip the sync reads.
+6. Run **per-layer `vp check`** (below). Lockfile conflicts still need
+   `CI= pnpm install --no-frozen-lockfile` — never leave a mismatched lock as the “resolution”.
+
+The stack conflict summary prints ready-to-paste JSON for both `*` and exact-SHA forms.
+
 ### Per-layer `vp check` after stack rebase (required)
 
 When you manually rebase or rewrite the stack, **do not advance to the next layer until the current
