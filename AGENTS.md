@@ -91,6 +91,11 @@ branches.
   Do not push a "green later" tip and stack on top of it. Same rule for feature PRs after
   `pnpm fork:stack update`: rebase, then `vp check`, then push/merge. Full detail:
   [docs/fork-stack.md](./docs/fork-stack.md) ("Per-layer `vp check` after stack rebase").
+- **Conflict resolutions (required when stack hits conflicts):** do **not** only hand-resolve and
+  resume. Update `.github/pr-stack.json` `conflictResolutions` so the next sync auto-applies the
+  same side. Prefer durable `commit: "*"` + path policies; exact SHAs go stale after every rewrite.
+  During rebase, `theirs` = commit being replayed, `ours` = new base. Documented in
+  [docs/fork-stack.md](./docs/fork-stack.md) ("Conflict resolutions").
 
 ## Pull requests (required handoff)
 
