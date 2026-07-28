@@ -356,6 +356,41 @@ function SnoozePopoverButton(props: {
   );
 }
 
+/**
+ * Compact "project · server" line for cross-project / multi-env lists.
+ * Mirrors classic recency subtitles without fighting V2 card chrome.
+ */
+function ProjectServerContextLine(props: {
+  readonly projectTitle: string | null;
+  readonly environmentLabel: string | null;
+  readonly showProject: boolean;
+  readonly showEnvironment: boolean;
+  readonly isRemote: boolean;
+  readonly className?: string;
+}) {
+  const showProject = props.showProject && Boolean(props.projectTitle);
+  const showEnvironment = props.showEnvironment && Boolean(props.environmentLabel);
+  if (!showProject && !showEnvironment) return null;
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1 truncate", props.className)}>
+      {showProject ? <span className="truncate">{props.projectTitle}</span> : null}
+      {showProject && showEnvironment ? (
+        <span aria-hidden className="shrink-0 text-muted-foreground/40">
+          ·
+        </span>
+      ) : null}
+      {showEnvironment ? (
+        <span className="inline-flex min-w-0 items-center gap-0.5 truncate">
+          {props.isRemote ? (
+            <ServerIcon aria-hidden className="size-2.5 shrink-0 opacity-70" />
+          ) : null}
+          <span className="truncate">{props.environmentLabel}</span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 const SidebarV2Row = memo(function SidebarV2Row(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
@@ -378,6 +413,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  /**
+   * When true (All projects scope), surface project name on rows so
+   * cross-project lists stay attributable. Scoped lists omit it.
+   */
+  showCrossProjectContext: boolean;
+  /**
+   * When true (multiple environments connected), surface server label so
+   * same-named projects on different hosts stay distinct.
+   */
+  showEnvironmentContext: boolean;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -528,6 +573,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
+  // Project label when scanning all projects; env when multi-host or remote
+  // even if scoped (same project name on two machines).
+  const showProjectContext = props.showCrossProjectContext && Boolean(props.projectTitle);
+  const showEnvironmentContext =
+    Boolean(props.environmentLabel) &&
+    (props.showEnvironmentContext || props.showCrossProjectContext || isRemote);
 
   const detailsTooltip = (
     <SidebarV2ThreadTooltip
@@ -734,10 +785,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     ) : null;
 
   if (variant === "slim") {
+    const showSlimContext = showProjectContext || showEnvironmentContext;
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className={cn(
+          "list-none [content-visibility:auto]",
+          showSlimContext
+            ? "[contain-intrinsic-size:auto_44px]"
+            : "[contain-intrinsic-size:auto_34px]",
+        )}
       >
         <Tooltip>
           <TooltipTrigger
@@ -746,7 +803,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 role="button"
                 tabIndex={0}
                 data-testid="sidebar-v2-row-slim"
-                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
+                className={cn(
+                  rowSurfaceClassName,
+                  "flex items-center gap-2.5 px-2.5",
+                  showSlimContext ? "min-h-9 py-1.5" : "h-9",
+                )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -770,7 +831,19 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 fallbackIcon={MessageSquareIcon}
               />
             </span>
-            {title}
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              {title}
+              {showSlimContext ? (
+                <ProjectServerContextLine
+                  projectTitle={props.projectTitle}
+                  environmentLabel={props.environmentLabel}
+                  showProject={showProjectContext}
+                  showEnvironment={showEnvironmentContext}
+                  isRemote={isRemote}
+                  className="text-[10px] text-muted-foreground/55"
+                />
+              ) : null}
+            </div>
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -870,7 +943,21 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 cwd={props.projectCwd ?? ""}
                 className="size-4 shrink-0"
               />
-              {props.projectTitle ? (
+              {showProjectContext || showEnvironmentContext ? (
+                <ProjectServerContextLine
+                  projectTitle={props.projectTitle}
+                  environmentLabel={props.environmentLabel}
+                  showProject={showProjectContext}
+                  showEnvironment={showEnvironmentContext}
+                  isRemote={isRemote}
+                  className={cn(
+                    "min-w-0 flex-1 text-xs text-muted-foreground/85",
+                    shouldRecede ? "font-normal" : "font-medium",
+                  )}
+                />
+              ) : props.projectTitle ? (
+                // Scoped to one project: keep a light project label for
+                // continuity without forcing server noise.
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
@@ -2476,6 +2563,8 @@ export default function SidebarV2() {
                           `${thread.environmentId}:${thread.projectId}`,
                         ) ?? null
                       }
+                      showCrossProjectContext={projectScopeKey === null}
+                      showEnvironmentContext={environments.length > 1}
                       providerEntryByInstanceId={providerEntryByInstanceId}
                       onThreadClick={handleThreadClick}
                       onThreadActivate={navigateToThread}
