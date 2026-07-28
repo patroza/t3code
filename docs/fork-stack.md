@@ -250,6 +250,22 @@ Required workflow when automation stops on a conflict:
 
 The stack conflict summary prints ready-to-paste JSON for both `*` and exact-SHA forms.
 
+### Integration overlay compose and lockfiles
+
+`node scripts/compose-integration-overlays.ts` rebuilds `fork/integration` by cherry-picking each
+overlay's commits onto current `fork/changes`. Overlay lockfiles **intentionally diverge** (each
+overlay only needs its own workspace package). Compose therefore:
+
+1. **Skips** commits that only touch `pnpm-lock.yaml`.
+2. On a mixed commit that conflicts **only** on `pnpm-lock.yaml`, keeps the current lock (`--ours`)
+   and continues the product files from the overlay.
+3. **Regenerates** a single integration lockfile with `CI= pnpm install --no-frozen-lockfile` and
+   commits it when needed.
+
+Do not treat overlay lockfile commits as product truth for integration. Do not leave a partial
+compose tip pushed after a lockfile conflict — finish compose (or re-run the script) so the
+regenerated lock is on `fork/integration`.
+
 ### Per-layer `vp check` after stack rebase (required)
 
 When you manually rebase or rewrite the stack, **do not advance to the next layer until the current
