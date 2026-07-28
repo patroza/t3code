@@ -119,12 +119,13 @@ export function seedNodeModules(repoDir: string, sourceRoot: string): string | u
   for (const source of candidateNodeModulesDirs(sourceRoot)) {
     if (!NodeFS.existsSync(source) || !NodeFS.statSync(source).isDirectory()) continue;
     console.log(`Seeding node_modules from ${source} (cp -a --reflink=auto)…`);
-    const started = Date.now();
+    // performance.now is wall-clock-safe for duration logs; avoid Date.now (globalDate).
+    const started = performance.now();
     const result = run("cp", ["-a", "--reflink=auto", source, dest], repoDir, {
       allowFailure: true,
     });
     if (result.status === 0 && NodeFS.existsSync(dest)) {
-      console.log(`Seeded node_modules in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+      console.log(`Seeded node_modules in ${((performance.now() - started) / 1000).toFixed(1)}s`);
       return dest;
     }
     console.warn(
@@ -217,17 +218,42 @@ export function cherryPickOverlayCommits(
   return { skippedLockfileOnly, deferredLockfileConflicts };
 }
 
+function resolvePnpmExecutable(repoDir: string): string {
+  const which = run("bash", ["-lc", "command -v pnpm || true"], repoDir, {
+    allowFailure: true,
+    env: envWithoutProxy(),
+  });
+  if (which.stdout) return which.stdout.split("\n")[0]!.trim();
+  // Stack workflow only sets up Node; enable packageManager from package.json via corepack.
+  run("corepack", ["enable"], repoDir, { allowFailure: true, env: envWithoutProxy() });
+  const prepared = run(
+    "bash",
+    [
+      "-lc",
+      `corepack prepare "$(node -p "require('./package.json').packageManager")" --activate && command -v pnpm`,
+    ],
+    repoDir,
+    { allowFailure: true, env: envWithoutProxy() },
+  );
+  if (prepared.status === 0 && prepared.stdout) {
+    return prepared.stdout.split("\n").filter(Boolean).at(-1)!.trim();
+  }
+  throw new StackError(
+    "pnpm is not available for lockfile regeneration (install pnpm or enable corepack).",
+  );
+}
+
 function regenerateIntegrationLockfile(repoDir: string, sourceRoot: string): boolean {
   seedNodeModules(repoDir, sourceRoot);
   console.log("Regenerating pnpm-lock.yaml for composed integration tree…");
-  const install = run("pnpm", ["install", "--no-frozen-lockfile", "--prefer-offline"], repoDir, {
+  const pnpm = resolvePnpmExecutable(repoDir);
+  const install = run(pnpm, ["install", "--no-frozen-lockfile", "--prefer-offline"], repoDir, {
     allowFailure: true,
     env: envWithoutProxy(),
-    stdioInherit: true,
   });
   if (install.status !== 0) {
     throw new StackError(
-      `pnpm install --no-frozen-lockfile failed after overlay compose (exit ${install.status}).`,
+      `pnpm install --no-frozen-lockfile failed after overlay compose (exit ${install.status}): ${install.stderr || install.stdout}`,
     );
   }
   const dirty = run("git", ["status", "--porcelain", "--", "pnpm-lock.yaml"], repoDir, {
