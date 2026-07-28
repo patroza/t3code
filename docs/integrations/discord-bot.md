@@ -187,6 +187,12 @@ Guild-scoped `/t3` commands (fast to register for a single-server bot). Mentions
 | `/t3 thread-talk action:on\|off\|status` | Same as `@bot thread-talk …`                                                                   | Public for on/off; ephemeral for status                 |
 | `/t3 link ref:<id\|t3-url>`              | Same as `@bot link …`                                                                          | Public                                                  |
 | `/t3 refresh-indicators`                 | Force-refresh Discord thread title badges (PR/VCS: ▫️/🔀/✔️/…); also `@bot refresh-indicators` | Ephemeral (title change is visible on the thread)       |
+| `/omegent assign` / `/agent assign`      | Assign linked PR(s) on this thread to **you** (identity map). Optional `github:<login>`        | **Public** summary after deferred gh call               |
+| `/omegent assign github:login`           | Same, but assign the given GitHub username (with or without `@`)                               | **Public** summary after deferred gh call               |
+
+### Agent PR policy (Discord turns)
+
+Every Discord turn injects conversation meta that requires agents to **always open a GitHub PR** for work that produces commits (or is clearly intended to land). Draft PRs are preferred until full lint / typecheck / tests / `vp check` finish; convert to ready only after those gates. See `AGENTS.md` → _Discord-originated pull requests_ and the identity-map attribution block (rule 6).
 
 **Visibility policy (neutral default):** shared-state mutations and agent work get **public** acks so the channel remains auditable. Personal/read-only signals (`help`, `thread-talk status`, benign “nothing to stop”) stay **ephemeral**. No role gates yet — any member in a project channel may use these.
 
