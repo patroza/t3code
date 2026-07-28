@@ -40,6 +40,12 @@ export interface DiscordBotConfig {
    */
   readonly alertsChannelId: string | undefined;
   /**
+   * Optional YAML/JSON rules file for per-process Discord alert ceilings.
+   * Lets operators raise/lower RSS, CPU, and sustained-duration thresholds
+   * for named guest processes without changing code.
+   */
+  readonly alertProcessRulesPath: string | undefined;
+  /**
    * Path to t3code `state.sqlite` for long-turn detection (guest: /var/lib/t3/userdata/state.sqlite).
    */
   readonly stateSqlitePath: string;
@@ -118,6 +124,10 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       Config.option,
       Config.map(Option.getOrUndefined),
     );
+    const alertProcessRulesPath = yield* Config.string("T3_DISCORD_ALERT_PROCESS_RULES_PATH").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
     const stateSqlitePath = yield* Config.string("T3_STATE_SQLITE_PATH").pipe(
       Config.withDefault("/var/lib/t3/userdata/state.sqlite"),
     );
@@ -173,6 +183,7 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       identityMapPath,
       honeycombTraceUrlTemplate,
       alertsChannelId,
+      alertProcessRulesPath,
       stateSqlitePath,
       browserEnabled,
       browserProfile,
