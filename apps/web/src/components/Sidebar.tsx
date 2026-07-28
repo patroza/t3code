@@ -23,7 +23,6 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import {
-  ChangeRequestStatusIcon,
   prStatusIndicator,
   PrStatusTooltipContent,
   resolveThreadPr,
@@ -794,25 +793,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          {prStatus && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label={prStatus.tooltip}
-                    className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
-                    onClick={handlePrClick}
-                  >
-                    <ChangeRequestStatusIcon className="size-3" />
-                  </button>
-                }
-              />
-              <TooltipPopup side="top">
-                <PrStatusTooltipContent status={prStatus} />
-              </TooltipPopup>
-            </Tooltip>
-          )}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
           {renamingThreadKey === threadKey ? (
             <input
@@ -842,6 +822,28 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </TooltipPopup>
             </Tooltip>
           )}
+          {prStatus && pr ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={prStatus.tooltip}
+                    className={cn(
+                      "shrink-0 cursor-pointer font-mono text-xs hover:underline outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                      prStatus.colorClass,
+                    )}
+                    onClick={handlePrClick}
+                  />
+                }
+              >
+                #{pr.number}
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                <PrStatusTooltipContent status={prStatus} />
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {discoveredPorts.length > 0 && (
@@ -3391,23 +3393,6 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           </Tooltip>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex min-w-0 items-center gap-1.5">
-              {prStatus ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label={prStatus.tooltip}
-                        className={`inline-flex shrink-0 items-center justify-center ${prStatus.colorClass}`}
-                        onClick={(event) => openPrLink(event, prStatus.url)}
-                      />
-                    }
-                  >
-                    <ChangeRequestStatusIcon className="size-3" />
-                  </TooltipTrigger>
-                  <TooltipPopup>{prStatus.tooltip}</TooltipPopup>
-                </Tooltip>
-              ) : null}
               {threadStatus ? <ThreadStatusLabel status={threadStatus} /> : null}
               {isRenaming ? (
                 <input
@@ -3431,6 +3416,28 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               ) : (
                 <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
               )}
+              {prStatus && pr ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={prStatus.tooltip}
+                        className={cn(
+                          "shrink-0 cursor-pointer font-mono text-xs hover:underline outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                          prStatus.colorClass,
+                        )}
+                        onClick={(event) => openPrLink(event, prStatus.url)}
+                      />
+                    }
+                  >
+                    #{pr.number}
+                  </TooltipTrigger>
+                  <TooltipPopup>
+                    <PrStatusTooltipContent status={prStatus} />
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
             </div>
             {/* Cross-project recency rows: project · server, matching mobile +
                 Sidebar V2's environment context (icon when remote). */}
