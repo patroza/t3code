@@ -9,7 +9,7 @@ import { createMessageWithAttachments, DiscordUploadError } from "../presentatio
 import { TeamsSeenStore } from "../store/TeamsSeenStore.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { truncateTitle } from "../presentation/messages.ts";
-import { startOrContinueLinkedTurn } from "./LinkedTurnRouter.ts";
+import { startOrContinueLinkedTurn, startOrContinueT3Turn } from "./LinkedTurnRouter.ts";
 import type { DiscordUploadFile } from "../presentation/discordFiles.ts";
 import { downloadTeamsMessageImages } from "../teams/attachments.ts";
 import { loadTeamsChannelConfigsFromFileSync, type TeamsChannelConfig } from "../teams/config.ts";
@@ -233,6 +233,14 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
     reason: "mention" | "german-problem" | "allowlisted-reaction" | "internal-tag",
     imageFiles: ReadonlyArray<DiscordUploadFile>,
   ) {
+    const discordChannelId = channel.discordChannelId;
+    if (discordChannelId === undefined) {
+      return yield* Effect.fail(
+        new Error(
+          `Teams channel ${channel.teamId}/${channel.channelId} uses Discord delivery without discordChannelId.`,
+        ),
+      );
+    }
     const seedContent = buildTeamsSeedMessage({
       company: channel.company,
       environment: channel.environment,
@@ -242,7 +250,7 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
     });
     const seed =
       imageFiles.length === 0
-        ? yield* rest.createMessage(channel.discordChannelId, {
+        ? yield* rest.createMessage(discordChannelId, {
             content: seedContent,
           })
         : yield* Effect.tryPromise({
@@ -250,7 +258,7 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
               createMessageWithAttachments({
                 baseUrl: discordConfig.rest.baseUrl,
                 botToken: Redacted.value(discordConfig.token),
-                channelId: channel.discordChannelId,
+                channelId: discordChannelId,
                 content: seedContent,
                 files: imageFiles,
               }),
@@ -259,7 +267,7 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
                 ? cause
                 : new DiscordUploadError(cause instanceof Error ? cause.message : String(cause)),
           });
-    const discordThread = yield* rest.createThreadFromMessage(channel.discordChannelId, seed.id, {
+    const discordThread = yield* rest.createThreadFromMessage(discordChannelId, seed.id, {
       name: truncateTitle(
         buildTeamsIncidentTitle({
           company: channel.company,
@@ -488,15 +496,6 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
       });
     }
 
-    const existing = yield* links.getBySourceThread("teams", rootKey);
-    const discordThreadId =
-      existing?.discordThreadId ??
-      (yield* openDiscordThread(
-        channel,
-        trigger.targetMessage,
-        trigger.reason,
-        imageDownloads.discordFiles,
-      ));
     const history = recentHistoryForMessage(
       channel,
       messages,
@@ -514,32 +513,69 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
       triggerMessage: trigger.triggerMessage,
       history,
     });
-    yield* startOrContinueLinkedTurn(config, {
-      source: {
-        sourceKind: "teams",
-        sourceThreadId: rootKey,
-      },
-      discordThreadId,
-      discordParentChannelId: channel.discordChannelId,
-      discordGuildId: "",
-      projectShortName: channel.projectShortName,
-      prompt,
-      flags: {},
-      ...(imageDownloads.t3Uploads.length > 0 ? { attachments: imageDownloads.t3Uploads } : {}),
-      announceLines: [
-        `Linked **${channel.projectShortName}**`,
-        `Source: Teams / ${channel.channelName}`,
-        `Company: **${channel.company}**`,
-        `Environment: **${channel.environment}**`,
-      ],
-      promptContext: {
-        kind: "raw",
-        value: prompt,
-      },
-    });
+    if (channel.deliveryMode === "discord") {
+      const discordChannelId = channel.discordChannelId;
+      if (discordChannelId === undefined) {
+        return yield* Effect.fail(
+          new Error(
+            `Teams channel ${channel.teamId}/${channel.channelId} uses Discord delivery without discordChannelId.`,
+          ),
+        );
+      }
+      const existing = yield* links.getBySourceThread("teams", rootKey);
+      const discordThreadId =
+        existing?.discordThreadId ??
+        (yield* openDiscordThread(
+          channel,
+          trigger.targetMessage,
+          trigger.reason,
+          imageDownloads.discordFiles,
+        ));
+      yield* startOrContinueLinkedTurn(config, {
+        source: {
+          sourceKind: "teams",
+          sourceThreadId: rootKey,
+        },
+        discordThreadId,
+        discordParentChannelId: discordChannelId,
+        discordGuildId: "",
+        projectShortName: channel.projectShortName,
+        prompt,
+        flags: {},
+        ...(imageDownloads.t3Uploads.length > 0 ? { attachments: imageDownloads.t3Uploads } : {}),
+        announceLines: [
+          `Linked **${channel.projectShortName}**`,
+          `Source: Teams / ${channel.channelName}`,
+          `Company: **${channel.company}**`,
+          `Environment: **${channel.environment}**`,
+        ],
+        promptContext: {
+          kind: "raw",
+          value: prompt,
+        },
+      });
+    } else {
+      yield* startOrContinueT3Turn(config, {
+        source: {
+          sourceKind: "teams",
+          sourceThreadId: rootKey,
+        },
+        externalConversationId: rootKey,
+        externalParentId: `${channel.teamId}/${channel.channelId}`,
+        externalTenantId: config.teamsTenantId ?? "",
+        projectShortName: channel.projectShortName,
+        prompt,
+        flags: {},
+        ...(imageDownloads.t3Uploads.length > 0 ? { attachments: imageDownloads.t3Uploads } : {}),
+        promptContext: {
+          kind: "raw",
+          value: prompt,
+        },
+      });
+    }
     processedRootKeys.add(rootKey);
 
-    if (trigger.reason === "mention") {
+    if (trigger.reason === "mention" || channel.deliveryMode !== "discord") {
       yield* postTeamsWebhookAck(channel, trigger.targetMessage);
     }
   });

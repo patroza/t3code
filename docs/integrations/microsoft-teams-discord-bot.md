@@ -1,162 +1,216 @@
-# Microsoft Teams Intake Module
+# Deploying the T3 Code Microsoft Teams integration
 
-This repository now includes a Teams intake path inside [`apps/discord-bot`](apps/discord-bot).
+T3 Code supports Microsoft Teams in two independent operating modes:
 
-It does three things:
+1. **Teams replacement mode** runs a native Teams app and does not require Discord credentials or
+   a Discord gateway connection. Teams messages start or continue T3 threads; final answers return
+   to Teams.
+2. **Intake-only mode** starts T3 from a selected Teams message without adding the bot to that
+   conversation. The bot-based message action invokes the service, returns a private confirmation,
+   and leaves the T3 thread available in T3 Code.
 
-1. Polls a configured list of Teams channels through Microsoft Graph.
-2. Detects one or more configured trigger modes per channel.
-3. Creates or reuses a Discord thread, starts a T3 investigation thread, and streams the analysis back into Discord.
+The legacy Graph poller is still available for automatic assessment, allowlisted reactions, and
+tag triggers. Its per-channel `deliveryMode` can be `discord`, `t3-only`, or `native`.
 
-## What The Module Does
+## Runtime capabilities
 
-- Each Teams channel is configured with:
-  - the Teams `teamId` and `channelId`
-  - the target Discord channel id
-  - the T3 project short name
-  - company and environment labels
-  - company/environment/problem keywords for matching
-- Each channel can enable any combination of these escalation modes:
-  - automatic assessment of new messages for German problem reports
-  - allowlisted internal-user reactions, such as `eyes` or `🚨`
-  - allowlisted internal-user tag messages, such as `#investigate`, typically sent as a reply to the message being escalated
-- Explicit Teams `@mention` traffic is treated as a forced trigger on top of those modes.
-- Automatic assessment only runs on newly seen messages.
-- Reaction triggers are re-evaluated on already-seen messages, so an internal user can flag an older message later without reposting it.
-- Tag triggers are only accepted from configured internal user ids on a per-channel basis.
-- The first detected message for a Teams thread opens a Discord thread under the mapped Discord channel.
-- Later matching messages in the same Teams thread continue the same T3 thread instead of opening duplicates.
-- Any image attachments on the target Teams message are copied into the Discord seed message and passed into the T3 investigation turn.
-- The intake prompt also includes immediate preceding channel history from the prior two hours, stopping at the previous already-investigated Teams root.
+| Capability                           | Teams replacement                            | Message action          | Graph poller                              |
+| ------------------------------------ | -------------------------------------------- | ----------------------- | ----------------------------------------- |
+| Start/continue a T3 thread           | Yes                                          | Yes                     | Yes                                       |
+| Discord required                     | No                                           | No                      | Only for `deliveryMode: "discord"`        |
+| Bot installed in target conversation | Yes                                          | No                      | No                                        |
+| Final answer posted to Teams         | Yes                                          | No; follow in T3 Code   | Optional workflow webhook acknowledgement |
+| Stop a turn                          | `stop`                                       | In T3 Code              | In T3 Code                                |
+| Approve/deny                         | `approve <request-id>` / `deny <request-id>` | In T3 Code              | In T3 Code                                |
+| Automatic/reaction/tag triggers      | Optional Graph poller                        | Explicit message action | Yes                                       |
 
-## Trigger Configuration
+Microsoft requires a Teams app to be installed in a team or group chat before its bot can send
+messages there. A message extension can be invoked from a message without making the bot a
+participant in that conversation; that path intentionally does not attempt a later bot reply.
 
-Per-channel configuration supports these fields:
+## 1. Prepare T3 Code
 
-- `automaticAssessmentEnabled`
-  - Default: `true`
-  - Enables German problem-report assessment for newly seen messages in that channel.
-- `internalUserIds`
-  - Microsoft Entra user ids allowed to trigger manual escalations in that channel.
-- `reactionTriggerTypes`
-  - Reaction types accepted from `internalUserIds`, for example `["eyes", "🚨"]`.
-- `messageTagTriggers`
-  - Text markers accepted from `internalUserIds`, for example `["#investigate", "#triage"]`.
+1. Run the T3 Code server and note its HTTP origin.
+2. Add every project that Teams may target to T3 Code.
+3. Create the same project alias file used by the Discord bridge:
 
-You can enable one, two, or all three of those modes per channel.
+   ```yaml
+   projects:
+     scanner:
+       workspaceRoot: /srv/projects/scanner
+   ```
 
-## Current Limits
+4. Set:
 
-- The implementation uses Microsoft Graph application auth for reading channel messages.
-- For write-back to Teams, the implementation only supports an optional channel webhook acknowledgement.
-- It does **not** implement a full Bot Framework HTTPS endpoint yet.
-- Because of that, “respond to @ trigger messages” currently means:
-  - detect the mention
-  - create the Discord/T3 incident thread
-  - optionally post a short acknowledgement back to Teams through a configured incoming webhook
-- If you need native threaded replies in Teams as the bot, add a Bot Framework endpoint later.
+   ```dotenv
+   T3_HTTP_BASE_URL=http://127.0.0.1:3773
+   T3_PROJECT_ALIASES_PATH=/etc/t3/project-aliases.yaml
+   T3_WEB_UI_BASE_URL=https://t3.example.com
+   T3_DISCORD_BOT_DATA_DIR=/var/lib/t3/teams-bridge
+   ```
 
-## Config Files
+`T3_DISCORD_BOT_DATA_DIR` retains its historical name but is also the durable data directory for
+Teams-only deployments.
 
-Set these env vars for the Discord bot process:
+## 2. Register the Microsoft application
 
-- `TEAMS_ENABLED=1`
-- `TEAMS_TENANT_ID=<entra tenant id>`
-- `TEAMS_CLIENT_ID=<app registration client id>`
-- `TEAMS_CLIENT_SECRET=<app registration client secret>`
-- `TEAMS_CHANNELS_PATH=/absolute/path/to/teams.channels.json`
-- `TEAMS_POLL_INTERVAL_SECONDS=60`
-- `TEAMS_BOT_DISPLAY_NAME=T3 Code`
+The fastest supported path is the current Teams Developer CLI:
 
-Use [`apps/discord-bot/teams.channels.example.json`](apps/discord-bot/teams.channels.example.json) as the starting point.
+```bash
+npm install --global @microsoft/teams.cli
+teams login
+teams app create \
+  --name t3-code \
+  --endpoint https://teams-bot.example.com/api/messages \
+  --env /secure/path/teams.env
+```
 
-## Polling Window
+The public endpoint must use HTTPS and route to the bridge process on `TEAMS_PORT` (3978 by
+default). The CLI creates the application/bot registration and writes the client, tenant, and
+secret values. An equivalent Azure Bot + Entra app registration created in the portals also works.
 
-- On normal weekdays, the poller scans the last 24 hours of channel traffic.
-- On Saturday, Sunday, and Monday, it scans from Friday 00:00 UTC onward so weekend reports are still in scope on Monday morning.
+Set the runtime variables using the values from the registration:
 
-## Microsoft Setup
+```dotenv
+TEAMS_NATIVE_ENABLED=1
+TEAMS_CLIENT_ID=00000000-0000-0000-0000-000000000000
+TEAMS_CLIENT_SECRET=replace-with-secret-value
+TEAMS_TENANT_ID=00000000-0000-0000-0000-000000000000
+TEAMS_PORT=3978
+TEAMS_MESSAGING_ENDPOINT=/api/messages
+TEAMS_DEFAULT_PROJECT_SHORT_NAME=scanner
+```
 
-The setup depends on whether you only need scan-and-escalate, or also want native in-Teams bot replies.
+Do not set `DISCORD_BOT_TOKEN` in a Teams-only deployment.
 
-### Minimum Setup For This Module
+## 3. Configure project mapping by Teams channel
 
-This is enough for the code currently in the repo.
+Copy `apps/discord-bot/teams.channels.example.json` and map Teams locations to T3 aliases:
 
-1. Create a Microsoft Entra app registration.
-2. Add a client secret.
-3. Grant Microsoft Graph application permissions needed to read channel messages.
-4. Grant admin consent in the tenant.
-5. Install the Teams app where you want resource-specific consent, if you use RSC-scoped access.
-6. Create one Teams incoming webhook per channel only if you want acknowledgements posted back to Teams.
+```json
+{
+  "channels": [
+    {
+      "teamId": "19:team-id@thread.tacv2",
+      "channelId": "19:channel-id@thread.tacv2",
+      "channelName": "Production incidents",
+      "projectShortName": "scanner",
+      "deliveryMode": "native",
+      "company": "Example",
+      "environment": "production",
+      "companyKeywords": ["example"],
+      "environmentKeywords": ["prod", "production"],
+      "automaticAssessmentEnabled": false
+    }
+  ]
+}
+```
 
-### Permissions And Consent
+Set `TEAMS_CHANNELS_PATH` to that file. Personal and group chats use
+`TEAMS_DEFAULT_PROJECT_SHORT_NAME` when no channel mapping matches.
 
-From Microsoft Learn:
+Delivery modes:
 
-- Teams bots only receive channel messages by default when directly mentioned.
-- To receive all channel messages without mentions, Teams supports resource-specific consent with `ChannelMessage.Read.Group`.
-- Microsoft Graph permissions that expose organization-wide data require admin consent in Microsoft Entra.
-- Teams app admins can review both Microsoft Graph permissions and RSC permissions in the Teams admin center.
+- `native`: native Teams activity handling owns replies. The Graph poller may still supply
+  background triggers, but it does not create Discord threads.
+- `t3-only`: Graph triggers start T3 directly and optionally acknowledge through
+  `teamsIncomingWebhookUrl`.
+- `discord`: compatibility mode; `discordChannelId` is required and the result is mirrored to
+  Discord.
 
-Operationally, that means:
+## 4. Build the Teams app package
 
-- If you want least-privilege per team/channel behavior, use Teams app installation plus RSC.
-- If your tenant instead grants broader Graph application permissions, your security review should treat that as tenant-wide read access.
+Start from `apps/discord-bot/teams-app/manifest.json`.
 
-## Recommended Org Approval Path
+1. Replace `${TEAMS_APP_ID}` and `${TEAMS_CLIENT_ID}` with the application/client ID.
+2. Replace `${PUBLIC_BASE_URL}` and `${PUBLIC_HOST}` with the public HTTPS origin and host.
+3. Add `outline.png` (32×32 transparent) and `color.png` (192×192).
+4. Zip the three files at the archive root:
 
-1. Security reviews the Entra app registration and the exact Graph/RSC permissions requested.
-2. Teams admins verify the app in Teams admin center and review the Permissions tab.
-3. Team owners approve installation into the specific teams/channels that should be monitored.
-4. Discord admins provide the destination Discord channel ids.
-5. Operators add the channel mappings JSON and restart the bot.
+   ```text
+   manifest.json
+   outline.png
+   color.png
+   ```
 
-## FAQ: Can We Reuse One Team Member's Credentials?
+The manifest enables personal, team, and group-chat bot scopes plus the
+**Start T3 investigation** message action.
 
-Technically, yes, for very basic delegated-access scenarios. In that model the bot acts on behalf of a real user instead of using app-only service credentials.
+## 5. Install for full Teams replacement
 
-That is not the recommended setup for this module.
+1. Upload the app package through **Teams Admin Center → Teams apps → Manage apps**, or sideload it
+   while testing.
+2. Allow the app in the applicable app permission policy.
+3. Install it for users and in each team/group chat where it must answer.
+4. In a channel, mention the bot and send a task. In personal chat, send the task directly.
+5. Verify that Teams receives a “Started T3” acknowledgement and then the final T3 answer.
+6. Verify controls:
 
-Main downsides:
+   ```text
+   stop
+   approve <request-id>
+   deny <request-id>
+   ```
 
-- Reliability:
-  - the integration breaks if that user changes password, loses access, leaves the company, or is affected by MFA or Conditional Access changes
-- Security:
-  - the bot now depends on a human credential or long-lived delegated refresh token, which is a worse secret to protect than a service credential
-- Auditability:
-  - reads and writes are attributed to a person rather than a service identity
-- Access control:
-  - the effective scope becomes whatever that user can access, which is often broader and less explicit than a dedicated app registration
-- Operability:
-  - Microsoft discourages username/password automation flows such as ROPC, and those flows are incompatible with common MFA-based tenant setups
+The native entrypoint is:
 
-Use a real Entra app registration with app-only auth for the poller.
+```bash
+pnpm --filter @t3tools/discord-bot start:teams
+```
 
-If you later need a user-driven trigger that should feel native inside Teams, use a proper Teams app or message action flow instead of storing one employee's credentials in the bot.
+For a systemd/container deployment, expose only `TEAMS_PORT` through the HTTPS reverse proxy and
+keep the T3 server/data paths private.
 
-## Native Teams Bot Replies
+## 6. Enable the message action without bot participation
 
-If you later need true bot replies inside Teams threads, you will need more than this module currently ships:
+The same app package includes a bot-based message extension. The app must be available to the user,
+but the conversational bot does not have to be added to the source channel/chat.
 
-1. A Teams app manifest with bot scope for teams/channels.
-2. A Bot Framework or Teams AI endpoint reachable from Microsoft over HTTPS.
-3. Bot authentication and token validation for incoming activities.
-4. Channel installation in each target team/channel.
+1. Make the app available through an app setup policy or let the user add the app personally.
+2. Open the **…** menu on a Teams message.
+3. Choose **Start T3 investigation**.
+4. Select the T3 project alias and optionally add instructions.
+5. Submit. Teams shows a private confirmation while the service starts the T3 thread.
+6. Follow the result in T3 Code.
 
-That is a separate step because it changes the runtime shape from “poller” to “internet-facing bot service”.
+This route is appropriate where adding an active bot participant to customer or incident channels
+is not yet approved.
 
-## Microsoft References
+## 7. Optional Graph polling without a bot participant
 
-- Receive all channel messages for bots and agents:
-  https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-messages-for-bots-and-agents
-- Channel and group chat conversations with a bot:
-  https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-and-group-conversations
-- Resource-specific consent:
-  https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent
-- Teams app permissions and consent:
-  https://learn.microsoft.com/en-us/microsoftteams/app-permissions
-- Apps for shared and private channels:
-  https://learn.microsoft.com/en-us/microsoftteams/platform/build-apps-for-shared-private-channels
-- Microsoft Graph permissions reference:
-  https://learn.microsoft.com/en-us/graph/permissions-reference
+Set `TEAMS_ENABLED=1` in a combined deployment and grant the Entra application the chosen Graph
+read permission. Prefer resource-specific consent (`ChannelMessage.Read.Group`) when monitoring a
+small set of teams; broader application permissions require tenant admin consent and a wider
+security review.
+
+The poller supports:
+
+- automatic problem-report assessment;
+- allowlisted reaction triggers;
+- allowlisted tag triggers;
+- explicit configured display-name mentions;
+- recent history and hosted image retrieval.
+
+Use `deliveryMode: "t3-only"` to ensure the poller never creates or requires a Discord thread.
+
+## 8. Production checklist
+
+- Public HTTPS endpoint resolves to `TEAMS_MESSAGING_ENDPOINT`.
+- Inbound activity authentication is enabled; never set SDK `skipAuth` in production.
+- Client secret is stored in a secret manager and rotated, or replace it with managed identity.
+- `T3_PROJECT_ALIASES_PATH` contains every exposed alias and no unintended workspace.
+- Teams app policies limit who can install/use the app.
+- Graph permissions use the narrowest viable consent model.
+- Durable bridge data is backed up.
+- T3 and Teams bridge logs/OTLP traces are monitored.
+- A test message verifies start, continuation, final delivery, stop, approval, and message action.
+- Discord is disabled by omitting `DISCORD_BOT_TOKEN` when Teams is the sole transport.
+
+## Microsoft references
+
+- [Teams SDK quickstart and app registration](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/get-started/quickstart-register)
+- [Teams bot conversations](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/build-conversational-capability)
+- [Proactive message installation requirements](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
+- [Message-extension action dialogs](https://learn.microsoft.com/en-us/microsoftteams/platform/messaging-extensions/how-to/action-commands/create-task-module)
+- [Resource-specific consent](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
+- [Receive channel/chat messages using RSC](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-messages-for-bots-and-agents)

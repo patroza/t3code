@@ -33,6 +33,10 @@ const baseConfig = {
   teamsChannelsPath: undefined,
   teamsPollIntervalSeconds: 60,
   teamsBotDisplayName: undefined,
+  teamsNativeEnabled: false,
+  teamsPort: 3978,
+  teamsMessagingEndpoint: "/api/messages" as const,
+  teamsDefaultProjectShortName: undefined,
 } satisfies DiscordBotConfig;
 
 describe("preferredModelSelection", () => {

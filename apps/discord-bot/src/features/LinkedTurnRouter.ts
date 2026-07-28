@@ -57,6 +57,20 @@ export interface LinkedTurnInput {
     | undefined;
 }
 
+export interface TransportNeutralLinkedTurnInput {
+  readonly source: LinkedTurnSource;
+  /** Stable delivery/conversation id. Stored in the legacy discordThreadId field for v2 links. */
+  readonly externalConversationId: string;
+  readonly externalParentId: string;
+  readonly externalTenantId: string;
+  readonly projectShortName: string;
+  readonly prompt: string;
+  readonly flags: LinkedTurnFlags;
+  readonly stickyModelOnContinue?: boolean | undefined;
+  readonly attachments?: ReadonlyArray<UploadChatAttachment> | undefined;
+  readonly promptContext?: LinkedTurnInput["promptContext"];
+}
+
 /**
  * Shared start/continue path for Discord mentions and Teams intake.
  * Ported from aaaomega/t3code-pvt#1 and adapted to the current ThreadLinkStore + bridge APIs.
@@ -81,6 +95,84 @@ export const resolveProjectFromShortName = Effect.fn("resolveProjectFromShortNam
   }
 
   return { alias, project };
+});
+
+/**
+ * Transport-neutral T3 start/continue path. Discord and Teams own their presentation and
+ * delivery lifecycle, while this function owns project resolution, model selection, T3
+ * orchestration, and the durable source-conversation link.
+ */
+export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function* (
+  config: DiscordBotConfig,
+  input: TransportNeutralLinkedTurnInput,
+) {
+  const t3 = yield* T3Session;
+  const links = yield* ThreadLinkStore;
+  const attachments = input.attachments ?? [];
+  const hasExplicitModelFlags =
+    input.flags.provider !== undefined || input.flags.model !== undefined;
+  const resolved = yield* resolveProjectFromShortName(input.projectShortName);
+  const existing = yield* links.getBySourceThread(
+    input.source.sourceKind,
+    input.source.sourceThreadId,
+  );
+
+  if (existing !== null) {
+    const continueModelSelection =
+      input.stickyModelOnContinue === true && !hasExplicitModelFlags
+        ? undefined
+        : yield* t3.resolveModelSelection({
+            project: resolved.project,
+            ...(input.flags.provider === undefined
+              ? {}
+              : { overrideInstanceId: input.flags.provider }),
+            ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+          });
+    yield* t3.startTurn({
+      threadId: existing.t3ThreadId,
+      prompt: input.prompt,
+      ...(continueModelSelection === undefined ? {} : { modelSelection: continueModelSelection }),
+      ...(input.flags.plan ? { interactionMode: "plan" as const } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
+    });
+    return { threadId: existing.t3ThreadId, isNew: false } as const;
+  }
+
+  const modelSelection = yield* t3.resolveModelSelection({
+    project: resolved.project,
+    ...(input.flags.provider === undefined ? {} : { overrideInstanceId: input.flags.provider }),
+    ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
+  });
+  const enrichedPrompt = resolveInitialPrompt({
+    config,
+    projectShortName: input.projectShortName,
+    workspaceRoot: resolved.project.workspaceRoot,
+    prompt: input.prompt,
+    promptContext: input.promptContext,
+    guildId: input.externalTenantId,
+    discordThreadId: input.externalConversationId,
+  });
+  const { threadId } = yield* t3.startTurnWithWorktree({
+    project: resolved.project,
+    prompt: enrichedPrompt,
+    modelSelection,
+    interactionMode: input.flags.plan ? "plan" : "default",
+    baseBranch: input.flags.base ?? config.t3DefaultBaseBranch,
+    local: input.flags.local ?? false,
+    ...(attachments.length > 0 ? { attachments } : {}),
+  });
+
+  yield* links.put({
+    sourceKind: input.source.sourceKind,
+    sourceThreadId: input.source.sourceThreadId,
+    discordThreadId: input.externalConversationId,
+    t3ThreadId: threadId,
+    projectId: resolved.project.id,
+    channelId: input.externalParentId,
+    guildId: input.externalTenantId,
+    createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+  });
+  return { threadId, isNew: true } as const;
 });
 
 function resolveInitialPrompt(input: {
@@ -125,14 +217,7 @@ export const startOrContinueLinkedTurn = Effect.fn("startOrContinueLinkedTurn")(
   input: LinkedTurnInput,
 ) {
   const rest = yield* DiscordREST;
-  const t3 = yield* T3Session;
   const links = yield* ThreadLinkStore;
-  const attachments = input.attachments ?? [];
-  const hasExplicitModelFlags =
-    input.flags.provider !== undefined || input.flags.model !== undefined;
-
-  const resolved = yield* resolveProjectFromShortName(input.projectShortName);
-
   const existing = yield* links.getBySourceThread(
     input.source.sourceKind,
     input.source.sourceThreadId,
@@ -160,73 +245,36 @@ export const startOrContinueLinkedTurn = Effect.fn("startOrContinueLinkedTurn")(
       t3ThreadId: existing.t3ThreadId,
       workingAckMessageId,
     });
-    const continueModelSelection =
-      input.stickyModelOnContinue === true && !hasExplicitModelFlags
-        ? undefined
-        : yield* t3.resolveModelSelection({
-            project: resolved.project,
-            ...(input.flags.provider === undefined
-              ? {}
-              : { overrideInstanceId: input.flags.provider }),
-            ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
-          });
-    yield* t3.startTurn({
-      threadId: existing.t3ThreadId,
-      prompt: input.prompt,
-      ...(continueModelSelection === undefined ? {} : { modelSelection: continueModelSelection }),
-      ...(input.flags.plan ? { interactionMode: "plan" as const } : {}),
-      ...(attachments.length > 0 ? { attachments } : {}),
-    });
-    return existing.t3ThreadId;
   }
 
-  const modelSelection = yield* t3.resolveModelSelection({
-    project: resolved.project,
-    ...(input.flags.provider === undefined ? {} : { overrideInstanceId: input.flags.provider }),
-    ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
-  });
-
-  const enrichedPrompt = resolveInitialPrompt({
-    config,
+  const turn = yield* startOrContinueT3Turn(config, {
+    source: input.source,
+    externalConversationId: input.discordThreadId,
+    externalParentId: input.discordParentChannelId,
+    externalTenantId: input.discordGuildId,
     projectShortName: input.projectShortName,
-    workspaceRoot: resolved.project.workspaceRoot,
     prompt: input.prompt,
-    promptContext: input.promptContext,
-    guildId: input.discordGuildId,
-    discordThreadId: input.discordThreadId,
+    flags: input.flags,
+    ...(input.stickyModelOnContinue === undefined
+      ? {}
+      : { stickyModelOnContinue: input.stickyModelOnContinue }),
+    ...(input.attachments === undefined ? {} : { attachments: input.attachments }),
+    ...(input.promptContext === undefined ? {} : { promptContext: input.promptContext }),
   });
-
-  const { threadId } = yield* t3.startTurnWithWorktree({
-    project: resolved.project,
-    prompt: enrichedPrompt,
-    modelSelection,
-    interactionMode: input.flags.plan ? "plan" : "default",
-    baseBranch: input.flags.base ?? config.t3DefaultBaseBranch,
-    local: input.flags.local ?? false,
-    ...(attachments.length > 0 ? { attachments } : {}),
-  });
-
-  yield* links.put({
-    sourceKind: input.source.sourceKind,
-    sourceThreadId: input.source.sourceThreadId,
-    discordThreadId: input.discordThreadId,
-    t3ThreadId: threadId,
-    projectId: resolved.project.id,
-    channelId: input.discordParentChannelId,
-    guildId: input.discordGuildId,
-    createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
-  });
+  const threadId = turn.threadId;
 
   const webLink =
     config.webUiBaseUrl === undefined
       ? null
       : `${config.webUiBaseUrl.replace(/\/$/u, "")}/?thread=${threadId}`;
 
-  yield* rest.createMessage(input.discordThreadId, {
-    content: [...input.announceLines, webLink === null ? null : `Open in Omegent: ${webLink}`]
-      .filter((line): line is string => line !== null && line.trim().length > 0)
-      .join("\n"),
-  });
+  if (turn.isNew) {
+    yield* rest.createMessage(input.discordThreadId, {
+      content: [...input.announceLines, webLink === null ? null : `Open in Omegent: ${webLink}`]
+        .filter((line): line is string => line !== null && line.trim().length > 0)
+        .join("\n"),
+    });
+  }
 
   yield* bridgeThreadToDiscord({
     discordChannelId: input.discordThreadId,

@@ -5,7 +5,7 @@
       "channelId": "19:examplechannel@thread.tacv2",
       "channelName": "Acme Prod Incidents",
       "projectShortName": "macs-scanner",
-      "discordChannelId": "123456789012345678",
+      "deliveryMode": "native",
       "company": "Acme",
       "environment": "prod",
       "companyKeywords": ["acme", "kunde acme"],

@@ -48,5 +48,33 @@ describe("loadTeamsChannelConfigsFromFileSync", () => {
     expect(configs[0]?.internalUserIds).toEqual(["user-1", "user-2"]);
     expect(configs[0]?.reactionTriggerTypes).toEqual(["eyes", "🚨"]);
     expect(configs[0]?.messageTagTriggers).toEqual(["#investigate", "#triage"]);
+    expect(configs[0]?.deliveryMode).toBe("discord");
+  });
+
+  it("supports Discord-free native channel mappings", async () => {
+    const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "teams-config-"));
+    tempDirs.push(dir);
+    const filePath = NodePath.join(dir, "teams.json");
+    await NodeFSP.writeFile(
+      filePath,
+      JSON.stringify([
+        {
+          teamId: "team-1",
+          channelId: "channel-1",
+          channelName: "Prod",
+          projectShortName: "scanner",
+          deliveryMode: "native",
+          company: "Acme",
+          environment: "prod",
+          companyKeywords: ["acme"],
+          environmentKeywords: ["prod"],
+        },
+      ]),
+      "utf8",
+    );
+
+    const configs = loadTeamsChannelConfigsFromFileSync(filePath);
+    expect(configs[0]?.deliveryMode).toBe("native");
+    expect(configs[0]?.discordChannelId).toBeUndefined();
   });
 });

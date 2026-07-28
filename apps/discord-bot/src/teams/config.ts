@@ -9,7 +9,13 @@ export interface TeamsChannelConfig {
   readonly channelId: string;
   readonly channelName: string;
   readonly projectShortName: string;
-  readonly discordChannelId: string;
+  readonly discordChannelId?: string | undefined;
+  /**
+   * discord: mirror into a Discord thread (legacy compatibility).
+   * t3-only: start T3 directly and acknowledge through the optional Teams workflow webhook.
+   * native: native Teams activities own replies; Graph polling only supplies ambient triggers.
+   */
+  readonly deliveryMode?: "discord" | "t3-only" | "native" | undefined;
   readonly company: string;
   readonly environment: string;
   readonly companyKeywords: ReadonlyArray<string>;
@@ -35,7 +41,11 @@ function isChannelConfig(value: unknown): value is TeamsChannelConfig {
     typeof candidate.channelId === "string" &&
     typeof candidate.channelName === "string" &&
     typeof candidate.projectShortName === "string" &&
-    typeof candidate.discordChannelId === "string" &&
+    (candidate.discordChannelId === undefined || typeof candidate.discordChannelId === "string") &&
+    (candidate.deliveryMode === undefined ||
+      candidate.deliveryMode === "discord" ||
+      candidate.deliveryMode === "t3-only" ||
+      candidate.deliveryMode === "native") &&
     typeof candidate.company === "string" &&
     typeof candidate.environment === "string" &&
     isStringArray(candidate.companyKeywords) &&
@@ -76,6 +86,8 @@ export function loadTeamsChannelConfigsFromFileSync(
 
   return channels.map((channel) => ({
     ...channel,
+    deliveryMode:
+      channel.deliveryMode ?? (channel.discordChannelId === undefined ? "t3-only" : "discord"),
     projectShortName: channel.projectShortName.trim().toLowerCase(),
     companyKeywords: channel.companyKeywords.map((value: string) => value.trim()).filter(Boolean),
     environmentKeywords: channel.environmentKeywords
