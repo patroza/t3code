@@ -111,6 +111,7 @@ import {
   buildSidebarV2ThreadContextMenuItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  groupSettledThreadsByRecencyForSidebarV2,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -1493,6 +1494,14 @@ export default function SidebarV2() {
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
 
+  // Date headers on the settled tail only (lifecycle spine stays intact).
+  // Recompute when the minute clock advances so Last Hour / Earlier Today
+  // boundaries stay honest. Single-bucket pages omit headers.
+  const settledRecencyLayout = useMemo(() => {
+    void nowMinute;
+    return groupSettledThreadsByRecencyForSidebarV2(renderedSettledThreads, new Date());
+  }, [nowMinute, renderedSettledThreads]);
+
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
   // shortcuts or multi-select), matching the settled tail's paging model.
@@ -2546,8 +2555,31 @@ export default function SidebarV2() {
                     </li>,
                   );
                 }
-                for (const thread of renderedSettledThreads) {
-                  items.push(renderThreadRow(thread, "settled"));
+                // Recency headers only when multiple buckets are visible on
+                // this page (Last Hour / Earlier Today / …). Jump keys and
+                // multi-select still walk row threads only.
+                if (settledRecencyLayout.showHeaders) {
+                  for (const group of settledRecencyLayout.groups) {
+                    items.push(
+                      <li
+                        key={`settled-recency-${group.id}`}
+                        data-thread-selection-safe
+                        data-testid={`sidebar-v2-settled-recency-${group.id}`}
+                        className="list-none px-2.5 pb-0.5 pt-2 first:pt-1"
+                      >
+                        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/45">
+                          {group.label}
+                        </div>
+                      </li>,
+                    );
+                    for (const thread of group.threads) {
+                      items.push(renderThreadRow(thread, "settled"));
+                    }
+                  }
+                } else {
+                  for (const thread of renderedSettledThreads) {
+                    items.push(renderThreadRow(thread, "settled"));
+                  }
                 }
                 return items;
               })()}
