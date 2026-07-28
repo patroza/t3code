@@ -3,6 +3,11 @@ import {
   effectiveSettled,
   type ChangeRequestStateLike,
 } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  groupThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+  type ThreadRecencyGroup,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
@@ -946,6 +951,39 @@ export function sortSettledThreadsForSidebarV2<
   return [...threads].toSorted(
     (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
   );
+}
+
+/**
+ * Recency section layout for the V2 settled shelf. Callers must pass threads
+ * already ordered by {@link sortSettledThreadsForSidebarV2} (or an equivalent
+ * activity/settle-time order) so buckets preserve that order within each day.
+ *
+ * Headers are suppressed when every visible row lands in a single bucket
+ * (same rule as classic Threads recency).
+ */
+export function groupSettledThreadsByRecencyForSidebarV2<
+  T extends SettledTimestampInput & { readonly id: string },
+>(
+  threads: readonly T[],
+  now: Date = new Date(),
+): {
+  readonly groups: ReadonlyArray<ThreadRecencyGroup<T>>;
+  readonly showHeaders: boolean;
+} {
+  const groups = groupThreadsByRecency(
+    threads,
+    (thread) => {
+      const timestamp = resolveSettledTimestamp(thread);
+      if (timestamp === null) return Number.NaN;
+      const ms = Date.parse(timestamp);
+      return Number.isNaN(ms) ? Number.NaN : ms;
+    },
+    now,
+  );
+  return {
+    groups,
+    showHeaders: shouldShowRecencySectionHeaders(groups),
+  };
 }
 
 /** The timestamp a working thread's elapsed label counts from: the running
