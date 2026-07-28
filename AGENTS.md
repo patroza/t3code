@@ -85,6 +85,12 @@ branches.
      like `ERR_PNPM_OUTDATED_LOCKFILE` / "specifiers in the lockfile don't match package.json".
      Prefer regenerating the lockfile over repeatedly choosing ours/theirs on `pnpm-lock.yaml` during
      multi-commit rebases of `fork/changes`.
+- **Per-layer `vp check` after stack rebase (required):** when rebasing or rewriting the stack,
+  run root **`vp check` on each layer and fix all failures before rebasing the next layer**. Order:
+  `fork/tim` → `fork/candidates` → `fork/changes` → each overlay → compose `fork/integration`.
+  Do not push a "green later" tip and stack on top of it. Same rule for feature PRs after
+  `pnpm fork:stack update`: rebase, then `vp check`, then push/merge. Full detail:
+  [docs/fork-stack.md](./docs/fork-stack.md) ("Per-layer `vp check` after stack rebase").
 
 ## Pull requests (required handoff)
 
