@@ -96,6 +96,10 @@ branches.
   same side. Prefer durable `commit: "*"` + path policies; exact SHAs go stale after every rewrite.
   During rebase, `theirs` = commit being replayed, `ours` = new base. Documented in
   [docs/fork-stack.md](./docs/fork-stack.md) ("Conflict resolutions").
+- **Integration compose lockfiles:** overlay lock commits diverge by design. Compose skips
+  lockfile-only commits, defers lock-only conflicts, and regenerates one integration
+  `pnpm-lock.yaml` at the end. Never push a partial `fork/integration` after a lock conflict.
+  See [docs/fork-stack.md](./docs/fork-stack.md) ("Integration overlay compose and lockfiles").
 
 ## Pull requests (required handoff)
 
