@@ -1097,7 +1097,9 @@ function ThreadNavigationSidebarPane(
               thread={thread}
               projectTitle={item.projectTitle}
               environmentLabel={
-                savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
+                Object.keys(savedConnectionsById).length > 1 || showFlatThreadList
+                  ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
+                  : null
               }
               projectCwd={
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
@@ -1131,6 +1133,8 @@ function ThreadNavigationSidebarPane(
               onGroupAction={updateGroupDisplay}
             />
           );
+        default:
+          return null;
       }
     },
     [
@@ -1146,6 +1150,7 @@ function ThreadNavigationSidebarPane(
       projectCwdByKey,
       projectTitleByProjectKey,
       props.onNewThreadInProject,
+      showFlatThreadList,
       props.selectedThreadKey,
       props.width,
       savedConnectionsById,
