@@ -150,6 +150,7 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).toContain("posted back into the same Discord thread");
     expect(prompt).toContain("Always open a GitHub PR");
     expect(prompt).toContain("draft PR");
+    expect(prompt).toContain("must mark it ready");
     expect(prompt).toContain('"you"');
     expect(prompt).toContain('"id": "user-1"');
     expect(prompt).toContain('"username": "example-user"');
@@ -283,6 +284,30 @@ describe("buildDiscordTurnPrompt", () => {
     });
     expect(prompt).not.toContain("Identity map");
     expect(prompt).not.toContain("Co-authored-by");
+  });
+
+  it("injects a ready-to-paste PR footer with profile + channel jump URLs", () => {
+    const prompt = buildDiscordTurnPrompt({
+      mentionPrompt: "make a pr",
+      requester: {
+        id: "m1",
+        author: { id: "593167616273809448", username: "joshuadima", displayName: "joshuadima" },
+      },
+      starter: {
+        id: "1531376362399465595",
+        author: { id: "593167616273809448", username: "joshuadima", displayName: "joshuadima" },
+      },
+      guildId: "1083767712431480922",
+      discordThreadId: "1531376362399465595",
+      discordThreadTitle: "Open Random PR Test",
+    });
+    expect(prompt).toContain("Discord PR description footer");
+    expect(prompt).toContain("https://discord.com/users/593167616273809448");
+    expect(prompt).toContain(
+      "https://discord.com/channels/1083767712431480922/1531376362399465595/1531376362399465595",
+    );
+    expect(prompt).not.toContain("](593167616273809448)");
+    expect(prompt).not.toMatch(/\]\(https:\/\/discord\.com\/channels\)/u);
   });
 
   it("falls back to bare keys when browse base is unset", () => {
