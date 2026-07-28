@@ -28,7 +28,14 @@ describe("Omegent slash command definition", () => {
       "thread-talk",
       "link",
       "refresh-indicators",
+      "assign",
     ]);
+  });
+
+  it("registers optional github option on assign", () => {
+    const assign = OMEGENT_SLASH_COMMAND.options.find((option) => option.name === "assign");
+    expect(assign?.options?.[0]?.name).toBe("github");
+    expect(assign?.options?.[0]?.required).toBe(false);
   });
 
   it("uses Discord subcommand option types", () => {
