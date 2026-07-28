@@ -12,7 +12,7 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 export interface DiscordBotConfig {
-  readonly discordToken: string;
+  readonly discordToken: string | undefined;
   readonly t3HttpBaseUrl: string;
   readonly t3BootstrapCredential: string | undefined;
   readonly t3BearerToken: string | undefined;
@@ -59,6 +59,20 @@ export interface DiscordBotConfig {
    * (e.g. `https://example.atlassian.net`).
    */
   readonly jiraBrowseBaseUrl: string | undefined;
+  /** Optional Microsoft Teams intake module (Graph channel polling → Discord/T3). */
+  readonly teamsEnabled: boolean;
+  readonly teamsTenantId: string | undefined;
+  readonly teamsClientId: string | undefined;
+  readonly teamsClientSecret: string | undefined;
+  readonly teamsChannelsPath: string | undefined;
+  readonly teamsPollIntervalSeconds: number;
+  readonly teamsBotDisplayName: string | undefined;
+  /** Run the native Teams SDK activity/message-extension endpoint. */
+  readonly teamsNativeEnabled: boolean;
+  readonly teamsPort: number;
+  readonly teamsMessagingEndpoint: `/${string}`;
+  /** Fallback alias for personal/group chats that do not map to a configured channel. */
+  readonly teamsDefaultProjectShortName: string | undefined;
 }
 
 const RuntimeModeConfig = Schema.Literals([
@@ -74,7 +88,8 @@ const DEFAULT_BOT_MODEL = DEFAULT_MODEL;
 export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigError> = Effect.gen(
   function* () {
     const discordToken = yield* Config.redacted("DISCORD_BOT_TOKEN").pipe(
-      Config.map((value) => Redacted.value(value)),
+      Config.option,
+      Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
     );
     const t3HttpBaseUrl = yield* Config.string("T3_HTTP_BASE_URL").pipe(
       Config.withDefault("http://127.0.0.1:3773"),
@@ -167,6 +182,44 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
         return undefined;
       }),
     );
+    const teamsEnabled = yield* Config.boolean("TEAMS_ENABLED").pipe(Config.withDefault(false));
+    const teamsTenantId = yield* Config.string("TEAMS_TENANT_ID").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsClientId = yield* Config.string("TEAMS_CLIENT_ID").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsClientSecret = yield* Config.redacted("TEAMS_CLIENT_SECRET").pipe(
+      Config.option,
+      Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
+    );
+    const teamsChannelsPath = yield* Config.string("TEAMS_CHANNELS_PATH").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsPollIntervalSeconds = yield* Config.int("TEAMS_POLL_INTERVAL_SECONDS").pipe(
+      Config.withDefault(60),
+    );
+    const teamsBotDisplayName = yield* Config.string("TEAMS_BOT_DISPLAY_NAME").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const teamsNativeEnabled = yield* Config.boolean("TEAMS_NATIVE_ENABLED").pipe(
+      Config.withDefault(false),
+    );
+    const teamsPort = yield* Config.int("TEAMS_PORT").pipe(Config.withDefault(3978));
+    const teamsMessagingEndpoint = yield* Config.string("TEAMS_MESSAGING_ENDPOINT").pipe(
+      Config.withDefault("/api/messages"),
+      Config.map((value) => {
+        const normalized = value.trim();
+        return (normalized.startsWith("/") ? normalized : `/${normalized}`) as `/${string}`;
+      }),
+    );
+    const teamsDefaultProjectShortName = yield* Config.string(
+      "TEAMS_DEFAULT_PROJECT_SHORT_NAME",
+    ).pipe(Config.option, Config.map(Option.getOrUndefined));
 
     return {
       discordToken,
@@ -191,6 +244,17 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       browserFfmpegPath,
       browserAllowedOrigins,
       jiraBrowseBaseUrl,
+      teamsEnabled,
+      teamsTenantId,
+      teamsClientId,
+      teamsClientSecret,
+      teamsChannelsPath,
+      teamsPollIntervalSeconds,
+      teamsBotDisplayName,
+      teamsNativeEnabled,
+      teamsPort,
+      teamsMessagingEndpoint,
+      teamsDefaultProjectShortName,
     } satisfies DiscordBotConfig;
   },
 );
