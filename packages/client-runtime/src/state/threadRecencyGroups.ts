@@ -1,18 +1,20 @@
 import { getThreadSortTimestamp, type ThreadSortInput } from "./threadSort.ts";
 
 /**
- * Calendar buckets for cross-project thread lists grouped by recency
- * (Today / Yesterday / Previous 7 Days / …), matching common chat-session UX.
+ * Calendar / activity buckets for cross-project thread lists grouped by recency.
+ * "Today" is split so busy days stay scannable (Last hour vs Earlier today).
  */
 export type ThreadRecencyBucketId =
-  | "today"
+  | "last_hour"
+  | "earlier_today"
   | "yesterday"
   | "previous_7_days"
   | "previous_30_days"
   | "older";
 
 export const THREAD_RECENCY_BUCKET_ORDER = [
-  "today",
+  "last_hour",
+  "earlier_today",
   "yesterday",
   "previous_7_days",
   "previous_30_days",
@@ -20,49 +22,42 @@ export const THREAD_RECENCY_BUCKET_ORDER = [
 ] as const satisfies readonly ThreadRecencyBucketId[];
 
 export const THREAD_RECENCY_BUCKET_LABELS: Record<ThreadRecencyBucketId, string> = {
-  today: "Today",
+  last_hour: "Last Hour",
+  earlier_today: "Earlier Today",
   yesterday: "Yesterday",
   previous_7_days: "Previous 7 Days",
   previous_30_days: "Previous 30 Days",
   older: "Older",
 };
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-function makeDateFromEpochMs(ms: number): Date {
-  // @effect-diagnostics-next-line globalDate:off
-  return new Date(ms);
-}
-
-function makeLocalDate(year: number, monthIndex: number, day: number): Date {
-  // @effect-diagnostics-next-line globalDate:off
-  return new Date(year, monthIndex, day);
-}
-
-function makeNow(): Date {
-  // @effect-diagnostics-next-line globalDate:off
-  return new Date();
-}
+const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
 
 export function startOfLocalDay(date: Date): Date {
-  return makeLocalDate(date.getFullYear(), date.getMonth(), date.getDate());
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 /**
- * Classify an activity timestamp into a recency bucket using local calendar days.
+ * Classify an activity timestamp into a recency bucket using local calendar
+ * days plus a rolling last-hour window for dense "today" lists.
  * `timestampMs` should be a finite epoch millis (activity / updated time).
  */
 export function getThreadRecencyBucketId(
   timestampMs: number,
-  now: Date = makeNow(),
+  now: Date = new Date(),
 ): ThreadRecencyBucketId {
   if (!Number.isFinite(timestampMs)) {
     return "older";
   }
 
+  const nowMs = now.getTime();
   const startToday = startOfLocalDay(now).getTime();
+
   if (timestampMs >= startToday) {
-    return "today";
+    if (timestampMs >= nowMs - MS_PER_HOUR) {
+      return "last_hour";
+    }
+    return "earlier_today";
   }
 
   const startYesterday = startToday - MS_PER_DAY;
@@ -90,13 +85,25 @@ export interface ThreadRecencyGroup<T> {
 }
 
 /**
+ * Whether recency section headers should render. Empty buckets are already
+ * omitted from `groups`; a single remaining bucket is still noise (e.g. every
+ * thread is "Last Hour"), so callers should render a flat list in that case.
+ */
+export function shouldShowRecencySectionHeaders(
+  groups: ReadonlyArray<ThreadRecencyGroup<unknown>>,
+): boolean {
+  return groups.length > 1;
+}
+
+/**
  * Partition already-sorted threads into non-empty recency groups.
  * Preserves input order within each bucket (callers should sort first).
+ * Empty buckets are never returned.
  */
 export function groupThreadsByRecency<T>(
   threads: readonly T[],
   getTimestampMs: (thread: T) => number,
-  now: Date = makeNow(),
+  now: Date = new Date(),
 ): ReadonlyArray<ThreadRecencyGroup<T>> {
   const buckets = new Map<ThreadRecencyBucketId, T[]>();
   for (const id of THREAD_RECENCY_BUCKET_ORDER) {
@@ -127,7 +134,7 @@ export function groupThreadsByRecency<T>(
  */
 export function groupSortedThreadsByRecency<T extends { readonly id: string } & ThreadSortInput>(
   threads: readonly T[],
-  now: Date = makeNow(),
+  now: Date = new Date(),
 ): ReadonlyArray<ThreadRecencyGroup<T>> {
   return groupThreadsByRecency(
     threads,
