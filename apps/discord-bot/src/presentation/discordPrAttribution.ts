@@ -55,16 +55,39 @@ export type DiscordThreadStarterLike = {
 };
 
 /**
+ * Public Discord user profile URL (opens profile in app/browser when signed in).
+ * Prefer this over bare snowflake ids, which are not navigable links.
+ */
+export function buildDiscordUserProfileUrl(userId: string): string {
+  return `https://discord.com/users/${userId.trim()}`;
+}
+
+/** True when the URL is a full discord.com/channels/... jump (not a truncated placeholder). */
+export function isValidDiscordChannelJumpUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (trimmed.length === 0) return false;
+  // Require guild + channel segments; optional message id.
+  return /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/[^/\s]+\/[^/\s]+(?:\/[^/\s]+)?$/u.test(
+    trimmed,
+  );
+}
+
+/**
  * Build the single-line attribution footer from thread starter + title.
+ * User link uses Discord profile URL; thread link must be a full channel jump URL.
  */
 export function formatDiscordPrAttributionFooter(input: DiscordPrAttributionInput): string {
   const displayName = input.starterDisplayName.trim() || "unknown";
   const userId = input.starterUserId.trim();
   const title = sanitizeMarkdownLinkLabel(input.threadTitle.trim() || "Discord thread");
+  const profileUrl = buildDiscordUserProfileUrl(userId);
   const jumpUrl = input.threadJumpUrl.trim();
 
-  // Keep display name linked to the raw Discord user id (matches AGENTS.md format).
-  return `opened by [${escapeMarkdownLinkLabel(displayName)}](${userId}) in chat thread **Discord** · [${escapeMarkdownLinkLabel(title)}](${jumpUrl})`;
+  const openedBy = `opened by [${escapeMarkdownLinkLabel(displayName)}](${profileUrl}) in chat thread **Discord**`;
+  if (!isValidDiscordChannelJumpUrl(jumpUrl)) {
+    return openedBy;
+  }
+  return `${openedBy} · [${escapeMarkdownLinkLabel(title)}](${jumpUrl})`;
 }
 
 export function buildDiscordThreadJumpUrl(input: {
@@ -73,11 +96,16 @@ export function buildDiscordThreadJumpUrl(input: {
   /** Prefer the starter message id; falls back to the thread id. */
   readonly messageId?: string | null | undefined;
 }): string {
+  const guildId = input.guildId.trim();
+  const discordThreadId = input.discordThreadId.trim();
+  if (guildId.length === 0 || discordThreadId.length === 0) {
+    return "";
+  }
   const messageId =
     input.messageId !== null && input.messageId !== undefined && input.messageId.trim() !== ""
       ? input.messageId.trim()
-      : input.discordThreadId;
-  return `https://discord.com/channels/${input.guildId}/${input.discordThreadId}/${messageId}`;
+      : discordThreadId;
+  return `https://discord.com/channels/${guildId}/${discordThreadId}/${messageId}`;
 }
 
 export function starterDisplayName(starter: DiscordThreadStarterLike | null | undefined): string {
