@@ -6,12 +6,15 @@
   "scripts": {
     "browser-profile": "node --import tsx src/browserProfileCli.ts",
     "dev": "node --watch --import tsx src/main.ts",
+    "dev:teams": "node --watch --import tsx src/teams-main.ts",
     "start": "node --import tsx src/main.ts",
+    "start:teams": "node --import tsx src/teams-main.ts",
     "typecheck": "tsgo --noEmit",
     "test": "vp test run"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
+    "@microsoft/teams.apps": "2.0.14",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
