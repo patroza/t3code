@@ -25,6 +25,11 @@ export interface DiscordBotConfig {
   /** Bot-local shortName → workspaceRoot map (not on the T3 server). */
   readonly projectAliasesPath: string | undefined;
   /**
+   * Optional Discord → GitHub/Jira identity map path for commit/PR co-authorship.
+   * Staged like project aliases (e.g. /run/secrets/identity-map.yaml).
+   */
+  readonly identityMapPath: string | undefined;
+  /**
    * Optional Honeycomb trace URL template for bootstrap prompts.
    * Placeholders: {traceId}, {environment}, {dataset}, {team}
    */
@@ -101,6 +106,10 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       Config.option,
       Config.map(Option.getOrUndefined),
     );
+    const identityMapPath = yield* Config.string("T3_IDENTITY_MAP_PATH").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
     const honeycombTraceUrlTemplate = yield* Config.string("T3_HONEYCOMB_TRACE_URL_TEMPLATE").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
@@ -161,6 +170,7 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       dataDir,
       webUiBaseUrl,
       projectAliasesPath,
+      identityMapPath,
       honeycombTraceUrlTemplate,
       alertsChannelId,
       stateSqlitePath,

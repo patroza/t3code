@@ -15,6 +15,7 @@ const baseConfig = {
   dataDir: "~/.t3/discord-bot",
   webUiBaseUrl: undefined,
   projectAliasesPath: undefined,
+  identityMapPath: undefined,
   honeycombTraceUrlTemplate: undefined,
   alertsChannelId: undefined,
   stateSqlitePath: "/var/lib/t3/userdata/state.sqlite",
