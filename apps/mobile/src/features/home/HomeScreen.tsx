@@ -716,6 +716,8 @@ export function HomeScreen(props: HomeScreenProps) {
             )?.driver ?? null
         }
         environmentLabel={
+          // Multi-server: always label the host. Matches classic list + web
+          // recency rows so cross-project cards stay attributable.
           Object.keys(props.savedConnectionsById).length > 1
             ? (props.savedConnectionsById[item.thread.environmentId]?.environmentLabel ?? null)
             : null
@@ -809,7 +811,12 @@ export function HomeScreen(props: HomeScreenProps) {
               thread={thread}
               projectTitle={item.projectTitle}
               environmentLabel={
-                props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
+                // Prefer showing server when multi-env OR recency/flat grouping
+                // so threads from different hosts aren't ambiguous.
+                Object.keys(props.savedConnectionsById).length > 1 ||
+                usesFlatThreadGrouping(props.threadGrouping)
+                  ? (props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
+                  : null
               }
               projectCwd={
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
@@ -838,6 +845,12 @@ export function HomeScreen(props: HomeScreenProps) {
               onGroupAction={updateGroupDisplay}
             />
           );
+        default: {
+          // Exhaustiveness guard: unknown item types must not throw on open.
+          const _exhaustive: never = item;
+          void _exhaustive;
+          return null;
+        }
       }
     },
     [
@@ -853,6 +866,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
+      props.threadGrouping,
       settledThreadKeys,
       settlementEnvironmentIds,
       updateGroupDisplay,
@@ -1135,6 +1149,10 @@ export function HomeScreen(props: HomeScreenProps) {
           data={listLayout.items}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
+          // Mixed item types (headers, section-headers, threads, show-more)
+          // must not share recycle pools — missing this crashes / blanks rows
+          // once shells load (sidebar already passes getItemType).
+          getItemType={(item) => item.type}
           itemsAreEqual={homeListItemsAreEqual}
           drawDistance={500}
           estimatedItemSize={ESTIMATED_THREAD_ROW_HEIGHT}
