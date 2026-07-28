@@ -517,6 +517,9 @@ export function formatIdentityAttributionBlock(input: {
   lines.push(
     "5. When opening a PR: include the Discord description footer from AGENTS.md (opened by … in chat thread **Discord**). The bot may hard-append the footer later — still write it on create. GitHub multi-author avatars come from **commit** trailers, not PR body prose alone.",
   );
+  lines.push(
+    "6. **Always open a PR** for this work once there are commits (or the change is clearly intended to land). Prefer a **draft PR** until full lint / typecheck / focused tests / `vp check` are done; do not hold the PR closed waiting for perfect green.",
+  );
 
   if (trailers.length > 0) {
     lines.push("");
