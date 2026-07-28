@@ -7,8 +7,8 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFs from "node:fs/promises";
-import * as NodeOs from "node:os";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
@@ -216,10 +216,10 @@ async function writePullRequestBody(
   body: string,
   execImpl: ExecFileLike,
 ): Promise<void> {
-  const tempDir = await NodeFs.mkdtemp(NodePath.join(NodeOs.tmpdir(), "t3-discord-pr-body-"));
+  const tempDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-discord-pr-body-"));
   const bodyFile = NodePath.join(tempDir, "body.json");
   try {
-    await NodeFs.writeFile(bodyFile, JSON.stringify({ body }), "utf8");
+    await NodeFSP.writeFile(bodyFile, JSON.stringify({ body }), "utf8");
     await execImpl(
       "gh",
       [
@@ -233,6 +233,6 @@ async function writePullRequestBody(
       { env: gitCommandEnv(), maxBuffer: 4 * 1024 * 1024 },
     );
   } finally {
-    await NodeFs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    await NodeFSP.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
