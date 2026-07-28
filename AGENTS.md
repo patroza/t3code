@@ -145,29 +145,56 @@ When implementation work for a user request is done (code, docs, config — not 
      `fork/changes`.
 5. Never assume an earlier PR in the session is still open.
 
-## Discord-originated pull requests
+## Discord-originated commits (REQUIRED)
 
-When opening a PR from a Discord thread request, append this footer at the end of the PR description (use the current requester and that thread’s real jump link):
+When the Discord turn includes an **Identity map** block with ready-to-paste `Co-authored-by` trailers, attribution is **mandatory**, not optional:
+
+1. Keep the environment default **author/committer** (usually the GitHub App bot).
+2. **Every** `git commit` you create for that work MUST end with those exact trailers after a blank line. Do not invent emails for unmapped people.
+3. Before `git push` / opening a PR, verify with `git log -1 --format=%B` that the trailers are present on each new commit.
+4. A Discord-originated commit **without** the mapped trailers is incomplete — fix it (amend if not pushed, or a follow-up commit is not enough for GitHub multi-author on already-pushed SHAs; amend/rebase when safe).
+
+GitHub multi-author avatars (`bot & human`) come from commit trailers, not from PR body prose alone.
+
+## Discord-originated pull requests (REQUIRED)
+
+When Discord work produces commits (or is clearly intended to land):
+
+0. **Always open a PR — do not wait for perfect green.** Create the PR as soon as there is something to review or track. If full lint / typecheck / focused tests / `vp check` are not finished yet, open it as a **draft**. Convert to ready for review only after those gates. A missing PR while work sits only on a remote branch is incomplete handoff.
+
+When opening or updating a PR from a Discord thread:
+
+1. **Discord footer (required in the PR description).** Append this exact footer form at the end of the PR body (use the **thread starter** when known, otherwise the current requester, and that thread’s real jump link):
 
 ```md
 opened by [<displayName>](discord_user_id) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>)
 ```
 
-If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
+Prefer the thread starter’s Discord id/display name from turn context. Do not skip this because the bot _might_ patch the body later — still write it when you create the PR so the first revision is correct. The bot may also hard-append the footer when a PR URL is linked; that is a safety net, not a reason to omit it.
+
+2. If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
+
+3. Prefer opening the PR only after commits already include the Identity map `Co-authored-by` trailers (see above).
 
 ## Task Completion Requirements
 
 ### Mandatory pre-push / PR handoff gate (no exceptions)
 
-**Before every `git push`, `fork:stack update --push`, PR open, or “handoff / done” claim**, the agent
-**must** run the local gates that mirror Fork CI’s **Check** job (format/lint/typecheck/desktop
-build pieces you can run on the host), fix all failures, then push. Fork CI is a safety net, not
-the first typechecker.
+**Before every `git push`, `fork:stack update --push`, non-draft PR open, ready-for-review
+conversion, or “handoff / done” claim**, the agent **must** run the local gates that mirror Fork
+CI’s **Check** job (format/lint/typecheck/desktop build pieces you can run on the host), fix all
+failures, then push. Fork CI is a safety net, not the first typechecker.
+
+**Always open a PR for Discord/agent work that produces commits** (see _Discord-originated pull
+requests_). **Draft PR exception:** you may open/update a **draft** PR earlier for tracking once
+commits exist, co-author trailers are correct, and focused tests for the changed behavior have been
+run — even if full monorepo typecheck / root `vp check` are still in progress. Do not claim the work
+is ready or mark the PR non-draft until the full gate below passes.
 
 Run from the repository root, in order:
 
 1. **`vp check`** — exact formatter/linter gate used by Fork CI **Check**. A focused format/lint
-   while iterating is fine; it is **not** a substitute for this root command before push.
+   while iterating is fine; it is **not** a substitute for this root command before ready handoff.
 2. **Full monorepo typecheck** (matches Fork CI):
 
    ```bash
@@ -176,8 +203,8 @@ Run from the repository root, in order:
 
    Equivalent: `vp run typecheck` / root `pnpm` typecheck script that runs recursive package
    typechecks. **Scoped** typecheck of only the package you edited is allowed **while iterating**,
-   but **before push you must run the full recursive typecheck**. Failures in packages you did not
-   touch still block push: your tip inherits the base; fix or land a fix on the tip so CI is green.
+   but **before ready handoff you must run the full recursive typecheck**. Failures in packages you
+   did not touch still block: your tip inherits the base; fix or land a fix on the tip so CI is green.
 
 3. **Desktop Check pieces when the tip can break them** (Fork CI **Check** also runs these): after
    desktop or preload-adjacent changes, run `vp run --cache build:desktop` and the preload verify
@@ -191,21 +218,24 @@ Run from the repository root, in order:
    - Fork product / UI changes **must** include an existence or behavior assertion that fails if
      the surface is dropped (not only pure helpers). See `apps/web/src/forkSurfaceExistence.test.ts`
      and [docs/fork-stack.md](./docs/fork-stack.md) (“Product conflicts”).
-5. **Do not push** if steps 1–2 fail, or if required steps 3–4 fail. Fix first.
+5. **Do not push a ready (non-draft) handoff** if steps 1–2 fail, or if required steps 3–4 fail.
+   Fix first.
 
 **Ordinary feature PRs (based on `fork/changes`):** full-workspace `vp run test` is optional unless
-the user asks or the change clearly needs the whole suite. **Do not** skip steps 1–2 to save time.
+the user asks or the change clearly needs the whole suite. **Do not** skip steps 1–2 to save time
+on ready handoff.
 
-**Explicitly forbidden before handoff:**
+**Explicitly forbidden before ready handoff:**
 
-- Pushing after only unit tests, only scoped package typecheck, or only a partial lint.
-- Opening/updating a PR knowing typecheck or `vp check` was skipped or red.
+- Ready/non-draft push after only unit tests, only scoped package typecheck, or only a partial lint.
+- Marking a PR ready for review knowing typecheck or `vp check` was skipped or red.
 - Treating “CI will catch it” as a substitute for local gates.
 - Advancing a stack rewrite to the next layer while the current layer is red (see below).
+- Leaving Discord/agent work with commits but **no** PR (use draft until gates finish).
 
-While iterating mid-task (not yet pushing), keep feedback loops small: format/lint the files you
+While iterating mid-task (not yet ready), keep feedback loops small: format/lint the files you
 touch, typecheck the packages you edit, run the smallest relevant tests. **The bar rises to the
-full pre-push gate the moment you push or hand off.**
+full pre-push gate the moment you mark ready or claim done.**
 
 ### Per-layer stack CI (stop the line — no exceptions)
 
