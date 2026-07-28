@@ -1,14 +1,19 @@
 import * as Cause from "effect/Cause";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("dfx", () => ({
+  DiscordConfig: { DiscordConfig: {} },
+  DiscordREST: {},
+}));
 
 import {
-  chunkAlertContent,
+  bridgeAlertDelivery,
   classifySessionLastError,
+  fatalAlertDelivery,
   formatAlertCause,
-  formatBridgeAlertContent,
-  formatFatalAlertContent,
   isExpectedSessionLastError,
   selectSessionErrorsForAlert,
+  sessionErrorAlertDelivery,
   sessionErrorAlertKey,
   trackSustainedHotProcesses,
   type ProcInfo,
@@ -65,10 +70,16 @@ describe("formatAlertCause", () => {
     expect(formatAlertCause(new Error("boom"))).toContain("boom");
     expect(formatAlertCause("plain")).toBe("plain");
   });
+
+  it("keeps complete causes by default while honoring explicit preview limits", () => {
+    const cause = `start\n${"x".repeat(4_000)}\nend`;
+    expect(formatAlertCause(cause)).toBe(cause);
+    expect(formatAlertCause(cause, 20)).toBe(`${cause.slice(0, 20)}…`);
+  });
 });
 
 describe("Discord alert content", () => {
-  it("preserves a full stack trace across ordered Discord-sized chunks", () => {
+  it("attaches the complete T3 session stack as one text file", () => {
     const trace = [
       "Error: Invalid params",
       ...Array.from(
@@ -77,22 +88,29 @@ describe("Discord alert content", () => {
           `    at decodeFrame${index} (file:///var/lib/t3/src/t3code/node_modules/effect/frame-${index}.js:877:8)`,
       ),
     ].join("\n");
-    const content = formatFatalAlertContent(
-      "T3 session error",
-      `thread=\`2d9ccf35-a36a-41bc-a762-523f5e423f41\`\n${trace}`,
-    );
-    const chunks = chunkAlertContent(content);
+    const delivery = sessionErrorAlertDelivery("2d9ccf35-a36a-41bc-a762-523f5e423f41", trace);
 
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 1900)).toBe(true);
-    expect(chunks.join("")).toBe(content);
-    expect(chunks.at(-1)).toContain("decodeFrame79");
+    expect(delivery.content).toContain("thread=`2d9ccf35-a36a-41bc-a762-523f5e423f41`");
+    expect(delivery.content).not.toContain("Invalid params");
+    expect(delivery.files).toHaveLength(1);
+    expect(delivery.files[0]?.name).toBe(
+      "t3-session-error-2d9ccf35-a36a-41bc-a762-523f5e423f41.txt",
+    );
+    expect(delivery.files[0]?.mimeType).toBe("text/plain;charset=utf-8");
+    expect(new TextDecoder().decode(delivery.files[0]?.data)).toBe(trace);
   });
 
-  it("does not truncate fatal or bridge details before delivery", () => {
-    const detail = `start\n${"x".repeat(4_000)}\nend`;
-    expect(formatFatalAlertContent("failure", detail)).toContain(detail);
-    expect(formatBridgeAlertContent("failure", detail)).toContain(detail);
+  it("keeps fatal and bridge traces out of message content and intact in attachments", () => {
+    const trace = `start\n${"x".repeat(4_000)}\nend`;
+    for (const delivery of [
+      fatalAlertDelivery("failure", trace),
+      bridgeAlertDelivery("failure", trace),
+    ]) {
+      expect(delivery.content).not.toContain(trace);
+      expect(delivery.files).toHaveLength(1);
+      expect(delivery.files[0]?.name.endsWith(".txt")).toBe(true);
+      expect(new TextDecoder().decode(delivery.files[0]?.data)).toBe(trace);
+    }
   });
 });
 
