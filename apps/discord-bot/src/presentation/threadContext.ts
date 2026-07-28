@@ -83,7 +83,7 @@ const DISCORD_CONVERSATION_CONTEXT = `## Discord conversation context
 - Your final answer will be posted back into the same Discord thread and may be read by multiple participants.
 - When the requester says "you" or otherwise addresses the assistant, interpret that as referring to you in your role as the Discord bot unless they clearly identify someone else.
 - Treat the current requester as distinct from the thread starter and from other participants. Do not attribute another participant's statements or identity to them.
-- **Always open a GitHub PR** for Discord work that produces commits (or is clearly intended to land). Do not wait until "everything is perfect." Use a **draft PR** when full lint / typecheck / tests / \`vp check\` are not finished yet; mark ready only after those gates.`;
+- **Always open a GitHub PR** for Discord work that produces commits (or is clearly intended to land). Do not wait until "everything is perfect." Use a **draft PR** when full lint / typecheck / tests / \`vp check\` are not finished yet; **after those gates you must mark it ready** — a draft is not done. Do not leave drafts abandoned.`;
 
 function formatRequesterMetadata(message: DiscordMessageLike | undefined): string {
   return JSON.stringify(
