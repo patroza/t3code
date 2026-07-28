@@ -164,13 +164,17 @@ When Discord work produces commits (or is clearly intended to land):
 
 When opening or updating a PR from a Discord thread:
 
-1. **Discord footer (required in the PR description).** Append this exact footer form at the end of the PR body (use the **thread starter** when known, otherwise the current requester, and that thread’s real jump link):
+1. **Discord footer (required in the PR description).** Append this form at the end of the PR body (use the **thread starter** when known, otherwise the current requester). Prefer the **ready-to-paste footer** from Discord turn context when present.
 
 ```md
-opened by [<displayName>](discord_user_id) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>)
+opened by [<displayName>](https://discord.com/users/<discord_user_id>) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>)
 ```
 
-Prefer the thread starter’s Discord id/display name from turn context. Do not skip this because the bot _might_ patch the body later — still write it when you create the PR so the first revision is correct. The bot may also hard-append the footer when a PR URL is linked; that is a safety net, not a reason to omit it.
+Rules:
+
+- **User link** must be `https://discord.com/users/<snowflake>` (Discord profile). Never use a bare snowflake as the URL (it goes nowhere).
+- **Thread link** must be a full `https://discord.com/channels/<guild>/<channel_or_thread>/<message>` URL. Never emit truncated placeholders like `https://discord.com/channels` or empty channel segments.
+- Prefer the thread starter’s display name from turn context. Do not skip the footer because the bot _might_ patch the body later — still write it when you create the PR so the first revision is correct. The bot may also hard-append the footer when a PR URL is linked; that is a safety net, not a reason to omit it.
 
 2. If Discord turn context lists **Linked work items** / Jira issues for the thread, include those Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).
 
