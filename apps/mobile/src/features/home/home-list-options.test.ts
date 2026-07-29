@@ -33,4 +33,10 @@ describe("home list options", () => {
       hasCustomHomeListOptions({ ...defaults, selectedProjectKey: "environment-1:project-1" }),
     ).toBe(true);
   });
+
+  it("marks non-default thread grouping as customized", () => {
+    expect(hasCustomHomeListOptions({ ...defaults, threadGrouping: "recency" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, threadGrouping: "none" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, threadGrouping: "project" })).toBe(false);
+  });
 });
