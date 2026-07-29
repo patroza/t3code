@@ -231,6 +231,7 @@ describe("buildSidebarV2ThreadContextMenuItems", () => {
     expect(buildSidebarV2ThreadContextMenuItems(baseInput)).toEqual([
       { id: "rename", label: "Rename thread" },
       { id: "mark-unread", label: "Mark unread" },
+      { id: "copy-path", label: "Copy path", icon: "copy" },
       { id: "delete", label: "Delete", destructive: true, icon: "trash" },
     ]);
   });

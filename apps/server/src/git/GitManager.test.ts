@@ -610,6 +610,8 @@ const configureFailingCommitSigner = Effect.fn("configureFailingCommitSigner")(f
     { mode: 0o755 },
   );
   yield* runGit(repoDir, ["config", "commit.gpgSign", "true"]);
+  // Host global config may set gpg.format=ssh, which ignores gpg.program.
+  yield* runGit(repoDir, ["config", "gpg.format", "openpgp"]);
   yield* runGit(repoDir, ["config", "gpg.program", signerPath]);
 });
 
@@ -3899,12 +3901,13 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       NodeFS.writeFileSync(NodePath.join(repoDir, "multi-hook.txt"), "multi hook\n");
       NodeFS.writeFileSync(
         NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
-        '#!/bin/sh\necho "output from pre-commit" >&2\n',
+        // Brief sleep gives TRACE2 time to mark the hook active before stderr lands.
+        '#!/bin/sh\nsleep 0.05\necho "output from pre-commit" >&2\nsleep 0.05\n',
         { mode: 0o755 },
       );
       NodeFS.writeFileSync(
         NodePath.join(repoDir, ".git", "hooks", "commit-msg"),
-        '#!/bin/sh\necho "output from commit-msg" >&2\n',
+        '#!/bin/sh\nsleep 0.05\necho "output from commit-msg" >&2\nsleep 0.05\n',
         { mode: 0o755 },
       );
 
