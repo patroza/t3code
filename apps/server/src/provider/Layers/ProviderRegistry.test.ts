@@ -53,6 +53,7 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { pollUntil } from "../testUtils/pollUntil.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -1606,7 +1607,10 @@ it.layer(
           const initialCodex = initialProviders.find((provider) => provider.instanceId === "codex");
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
-          assert.deepStrictEqual(spawnedCommands, [firstMissing]);
+          assert.deepStrictEqual(
+            spawnedCommands.filter((command) => command !== "kimi"),
+            [firstMissing],
+          );
 
           // Drive a settings change. The Hydration layer's
           // `SettingsWatcherLive` consumes this via `streamChanges`,
@@ -1639,7 +1643,10 @@ it.layer(
           });
 
           const reprobedCodex = refreshed.find((provider) => provider.instanceId === "codex");
-          assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
+          assert.deepStrictEqual(
+            spawnedCommands.filter((command) => command !== "kimi"),
+            [firstMissing, secondMissing],
+          );
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);
         }).pipe(Effect.provide(runtimeServices));
@@ -1793,6 +1800,7 @@ it.layer(
             "codex",
             "cursor",
             "grok",
+            "kimi",
             "opencode",
           ]);
           assert.strictEqual(cursorProvider?.enabled, false);
@@ -1925,7 +1933,7 @@ it.layer(
       ),
     );
 
-    it.effect("includes Claude Fable 5 on supported Claude Code versions", () =>
+    it.effect("keeps Claude Opus 4.8 first when Fable 5 is supported", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
@@ -1933,6 +1941,7 @@ it.layer(
         );
         const fable5 = status.models.find((model) => model.slug === "claude-fable-5");
         assert.strictEqual(fable5?.name, "Claude Fable 5");
+        assert.strictEqual(status.models[0]?.slug, "claude-opus-4-8");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
