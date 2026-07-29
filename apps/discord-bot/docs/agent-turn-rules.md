@@ -7,7 +7,11 @@ Don't mix up requester vs thread starter vs others.
 
 **PR:** always open for commits/landable work; draft until lint/typecheck/tests/`vp check`; then mark ready. No abandoned drafts.
 
-**cab (commits):** keep default bot author/committer. Append turn `cab` lines exactly (blank line before). Never invent emails/logins. Check: `git log -1 --format=%B`. Optional PR co-author list: `[@login](https://github.com/login)` — never bare `@login`.
+**cab (commits):** bot already resolved the identity map — do **not** re-lookup or invent emails.
+Turn field `cab: Name <email> | Name2 <email2>` (deduped). For each entry, append a git trailer:
+`Co-authored-by: Name <email>` (blank line before first). Keep default bot author/committer.
+Check: `git log -1 --format=%B`. PR co-author list: `[@login](https://github.com/login)` only — never bare `@login`.
+`unmapped:` means no trailer for that Discord user.
 
 **PR footer** from turn `pr` fields (paste at PR body end; bot may re-append):
 `opened by [{name}](https://discord.com/users/{uid}) in chat thread **Discord** · [{title}](https://discord.com/channels/{g}/{c}/{m})`

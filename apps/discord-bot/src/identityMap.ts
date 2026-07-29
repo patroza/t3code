@@ -372,8 +372,11 @@ export function resolveGitHubCoAuthorEmail(github: GitHubIdentityRef): string | 
   return null;
 }
 
-/** `Co-authored-by: Name <email>` or null when GitHub email cannot be resolved. */
-export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null {
+/**
+ * Co-author body only: `Name <email>` (no trailer prefix).
+ * Prefix with `Co-authored-by: ` when writing git commits (see agent-turn-rules).
+ */
+export function formatCoAuthoredByBody(person: PersonIdentity): string | null {
   const github = person.github;
   if (github === undefined) return null;
   const email = resolveGitHubCoAuthorEmail(github);
@@ -381,7 +384,13 @@ export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null
   const name = (github.name ?? person.name).trim() || person.name;
   // Git trailers must be a single line; strip newlines from names.
   const safeName = name.replace(/[\r\n]+/gu, " ").trim();
-  return `Co-authored-by: ${safeName} <${email}>`;
+  return `${safeName} <${email}>`;
+}
+
+/** Full git trailer `Co-authored-by: Name <email>`, or null when unresolved. */
+export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null {
+  const body = formatCoAuthoredByBody(person);
+  return body === null ? null : `Co-authored-by: ${body}`;
 }
 
 export type ResolvedParticipantIdentity = {
@@ -448,7 +457,9 @@ export function resolveParticipantIdentity(input: {
 
 /**
  * Build the agent-facing attribution block for commits/PRs.
- * Returns null when there is nothing useful to inject (empty map + no participants).
+ * Bot already resolved the identity map — inject cab bodies only (no lookup, no
+ * repeated `Co-authored-by:` prefix). Unmapped participants listed briefly.
+ * Returns null when there is nothing useful to inject.
  */
 export function formatIdentityAttributionBlock(input: {
   readonly participants: ReadonlyArray<ResolvedParticipantIdentity>;
@@ -457,69 +468,55 @@ export function formatIdentityAttributionBlock(input: {
   if (participants.length === 0) return null;
 
   const anyMapped = participants.some((p) => p.person !== null);
-  const trailers = uniqueTrailers(
-    participants.map((p) => p.coAuthoredBy).filter((t): t is string => t !== null),
+  // Dedupe by trailer body; starter+req same person → one entry.
+  const cabBodies = uniqueStrings(
+    participants
+      .map((p) => {
+        if (p.coAuthoredBy === null) return null;
+        return p.coAuthoredBy.replace(/^Co-authored-by:\s*/iu, "").trim();
+      })
+      .filter((t): t is string => t !== null && t.length > 0),
   );
 
-  // Static attribution policy in docs/agent-turn-rules.md; inject who + cab only.
-  // Merge rows that share the same discord id (starter+req same person → one entry).
-  type WhoRow = {
-    roles: string[];
-    id: string;
-    user: string;
-    suffix: string;
-  };
-  const byId = new Map<string, WhoRow>();
-
+  // Only surface unmapped / incomplete rows (mapped people are fully covered by cab).
+  const unmappedParts: string[] = [];
+  const seenUnmapped = new Set<string>();
   for (const p of participants) {
+    if (p.coAuthoredBy !== null) continue;
     const role = p.role === "requester" ? "req" : p.role === "thread_starter" ? "starter" : "p";
-    const id = p.discordId ?? `anon:${byId.size}`;
+    const id = p.discordId ?? "?";
     const user = p.discordUsername ?? p.person?.discord?.username ?? "?";
-    const suffix =
-      p.person === null
-        ? "unmapped"
-        : p.person.github !== undefined
-          ? p.person.github.id !== undefined
-            ? `gh:${p.person.github.login}#${p.person.github.id}`
-            : `gh:${p.person.github.login}`
-          : "gh:?";
-    const existing = byId.get(id);
-    if (existing !== undefined) {
-      if (!existing.roles.includes(role)) existing.roles.push(role);
-      // Prefer real username / mapped suffix if a later role fills them in.
-      if (existing.user === "?" && user !== "?") existing.user = user;
-      if (existing.suffix === "unmapped" && suffix !== "unmapped") existing.suffix = suffix;
-      continue;
-    }
-    byId.set(id, { roles: [role], id, user, suffix });
+    const key = `${id}@${user}`;
+    if (seenUnmapped.has(key)) continue;
+    seenUnmapped.add(key);
+    const why = p.person === null ? "unmapped" : "no-gh";
+    unmappedParts.push(`${role} ${key} ${why}`);
   }
 
-  const whoParts = [...byId.values()].map(
-    (row) => `${row.roles.join("+")} ${row.id}@${row.user} ${row.suffix}`,
-  );
-
-  const lines: string[] = [`who: ${whoParts.join(" | ")}`];
-
-  if (trailers.length > 0) {
-    lines.push("cab:");
-    for (const t of trailers) lines.push(t);
+  const lines: string[] = [];
+  if (cabBodies.length > 0) {
+    // Single line; agent prefixes each with `Co-authored-by: ` when committing.
+    lines.push(`cab: ${cabBodies.join(" | ")}`);
   } else if (!anyMapped) {
-    lines.push("cab: (none — unmapped)");
+    lines.push("cab: (none)");
   } else {
     lines.push("cab: (none — missing gh id/email)");
+  }
+  if (unmappedParts.length > 0) {
+    lines.push(`unmapped: ${unmappedParts.join(" | ")}`);
   }
 
   return lines.join("\n");
 }
 
-function uniqueTrailers(trailers: ReadonlyArray<string>): ReadonlyArray<string> {
+function uniqueStrings(values: ReadonlyArray<string>): ReadonlyArray<string> {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const t of trailers) {
-    const key = t.toLowerCase();
+  for (const value of values) {
+    const key = value.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(t);
+    out.push(value);
   }
   return out;
 }

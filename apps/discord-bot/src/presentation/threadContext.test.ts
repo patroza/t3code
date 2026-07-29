@@ -276,7 +276,7 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).not.toContain("jira:");
   });
 
-  it("injects compact who + cab for starter + requester", () => {
+  it("injects compact cab for starter + requester", () => {
     const prompt = buildDiscordTurnPrompt({
       mentionPrompt: "open a PR",
       starter: {
@@ -305,14 +305,11 @@ describe("buildDiscordTurnPrompt", () => {
       ],
     });
 
-    expect(prompt).toContain("who:");
-    expect(prompt).toContain("starter 222@davide gh:davide#99");
-    expect(prompt).toContain("req 95218063095377920@patroza gh:patroza#12345");
-    expect(prompt).toContain("cab:");
-    expect(prompt).toContain("Co-authored-by: Davide <99+davide@users.noreply.github.com>");
     expect(prompt).toContain(
-      "Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>",
+      "cab: Davide <99+davide@users.noreply.github.com> | Patrick Roza <12345+patroza@users.noreply.github.com>",
     );
+    expect(prompt).not.toContain("Co-authored-by:");
+    expect(prompt).not.toContain("who:");
     expect(prompt).not.toContain("do not invent emails");
     expect(prompt).not.toContain("Always open a PR");
     expect(prompt).not.toContain("jiraAccountId");

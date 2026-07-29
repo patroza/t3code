@@ -91,7 +91,8 @@ Each Discord turn injects a **compact** dynamic block only:
 
 - `rules:` absolute path to static policy
 - `req:` `id@user name`
-- `who:` / `cab:` identity + co-author trailers
+- `cab: Name <email> | …` (bot-resolved; agent prefixes `Co-authored-by:`)
+- `unmapped:` only when someone has no resolvable GitHub trailer
 - `pr:` `name` / `uid` / `g` / `c` / `m` / `title` (ids — expand via rules)
 - `jira:` issue keys (no browse URLs)
 - `jump:` `g/c/m` for referenced messages
