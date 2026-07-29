@@ -1,22 +1,11 @@
-name: Mobile EAS Production
+name: Mobile EAS Development
 
-# Production builds and OTA updates run from CI (Linux) — never from a laptop.
-# Under the fingerprint runtime-version policy the fingerprint must be computed
-# in the same OS/pnpm as the EAS build; a macOS `eas build` computes a different
-# fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
-# runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
+# Keep the installable development client current without rebuilding it for
+# JavaScript-only changes. Expo Fingerprint reuses a compatible native build
+# and publishes an OTA update; native changes produce a new internal build.
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "auto (fingerprint decides), build (+ auto-submit to TestFlight), or update (OTA)"
-        required: true
-        type: choice
-        default: auto
-        options:
-          - auto
-          - build
-          - update
       platform:
         description: "Target platform"
         required: true
@@ -26,28 +15,25 @@ on:
           - ios
           - android
           - all
-      message:
-        description: "OTA update message (mode=update only)"
-        required: false
-        type: string
       sha:
         description: "Exact fork/integration SHA (blank uses its current tip)"
         required: false
         type: string
 
 concurrency:
-  group: mobile-eas-production
+  group: mobile-eas-development
   cancel-in-progress: false
 
 jobs:
-  production:
-    name: EAS Production ${{ inputs.mode }}
+  development:
+    name: EAS Development
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
-      APP_VARIANT: production
+      APP_VARIANT: development
       NODE_OPTIONS: --max-old-space-size=8192
+      MOBILE_VERSION_POLICY: fingerprint
       T3CODE_MOBILE_EAS_PROJECT_ID: ${{ vars.T3CODE_MOBILE_EAS_PROJECT_ID }}
       T3CODE_MOBILE_EXPO_OWNER: ${{ vars.T3CODE_MOBILE_EXPO_OWNER }}
       T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
@@ -62,7 +48,7 @@ jobs:
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "EXPO_TOKEN is not available; skipping EAS production job."
+            echo "EXPO_TOKEN is not available; skipping EAS development job."
           fi
 
       - name: Checkout
@@ -72,8 +58,7 @@ jobs:
           ref: fork/integration
           fetch-depth: 0
 
-      - id: source
-        name: Resolve approved integration source
+      - name: Resolve approved integration source
         if: steps.expo-token.outputs.present == 'true'
         env:
           REQUESTED_SHA: ${{ inputs.sha }}
@@ -88,7 +73,6 @@ jobs:
           git merge-base --is-ancestor "$target_sha" "$integration_sha"
           git checkout --detach "$target_sha"
           test "$(git rev-parse HEAD)" = "$target_sha"
-          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
@@ -112,52 +96,24 @@ jobs:
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
-          # npm, not pnpm: this only installs eas-cli into the action's own
-          # tool dir, and pnpm 11 hard-fails that install on dtrace-provider's
-          # ignored build script (no allowBuilds config outside the repo).
           packager: npm
 
-      - name: Pull production environment variables
+      - name: Pull development environment variables
         if: steps.expo-token.outputs.present == 'true'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas env:pull production --non-interactive
+        run: eas env:pull development --non-interactive
 
-      # Fingerprint decides: a JavaScript-only integration publishes an OTA
-      # update to the production channel, which the installed TestFlight build
-      # picks up on next launch. A change to native runtime inputs starts a
-      # production build and submits it to TestFlight instead.
-      - name: Deploy with fingerprint check
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'auto'
+      - name: Publish compatible update or development build
+        if: steps.expo-token.outputs.present == 'true'
         uses: expo/expo-github-action/continuous-deploy-fingerprint@main
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         with:
-          profile: production
-          branch: production
+          profile: development
+          branch: development
           platform: ${{ inputs.platform }}
-          environment: production
-          auto-submit-builds: true
+          environment: development
           working-directory: apps/mobile
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and submit
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
-
-      - name: Publish OTA update
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'
-        working-directory: apps/mobile
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          eas update \
-            --channel production \
-            --environment production \
-            --platform ${{ inputs.platform }} \
-            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
-            --non-interactive

@@ -2,13 +2,17 @@ name: Mobile EAS Preview
 
 on:
   pull_request:
+    # Preview builds belong to feature PRs. The permanent fork stack PRs target
+    # lower provenance layers and must not create a preview run on every rebase.
+    branches:
+      - fork/changes
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
   preview:
     name: EAS Preview
     if: contains(github.event.pull_request.labels.*.name, '🚀 Mobile Continuous Deployment')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
@@ -75,9 +79,14 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         with:
-          profile: preview:dev
+          # Release configuration, not `preview:dev`: PR builds must show
+          # production-grade performance and memory behaviour. The dev-client
+          # `preview:dev` profile stays available for local Metro attachment.
+          profile: preview
           branch: pr-${{ github.event.pull_request.number }}
-          platform: all
+          # iOS only: Android has no signing keystore configured, so including
+          # it fails the job before the iOS artifact is published.
+          platform: ios
           environment: preview
           working-directory: apps/mobile
           github-token: ${{ secrets.GITHUB_TOKEN }}
