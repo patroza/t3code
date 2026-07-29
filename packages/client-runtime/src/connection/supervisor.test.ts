@@ -321,7 +321,7 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
-    it.effect("resets retries when activation arrives before the network returns", () =>
+  it.effect("resets retries when activation arrives before the network returns", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
@@ -353,7 +353,7 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
-it.effect("recovers from a network change the platform dropped while suspended", () =>
+  it.effect("recovers from a network change the platform dropped while suspended", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ networkStatus: "offline" });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
