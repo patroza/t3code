@@ -26,6 +26,23 @@ Shared browser dev is single-origin: Vite proxies the backend paths, so never se
 
 The dev runner disables browser auto-open by default. Do not pass `--browser` during automated testing: an automatically opened page can consume the one-time bootstrap token before the controlled browser uses it.
 
+### Previewing the dev server from a remote client
+
+When T3 itself is being driven from another machine — the app connected to this environment over a
+tailnet or LAN address rather than `localhost` — a dev server bound to loopback is not reachable at
+that address just because the hostname is. Opening it does **not** require `--share`: the
+environment resolves the port on demand, reusing an existing `tailscale serve` route, using the
+environment's own address when the port already answers there, and otherwise publishing a
+tailnet-only HTTPS route for the port and withdrawing it when the dev server exits.
+
+Give the preview a `localhost:<port>` URL and let it resolve. Never hand-write the environment's
+hostname with the dev port appended — that is the shape that fails, because nothing promises the
+dev port is published under the same number or scheme.
+
+If the port cannot be made reachable, the preview reports why and what to do (dev server not
+running, tailscale not logged in, no permission to manage routes, tailnet port already taken).
+Treat that message as the result; do not retry the same URL.
+
 ### Verify a shared environment before human handoff
 
 When another person will use the printed pairing URL, first open the shared origin without the pairing path or fragment in the controlled browser and confirm the T3 Code app loads. This browser navigation is required even when curl succeeds because browsers block some otherwise reachable ports before making a network request.

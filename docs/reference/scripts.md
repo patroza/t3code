@@ -17,7 +17,7 @@
 - `vp run dist:desktop:artifact -- --platform <mac|linux|win> --target <target> --arch <arch>` — Builds a desktop artifact for a specific platform/target/arch.
 - `vp run dist:desktop:dmg` — Builds a shareable macOS `.dmg` into `./release`.
 - `vp run dist:desktop:dmg:x64` — Builds an Intel macOS `.dmg`.
-- `vp run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
+- `vp run dist:desktop:linux` — Builds the Linux desktop app into `./release` (default target `dir`; use `dist:desktop:linux:appimage` or `dist:desktop:linux:pacman` for those targets).
 - `vp run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
 
 ## Desktop `.dmg` packaging notes
