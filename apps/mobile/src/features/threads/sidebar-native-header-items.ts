@@ -4,6 +4,12 @@ import type {
 } from "@react-navigation/native-stack";
 
 import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
+import {
+  HOME_LIST_MODE_ICONS,
+  HOME_LIST_MODE_LABELS,
+  otherHomeListModes,
+  type HomeListMode,
+} from "../home/homeListMode";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 
 type NativeHeaderMenuItems = NativeStackHeaderItemMenu["menu"]["items"];
@@ -32,15 +38,17 @@ function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): NativeHead
 }
 
 /**
- * Right-side UINavigationBar items for the sidebar column: the thread list
- * filter/sort menu plus the settings button, sharing one glass capsule —
- * the Messages-style grouped header buttons.
+ * Right-side UINavigationBar items for the sidebar column: filter/sort menu,
+ * the two alternate list-mode icons (Recent / Projects / Board), and settings.
  */
 export function createSidebarHeaderItems(input: {
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
+  readonly listMode: HomeListMode;
+  readonly onListModeChange: (mode: HomeListMode) => void;
   readonly onOpenSettings: () => void;
 }): NativeStackHeaderItem[] {
+  const alternateModes = otherHomeListModes(input.listMode);
   return [
     withNativeGlassHeaderItem({
       type: "menu",
@@ -52,6 +60,15 @@ export function createSidebarHeaderItems(input: {
         items: toNativeHeaderMenuItems(input.filterMenu.items),
       },
     }),
+    ...alternateModes.map((mode) =>
+      withNativeGlassHeaderItem({
+        type: "button" as const,
+        label: "",
+        accessibilityLabel: HOME_LIST_MODE_LABELS[mode],
+        icon: sfSymbolIcon(HOME_LIST_MODE_ICONS[mode]),
+        onPress: () => input.onListModeChange(mode),
+      }),
+    ),
     withNativeGlassHeaderItem({
       type: "button",
       label: "",

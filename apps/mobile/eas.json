@@ -12,6 +12,7 @@
         "NODE_OPTIONS": "--max-old-space-size=4096"
       },
       "channel": "development",
+      "environment": "development",
       "developmentClient": true,
       "distribution": "internal"
     },
@@ -19,11 +20,15 @@
       "corepack": true,
       "env": {
         "APP_VARIANT": "preview",
+        "MOBILE_VERSION_POLICY": "fingerprint",
         "NODE_OPTIONS": "--max-old-space-size=4096"
       },
       "channel": "preview",
       "environment": "preview",
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
     },
     "preview:dev": {
       "corepack": true,
@@ -44,7 +49,11 @@
       "corepack": true,
       "env": {
         "APP_VARIANT": "production",
-        "NODE_OPTIONS": "--max-old-space-size=4096"
+        "NODE_OPTIONS": "--max-old-space-size=4096",
+        "T3CODE_MOBILE_EAS_PROJECT_ID": "731ac55d-f006-4a63-95ef-091c2146caeb",
+        "T3CODE_MOBILE_EXPO_OWNER": "patroza",
+        "T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER": "dev.patroza.t3code",
+        "T3CODE_MOBILE_IOS_TEAM_ID": "8B9VRZFRAA"
       },
       "channel": "production",
       "environment": "production",
@@ -54,7 +63,7 @@
   "submit": {
     "production": {
       "ios": {
-        "ascAppId": "6787819824"
+        "ascAppId": "6794618314"
       },
       "android": {
         "track": "internal"

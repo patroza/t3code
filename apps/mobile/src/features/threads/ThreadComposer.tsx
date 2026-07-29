@@ -4,6 +4,7 @@ import type {
   MessageId,
   ModelSelection,
   OrchestrationThreadShell,
+  ProviderDriverKind,
   ProviderInteractionMode,
   RuntimeMode,
   ServerConfig as T3ServerConfig,
@@ -52,7 +53,9 @@ import {
   ComposerToolbarTrigger,
 } from "../../components/ComposerToolbarTrigger";
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
-import { ProviderIcon } from "../../components/ProviderIcon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
+import { resolveDriverUsage } from "@t3tools/client-runtime/state/aiUsagePresentation";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -100,8 +103,8 @@ export interface ThreadComposerProps {
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
-  readonly queueCount: number;
   readonly activeThreadBusy: boolean;
+  readonly isEditingQueuedMessage?: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
@@ -281,7 +284,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   const isExpanded = isFocused;
-  const canSend = hasContent;
+  const canSend = hasContent || props.isEditingQueuedMessage === true;
 
   const onPressImage = useCallback(
     (uri: string) => {
@@ -311,10 +314,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
 
-  const sendLabel =
-    props.connectionState !== "connected" || props.activeThreadBusy || props.queueCount > 0
-      ? "Queue"
-      : "Send";
+  const sendLabel = "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
@@ -633,6 +633,32 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         option.selection.instanceId === currentModelSelection.instanceId &&
         option.selection.model === currentModelSelection.model,
     ) ?? null;
+
+  const aiUsageSnapshot = useAiUsageSnapshot(props.environmentId);
+  const threadUsage = useMemo(
+    () =>
+      currentModelOption
+        ? resolveDriverUsage(
+            aiUsageSnapshot,
+            currentModelOption.providerDriver as ProviderDriverKind,
+            currentModelSelection.model,
+          )
+        : null,
+    [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
+  );
+  const currentModelIconNode = (
+    <ProviderUsageIcon
+      provider={currentModelOption?.providerDriver}
+      size={14}
+      marker={threadUsage?.marker ?? null}
+    />
+  );
+
+  const currentUsageNote = threadUsage
+    ? (threadUsage.item.windows
+        .map((w) => (typeof w.percent === "number" ? `${w.percent}%` : null))
+        .find(Boolean) ?? null)
+    : null;
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -650,11 +676,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerGroups.map((group) => ({
         id: `provider:${group.providerKey}`,
         title: group.providerLabel,
-        subtitle: group.models.find(
-          (model) =>
-            model.selection.instanceId === currentModelSelection.instanceId &&
-            model.selection.model === currentModelSelection.model,
-        )?.label,
+        subtitle: (() => {
+          const selected = group.models.find(
+            (model) =>
+              model.selection.instanceId === currentModelSelection.instanceId &&
+              model.selection.model === currentModelSelection.model,
+          );
+          if (!selected) return undefined;
+          return currentUsageNote ? `${selected.label} · ${currentUsageNote}` : selected.label;
+        })(),
         subactions: group.models.map((option) => ({
           id: `model:${option.key}`,
           title: option.label,
@@ -756,9 +786,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       style={{
         paddingTop: isExpanded ? 8 : 6,
         paddingBottom: (props.bottomInset ?? 0) + (isExpanded ? 8 : 6),
+        // Keep the top soft for a short blend into the feed, but make the
+        // lower band nearly opaque so timeline rows never read as sitting
+        // *inside* the composer chrome.
         experimental_backgroundImage: isDarkMode
-          ? "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 55%, rgba(0,0,0,0.9) 100%)"
-          : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.6) 55%, rgba(255,255,255,0.9) 100%)",
+          ? "linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.82) 42%, rgba(0,0,0,0.96) 100%)"
+          : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.88) 42%, rgba(255,255,255,0.98) 100%)",
       }}
     >
       <Animated.View
@@ -878,6 +911,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </View>
           ) : null}
           {!isExpanded ? (
+            <ControlPillMenu
+              actions={modelMenuActions}
+              onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
+            >
+              <View style={{ width: 18, height: 18, marginRight: 4, marginLeft: 2 }}>
+                {currentModelIconNode}
+              </View>
+            </ControlPillMenu>
+          ) : null}
+          {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
               {showStopAction ? (
                 <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
@@ -913,9 +956,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 >
                   <ComposerToolbarTrigger
                     accessibilityLabel="Model"
-                    iconNode={
-                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                    }
+                    iconNode={currentModelIconNode}
                     label={currentModelOption?.label ?? currentModelSelection.model}
                   />
                 </ControlPillMenu>
@@ -948,16 +989,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 showChevron={false}
               />
             </ComposerToolbarRow>
-          </Animated.View>
-        ) : null}
-
-        {/* Queue count */}
-        {props.queueCount > 0 ? (
-          <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
-            <Text className="pt-2 text-xs text-foreground-muted">
-              {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send
-              automatically.
-            </Text>
           </Animated.View>
         ) : null}
       </Animated.View>

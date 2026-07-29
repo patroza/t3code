@@ -194,7 +194,9 @@ function ThreadRouteContent(
   const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
-  const requests = useSelectedThreadRequests();
+  // Derive pending requests from the FULL loaded set (older pages + live
+  // window) so a prompt the user scrolled back to load still surfaces.
+  const requests = useSelectedThreadRequests(composer.mergedActivities);
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const navigation = useNavigation();
   const params = props.route.params;
@@ -760,12 +762,14 @@ function ThreadRouteContent(
   });
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = (showActionControls: boolean) => (
-    <>
+    // A real flex host (not a fragment) keeps the thread body filling the
+    // screen so the absolute composer overlay anchors to the true bottom.
+    <View className="flex-1 bg-screen">
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
 
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
-      <View className="flex-1 bg-screen">
+      <View className="flex-1">
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
@@ -785,13 +789,14 @@ function ThreadRouteContent(
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           activeThreadBusy={composer.activeThreadBusy}
+          isEditingQueuedMessage={composer.isEditingQueuedMessage}
+          composerQueueItems={composer.composerQueueItems}
           hasMoreOlderActivities={composer.hasMoreOlderActivities}
           loadingOlderActivities={composer.loadingOlderActivities}
           onLoadOlderActivities={composer.onLoadOlderActivities}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
-          selectedThreadQueueCount={composer.selectedThreadQueueCount}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onOpenConnectionEditor={handleOpenConnectionEditor}
@@ -802,6 +807,8 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onSteerQueuedMessage={composer.onSteerQueuedMessage}
+          onEditQueuedMessage={composer.onEditQueuedMessage}
           onStartNewThread={handleStartNewThread}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
@@ -813,7 +820,7 @@ function ThreadRouteContent(
           onSubmitUserInput={requests.onSubmitUserInput}
         />
       </View>
-    </>
+    </View>
   );
 
   return (

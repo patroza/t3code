@@ -13,14 +13,23 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useEnvironmentServerConfig } from "../../state/entities";
+import { prefetchEnvironmentThread } from "../../state/threads";
+import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadStatus } from "./threadPresentation";
+import {
+  hasUsageMarker,
+  resolveDriverUsage,
+} from "@t3tools/client-runtime/state/aiUsagePresentation";
+import type { ProviderDriverKind } from "@t3tools/contracts";
 
 /**
  * Shared presentation for the thread lists: the compact (phone) Home list and
@@ -68,6 +77,39 @@ function PullRequestIcon(props: { readonly size: number; readonly color: string 
     </Svg>
   );
 }
+
+/* ─── Section header (Needs attention) ───────────────────────────────── */
+
+/**
+ * Non-collapsible section label for the cross-project Needs attention block.
+ */
+export const ThreadListSectionHeader = memo(function ThreadListSectionHeader(props: {
+  readonly variant: ThreadListVariant;
+  readonly title: string;
+}) {
+  const compact = props.variant === "compact";
+  return (
+    <View
+      className={compact ? "bg-screen" : undefined}
+      style={{
+        paddingLeft: compact ? THREAD_LIST_COMPACT_INSET : 12,
+        paddingRight: compact ? 18 : 12,
+        paddingTop: compact ? 8 : 4,
+        paddingBottom: compact ? 6 : 4,
+      }}
+    >
+      <Text
+        className={
+          compact
+            ? "text-xs font-t3-bold uppercase tracking-wider text-foreground-tertiary"
+            : "text-3xs font-t3-bold uppercase tracking-wider text-foreground-tertiary"
+        }
+      >
+        {props.title}
+      </Text>
+    </View>
+  );
+});
 
 /* ─── Project group header ───────────────────────────────────────────── */
 
@@ -183,21 +225,33 @@ export const ThreadListShowMoreRow = memo(function ThreadListShowMoreRow(props: 
   readonly variant: ThreadListVariant;
   readonly hiddenCount: number;
   readonly canShowLess: boolean;
-  readonly groupKey: string;
-  readonly onGroupAction: (key: string, action: HomeGroupDisplayAction) => void;
+  /** When set with `onGroupAction`, show-more / show-less dispatch group actions. */
+  readonly groupKey?: string;
+  readonly onGroupAction?: (key: string, action: HomeGroupDisplayAction) => void;
+  /**
+   * Binary expand/collapse for Needs attention (preview ↔ all). When provided,
+   * overrides group-key based actions.
+   */
+  readonly onToggleExpanded?: () => void;
 }) {
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const showsMore = props.hiddenCount > 0;
   const compact = props.variant === "compact";
-  const { groupKey, onGroupAction } = props;
-  const handleShowMore = useCallback(
-    () => onGroupAction(groupKey, "show-more"),
-    [groupKey, onGroupAction],
-  );
-  const handleShowLess = useCallback(
-    () => onGroupAction(groupKey, "show-less"),
-    [groupKey, onGroupAction],
-  );
+  const { groupKey, onGroupAction, onToggleExpanded } = props;
+  const handleShowMore = useCallback(() => {
+    if (onToggleExpanded) {
+      onToggleExpanded();
+      return;
+    }
+    if (groupKey && onGroupAction) onGroupAction(groupKey, "show-more");
+  }, [groupKey, onGroupAction, onToggleExpanded]);
+  const handleShowLess = useCallback(() => {
+    if (onToggleExpanded) {
+      onToggleExpanded();
+      return;
+    }
+    if (groupKey && onGroupAction) onGroupAction(groupKey, "show-less");
+  }, [groupKey, onGroupAction, onToggleExpanded]);
 
   const button = (label: string, icon: "chevron.down" | "chevron.up", onPress: () => void) => (
     <Pressable
@@ -406,16 +460,37 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
 
 /* ─── Thread row ─────────────────────────────────────────────────────── */
 
-const THREAD_ROW_MENU_ACTIONS: MenuAction[] = [
+const THREAD_ROW_LEGACY_MENU_ACTIONS: MenuAction[] = [
   { id: "archive", title: "Archive", image: "archivebox" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
+
+function buildThreadRowMenuActions(input: {
+  readonly settlementSupported: boolean;
+  readonly isSettled: boolean;
+}): MenuAction[] {
+  if (!input.settlementSupported) {
+    return THREAD_ROW_LEGACY_MENU_ACTIONS;
+  }
+  return [
+    input.isSettled
+      ? { id: "unsettle", title: "Unsettle", image: "pin" }
+      : { id: "settle", title: "Settle", image: "checkmark.circle" },
+    { id: "archive", title: "Archive", image: "archivebox" },
+    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  ];
+}
 
 export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly variant: ThreadListVariant;
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
   readonly projectCwd: string | null;
+  /**
+   * Optional project title for cross-project contexts (Needs attention).
+   * Shown ahead of environment / branch in the subtitle.
+   */
+  readonly projectTitle?: string | null;
   readonly isLast: boolean;
   /** Sidebar only: the thread currently open in the detail pane. */
   readonly selected?: boolean;
@@ -424,6 +499,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  /** When set with settlementSupported, long-press can settle/unsettle. */
+  readonly settlementSupported?: boolean;
+  readonly isSettled?: boolean;
+  readonly onSettleThread?: (thread: EnvironmentThreadShell) => void;
+  readonly onUnsettleThread?: (thread: EnvironmentThreadShell) => void;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   readonly simultaneousSwipeGesture?: ComponentProps<
@@ -445,16 +525,45 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
 
-  const { thread, onSelectThread, onArchiveThread, onDeleteThread } = props;
+  const {
+    thread,
+    onSelectThread,
+    onArchiveThread,
+    onDeleteThread,
+    onSettleThread,
+    onUnsettleThread,
+  } = props;
+  const settlementSupported = props.settlementSupported === true;
+  const isSettled = props.isSettled === true;
   const status = resolveThreadStatus(thread);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
   const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
-  const subtitleParts = [props.environmentLabel, thread.branch].filter((part): part is string =>
-    Boolean(part),
+  const subtitleParts = [props.projectTitle, props.environmentLabel, thread.branch].filter(
+    (part): part is string => Boolean(part),
   );
+
+  const serverConfig = useEnvironmentServerConfig(thread.environmentId);
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = useMemo(() => {
+    if (!serverConfig) return null;
+    const providerEntry = serverConfig.providers.find(
+      (p) => p.instanceId === thread.modelSelection.instanceId,
+    );
+    if (!providerEntry) return null;
+    return resolveDriverUsage(
+      aiUsageSnapshot,
+      providerEntry.driver as ProviderDriverKind,
+      thread.modelSelection.model,
+    );
+  }, [serverConfig, aiUsageSnapshot, thread.modelSelection]);
+  const showUsageDot = threadUsage ? hasUsageMarker(threadUsage.marker) : false;
+  const providerDriverForIcon = serverConfig
+    ? (serverConfig.providers.find((p) => p.instanceId === thread.modelSelection.instanceId)
+        ?.driver ?? null)
+    : null;
 
   const backgroundColor = compact ? screenColor : drawerColor;
   const effectivePressedBackground = selected ? "rgba(255,255,255,0.16)" : pressedBackgroundColor;
@@ -465,6 +574,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const handleSettle = useCallback(() => onSettleThread?.(thread), [onSettleThread, thread]);
+  const handleUnsettle = useCallback(() => onUnsettleThread?.(thread), [onUnsettleThread, thread]);
   const primaryAction = useMemo(
     () => ({
       accessibilityLabel: `Archive ${thread.title}`,
@@ -474,12 +585,18 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     }),
     [handleArchive, thread.title],
   );
+  const menuActions = useMemo(
+    () => buildThreadRowMenuActions({ settlementSupported, isSettled }),
+    [isSettled, settlementSupported],
+  );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "settle") handleSettle();
+      if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete],
+    [handleArchive, handleDelete, handleSettle, handleUnsettle],
   );
 
   const statusPill = effectiveStatus ? (
@@ -533,6 +650,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         className="bg-screen"
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -555,9 +675,18 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
             }}
           >
             <View className="flex-row items-center justify-between gap-2">
-              <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
-                {thread.title}
-              </Text>
+              <View className="flex-1 flex-row items-center gap-2 min-w-0">
+                {providerDriverForIcon ? (
+                  <ProviderUsageIcon
+                    provider={providerDriverForIcon}
+                    size={16}
+                    marker={showUsageDot ? (threadUsage?.marker ?? null) : null}
+                  />
+                ) : null}
+                <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
+                  {thread.title}
+                </Text>
+              </View>
               <View className="flex-row items-center gap-2">
                 {statusPill}
                 <Text className="text-base tabular-nums text-foreground-tertiary">{timestamp}</Text>
@@ -581,6 +710,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         accessibilityState={{ selected }}
         onHoverIn={() => setHovered(true)}
         onHoverOut={() => setHovered(false)}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -601,15 +733,24 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       >
         <View className="gap-[3px]">
           <View className="flex-row items-center justify-between gap-2">
-            <Text
-              className={cn(
-                "flex-1 text-base font-t3-medium",
-                selected ? "text-user-bubble-foreground" : "text-foreground",
-              )}
-              numberOfLines={1}
-            >
-              {thread.title}
-            </Text>
+            <View className="flex-1 flex-row items-center gap-2 min-w-0">
+              {providerDriverForIcon ? (
+                <ProviderUsageIcon
+                  provider={providerDriverForIcon}
+                  size={14}
+                  marker={showUsageDot ? (threadUsage?.marker ?? null) : null}
+                />
+              ) : null}
+              <Text
+                className={cn(
+                  "flex-1 text-base font-t3-medium",
+                  selected ? "text-user-bubble-foreground" : "text-foreground",
+                )}
+                numberOfLines={1}
+              >
+                {thread.title}
+              </Text>
+            </View>
             <View className="flex-row items-center gap-2">
               {statusPill}
               <Text
@@ -654,7 +795,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         // ControlPillMenu injects onLongPress into the row and anchors the
         // token-styled dropdown to it; taps and swipes are untouched.
         <ControlPillMenu
-          actions={THREAD_ROW_MENU_ACTIONS}
+          actions={menuActions}
           onPressAction={handleMenuAction}
           shouldOpenOnLongPress
         >

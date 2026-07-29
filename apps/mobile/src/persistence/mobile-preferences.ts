@@ -30,6 +30,29 @@ export interface Preferences {
    * see `resolveThreadListV2Enabled`.
    */
   readonly threadListV2Enabled?: boolean;
+  /**
+   * @deprecated Legacy toggle from Needs attention / Recent work UI (removed).
+   * Kept only so older device preference payloads still decode.
+   */
+  readonly recentWorkEnabled?: boolean;
+  /**
+   * Multi-select home/board environment filter. Empty or omitted = all
+   * environments. Device-local (no client-settings sync).
+   */
+  readonly selectedEnvironmentIds?: readonly string[];
+  /**
+   * @deprecated Prefer hideSettledOnRecent. Older payloads used a single flag
+   * for Recent only; kept so device prefs still decode.
+   */
+  readonly hideSettledThreads?: boolean;
+  /**
+   * Recent list: hide settled threads. Default true when omitted (cleaner inbox).
+   */
+  readonly hideSettledOnRecent?: boolean;
+  /**
+   * Projects list: hide settled threads. Default false when omitted (full history).
+   */
+  readonly hideSettledOnProjects?: boolean;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -81,6 +104,11 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     threadListV2Enabled?: boolean;
+    recentWorkEnabled?: boolean;
+    selectedEnvironmentIds?: readonly string[];
+    hideSettledThreads?: boolean;
+    hideSettledOnRecent?: boolean;
+    hideSettledOnProjects?: boolean;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -113,7 +141,40 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.threadListV2Enabled === "boolean") {
     preferences.threadListV2Enabled = parsed.threadListV2Enabled;
   }
+  if (typeof parsed.recentWorkEnabled === "boolean") {
+    preferences.recentWorkEnabled = parsed.recentWorkEnabled;
+  }
+  if (Array.isArray(parsed.selectedEnvironmentIds)) {
+    preferences.selectedEnvironmentIds = parsed.selectedEnvironmentIds.filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
+  }
+  if (typeof parsed.hideSettledThreads === "boolean") {
+    preferences.hideSettledThreads = parsed.hideSettledThreads;
+  }
+  if (typeof parsed.hideSettledOnRecent === "boolean") {
+    preferences.hideSettledOnRecent = parsed.hideSettledOnRecent;
+  }
+  if (typeof parsed.hideSettledOnProjects === "boolean") {
+    preferences.hideSettledOnProjects = parsed.hideSettledOnProjects;
+  }
   return preferences;
+}
+
+/** Recent: default hide settled. Honors legacy hideSettledThreads when set. */
+export function resolveHideSettledOnRecent(preferences: Preferences): boolean {
+  if (typeof preferences.hideSettledOnRecent === "boolean") {
+    return preferences.hideSettledOnRecent;
+  }
+  if (typeof preferences.hideSettledThreads === "boolean") {
+    return preferences.hideSettledThreads;
+  }
+  return true;
+}
+
+/** Projects: default show settled (hide = false). */
+export function resolveHideSettledOnProjects(preferences: Preferences): boolean {
+  return preferences.hideSettledOnProjects === true;
 }
 
 export const make = Effect.fn("MobilePreferencesStore.make")(function* () {

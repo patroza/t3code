@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildHomeListLayout,
+  buildHomeRecentListLayout,
   DEFAULT_GROUP_DISPLAY_STATE,
   HOME_INITIAL_VISIBLE_THREADS,
   HOME_SHOW_MORE_STEP,
@@ -238,5 +239,84 @@ describe("buildHomeListLayout", () => {
     // header + 6 threads + show-more = 8 items, so beta's header is index 8.
     expect(layout.stickyHeaderIndices).toEqual([0, 8]);
     expect(layout.items[8]).toMatchObject({ type: "header", isFirst: false });
+  });
+
+  it("builds a flat recent layout with project titles", () => {
+    const layout = buildHomeRecentListLayout({
+      pendingTasks: [],
+      entries: [
+        { thread: makeThread("t1", ProjectId.make("alpha")), projectTitle: "Alpha" },
+        { thread: makeThread("t2", ProjectId.make("beta")), projectTitle: "Beta" },
+      ],
+    });
+    expect(itemTypes(layout.items)).toEqual(["thread", "thread"]);
+    expect(layout.items[0]).toMatchObject({ type: "thread", projectTitle: "Alpha" });
+    expect(layout.stickyHeaderIndices).toEqual([]);
+  });
+
+  it("builds recency sections with Last Hour / Older headers when multiple buckets", () => {
+    const now = new Date(2026, 2, 15, 14, 30, 0);
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const olderIso = new Date(
+      new Date(2026, 2, 15).getTime() - 40 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const lastHourThread = {
+      ...makeThread("t-hour", ProjectId.make("alpha")),
+      updatedAt: lastHourIso,
+      latestUserMessageAt: lastHourIso,
+    };
+    const olderThread = {
+      ...makeThread("t-older", ProjectId.make("beta")),
+      updatedAt: olderIso,
+      latestUserMessageAt: olderIso,
+    };
+    const layout = buildHomeRecentListLayout({
+      pendingTasks: [],
+      entries: [
+        { thread: lastHourThread, projectTitle: "Alpha" },
+        { thread: olderThread, projectTitle: "Beta" },
+      ],
+      groupByRecency: true,
+      now,
+    });
+    expect(itemTypes(layout.items)).toEqual([
+      "section-header",
+      "thread",
+      "section-header",
+      "thread",
+    ]);
+    expect(layout.items[0]).toMatchObject({ type: "section-header", title: "Last Hour" });
+    expect(layout.items[2]).toMatchObject({ type: "section-header", title: "Older" });
+    expect(layout.stickyHeaderIndices).toEqual([0, 2]);
+  });
+
+  it("omits recency section headers when all threads share one bucket", () => {
+    const now = new Date(2026, 2, 15, 14, 30, 0);
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const layout = buildHomeRecentListLayout({
+      pendingTasks: [],
+      entries: [
+        {
+          thread: {
+            ...makeThread("t1", ProjectId.make("alpha")),
+            updatedAt: lastHourIso,
+            latestUserMessageAt: lastHourIso,
+          },
+          projectTitle: "Alpha",
+        },
+        {
+          thread: {
+            ...makeThread("t2", ProjectId.make("beta")),
+            updatedAt: lastHourIso,
+            latestUserMessageAt: lastHourIso,
+          },
+          projectTitle: "Beta",
+        },
+      ],
+      groupByRecency: true,
+      now,
+    });
+    expect(itemTypes(layout.items)).toEqual(["thread", "thread"]);
+    expect(layout.stickyHeaderIndices).toEqual([]);
   });
 });
