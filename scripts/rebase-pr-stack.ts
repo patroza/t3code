@@ -133,7 +133,126 @@ export interface StackRunOptions {
   readonly pullRequests?: ReadonlyArray<PullRequestSnapshot>;
   readonly preserveState?: boolean;
   readonly initialBaseForAll?: boolean;
+  /**
+   * After each replayed commit lands during a layer rebase, typecheck packages
+   * touched by that commit. Fail the stack rewrite on the first red commit
+   * instead of stacking `fix(stack)` tips later. Requires `node_modules` in the
+   * rewrite worktree (install once before sync when enabling this).
+   */
+  readonly verifyEachCommit?: boolean;
   readonly beforePush?: (state: Readonly<PersistedState>) => void | Promise<void>;
+}
+
+/** Paths where whole-file ours/theirs is never a durable product-safe policy. */
+const PRODUCT_CONFLICT_PATH_PREFIXES = [
+  "apps/server/src/",
+  "apps/web/src/",
+  "apps/mobile/src/",
+  "apps/desktop/src/",
+  "apps/discord-bot/src/",
+  "apps/vscode/src/",
+  "packages/client-runtime/src/",
+  "packages/contracts/src/",
+  "packages/shared/src/",
+] as const;
+
+export function isProductConflictPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  return PRODUCT_CONFLICT_PATH_PREFIXES.some(
+    (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix),
+  );
+}
+
+/**
+ * Map changed repo paths to pnpm filter names for commit-local typecheck.
+ * Config/docs/workflow-only commits return an empty list (no package gate).
+ */
+export function packagesForChangedPaths(paths: ReadonlyArray<string>): ReadonlyArray<string> {
+  const filters = new Set<string>();
+  for (const raw of paths) {
+    const path = raw.replaceAll("\\", "/");
+    if (path.startsWith("packages/client-runtime/")) filters.add("@t3tools/client-runtime");
+    else if (path.startsWith("packages/contracts/")) filters.add("@t3tools/contracts");
+    else if (path.startsWith("packages/shared/")) filters.add("@t3tools/shared");
+    else if (path.startsWith("packages/ssh/")) filters.add("@t3tools/ssh");
+    else if (path.startsWith("packages/tailscale/")) filters.add("@t3tools/tailscale");
+    else if (path.startsWith("packages/effect-acp/")) filters.add("effect-acp");
+    else if (path.startsWith("packages/effect-codex-app-server/")) {
+      filters.add("effect-codex-app-server");
+    } else if (path.startsWith("apps/server/")) filters.add("t3");
+    else if (path.startsWith("apps/web/")) filters.add("@t3tools/web");
+    else if (path.startsWith("apps/mobile/")) filters.add("@t3tools/mobile");
+    else if (path.startsWith("apps/desktop/")) filters.add("@t3tools/desktop");
+    else if (path.startsWith("apps/discord-bot/")) filters.add("@t3tools/discord-bot");
+    else if (path.startsWith("apps/vscode/")) filters.add("t3-code");
+    else if (path.startsWith("apps/marketing/")) filters.add("@t3tools/marketing");
+    else if (path.startsWith("scripts/")) filters.add("@t3tools/scripts");
+    else if (path.startsWith("oxlint-plugin-t3code/")) filters.add("@t3tools/oxlint-plugin-t3code");
+  }
+  return [...filters].sort();
+}
+
+/**
+ * Typecheck packages touched by `HEAD` vs its first parent. Used as
+ * `git rebase --exec` and as the `verify-head` CLI entry.
+ */
+export function verifyReplayHead(
+  repoDir: string,
+  options?: { readonly stateDir?: string | undefined },
+): void {
+  const gitOpts = options?.stateDir === undefined ? {} : { stateDir: options.stateDir };
+  const parent = run("git", ["rev-parse", "--verify", "HEAD^"], {
+    cwd: repoDir,
+    allowFailure: true,
+    ...gitOpts,
+  });
+  if (parent.status !== 0) {
+    console.log("verify-head: root commit; skipping package typecheck");
+    return;
+  }
+  const diff = git(repoDir, ["diff", "--name-only", "HEAD^", "HEAD"], gitOpts);
+  const paths = diff
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const packages = packagesForChangedPaths(paths);
+  if (packages.length === 0) {
+    console.log(
+      `verify-head: ${git(repoDir, ["rev-parse", "--short", "HEAD"], gitOpts)} touches no package sources; ok`,
+    );
+    return;
+  }
+  if (!NodeFS.existsSync(NodePath.join(repoDir, "node_modules"))) {
+    throw new StackError(
+      "verify-each-commit requires node_modules in the rewrite worktree. " +
+        "Run `CI= pnpm install --no-frozen-lockfile` in the worktree (or source tree with " +
+        "linked modules) before `sync --verify-each-commit`.",
+      options?.stateDir === undefined ? undefined : { stateDir: options.stateDir },
+    );
+  }
+  const sha = git(repoDir, ["rev-parse", "--short", "HEAD"], gitOpts);
+  const subject = git(repoDir, ["log", "-1", "--format=%s"], gitOpts);
+  console.log(`verify-head: ${sha} ${subject} → ${packages.join(", ")}`);
+  for (const pkg of packages) {
+    const result = run("pnpm", ["--filter", pkg, "run", "typecheck"], {
+      cwd: repoDir,
+      allowFailure: true,
+      env: { ELECTRON_SKIP_BINARY_DOWNLOAD: "1" },
+      ...gitOpts,
+    });
+    if (result.status !== 0) {
+      throw new StackError(
+        `Commit ${sha} ("${subject}") failed typecheck for ${pkg}. ` +
+          `Fix the replayed commit (or the conflict resolution that produced it); ` +
+          `do not land a tip-only fix(stack) product patch.`,
+        options?.stateDir === undefined ? undefined : { stateDir: options.stateDir },
+      );
+    }
+  }
+}
+
+function thisScriptPath(): string {
+  return NodeURL.fileURLToPath(import.meta.url);
 }
 
 export interface StackRunResult {
@@ -909,6 +1028,13 @@ function applyConfiguredConflictResolutions(
 
   for (const resolution of resolutions) {
     if (!resolution) continue;
+    if (isProductConflictPath(resolution.path)) {
+      console.warn(
+        `WARNING: whole-file ${resolution.strategy} on product path ${resolution.path} ` +
+          `(${operation.branch}). Prefer a 3-way merge; durable * policies on shared app/package ` +
+          `sources cause silent feature loss and tip-only fix(stack) patches.`,
+      );
+    }
     git(state.repoDir, ["checkout", `--${resolution.strategy}`, "--", resolution.path], {
       stateDir,
     });
@@ -938,6 +1064,7 @@ function startOperation(
   stateDir: string,
   state: PersistedState,
   operation: RebaseOperation,
+  options?: { readonly verifyEachCommit?: boolean },
 ): PersistedState {
   let updated = updateState(stateDir, state, { currentOperation: operation });
   if (operation.commits.length === 0) {
@@ -946,27 +1073,32 @@ function startOperation(
   }
   if (operation.oldBase === operation.newBase) {
     git(updated.repoDir, ["checkout", "--quiet", "--detach", operation.oldTip], { stateDir });
+    if (options?.verifyEachCommit === true) {
+      // No rewrite, but still gate the layer tip when verifying a full stack run.
+      verifyReplayHead(updated.repoDir, { stateDir });
+    }
     return finishOperation(stateDir, updated, operation);
   }
   git(updated.repoDir, ["checkout", "--quiet", "--detach", operation.oldTip], { stateDir });
-  let result = run(
-    "git",
-    [
-      "-c",
-      "commit.gpgsign=false",
-      "rebase",
-      "--onto",
-      operation.newBase,
-      operation.oldBase,
-      operation.oldTip,
-    ],
-    {
-      cwd: updated.repoDir,
-      allowFailure: true,
-      env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
-      stateDir,
-    },
-  );
+  const rebaseArgs = [
+    "-c",
+    "commit.gpgsign=false",
+    "rebase",
+    "--onto",
+    operation.newBase,
+    operation.oldBase,
+    operation.oldTip,
+  ];
+  if (options?.verifyEachCommit === true) {
+    // Run after each successfully replayed commit (including post-conflict continues).
+    rebaseArgs.push("--exec", `node ${JSON.stringify(thisScriptPath())} verify-head`);
+  }
+  let result = run("git", rebaseArgs, {
+    cwd: updated.repoDir,
+    allowFailure: true,
+    env: { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+    stateDir,
+  });
   while (result.status !== 0 && rebaseInProgress(updated.repoDir)) {
     if (!applyConfiguredConflictResolutions(stateDir, updated, operation)) {
       throw conflictError(stateDir, updated, operation);
@@ -990,12 +1122,16 @@ function startOperation(
   return updated;
 }
 
-function continueOperations(stateDir: string, initialState: PersistedState): PersistedState {
+function continueOperations(
+  stateDir: string,
+  initialState: PersistedState,
+  options?: { readonly verifyEachCommit?: boolean },
+): PersistedState {
   let state = initialState;
   for (;;) {
     const operation = makeOperation(state);
     if (!operation) return state;
-    state = startOperation(stateDir, state, operation);
+    state = startOperation(stateDir, state, operation, options);
   }
 }
 
@@ -1536,7 +1672,9 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
     manifest,
     options.initialBaseForAll === true,
   );
-  const completed = continueOperations(stateDir, state);
+  const completed = continueOperations(stateDir, state, {
+    verifyEachCommit: options.verifyEachCommit === true,
+  });
   const result = await finishRun(stateDir, completed, options);
 
   // When fork/changes moves, record base-history and rebase open feature PRs onto the new tip.
@@ -1724,7 +1862,7 @@ function appendFeatureRebaseSummary(result: FeaturePullRequestRebaseResult): voi
 
 export async function resumeStack(
   stateDirInput: string,
-  options: Pick<StackRunOptions, "push" | "preserveState" | "beforePush">,
+  options: Pick<StackRunOptions, "push" | "preserveState" | "beforePush" | "verifyEachCommit">,
 ): Promise<StackRunResult> {
   const stateDir = NodePath.resolve(stateDirInput);
   let state = readState(stateDir);
@@ -1749,7 +1887,9 @@ export async function resumeStack(
     }
   }
   state = finishOperation(stateDir, state, operation);
-  state = continueOperations(stateDir, state);
+  state = continueOperations(stateDir, state, {
+    verifyEachCommit: options.verifyEachCommit === true,
+  });
   return finishRun(stateDir, state, options);
 }
 
@@ -1895,9 +2035,10 @@ node scripts/rebase-pr-stack.ts resume --state ${error.stateDir ?? "<temporary-d
 function usage(): string {
   return `Usage:
   node scripts/rebase-pr-stack.ts check
-  node scripts/rebase-pr-stack.ts sync --push
-  node scripts/rebase-pr-stack.ts sync --dry-run
-  node scripts/rebase-pr-stack.ts resume --state <temporary-directory> --push`;
+  node scripts/rebase-pr-stack.ts sync --push [--verify-each-commit]
+  node scripts/rebase-pr-stack.ts sync --dry-run [--verify-each-commit]
+  node scripts/rebase-pr-stack.ts resume --state <temporary-directory> --push
+  node scripts/rebase-pr-stack.ts verify-head`;
 }
 
 async function main(args: ReadonlyArray<string>): Promise<void> {
@@ -1907,13 +2048,19 @@ async function main(args: ReadonlyArray<string>): Promise<void> {
     console.log("PR stack manifest, pull requests, and remote topology are valid.");
     return;
   }
+  if (command === "verify-head" && flags.length === 0) {
+    verifyReplayHead(process.cwd());
+    return;
+  }
   if (command === "sync") {
     const push = flags.includes("--push");
     const dryRun = flags.includes("--dry-run");
-    if (push === dryRun || flags.some((flag) => flag !== "--push" && flag !== "--dry-run")) {
+    const verifyEachCommit = flags.includes("--verify-each-commit");
+    const allowed = new Set(["--push", "--dry-run", "--verify-each-commit"]);
+    if (push === dryRun || flags.some((flag) => !allowed.has(flag))) {
       throw new StackError(usage());
     }
-    const result = await syncStack({ push });
+    const result = await syncStack({ push, verifyEachCommit });
     console.log(
       push
         ? `Atomically updated ${Object.keys(result.newTips).length + 1} branches.`

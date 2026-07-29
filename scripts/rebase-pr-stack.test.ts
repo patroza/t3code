@@ -8,7 +8,9 @@ import * as NodePath from "node:path";
 
 import {
   baseHistoryPushArgs,
+  isProductConflictPath,
   isSuccessfulFeatureRebaseSkip,
+  packagesForChangedPaths,
   rebaseOpenFeaturePullRequests,
   RebaseConflictError,
   resumeStack,
@@ -20,6 +22,38 @@ import {
   type StackManifest,
   validatePullRequestSnapshots,
 } from "./rebase-pr-stack.ts";
+
+describe("packagesForChangedPaths", () => {
+  it("maps package and app sources to pnpm filters", () => {
+    assert.deepEqual(
+      packagesForChangedPaths([
+        "packages/client-runtime/src/state/vcs.ts",
+        "apps/server/src/ws.ts",
+        "apps/web/src/components/BranchToolbar.tsx",
+        "docs/fork-stack.md",
+        ".github/pr-stack.json",
+      ]),
+      ["@t3tools/client-runtime", "@t3tools/web", "t3"],
+    );
+  });
+
+  it("returns empty for docs/manifest-only commits", () => {
+    assert.deepEqual(
+      packagesForChangedPaths([".github/pr-stack.json", "docs/fork-stack.md", "AGENTS.md"]),
+      [],
+    );
+  });
+});
+
+describe("isProductConflictPath", () => {
+  it("flags shared app and package sources", () => {
+    assert.equal(isProductConflictPath("apps/server/src/vcs/GitVcsDriverCore.ts"), true);
+    assert.equal(isProductConflictPath("packages/client-runtime/src/state/vcs.ts"), true);
+    assert.equal(isProductConflictPath(".github/pr-stack.json"), false);
+    assert.equal(isProductConflictPath("pnpm-lock.yaml"), false);
+    assert.equal(isProductConflictPath("docs/fork-stack.md"), false);
+  });
+});
 
 describe("isSuccessfulFeatureRebaseSkip", () => {
   it("treats actual already-based reason strings as success", () => {

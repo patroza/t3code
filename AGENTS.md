@@ -108,6 +108,11 @@ branches.
   product paths. 3-way merge or re-apply the feature commit; run a pre/post parity check so helpers
   and tests cannot survive while JSX/wiring is dropped (see #154 remote Open in VS Code button).
   Full rules: [docs/fork-stack.md](./docs/fork-stack.md) ("Product conflicts").
+- **No tip-only product `fix(stack)` recovery:** whole-file stack resolves that drop VCS/UI must be
+  fixed inside the related provenance/feature commit (or one product-named commit during rewrite),
+  not as permanent tip patches. Use `node scripts/rebase-pr-stack.ts sync --verify-each-commit` so
+  each replayed commit typechecks. See [docs/fork-stack.md](./docs/fork-stack.md)
+  (“Commit-green during stack rewrite”) and [docs/stack-history-rewrite.md](./docs/stack-history-rewrite.md).
 - **Fork product changes need existence/behavior tests:** every user-visible or behavioral fork
   change must land with a test that fails if the surface disappears (pure helpers alone are not
   enough). Prefer pure gates + `aria-label`/`data-testid` existence, or markers in
