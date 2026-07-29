@@ -187,6 +187,12 @@
       "commit": "*",
       "path": "apps/server/src/vcs/VcsStatusBroadcaster.ts",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/candidates",
+      "commit": "*",
+      "path": "apps/web/src/components/ChatView.tsx",
+      "strategy": "theirs"
     }
   ]
 }
