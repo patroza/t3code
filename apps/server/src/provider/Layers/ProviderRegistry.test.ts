@@ -1606,7 +1606,11 @@ it.layer(
           const initialCodex = initialProviders.find((provider) => provider.instanceId === "codex");
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
-          assert.deepStrictEqual(spawnedCommands, [firstMissing]);
+          // Kimi may probe in the background; only assert the codex binaries under test.
+          assert.deepStrictEqual(
+            spawnedCommands.filter((command) => command !== "kimi"),
+            [firstMissing],
+          );
 
           // Drive a settings change. The Hydration layer's
           // `SettingsWatcherLive` consumes this via `streamChanges`,
@@ -1639,7 +1643,10 @@ it.layer(
           });
 
           const reprobedCodex = refreshed.find((provider) => provider.instanceId === "codex");
-          assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
+          assert.deepStrictEqual(
+            spawnedCommands.filter((command) => command !== "kimi"),
+            [firstMissing, secondMissing],
+          );
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);
         }).pipe(Effect.provide(runtimeServices));
@@ -1793,6 +1800,7 @@ it.layer(
             "codex",
             "cursor",
             "grok",
+            "kimi",
             "opencode",
           ]);
           assert.strictEqual(cursorProvider?.enabled, false);
