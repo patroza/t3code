@@ -29,4 +29,6 @@ export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./aiUsage.ts";
 export * from "./hostResources.ts";
+export * from "./background.ts";
+export * from "./resourceTelemetry.ts";
 export * from "./rpc.ts";
