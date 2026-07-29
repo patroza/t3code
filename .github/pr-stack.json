@@ -181,6 +181,12 @@
       "commit": "*",
       "path": "packages/client-runtime/src/rpc/client.ts",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/candidates",
+      "commit": "*",
+      "path": "apps/server/src/vcs/VcsStatusBroadcaster.ts",
+      "strategy": "theirs"
     }
   ]
 }
