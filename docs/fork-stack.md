@@ -259,10 +259,20 @@ where both the new base and the replayed commit carry real behavior (classic exa
 `resolveRemoteVscodeOpenTarget` + unit tests and **dropped the remote Open in VS Code header
 button**, so CI stayed green while the control vanished; restored in #154).
 
+**Never register durable `*` whole-file policies** on:
+
+- `apps/server/src/**`, `apps/web/src/**`, `apps/mobile/src/**`, client overlays under `apps/*/`
+- `packages/client-runtime/src/**`, `packages/contracts/src/**`, `packages/shared/src/**`
+
+Especially VCS clusters (`GitVcsDriverCore*`, `vcs.ts` / `vcsAction*`, BranchToolbar, CommandPalette,
+`ws.ts`): taking main or Tim whole-file once produced tip-only `fix(stack)` patches (#165/#166).
+Those patches are debt — fold them into the **related provenance/feature commit** on the next
+rewrite (see [stack-history-rewrite.md](./stack-history-rewrite.md)).
+
 When a conflict touches `apps/**` or `packages/**` product code:
 
 1. **Do not** apply a durable whole-file `*` policy unless the path is documented as always taking
-   one side for every rewrite.
+   one side for every rewrite (and is **not** product code above).
 2. **3-way merge or re-apply** the known-good feature commit after a clean base; do not invent a
    partial hand merge that keeps helpers/tests and drops JSX / wiring.
 3. **Parity check** before resume/push: `git diff` the pre-rewrite tip vs the resolved path; if a
@@ -274,7 +284,51 @@ When a conflict touches `apps/**` or `packages/**` product code:
    - one existence check (`aria-label` / `data-testid` via `renderToStaticMarkup`, or source markers
      in `apps/web/src/forkSurfaceExistence.test.ts` for chrome that is hard to mount).
 5. After resolving, run the focused tests for the conflicted package **and** the root pre-push gate
-   for the layer (see AGENTS.md).
+   for the layer (see AGENTS.md). Prefer
+   `node scripts/rebase-pr-stack.ts sync --dry-run --verify-each-commit` (or `--push`) so **each
+   replayed commit** typechecks before the next lands.
+
+### Commit-green during stack rewrite (not tip-only)
+
+**Layer tip green is necessary; it is not sufficient.** Tip-only `fix(stack): rejoin …` commits hide
+broken intermediate SHAs and reappear after the next rebase.
+
+Two bars:
+
+| When                                    | Gate                                      |
+| --------------------------------------- | ----------------------------------------- |
+| **Each layer tip** after rewrite        | Full local Fork CI (below)                |
+| **Each replayed commit** during rewrite | Typecheck packages touched by that commit |
+
+Enable per-commit typecheck:
+
+```bash
+CI= pnpm install --no-frozen-lockfile   # once in the tree that supplies node_modules
+node scripts/rebase-pr-stack.ts sync --dry-run --verify-each-commit
+# or
+node scripts/rebase-pr-stack.ts sync --push --verify-each-commit
+```
+
+Implementation: `git rebase --exec 'node scripts/rebase-pr-stack.ts verify-head'` after every pick.
+`verify-head` maps `HEAD^..HEAD` paths to pnpm filters and runs each package's `typecheck`. Config /
+docs / lock-only commits skip package typecheck.
+
+**On failure:** stop. Fix the **replayed commit** (conflict resolution or provenance content), not a
+new tip patch. Product recovery belongs **inside** Tim/candidate/feature commits, never as a
+standalone `fix(stack)` product commit on `fork/changes`.
+
+Allowed under `fix(stack)` / `feat(fork-stack)` naming:
+
+- stack automation (`scripts/rebase-pr-stack.ts`, compose, CI wiring)
+- durable **non-product** `conflictResolutions` (manifest paths, lockfile strategy)
+- docs for the stack itself
+
+Not allowed as permanent history:
+
+- re-applying dropped UI/VCS/API after a blind resolve
+- “make typecheck green” tips that only undo a bad `ours`/`theirs`
+
+History cleanup procedure: [stack-history-rewrite.md](./stack-history-rewrite.md).
 
 ### Integration overlay compose and lockfiles
 
@@ -313,7 +367,8 @@ back to a full copy. Optional: `COMPOSE_WORK_ROOT` overrides the work directory 
 
 When you manually rebase or rewrite the stack, **do not advance to the next layer until the current
 layer passes the full local CI gate** (not only `vp check`). A red parent must never receive more
-layers on top of it.
+layers on top of it. Prefer `--verify-each-commit` during the rewrite so intermediate SHAs are also
+typecheck-green (see **Commit-green during stack rewrite** above).
 
 After each layer is rebased onto its parent, install/lock is consistent, and conflicts are resolved
 (and `conflictResolutions` updated when you hand-resolved):
