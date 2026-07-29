@@ -106,12 +106,13 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 // RPC Inputs
 
 /**
- * How aggressively the server should refresh remote VCS status for a subscription.
+ * How the server should refresh remote VCS status for a subscription.
  *
- * - `full` (default): long-lived remote poller (automatic git fetch interval) — for the
- *   active thread / git chrome.
- * - `list`: local status + best-effort remote snapshot, **no** remote poller — for
- *   sidebar/board/list PR badges so N loaded worktrees do not create N pollers.
+ * - `full` (default): dedicated per-cwd remote poller (automatic git fetch interval) —
+ *   for the active thread / git chrome.
+ * - `list`: still keeps remote/PR state **up to date** via a **shared budgeted**
+ *   refresher for all list-interested worktrees (not one poller fiber per row).
+ *   Use for sidebar/board/list PR badges.
  */
 export const VcsStatusSubscribeMode = Schema.Literals(["full", "list"]);
 export type VcsStatusSubscribeMode = typeof VcsStatusSubscribeMode.Type;

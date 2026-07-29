@@ -11,8 +11,8 @@ export {
 } from "./thread-pr-presentation";
 
 /**
- * List-mode PR status for a thread's branch (no remote poller). Deduped per
- * (environmentId, cwd); use full `vcsEnvironment.status` only for active git chrome.
+ * List-mode PR status for a thread's branch (shared budgeted remote refresh).
+ * Deduped per (environmentId, cwd); use full `status` for active git chrome.
  */
 export function useThreadPr(
   thread: EnvironmentThreadShell,

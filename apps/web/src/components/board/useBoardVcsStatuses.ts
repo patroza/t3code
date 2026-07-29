@@ -17,10 +17,8 @@ const EMPTY_STATUSES_ATOM = Atom.make(
 ).pipe(Atom.withLabel("web:board-vcs-statuses:empty"));
 
 /**
- * Aggregated list-mode VCS status for the board: one derived atom over the
- * per-cwd listStatus family (no server remote poller). Dedupe by
- * (environmentId, cwd); shorter idle TTL than full status. Entries are `null`
- * until the first snapshot streams in.
+ * Aggregated list-mode VCS status for the board: shared budgeted remote refresh
+ * (PR/git stay fresh; no per-row poller). Dedupe by (environmentId, cwd).
  */
 export function useBoardVcsStatuses(
   targets: ReadonlyArray<BoardVcsTarget>,

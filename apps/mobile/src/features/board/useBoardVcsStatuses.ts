@@ -17,8 +17,8 @@ const EMPTY_STATUSES_ATOM = Atom.make(
 ).pipe(Atom.withLabel("mobile:board-vcs-statuses:empty"));
 
 /**
- * Aggregated list-mode VCS status for the board (no remote poller) — same
- * shape as web `useBoardVcsStatuses`.
+ * Aggregated list-mode VCS status for the board (shared budgeted refresh) —
+ * same shape as web `useBoardVcsStatuses`.
  */
 export function useBoardVcsStatuses(
   targets: ReadonlyArray<BoardVcsTarget>,

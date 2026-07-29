@@ -554,7 +554,7 @@ describe("VcsStatusBroadcaster", () => {
     );
   });
 
-  it.effect("list mode does not start a remote poller", () => {
+  it.effect("list mode uses a shared budgeted refresher, not a per-cwd poller", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
       currentRemoteStatus: remoteStatusWithPr,
@@ -568,33 +568,43 @@ describe("VcsStatusBroadcaster", () => {
     return Effect.gen(function* () {
       const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const scope = yield* Scope.make();
-      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
-      yield* Stream.runForEach(
-        broadcaster.streamStatus(
-          { cwd: "/repo", mode: "list" },
-          { automaticRemoteRefreshInterval: Effect.succeed(Duration.seconds(30)) },
-        ),
-        (event) =>
-          event._tag === "snapshot"
-            ? Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore)
-            : Effect.void,
-      ).pipe(Effect.forkIn(scope));
+      const repoAReady = yield* Deferred.make<void>();
+      const repoBReady = yield* Deferred.make<void>();
 
-      const snapshot = yield* Deferred.await(snapshotDeferred);
-      assert.deepStrictEqual(snapshot, {
-        _tag: "snapshot",
-        local: baseLocalStatus,
-        remote: remoteStatusWithPr,
-      } satisfies VcsStatusStreamEvent);
-      // One coalesced remote load for the initial badge fill — no force invalidate.
-      assert.equal(state.remoteStatusCalls, 1);
+      const trackReady = (cwd: string, ready: Deferred.Deferred<void, never>) =>
+        Stream.runForEach(
+          broadcaster.streamStatus(
+            { cwd, mode: "list" },
+            { automaticRemoteRefreshInterval: Effect.succeed(Duration.seconds(30)) },
+          ),
+          (event) =>
+            event._tag === "snapshot" || event._tag === "remoteUpdated"
+              ? Deferred.succeed(ready, undefined).pipe(Effect.ignore)
+              : Effect.void,
+        ).pipe(Effect.forkIn(scope, { startImmediately: true }));
+
+      // Two list worktrees — shared refresher, not two independent 30s pollers.
+      yield* trackReady("/repo-a", repoAReady);
+      yield* trackReady("/repo-b", repoBReady);
+      yield* Deferred.await(repoAReady);
+      yield* Deferred.await(repoBReady);
+
+      // Initial fill: one remote load per list cwd (subscribe fill and/or shared sweep).
+      assert.isAtLeast(state.remoteStatusCalls, 2);
+      assert.isAtMost(state.remoteStatusCalls, 4);
       assert.equal(state.remoteInvalidationCalls, 0);
-      assert.deepStrictEqual(state.remoteStatusRefreshUpstreamValues, [false]);
+      for (const flag of state.remoteStatusRefreshUpstreamValues) {
+        assert.equal(flag, false);
+      }
+      const afterInitial = state.remoteStatusCalls;
 
-      // Advance well past the full-mode poll interval; list mode must not re-poll.
-      yield* TestClock.adjust(Duration.minutes(5));
+      // Over ~90s: shared list cadence (~60s) should add about one sweep for both
+      // cwds (+2), not two independent 30s full pollers (≈ +6).
+      yield* TestClock.adjust(Duration.seconds(90));
       yield* Effect.yieldNow;
-      assert.equal(state.remoteStatusCalls, 1);
+      const delta = state.remoteStatusCalls - afterInitial;
+      assert.isAtLeast(delta, 2);
+      assert.isAtMost(delta, 4);
 
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
