@@ -223,12 +223,9 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly cancel: Effect.Effect<void, EffectAcpErrors.AcpError>;
     /**
-     * Selects the active session mode.
-     *
-     * Prefers the negotiated `mode` configuration option when present (Cursor-style).
-     * Otherwise uses the standard ACP `session/set_mode` method (Grok-style).
+     * Selects the active session mode via `session/set_mode`, falling back to the
+     * negotiated `mode` configuration option for agents that only expose that path.
      * This is a no-op when the requested mode is already active.
-     *
      * @see https://agentclientprotocol.com/protocol/schema#session/set_mode
      * @see https://agentclientprotocol.com/protocol/schema#session/set_config_option
      */
@@ -890,15 +887,28 @@ export const make = (
           if (modeState?.currentModeId === normalizedModeId) {
             return {} satisfies EffectAcpSchema.SetSessionModeResponse;
           }
-          const configOptions = yield* Ref.get(configOptionsRef);
-          const hasModeConfigOption = findSessionConfigOption(configOptions, "mode") !== undefined;
-          if (hasModeConfigOption) {
-            yield* setConfigOption("mode", normalizedModeId);
-          } else {
-            yield* setSessionMode(normalizedModeId);
-          }
-          yield* updateCurrentModeId(normalizedModeId);
-          return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          const started = yield* getStartedState;
+          const requestPayload = {
+            sessionId: started.sessionId,
+            modeId: normalizedModeId,
+          } satisfies EffectAcpSchema.SetSessionModeRequest;
+          return yield* runLoggedRequest(
+            "session/set_mode",
+            requestPayload,
+            acp.agent.setSessionMode(requestPayload),
+          ).pipe(
+            Effect.tap(() => updateCurrentModeId(normalizedModeId)),
+            Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+            Effect.catch((error) => {
+              if (error._tag === "AcpRequestError" && error.code === -32601) {
+                return setConfigOption("mode", normalizedModeId).pipe(
+                  Effect.tap(() => updateCurrentModeId(normalizedModeId)),
+                  Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+                );
+              }
+              return Effect.fail(error);
+            }),
+          );
         }),
       setConfigOption,
       setModel: (model) =>
