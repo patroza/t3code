@@ -10,7 +10,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
+import { type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -97,19 +97,38 @@ export function buildLocalDraftThread(
   };
 }
 
-export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
-  return {
-    ...shell,
-    messages: [],
-    proposedPlans: [],
-    activities: [],
-    checkpoints: [],
-    deletedAt: null,
-  };
+/**
+ * The error to show for a server thread.
+ *
+ * Dismissing cannot be expressed by clearing the local error: the banner falls
+ * back to `session.lastError`, so `localError ?? serverError` resolves right
+ * back to the server's message and anything server-sourced (e.g. "Selected
+ * model is at capacity") can never be dismissed.
+ *
+ * A dismissal therefore records *which* message was dismissed, and only
+ * suppresses that one — a different server error still surfaces, rather than the
+ * thread latching quiet forever.
+ */
+export function resolveServerThreadError(input: {
+  /** An error set by this client (send failure, etc). */
+  readonly localError: string | null | undefined;
+  /** `session.lastError` from the server. */
+  readonly serverError: string | null | undefined;
+  /** The server message the user dismissed, if any. */
+  readonly dismissedServerError: string | null | undefined;
+}): string | null {
+  if (input.localError !== null && input.localError !== undefined) {
+    return input.localError;
+  }
+  const serverError = input.serverError ?? null;
+  if (serverError === null) {
+    return null;
+  }
+  return serverError === input.dismissedServerError ? null : serverError;
 }
 
 export function shouldWriteThreadErrorToCurrentServerThread(input: {
-  activeServerThread:
+  serverThread:
     | {
         environmentId: EnvironmentId;
         id: ThreadId;
@@ -120,11 +139,25 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   targetThreadId: ThreadId;
 }): boolean {
   return Boolean(
-    input.activeServerThread &&
+    input.serverThread &&
     input.targetThreadId === input.routeThreadRef.threadId &&
-    input.activeServerThread.environmentId === input.routeThreadRef.environmentId &&
-    input.activeServerThread.id === input.targetThreadId,
+    input.serverThread.environmentId === input.routeThreadRef.environmentId &&
+    input.serverThread.id === input.targetThreadId,
   );
+}
+
+export function shouldTreatServerThreadAsActive(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasServerThreadDetail: boolean;
+}): boolean {
+  return input.hasServerThreadShell && input.hasServerThreadDetail;
+}
+
+export function shouldRenderServerThreadRoute(input: {
+  readonly hasServerThreadShell: boolean;
+  readonly hasDraftThread: boolean;
+}): boolean {
+  return input.hasServerThreadShell || input.hasDraftThread;
 }
 
 export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
