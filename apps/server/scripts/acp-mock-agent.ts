@@ -283,6 +283,16 @@ const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
     description: "Request permission before making any changes",
   },
   {
+    id: "agent",
+    name: "Agent",
+    description: "Implement changes with full tool access",
+  },
+  {
+    id: "plan",
+    name: "Plan",
+    description: "Design and plan software systems without implementation",
+  },
+  {
     id: "architect",
     name: "Architect",
     description: "Design and plan software systems without implementation",
@@ -405,6 +415,27 @@ const program = Effect.gen(function* () {
         models: modelState(),
         configOptions: configOptions(),
       };
+    }),
+  );
+
+  yield* agent.handleSetSessionMode((request) =>
+    Effect.gen(function* () {
+      const nextModeId = request.modeId.trim();
+      if (!nextModeId) {
+        return yield* AcpError.AcpRequestError.invalidParams("modeId is required", {
+          method: "session/set_mode",
+          params: request,
+        });
+      }
+      currentModeId = nextModeId;
+      yield* agent.client.sessionUpdate({
+        sessionId: request.sessionId || sessionId,
+        update: {
+          sessionUpdate: "current_mode_update",
+          currentModeId,
+        },
+      });
+      return {};
     }),
   );
 
