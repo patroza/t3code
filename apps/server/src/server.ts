@@ -113,6 +113,7 @@ import * as JiraAppClient from "./jira/JiraAppClient.ts";
 import * as JiraAppConfig from "./jira/JiraAppConfig.ts";
 import * as JiraDeliveryStore from "./jira/JiraDeliveryStore.ts";
 import * as JiraIssueBridge from "./jira/JiraIssueBridge.ts";
+import * as JiraWebhookDebugLog from "./jira/JiraWebhookDebugLog.ts";
 import { jiraWebhookRouteLayer } from "./jira/http.ts";
 import * as ThreadWorkItemStore from "./workItems/ThreadWorkItemStore.ts";
 import * as NetService from "@t3tools/shared/Net";
@@ -264,9 +265,11 @@ const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(
   Layer.provideMerge(ThreadWorkItemStoreLive),
 );
 
-const JiraAppDependenciesLive = Layer.mergeAll(JiraAppClient.layer, JiraDeliveryStore.layer).pipe(
-  Layer.provideMerge(JiraAppConfig.layer),
-);
+const JiraAppDependenciesLive = Layer.mergeAll(
+  JiraAppClient.layer,
+  JiraDeliveryStore.layer,
+  JiraWebhookDebugLog.layer,
+).pipe(Layer.provideMerge(JiraAppConfig.layer));
 
 const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
   Layer.provideMerge(JiraAppDependenciesLive),

@@ -97,6 +97,22 @@ Work-item associations live in:
 ${T3CODE stateDir}/thread-work-items.json
 ```
 
+## Webhook debug log
+
+Every inbound `POST /api/jira/webhook` writes one NDJSON row to:
+
+```text
+${T3CODE stateDir}/jira-webhook-debug.ndjson
+```
+
+Outcomes include `accepted_202`, `ignored_202`, `invalid_400`, `unauthorized_401`,
+`project_denied_202`, `too_large_413`, and `disabled_404`. Invalid rows store a capped
+`bodyPreview` plus a `reason` (`json_parse_failed` is common when Automation injects
+unescaped newlines into Custom data JSON).
+
+Retention: **24 hours** (and a hard cap of 5 000 rows). Older lines are pruned on each
+append and on process start. Best-effort only — append failures never fail the webhook.
+
 ## Configuration
 
 | Variable                         | Required | Default | Purpose                                                          |
@@ -134,8 +150,10 @@ users.
 1. Unit: mention extraction for plain text, wiki, and ADF; parent comment id; bot/self skip.
 2. Unit: webhook secret acceptance / rejection; project allowlist.
 3. Unit: delivery dedupe on redelivery of the same comment id.
-4. Integration (manual): register a Jira webhook or Automation rule → `POST /api/jira/webhook`
-   with the shared secret; mention the bot on a linked issue; confirm a reply comment.
+4. Unit: webhook debug retention prune (24h) and body failure classification.
+5. Integration (manual): register a Jira webhook or Automation rule → `POST /api/jira/webhook`
+   with the shared secret; mention the bot on a linked issue; confirm a reply comment and a
+   matching `accepted_202` (or `invalid_400` with preview) line in `jira-webhook-debug.ndjson`.
 
 ## Non-goals (this foundation)
 
