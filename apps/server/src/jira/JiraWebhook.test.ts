@@ -5,6 +5,12 @@ import { isJiraProjectAllowed } from "./JiraAppConfig.ts";
 import { formatJiraComment } from "./JiraIssueBridge.ts";
 import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
+  classifyWebhookBodyFailure,
+  previewWebhookBody,
+  pruneWebhookDebugRecords,
+  type WebhookDebugRecord,
+} from "../webhooks/WebhookDebugLog.ts";
+import {
   bodyMentionsIdentity,
   buildJiraTurnPrompt,
   extractJiraMentionPrompt,
@@ -333,5 +339,64 @@ describe("Jira helpers", () => {
   it("bodyMentionsIdentity distinguishes misses", () => {
     expect(bodyMentionsIdentity("hello world", "omegent").matched).toBe(false);
     expect(bodyMentionsIdentity("@omegent please", "omegent").matched).toBe(true);
+  });
+});
+
+describe("Webhook debug log helpers", () => {
+  it("classifies empty, broken JSON, and schema-shaped failures", () => {
+    expect(classifyWebhookBodyFailure("").reason).toBe("empty_body");
+    expect(classifyWebhookBodyFailure("  ").reason).toBe("empty_body");
+
+    const broken = '{\n  "comment": {\n    "body": "line1\nline2"\n  }\n}';
+    const brokenResult = classifyWebhookBodyFailure(broken);
+    expect(brokenResult.reason).toBe("json_parse_failed");
+    expect(brokenResult.detail?.length).toBeGreaterThan(0);
+
+    const validJsonWrongShape = JSON.stringify({ hello: "world" });
+    expect(classifyWebhookBodyFailure(validJsonWrongShape).reason).toBe("schema_decode_failed");
+  });
+
+  it("previews bodies with a byte count and truncation", () => {
+    const short = previewWebhookBody("abc");
+    expect(short.bodyBytes).toBe(3);
+    expect(short.bodyPreview).toBe("abc");
+
+    const long = previewWebhookBody("x".repeat(50), 10);
+    expect(long.bodyBytes).toBe(50);
+    expect(long.bodyPreview).toBe(`${"x".repeat(10)}…`);
+  });
+
+  it("prunes records older than max age and applies a hard cap", () => {
+    const now = Date.parse("2026-07-29T14:00:00.000Z");
+    const records: WebhookDebugRecord[] = [
+      {
+        ts: "2026-07-28T13:00:00.000Z",
+        source: "jira",
+        outcome: "invalid_400",
+        status: 400,
+        bodyBytes: 1,
+      },
+      {
+        ts: "2026-07-29T12:00:00.000Z",
+        source: "github",
+        outcome: "accepted_202",
+        status: 202,
+        bodyBytes: 2,
+      },
+      {
+        ts: "2026-07-29T13:30:00.000Z",
+        source: "jira",
+        outcome: "ignored_202",
+        status: 202,
+        bodyBytes: 3,
+      },
+    ];
+
+    const pruned = pruneWebhookDebugRecords(records, now, 24 * 60 * 60 * 1000);
+    expect(pruned.map((r) => r.outcome)).toEqual(["accepted_202", "ignored_202"]);
+
+    const capped = pruneWebhookDebugRecords(records, now, 48 * 60 * 60 * 1000, 1);
+    expect(capped).toHaveLength(1);
+    expect(capped[0]?.outcome).toBe("ignored_202");
   });
 });
