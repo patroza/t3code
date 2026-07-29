@@ -375,6 +375,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       const turnEvents = Array.isArray(turnResult) ? turnResult : [turnResult];
       expect(turnEvents.map((event) => event.type)).toEqual([
         "thread.unsettled",
+        "thread.unsnoozed",
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);
@@ -423,6 +424,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       // activity resets it to neutral, restoring the default lifecycle.
       expect(turnEvents.map((event) => event.type)).toEqual([
         "thread.unsettled",
+        "thread.unsnoozed",
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);
