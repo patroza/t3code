@@ -1,5 +1,11 @@
 import * as Equal from "effect/Equal";
 import {
+  compareSteerTimelineSortable,
+  findMidTurnSteerUserIds,
+  splitAssistantTextAtSteers,
+  type SteerTimelineBoundaryStore,
+} from "@t3tools/shared/steerTimeline";
+import {
   formatDuration,
   workEntryIndicatesToolNeutralStatus,
   workLogEntryIsToolLike,
@@ -177,7 +183,10 @@ export interface TimelineDurationMessage {
 export type TimelineLatestTurn = Pick<
   OrchestrationLatestTurn,
   "turnId" | "state" | "startedAt" | "completedAt"
->;
+> & {
+  /** When set, preferred terminal assistant for this turn (fold / copy meta). */
+  readonly assistantMessageId?: MessageId | null;
+};
 
 export type MessagesTimelineRow =
   | {
@@ -274,7 +283,10 @@ export function resolveAssistantMessageCopyState({
   };
 }
 
-function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
+function deriveTerminalAssistantMessageIds(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  preferredTerminalMessageIdByTurn: ReadonlyMap<TurnId, MessageId> = new Map(),
+) {
   const lastAssistantMessageIdByResponseKey = new Map<string, string>();
   let nullTurnResponseIndex = 0;
 
@@ -295,6 +307,17 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
       ? `turn:${message.turnId}`
       : `unkeyed:${nullTurnResponseIndex}`;
     lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
+  }
+
+  // Prefer the turn projection's assistant_message_id when present — it stays
+  // correct even if the message row was stamped with the next turn at drain.
+  for (const [turnId, messageId] of preferredTerminalMessageIdByTurn) {
+    const exists = timelineEntries.some(
+      (entry) => entry.kind === "message" && entry.message.id === messageId,
+    );
+    if (exists) {
+      lastAssistantMessageIdByResponseKey.set(`turn:${turnId}`, messageId);
+    }
   }
 
   return new Set(lastAssistantMessageIdByResponseKey.values());
@@ -386,13 +409,62 @@ function deriveTurnFolds(input: {
     }
     group.entries.push(entry);
     if (entry.kind === "message") {
-      if (input.terminalAssistantMessageIds.has(entry.message.id)) {
-        group.terminalEntry = entry;
-      }
       if (entry.message.streaming) {
         group.hasStreamingMessage = true;
       }
     }
+  }
+
+  // Queue-drain / turn flip can stamp the previous turn's final assistant
+  // message with the *next* turn id at the same timestamp as the next user
+  // message. Re-home those orphans so the fold keeps the real final visible.
+  const userCreatedAts = input.timelineEntries
+    .filter(
+      (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
+        entry.kind === "message" && entry.message.role === "user",
+    )
+    .map((entry) => entry.createdAt);
+  const orderedTurns = [...groupsByTurnId.entries()].sort((left, right) => {
+    const leftAt = left[1].entries[0]?.createdAt ?? left[1].startBoundary ?? "";
+    const rightAt = right[1].entries[0]?.createdAt ?? right[1].startBoundary ?? "";
+    return leftAt.localeCompare(rightAt);
+  });
+  for (let index = 1; index < orderedTurns.length; index += 1) {
+    const previous = orderedTurns[index - 1];
+    const current = orderedTurns[index];
+    if (!previous || !current) continue;
+    const [, previousGroup] = previous;
+    const [, currentGroup] = current;
+    const previousLastAt =
+      previousGroup.entries.at(-1)?.createdAt ?? previousGroup.startBoundary ?? null;
+    if (previousLastAt === null) continue;
+    const nextUserAt = userCreatedAts.find((createdAt) => createdAt >= previousLastAt) ?? null;
+    if (nextUserAt === null) continue;
+    const firstAssistantIndex = currentGroup.entries.findIndex(
+      (entry) => entry.kind === "message" && entry.message.role === "assistant",
+    );
+    if (firstAssistantIndex < 0) continue;
+    const firstAssistant = currentGroup.entries[firstAssistantIndex];
+    if (!firstAssistant || firstAssistant.kind !== "message") continue;
+    // True first tokens of the next turn always land *after* that user message.
+    if (firstAssistant.createdAt > nextUserAt) continue;
+    currentGroup.entries.splice(firstAssistantIndex, 1);
+    previousGroup.entries.push(firstAssistant);
+  }
+
+  // Resolve terminal after re-homing: the last assistant in the group is the
+  // real final (status lines are earlier). latestTurn.assistantMessageId can
+  // still point at the first commentary message, so it must not override the
+  // chronological final.
+  for (const group of groupsByTurnId.values()) {
+    group.terminalEntry = null;
+    let lastAssistant: Extract<TimelineEntry, { kind: "message" }> | null = null;
+    for (const entry of group.entries) {
+      if (entry.kind === "message" && entry.message.role === "assistant") {
+        lastAssistant = entry;
+      }
+    }
+    group.terminalEntry = lastAssistant;
   }
 
   const foldsByAnchorEntryId = new Map<string, TurnFold>();
@@ -461,6 +533,198 @@ function deriveTurnFolds(input: {
   return foldsByAnchorEntryId;
 }
 
+function timelineEntryBelongsToTurn(entry: TimelineEntry, turnId: TurnId): boolean {
+  if (entry.kind === "work") {
+    return entry.entry.turnId === turnId;
+  }
+  if (entry.kind === "message" && entry.message.role !== "user") {
+    return entry.message.turnId === turnId;
+  }
+  if (entry.kind === "proposed-plan") {
+    return entry.proposedPlan.turnId === turnId;
+  }
+  return false;
+}
+
+function collectTimelineTurnIds(timelineEntries: ReadonlyArray<TimelineEntry>): TurnId[] {
+  const turnIds: TurnId[] = [];
+  const seen = new Set<string>();
+  for (const entry of timelineEntries) {
+    const turnId =
+      entry.kind === "work"
+        ? entry.entry.turnId
+        : entry.kind === "proposed-plan"
+          ? entry.proposedPlan.turnId
+          : entry.kind === "message"
+            ? entry.message.turnId
+            : null;
+    if (turnId == null || seen.has(String(turnId))) {
+      continue;
+    }
+    seen.add(String(turnId));
+    turnIds.push(turnId);
+  }
+  return turnIds;
+}
+
+/**
+ * Cursor/Codex steer while a turn is running reuses the active turn id and
+ * keeps appending assistant deltas to an early message row. Chronological sort
+ * alone parks that whole bubble above later steer user messages; the previous
+ * "move steers above the turn" workaround parked them before *all* turn work.
+ *
+ * Instead, interleave by `createdAt` and split assistant text at client-observed
+ * boundaries so steers sit between pre- and post-steer content (and between
+ * tools that started before/after the steer).
+ */
+export function interleaveTimelineEntriesForSteeredTurn(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  input: {
+    /** When set, only this turn is expanded. When omitted, every turn with steers is. */
+    readonly unsettledTurnId?: TurnId | null;
+    readonly boundaryStore?: SteerTimelineBoundaryStore;
+  } = {},
+): TimelineEntry[] {
+  const turnIds =
+    input.unsettledTurnId !== undefined && input.unsettledTurnId !== null
+      ? [input.unsettledTurnId]
+      : collectTimelineTurnIds(timelineEntries);
+
+  const steersByTurnId = new Map<
+    string,
+    ReadonlyArray<{ readonly id: string; readonly createdAt: string }>
+  >();
+  const steerIdSet = new Set<string>();
+
+  for (const turnId of turnIds) {
+    const steers = findMidTurnSteerUserIds({
+      items: timelineEntries.map((entry) => ({
+        id: entry.id,
+        createdAt: entry.createdAt,
+        isUser: entry.kind === "message" && entry.message.role === "user",
+        belongsToActiveTurn: timelineEntryBelongsToTurn(entry, turnId),
+      })),
+    });
+    if (steers.length === 0) {
+      continue;
+    }
+    steersByTurnId.set(String(turnId), steers);
+    for (const steer of steers) {
+      steerIdSet.add(steer.id);
+    }
+  }
+
+  if (steersByTurnId.size === 0) {
+    return [...timelineEntries].toSorted((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    );
+  }
+
+  const expanded: Array<TimelineEntry & { sortRank: number }> = [];
+
+  for (const entry of timelineEntries) {
+    if (
+      entry.kind === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.turnId !== null
+    ) {
+      const steers = steersByTurnId.get(String(entry.message.turnId));
+      if (steers !== undefined && steers.length > 0) {
+        const segments = splitAssistantTextAtSteers({
+          assistantMessageId: entry.message.id,
+          assistantCreatedAt: entry.message.createdAt,
+          text: entry.message.text,
+          streaming: entry.message.streaming,
+          steers,
+          ...(input.boundaryStore !== undefined ? { boundaryStore: input.boundaryStore } : {}),
+        });
+
+        for (const segment of segments) {
+          expanded.push({
+            id: segment.segmentId,
+            kind: "message",
+            createdAt: segment.sortAt,
+            sortRank: segment.sortRank,
+            message: {
+              ...entry.message,
+              text: segment.text,
+              streaming: segment.streaming,
+              // Segment sort key — keeps fold/duration helpers aligned with display order.
+              createdAt: segment.sortAt,
+              updatedAt: segment.streaming ? entry.message.updatedAt : segment.sortAt,
+            },
+          });
+        }
+        continue;
+      }
+    }
+
+    expanded.push({
+      ...entry,
+      sortRank: steerIdSet.has(entry.id) ? 1 : 0,
+    });
+  }
+
+  return expanded.toSorted((left, right) =>
+    compareSteerTimelineSortable(
+      { id: left.id, sortAt: left.createdAt, sortRank: left.sortRank },
+      { id: right.id, sortAt: right.createdAt, sortRank: right.sortRank },
+    ),
+  );
+}
+
+/** @deprecated Use {@link interleaveTimelineEntriesForSteeredTurn}. */
+export const reorderTimelineEntriesForSteeredTurn = (
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  input: {
+    readonly unsettledTurnId?: TurnId | null;
+    readonly isWorking?: boolean;
+    readonly boundaryStore?: SteerTimelineBoundaryStore;
+  },
+): TimelineEntry[] =>
+  interleaveTimelineEntriesForSteeredTurn(timelineEntries, {
+    ...(input.unsettledTurnId !== undefined ? { unsettledTurnId: input.unsettledTurnId } : {}),
+    ...(input.boundaryStore !== undefined ? { boundaryStore: input.boundaryStore } : {}),
+  });
+
+/**
+ * Collapse assistant bubbles that re-surface the same body after tool activity
+ * within a turn. Grok multi-step ACP has been observed to re-emit the prior
+ * status line as a new message id after tools (A → tools → A → B); keep the
+ * first status and drop the twin so the timeline reads A → tools → B.
+ */
+export function collapseConsecutiveDuplicateAssistantEntries(
+  entries: ReadonlyArray<TimelineEntry>,
+): TimelineEntry[] {
+  const result: TimelineEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== "message" || entry.message.role !== "assistant") {
+      result.push(entry);
+      continue;
+    }
+    // Walk back across pure work rows so A → tools → A is detected.
+    let lookback = result.length - 1;
+    while (lookback >= 0 && result[lookback]?.kind === "work") {
+      lookback -= 1;
+    }
+    const priorAssistant = lookback >= 0 ? result[lookback] : undefined;
+    if (
+      priorAssistant?.kind === "message" &&
+      priorAssistant.message.role === "assistant" &&
+      priorAssistant.message.turnId !== null &&
+      priorAssistant.message.turnId === entry.message.turnId &&
+      priorAssistant.message.text.replace(/\s+/g, " ").trim() ===
+        entry.message.text.replace(/\s+/g, " ").trim() &&
+      entry.message.text.trim().length > 0
+    ) {
+      // Drop this later twin; keep the earlier status and intervening tools.
+      continue;
+    }
+    result.push(entry);
+  }
+  return result;
+}
+
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestTurn?: TimelineLatestTurn | null;
@@ -473,16 +737,32 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
-  const durationStartByMessageId = computeMessageDurationStart(
-    input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+  // Always expand steers for every turn that has them (live + settled). The
+  // boundary store freezes pre-steer text on first observation so post-steer
+  // tokens keep rendering after the steer once the turn settles.
+  const displayTimelineEntries = collapseConsecutiveDuplicateAssistantEntries(
+    interleaveTimelineEntriesForSteeredTurn(input.timelineEntries),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(input.timelineEntries);
+  const durationStartByMessageId = computeMessageDurationStart(
+    displayTimelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+  );
+  const preferredTerminalMessageIdByTurn = new Map<TurnId, MessageId>();
+  if (input.latestTurn?.assistantMessageId != null) {
+    preferredTerminalMessageIdByTurn.set(
+      input.latestTurn.turnId,
+      input.latestTurn.assistantMessageId,
+    );
+  }
+  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(
+    displayTimelineEntries,
+    preferredTerminalMessageIdByTurn,
+  );
   const unsettledTurnId = deriveUnsettledTurnId(
     input.latestTurn ?? null,
     input.runningTurnId ?? null,
   );
   const foldsByAnchorEntryId = deriveTurnFolds({
-    timelineEntries: input.timelineEntries,
+    timelineEntries: displayTimelineEntries,
     terminalAssistantMessageIds,
     latestTurn: input.latestTurn ?? null,
     unsettledTurnId,
@@ -496,8 +776,8 @@ export function deriveMessagesTimelineRows(input: {
     }
   }
 
-  for (let index = 0; index < input.timelineEntries.length; index += 1) {
-    const timelineEntry = input.timelineEntries[index];
+  for (let index = 0; index < displayTimelineEntries.length; index += 1) {
+    const timelineEntry = displayTimelineEntries[index];
     if (!timelineEntry) {
       continue;
     }
@@ -535,8 +815,8 @@ export function deriveMessagesTimelineRows(input: {
 
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
-      while (cursor < input.timelineEntries.length) {
-        const nextEntry = input.timelineEntries[cursor];
+      while (cursor < displayTimelineEntries.length) {
+        const nextEntry = displayTimelineEntries[cursor];
         if (
           !nextEntry ||
           nextEntry.kind !== "work" ||
