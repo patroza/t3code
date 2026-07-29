@@ -17,12 +17,10 @@ const EMPTY_STATUSES_ATOM = Atom.make(
 ).pipe(Atom.withLabel("web:board-vcs-statuses:empty"));
 
 /**
- * Aggregated VCS status subscription for the board: one derived atom over the
- * per-cwd status subscription family, read with a single useAtomValue. The
- * family dedupes identical (environmentId, cwd) keys into one WS subscription
- * and keeps entries warm for 5 minutes after last use, so filter toggles
- * don't churn subscriptions. Entries are `null` until the first snapshot
- * streams in.
+ * Aggregated list-mode VCS status for the board: one derived atom over the
+ * per-cwd listStatus family (no server remote poller). Dedupe by
+ * (environmentId, cwd); shorter idle TTL than full status. Entries are `null`
+ * until the first snapshot streams in.
  */
 export function useBoardVcsStatuses(
   targets: ReadonlyArray<BoardVcsTarget>,
@@ -62,7 +60,7 @@ export function useBoardVcsStatuses(
             Option.getOrNull(
               AsyncResult.value(
                 get(
-                  vcsEnvironment.status({
+                  vcsEnvironment.listStatus({
                     environmentId: target.environmentId,
                     input: { cwd: target.cwd },
                   }),

@@ -554,6 +554,52 @@ describe("VcsStatusBroadcaster", () => {
     );
   });
 
+  it.effect("list mode does not start a remote poller", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: remoteStatusWithPr,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      remoteStatusRefreshUpstreamValues: [] as Array<boolean | undefined>,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const scope = yield* Scope.make();
+      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      yield* Stream.runForEach(
+        broadcaster.streamStatus(
+          { cwd: "/repo", mode: "list" },
+          { automaticRemoteRefreshInterval: Effect.succeed(Duration.seconds(30)) },
+        ),
+        (event) =>
+          event._tag === "snapshot"
+            ? Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore)
+            : Effect.void,
+      ).pipe(Effect.forkIn(scope));
+
+      const snapshot = yield* Deferred.await(snapshotDeferred);
+      assert.deepStrictEqual(snapshot, {
+        _tag: "snapshot",
+        local: baseLocalStatus,
+        remote: remoteStatusWithPr,
+      } satisfies VcsStatusStreamEvent);
+      // One coalesced remote load for the initial badge fill — no force invalidate.
+      assert.equal(state.remoteStatusCalls, 1);
+      assert.equal(state.remoteInvalidationCalls, 0);
+      assert.deepStrictEqual(state.remoteStatusRefreshUpstreamValues, [false]);
+
+      // Advance well past the full-mode poll interval; list mode must not re-poll.
+      yield* TestClock.adjust(Duration.minutes(5));
+      yield* Effect.yieldNow;
+      assert.equal(state.remoteStatusCalls, 1);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
+  });
+
   it.effect("delays automatic refresh when a cached remote snapshot is available", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,

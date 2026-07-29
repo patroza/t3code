@@ -511,18 +511,35 @@ export const make = Effect.gen(function* () {
     Stream.unwrap(
       Effect.gen(function* () {
         const cwd = yield* withFileSystem(normalizeCwd(input.cwd));
+        const mode = input.mode ?? "full";
         const subscription = yield* PubSub.subscribe(changesPubSub);
         const initialLocal = yield* getOrLoadLocalStatus(cwd);
-        const cachedStatus = yield* getCachedStatus(cwd);
-        const initialRemote = cachedStatus?.remote?.value ?? null;
-        yield* retainRemotePoller(
-          cwd,
-          options?.automaticRemoteRefreshInterval ??
-            Effect.succeed(DEFAULT_VCS_STATUS_REFRESH_INTERVAL),
-          cachedStatus?.remote === null || cachedStatus?.remote === undefined,
-        );
+        let cachedStatus = yield* getCachedStatus(cwd);
 
-        const release = releaseRemotePoller(cwd).pipe(Effect.ignore, Effect.asVoid);
+        // List mode must not start a remote poller (O(N) storm root for sidebar/board).
+        // One coalesced remote load when uncached so PR badges can populate once; later
+        // updates arrive via pubsub when a full subscriber or explicit refresh runs.
+        if (
+          mode === "list" &&
+          (cachedStatus?.remote === null || cachedStatus?.remote === undefined)
+        ) {
+          yield* refreshRemoteStatus(cwd, { refreshUpstream: false }).pipe(Effect.ignore);
+          cachedStatus = yield* getCachedStatus(cwd);
+        }
+
+        const initialRemote = cachedStatus?.remote?.value ?? null;
+
+        // Full mode only: long-lived remote poller for the active thread / git chrome.
+        let release: Effect.Effect<void> = Effect.void;
+        if (mode === "full") {
+          yield* retainRemotePoller(
+            cwd,
+            options?.automaticRemoteRefreshInterval ??
+              Effect.succeed(DEFAULT_VCS_STATUS_REFRESH_INTERVAL),
+            cachedStatus?.remote === null || cachedStatus?.remote === undefined,
+          );
+          release = releaseRemotePoller(cwd).pipe(Effect.ignore, Effect.asVoid);
+        }
 
         // When remote is not cached yet, emit localUpdated only — never a snapshot that
         // fabricates remote defaults (pr:null). Downstream clients treat that fake null

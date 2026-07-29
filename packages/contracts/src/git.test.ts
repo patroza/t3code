@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   VcsCreateWorktreeInput,
+  VcsStatusInput,
   GitPreparePullRequestThreadInput,
   GitRunStackedActionResult,
   GitRunStackedActionInput,
@@ -12,6 +13,7 @@ import {
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
+const decodeVcsStatusInput = Schema.decodeUnknownSync(VcsStatusInput);
 const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadInput,
 );
@@ -20,6 +22,19 @@ const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActio
 const decodeActionProgressEvent = Schema.decodeUnknownSync(GitActionProgressEvent);
 const decodeGitCommandError = Schema.decodeUnknownSync(GitCommandError);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+
+describe("VcsStatusInput", () => {
+  it("accepts cwd-only input as full-mode compatible", () => {
+    const parsed = decodeVcsStatusInput({ cwd: "/repo" });
+    expect(parsed.cwd).toBe("/repo");
+    expect(parsed.mode).toBeUndefined();
+  });
+
+  it("accepts list mode for high-cardinality list subscriptions", () => {
+    const parsed = decodeVcsStatusInput({ cwd: "/repo/worktree", mode: "list" });
+    expect(parsed.mode).toBe("list");
+  });
+});
 
 describe("VcsCreateWorktreeInput", () => {
   it("accepts omitted newRefName for existing-refName worktrees", () => {

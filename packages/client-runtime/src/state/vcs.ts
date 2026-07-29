@@ -272,20 +272,39 @@ export function createVcsEnvironmentAtoms<R, E>(
       cwd: target.input.cwd,
     });
 
+  const statusStream = (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
+    subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
+      Stream.mapAccum(
+        () => null as VcsStatusResult | null,
+        (current, event) => {
+          const next = applyGitStatusStreamEvent(current, event);
+          return [next, [next]] as const;
+        },
+      ),
+    );
+
   return {
     listRefs,
+    /**
+     * Full VCS status (includes server remote poller). Use for the active thread /
+     * git chrome only — not for high-cardinality lists.
+     */
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
+      subscribe: statusStream,
+    }),
+    /**
+     * List/badge VCS status: no remote poller on the server. Shorter idle TTL so
+     * off-screen rows drop streams. Prefer this for sidebar/board/thread rows.
+     */
+    listStatus: createEnvironmentSubscriptionAtomFamily(runtime, {
+      label: "environment-data:vcs:status-list",
+      idleTtlMs: 60_000,
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
-        subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
-          Stream.mapAccum(
-            () => null as VcsStatusResult | null,
-            (current, event) => {
-              const next = applyGitStatusStreamEvent(current, event);
-              return [next, [next]] as const;
-            },
-          ),
-        ),
+        statusStream({
+          ...input,
+          mode: "list",
+        }),
     }),
     pull: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:pull",
