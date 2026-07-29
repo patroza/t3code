@@ -33,11 +33,11 @@ import {
 import { shellEnvironment } from "../../state/shell";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { HostResourceStatus } from "../HostResourceStatus";
 import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
-import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -905,16 +905,12 @@ export function DiagnosticsSettingsPanel() {
       if (environmentId === null) {
         return;
       }
-      const process = processData?.processes.find((entry) => entry.pid === pid);
-      if (process === undefined) {
-        return;
-      }
 
       setSignalingPid(pid);
       void (async () => {
         const result = await signalServerProcess({
           environmentId,
-          input: { pid, startTimeMs: process.startTimeMs, signal },
+          input: { pid, signal },
         });
         setSignalingPid(null);
         if (result._tag === "Failure") {
@@ -951,7 +947,7 @@ export function DiagnosticsSettingsPanel() {
         refreshProcesses();
       })();
     },
-    [environmentId, processData?.processes, refreshProcesses, signalServerProcess],
+    [environmentId, refreshProcesses, signalServerProcess],
   );
 
   const processDiagnosticsError = processData ? Option.getOrNull(processData.error) : null;
@@ -962,9 +958,24 @@ export function DiagnosticsSettingsPanel() {
     : false;
 
   return (
-    <SettingsPageContainer className="max-w-6xl gap-10">
-      <ResourceTelemetryDiagnostics />
-
+    <SettingsPageContainer>
+      {primaryEnvironment ? (
+        <SettingsSection title="Host Resources">
+          <div className="space-y-2 px-4 py-3 sm:px-5">
+            <HostResourceStatus
+              environmentId={primaryEnvironment.environmentId}
+              environmentLabel={primaryEnvironment.label}
+              connected={primaryEnvironment.connection.phase === "connected"}
+              showRefresh
+              unavailableLabel
+            />
+            <p className="text-xs text-muted-foreground">
+              Advisory system-wide metrics from the host running this T3 server. They do not affect
+              connection or provider readiness.
+            </p>
+          </div>
+        </SettingsSection>
+      ) : null}
       <SettingsSection
         title="Live Processes"
         headerAction={

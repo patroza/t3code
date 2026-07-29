@@ -12,7 +12,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ScopedThreadRef,
+  SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -27,6 +31,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListFilterIcon,
   MessageSquareIcon,
   PlusIcon,
   SearchIcon,
@@ -112,6 +117,7 @@ import {
   buildSidebarV2ThreadContextMenuItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  groupSettledThreadsByRecencyForSidebarV2,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -155,7 +161,32 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Kbd } from "./ui/kbd";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+  DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+  EMPTY_LIST_ENVIRONMENT_FILTER,
+  LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  ListEnvironmentFilterSchema,
+  ListHideSettledSchema,
+  SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+  SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+  isAllEnvironmentsSelected,
+  isEnvironmentSelected,
+  matchesEnvironmentFilter,
+  resolveSelectedEnvironmentIds,
+  toggleEnvironmentId,
+} from "./listEnvironmentFilter";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -356,6 +387,41 @@ function SnoozePopoverButton(props: {
   );
 }
 
+/**
+ * Compact "project · server" line for cross-project / multi-env lists.
+ * Mirrors classic recency subtitles without fighting V2 card chrome.
+ */
+function ProjectServerContextLine(props: {
+  readonly projectTitle: string | null;
+  readonly environmentLabel: string | null;
+  readonly showProject: boolean;
+  readonly showEnvironment: boolean;
+  readonly isRemote: boolean;
+  readonly className?: string;
+}) {
+  const showProject = props.showProject && Boolean(props.projectTitle);
+  const showEnvironment = props.showEnvironment && Boolean(props.environmentLabel);
+  if (!showProject && !showEnvironment) return null;
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1 truncate", props.className)}>
+      {showProject ? <span className="truncate">{props.projectTitle}</span> : null}
+      {showProject && showEnvironment ? (
+        <span aria-hidden className="shrink-0 text-muted-foreground/40">
+          ·
+        </span>
+      ) : null}
+      {showEnvironment ? (
+        <span className="inline-flex min-w-0 items-center gap-0.5 truncate">
+          {props.isRemote ? (
+            <ServerIcon aria-hidden className="size-2.5 shrink-0 opacity-70" />
+          ) : null}
+          <span className="truncate">{props.environmentLabel}</span>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 const SidebarV2Row = memo(function SidebarV2Row(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
@@ -378,6 +444,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   environmentLabel: string | null;
   projectCwd: string | null;
   projectTitle: string | null;
+  /**
+   * When true (All projects scope), surface project name on rows so
+   * cross-project lists stay attributable. Scoped lists omit it.
+   */
+  showCrossProjectContext: boolean;
+  /**
+   * When true (multiple environments connected), surface server label so
+   * same-named projects on different hosts stay distinct.
+   */
+  showEnvironmentContext: boolean;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -491,7 +567,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
     (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
@@ -528,6 +604,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
+  // Project label when scanning all projects; env when multi-host or remote
+  // even if scoped (same project name on two machines).
+  const showProjectContext = props.showCrossProjectContext && Boolean(props.projectTitle);
+  const showEnvironmentContext =
+    Boolean(props.environmentLabel) &&
+    (props.showEnvironmentContext || props.showCrossProjectContext || isRemote);
 
   const detailsTooltip = (
     <SidebarV2ThreadTooltip
@@ -734,10 +816,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     ) : null;
 
   if (variant === "slim") {
+    const showSlimContext = showProjectContext || showEnvironmentContext;
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className={cn(
+          "list-none [content-visibility:auto]",
+          showSlimContext
+            ? "[contain-intrinsic-size:auto_44px]"
+            : "[contain-intrinsic-size:auto_34px]",
+        )}
       >
         <Tooltip>
           <TooltipTrigger
@@ -746,7 +834,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 role="button"
                 tabIndex={0}
                 data-testid="sidebar-v2-row-slim"
-                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
+                className={cn(
+                  rowSurfaceClassName,
+                  "flex items-center gap-2.5 px-2.5",
+                  showSlimContext ? "min-h-9 py-1.5" : "h-9",
+                )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -770,7 +862,19 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 fallbackIcon={MessageSquareIcon}
               />
             </span>
-            {title}
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              {title}
+              {showSlimContext ? (
+                <ProjectServerContextLine
+                  projectTitle={props.projectTitle}
+                  environmentLabel={props.environmentLabel}
+                  showProject={showProjectContext}
+                  showEnvironment={showEnvironmentContext}
+                  isRemote={isRemote}
+                  className="text-[10px] text-muted-foreground/55"
+                />
+              ) : null}
+            </div>
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -870,7 +974,21 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 cwd={props.projectCwd ?? ""}
                 className="size-4 shrink-0"
               />
-              {props.projectTitle ? (
+              {showProjectContext || showEnvironmentContext ? (
+                <ProjectServerContextLine
+                  projectTitle={props.projectTitle}
+                  environmentLabel={props.environmentLabel}
+                  showProject={showProjectContext}
+                  showEnvironment={showEnvironmentContext}
+                  isRemote={isRemote}
+                  className={cn(
+                    "min-w-0 flex-1 text-xs text-muted-foreground/85",
+                    shouldRecede ? "font-normal" : "font-medium",
+                  )}
+                />
+              ) : props.projectTitle ? (
+                // Scoped to one project: keep a light project label for
+                // continuity without forcing server noise.
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
@@ -1043,6 +1161,21 @@ export default function SidebarV2() {
     null,
   );
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
+    LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+    EMPTY_LIST_ENVIRONMENT_FILTER,
+    ListEnvironmentFilterSchema,
+  );
+  const [settledRecencyHeadersEnabled, setSettledRecencyHeadersEnabled] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+    ListHideSettledSchema,
+  );
+  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+    ListHideSettledSchema,
+  );
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
@@ -1082,6 +1215,22 @@ export default function SidebarV2() {
       ),
     [environments],
   );
+  const availableEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  const selectedEnvironmentIds = useMemo(
+    () =>
+      resolveSelectedEnvironmentIds(
+        storedEnvironmentFilter as readonly EnvironmentId[],
+        availableEnvironmentIds,
+      ),
+    [availableEnvironmentIds, storedEnvironmentFilter],
+  );
+  const listOptionsActive =
+    !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
+    settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS ||
+    settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED;
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1379,6 +1528,7 @@ export default function SidebarV2() {
     const visible = threads.filter(
       (thread) =>
         thread.archivedAt === null &&
+        matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
@@ -1426,6 +1576,7 @@ export default function SidebarV2() {
     changeRequestStateByKey,
     nowMinute,
     scopedProjectKeys,
+    selectedEnvironmentIds,
     serverConfigs,
     snoozeWakeTick,
     threads,
@@ -1454,7 +1605,7 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = `${projectScopeKey ?? "all"}:${selectedEnvironmentIds.join(",")}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -1482,8 +1633,10 @@ export default function SidebarV2() {
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
   );
-  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
-  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  const toggleSettledShelf = useCallback(
+    () => setSettledShelfExpanded((value) => !value),
+    [setSettledShelfExpanded],
+  );
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
     if (routeThreadKey === null) return [];
@@ -1493,6 +1646,19 @@ export default function SidebarV2() {
     );
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
+
+  // Date headers on the settled tail only (lifecycle spine stays intact).
+  // Recompute when the minute clock advances so Last Hour / Earlier Today
+  // boundaries stay honest. Single-bucket pages omit headers. View menu can
+  // disable headers entirely without changing settle order.
+  const settledRecencyLayout = useMemo(() => {
+    void nowMinute;
+    const layout = groupSettledThreadsByRecencyForSidebarV2(renderedSettledThreads, new Date());
+    if (!settledRecencyHeadersEnabled) {
+      return { groups: layout.groups, showHeaders: false };
+    }
+    return layout;
+  }, [nowMinute, renderedSettledThreads, settledRecencyHeadersEnabled]);
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -2356,8 +2522,8 @@ export default function SidebarV2() {
                 </Tooltip>
               </div>
             </div>
-            {projectGroups.length > 0 ? (
-              <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1">
+              {projectGroups.length > 0 ? (
                 <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                   <MenuTrigger
                     render={
@@ -2429,6 +2595,109 @@ export default function SidebarV2() {
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+              ) : (
+                <div className="min-w-0 flex-1" />
+              )}
+              <Menu>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <MenuTrigger
+                        render={
+                          <SidebarMenuButton
+                            size="icon"
+                            type="button"
+                            className={cn(
+                              "relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
+                              listOptionsActive && "bg-sidebar-row-hover text-sidebar-foreground",
+                            )}
+                            aria-label="View and filters"
+                            data-testid="sidebar-v2-view-options-trigger"
+                          />
+                        }
+                      />
+                    }
+                  >
+                    <ListFilterIcon />
+                    {listOptionsActive ? (
+                      <span
+                        aria-hidden
+                        className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
+                      />
+                    ) : null}
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">View & filters</TooltipPopup>
+                </Tooltip>
+                <MenuPopup align="end" side="bottom" className="min-w-56">
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      Settled shelf
+                    </div>
+                    <MenuCheckboxItem
+                      checked={settledRecencyHeadersEnabled}
+                      closeOnClick={false}
+                      className="min-h-7 py-1 sm:text-xs"
+                      data-testid="sidebar-v2-settled-recency-headers"
+                      onCheckedChange={(checked) =>
+                        setSettledRecencyHeadersEnabled(checked === true)
+                      }
+                    >
+                      Date headers on settled
+                    </MenuCheckboxItem>
+                    <MenuCheckboxItem
+                      checked={settledShelfExpanded}
+                      closeOnClick={false}
+                      className="min-h-7 py-1 sm:text-xs"
+                      data-testid="sidebar-v2-settled-shelf-expanded"
+                      onCheckedChange={(checked) => setSettledShelfExpanded(checked === true)}
+                    >
+                      Expand settled shelf
+                    </MenuCheckboxItem>
+                  </MenuGroup>
+                  {environments.length > 1 ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                          Environment
+                        </div>
+                        <MenuCheckboxItem
+                          checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
+                          closeOnClick={false}
+                          className="min-h-7 py-1 sm:text-xs"
+                          data-testid="sidebar-v2-environment-filter-all"
+                          onCheckedChange={() => setStoredEnvironmentFilter([])}
+                        >
+                          All environments
+                        </MenuCheckboxItem>
+                        {environments.map((environment) => (
+                          <MenuCheckboxItem
+                            key={environment.environmentId}
+                            checked={isEnvironmentSelected(
+                              selectedEnvironmentIds,
+                              environment.environmentId,
+                            )}
+                            closeOnClick={false}
+                            className="min-h-7 py-1 sm:text-xs"
+                            data-testid={`sidebar-v2-environment-filter-${environment.environmentId}`}
+                            onCheckedChange={() => {
+                              setStoredEnvironmentFilter([
+                                ...toggleEnvironmentId(
+                                  selectedEnvironmentIds,
+                                  environment.environmentId,
+                                ),
+                              ]);
+                            }}
+                          >
+                            {environment.label}
+                          </MenuCheckboxItem>
+                        ))}
+                      </MenuGroup>
+                    </>
+                  ) : null}
+                </MenuPopup>
+              </Menu>
+              {projectGroups.length > 0 ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -2449,8 +2718,8 @@ export default function SidebarV2() {
                   </TooltipTrigger>
                   <TooltipPopup side="right">New project</TooltipPopup>
                 </Tooltip>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </SidebarGroup>
         }
       >
@@ -2527,6 +2796,8 @@ export default function SidebarV2() {
                           `${thread.environmentId}:${thread.projectId}`,
                         ) ?? null
                       }
+                      showCrossProjectContext={projectScopeKey === null}
+                      showEnvironmentContext={environments.length > 1}
                       providerEntryByInstanceId={providerEntryByInstanceId}
                       onThreadClick={handleThreadClick}
                       onThreadActivate={navigateToThread}
@@ -2606,8 +2877,31 @@ export default function SidebarV2() {
                     </li>,
                   );
                 }
-                for (const thread of renderedSettledThreads) {
-                  items.push(renderThreadRow(thread, "settled"));
+                // Recency headers only when multiple buckets are visible on
+                // this page (Last Hour / Earlier Today / …). Jump keys and
+                // multi-select still walk row threads only.
+                if (settledRecencyLayout.showHeaders) {
+                  for (const group of settledRecencyLayout.groups) {
+                    items.push(
+                      <li
+                        key={`settled-recency-${group.id}`}
+                        data-thread-selection-safe
+                        data-testid={`sidebar-v2-settled-recency-${group.id}`}
+                        className="list-none px-2.5 pb-0.5 pt-2 first:pt-1"
+                      >
+                        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/45">
+                          {group.label}
+                        </div>
+                      </li>,
+                    );
+                    for (const thread of group.threads) {
+                      items.push(renderThreadRow(thread, "settled"));
+                    }
+                  }
+                } else {
+                  for (const thread of renderedSettledThreads) {
+                    items.push(renderThreadRow(thread, "settled"));
+                  }
                 }
                 return items;
               })()}

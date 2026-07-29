@@ -5,7 +5,7 @@ import {
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveLockedWorkspaceLabel,
-  type EnvMode,
+  type WorkspaceTarget,
 } from "./BranchToolbar.logic";
 import {
   Select,
@@ -21,36 +21,42 @@ export const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
 interface BranchToolbarEnvModeSelectorProps {
   envLocked: boolean;
-  effectiveEnvMode: EnvMode;
+  workspaceTarget: WorkspaceTarget;
   activeWorktreePath: string | null;
-  onEnvModeChange: (mode: EnvMode) => void;
+  onWorkspaceTargetChange: (target: WorkspaceTarget) => void;
   previousWorktreeLabel?: string | null;
   onUsePreviousWorktree?: () => void;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
   envLocked,
-  effectiveEnvMode,
+  workspaceTarget,
   activeWorktreePath,
-  onEnvModeChange,
+  onWorkspaceTargetChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
 }: BranchToolbarEnvModeSelectorProps) {
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
-  const envModeItems = useMemo(
-    () => [
-      { value: "local", label: resolveCurrentWorkspaceLabel(activeWorktreePath) },
-      { value: "worktree", label: resolveEnvModeLabel("worktree") },
-      ...(showPreviousWorktree && previousWorktreeLabel
-        ? [{ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel }]
-        : []),
-    ],
-    [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree],
-  );
+  const envModeItems = useMemo(() => {
+    const items: Array<{ value: string; label: string }> = [
+      { value: "local", label: resolveEnvModeLabel("local") },
+    ];
+    if (activeWorktreePath) {
+      items.push({
+        value: "current-worktree",
+        label: resolveCurrentWorkspaceLabel(activeWorktreePath),
+      });
+    }
+    items.push({ value: "worktree", label: resolveEnvModeLabel("worktree") });
+    if (showPreviousWorktree && previousWorktreeLabel) {
+      items.push({ value: PREVIOUS_WORKTREE_SELECT_VALUE, label: previousWorktreeLabel });
+    }
+    return items;
+  }, [activeWorktreePath, previousWorktreeLabel, showPreviousWorktree]);
 
   if (envLocked) {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
+      <span className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:text-xs">
         {activeWorktreePath ? (
           <>
             <FolderGitIcon className="size-3" />
@@ -69,25 +75,20 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   return (
     <Select
       modal={false}
-      value={effectiveEnvMode}
+      value={workspaceTarget}
       onValueChange={(value: string | null) => {
         if (value === PREVIOUS_WORKTREE_SELECT_VALUE) {
           onUsePreviousWorktree?.();
           return;
         }
-        onEnvModeChange(value as EnvMode);
+        onWorkspaceTargetChange(value as WorkspaceTarget);
       }}
       items={envModeItems}
     >
-      <SelectTrigger
-        variant="ghost"
-        size="xs"
-        className="shrink-0 font-medium"
-        aria-label="Workspace"
-      >
-        {effectiveEnvMode === "worktree" ? (
+      <SelectTrigger variant="ghost" size="xs" className="font-medium" aria-label="Workspace">
+        {workspaceTarget === "worktree" ? (
           <FolderGit2Icon className="size-3" />
-        ) : activeWorktreePath ? (
+        ) : workspaceTarget === "current-worktree" ? (
           <FolderGitIcon className="size-3" />
         ) : (
           <FolderIcon className="size-3" />
@@ -99,14 +100,18 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           <SelectGroupLabel>Workspace</SelectGroupLabel>
           <SelectItem value="local">
             <span className="inline-flex items-center gap-1.5">
-              {activeWorktreePath ? (
-                <FolderGitIcon className="size-3" />
-              ) : (
-                <FolderIcon className="size-3" />
-              )}
-              {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+              <FolderIcon className="size-3" />
+              {resolveEnvModeLabel("local")}
             </span>
           </SelectItem>
+          {activeWorktreePath ? (
+            <SelectItem value="current-worktree">
+              <span className="inline-flex items-center gap-1.5">
+                <FolderGitIcon className="size-3" />
+                {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+              </span>
+            </SelectItem>
+          ) : null}
           <SelectItem value="worktree">
             <span className="inline-flex items-center gap-1.5">
               <FolderGit2Icon className="size-3" />
