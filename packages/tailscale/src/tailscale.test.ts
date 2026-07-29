@@ -13,14 +13,18 @@ import {
   buildTailscaleHttpsBaseUrl,
   disableTailscaleServe,
   ensureTailscaleServe,
+  findRootServeMappingForLocalPort,
   isTailscaleIpv4Address,
   parseTailscaleMagicDnsName,
+  parseTailscaleServeMappings,
   parseTailscaleStatus,
+  readTailscaleServeMappings,
   readTailscaleStatus,
   TAILSCALE_STATUS_TIMEOUT,
   TailscaleCommandExitError,
   TailscaleCommandSpawnError,
   TailscaleCommandTimeoutError,
+  TailscaleServeStatusParseError,
   TailscaleStatusParseError,
 } from "./tailscale.ts";
 
@@ -65,6 +69,16 @@ function assertCarriesNoSecret(error: object, secret: string): void {
 }
 const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
 const tailscaleStatusWithSingleIpJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.90.1.2"]}}`;
+// Shaped after real `tailscale serve status --json`: TCP lists the listening
+// ports, Web carries the routes. The serve port deliberately differs from the
+// local port it proxies, which is the case the resolver used to get wrong.
+const tailscaleServeStatusJson = `{
+  "TCP": { "45733": { "HTTPS": true }, "8443": { "HTTPS": true } },
+  "Web": {
+    "desktop.tail.ts.net:45733": { "Handlers": { "/": { "Proxy": "http://127.0.0.1:5733" } } },
+    "desktop.tail.ts.net:8443": { "Handlers": { "/docs": { "Proxy": "http://127.0.0.1:6001" } } }
+  }
+}`;
 
 function mockHandle(result: { stdout?: string; stderr?: string; code?: number }) {
   return ChildProcessSpawner.makeHandle({
@@ -154,6 +168,78 @@ describe("tailscale", () => {
       assert.notInclude(error.message, String(error.cause));
     }),
   );
+
+  it.effect("flattens serve mappings, keeping the serve port distinct from the local port", () =>
+    Effect.gen(function* () {
+      const mappings = yield* parseTailscaleServeMappings(tailscaleServeStatusJson);
+
+      assert.deepEqual(mappings, [
+        {
+          magicDnsName: "desktop.tail.ts.net",
+          servePort: 45733,
+          path: "/",
+          localHost: "127.0.0.1",
+          localPort: 5733,
+          url: "https://desktop.tail.ts.net:45733/",
+        },
+        {
+          magicDnsName: "desktop.tail.ts.net",
+          servePort: 8443,
+          path: "/docs",
+          localHost: "127.0.0.1",
+          localPort: 6001,
+          url: "https://desktop.tail.ts.net:8443/docs",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("treats a tailnet with no serve mappings as empty rather than failing", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* parseTailscaleServeMappings("{}"), []);
+      // TCP forwards and text handlers carry no local HTTP port to route to.
+      assert.deepEqual(
+        yield* parseTailscaleServeMappings(
+          `{"TCP":{"445":{"TCPForward":"127.0.0.1:445"}},"Web":{"desktop.tail.ts.net:443":{"Handlers":{"/":{"Text":"hello"}}}}}`,
+        ),
+        [],
+      );
+    }),
+  );
+
+  it.effect("preserves serve status decoding failures", () =>
+    Effect.gen(function* () {
+      const error = yield* parseTailscaleServeMappings("{not-json").pipe(Effect.flip);
+
+      assert.instanceOf(error, TailscaleServeStatusParseError);
+      assert.equal(error.message, "Failed to decode tailscale serve status JSON.");
+    }),
+  );
+
+  it.effect("matches only root mappings when resolving a local port", () =>
+    Effect.gen(function* () {
+      const mappings = yield* parseTailscaleServeMappings(tailscaleServeStatusJson);
+
+      assert.equal(findRootServeMappingForLocalPort(mappings, 5733)?.servePort, 45733);
+      // Served under /docs, so it cannot carry a dev server's absolute asset
+      // paths — treated as no mapping at all.
+      assert.isUndefined(findRootServeMappingForLocalPort(mappings, 6001));
+      assert.isUndefined(findRootServeMappingForLocalPort(mappings, 9999));
+    }),
+  );
+
+  it.effect("reads serve mappings through the process spawner service", () => {
+    const layer = mockSpawnerLayer((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["serve", "status", "--json"]);
+      return { stdout: tailscaleServeStatusJson };
+    });
+
+    return Effect.gen(function* () {
+      const mappings = yield* readTailscaleServeMappings;
+      assert.equal(mappings.length, 2);
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("builds clean HTTPS base URLs", () =>
     Effect.sync(() => {
