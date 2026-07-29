@@ -1572,7 +1572,12 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       const modeChanged =
         yield* Deferred.make<Extract<ProviderRuntimeEvent, { type: "session.mode.changed" }>>();
       const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
-        if (event.type === "session.mode.changed" && String(event.threadId) === String(threadId)) {
+        // Session start may pin Build→agent first; wait for the plan-mode switch.
+        if (
+          event.type === "session.mode.changed" &&
+          String(event.threadId) === String(threadId) &&
+          event.payload.modeId === "plan"
+        ) {
           return Deferred.succeed(modeChanged, event).pipe(Effect.ignore);
         }
         return Effect.void;
@@ -1596,7 +1601,11 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       assert.equal(modeEvent.payload.interactionMode, "plan");
 
       const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
-      const setMode = requests.find((entry) => entry.method === "session/set_mode");
+      const setMode = requests.find(
+        (entry) =>
+          entry.method === "session/set_mode" &&
+          (entry.params as { modeId?: string } | undefined)?.modeId === "plan",
+      );
       assert.isDefined(setMode);
       assert.equal((setMode?.params as { modeId?: string } | undefined)?.modeId, "plan");
 
