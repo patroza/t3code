@@ -87,12 +87,17 @@ pnpm --filter @t3tools/discord-bot start
 
 ## Agent turn prompts
 
-Each Discord turn injects **dynamic** context only (requester, identity trailers,
-PR footer, Jira keys, user text). Static policy (reply style, PR/commit
-attribution, Sentry bootstrap steps) lives in
+Each Discord turn injects a **compact** dynamic block only:
+
+- `rules:` absolute path to static policy
+- `req:` `id@user name`
+- `who:` / `cab:` identity + co-author trailers
+- `pr:` `name` / `uid` / `g` / `c` / `m` / `title` (ids — expand via rules)
+- `jira:` issue keys (no browse URLs)
+- `jump:` `g/c/m` for referenced messages
+
+Static policy lives in
 [`apps/discord-bot/docs/agent-turn-rules.md`](../../apps/discord-bot/docs/agent-turn-rules.md).
-The per-turn message points agents at that file via an absolute path so they can
-read it from any project worktree.
 
 ## Browser automation
 

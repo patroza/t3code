@@ -182,9 +182,10 @@ describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
         }),
       ],
     });
-    expect(block).toContain("Identity map");
-    expect(block).toContain("Thread starter");
-    expect(block).toContain("Current requester");
+    expect(block).toContain("who:");
+    expect(block).toContain("starter 222@davide gh:davide#99");
+    expect(block).toContain("req 95218063095377920@patroza gh:patroza#12345");
+    expect(block).toContain("cab:");
     expect(block).toContain("Co-authored-by: Davide <99+davide@users.noreply.github.com>");
     expect(block).toContain(
       "Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>",

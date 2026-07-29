@@ -461,57 +461,52 @@ export function formatIdentityAttributionBlock(input: {
     participants.map((p) => p.coAuthoredBy).filter((t): t is string => t !== null),
   );
 
-  // Static attribution policy lives in docs/agent-turn-rules.md; only inject
-  // per-turn resolved participants and ready-to-paste trailers here.
-  const lines: string[] = ["### Identity map (this turn)"];
+  // Static attribution policy in docs/agent-turn-rules.md; inject who + cab only.
+  // Merge rows that share the same discord id (starter+req same person → one entry).
+  type WhoRow = {
+    roles: string[];
+    id: string;
+    user: string;
+    suffix: string;
+  };
+  const byId = new Map<string, WhoRow>();
 
   for (const p of participants) {
-    const roleLabel =
-      p.role === "requester"
-        ? "Current requester"
-        : p.role === "thread_starter"
-          ? "Thread starter"
-          : "Participant";
-    const discordBits = [
-      p.discordDisplayName ?? p.discordUsername ?? "unknown",
-      p.discordId !== null ? `id=${p.discordId}` : null,
-      p.discordUsername !== null ? `username=${p.discordUsername}` : null,
-    ]
-      .filter((b): b is string => b !== null)
-      .join(", ");
-
-    if (p.person === null) {
-      lines.push(
-        `- **${roleLabel}** (${discordBits}): unmapped (${p.unmappedReason ?? "unknown"})`,
-      );
+    const role = p.role === "requester" ? "req" : p.role === "thread_starter" ? "starter" : "p";
+    const id = p.discordId ?? `anon:${byId.size}`;
+    const user = p.discordUsername ?? p.person?.discord?.username ?? "?";
+    const suffix =
+      p.person === null
+        ? "unmapped"
+        : p.person.github !== undefined
+          ? p.person.github.id !== undefined
+            ? `gh:${p.person.github.login}#${p.person.github.id}`
+            : `gh:${p.person.github.login}`
+          : "gh:?";
+    const existing = byId.get(id);
+    if (existing !== undefined) {
+      if (!existing.roles.includes(role)) existing.roles.push(role);
+      // Prefer real username / mapped suffix if a later role fills them in.
+      if (existing.user === "?" && user !== "?") existing.user = user;
+      if (existing.suffix === "unmapped" && suffix !== "unmapped") existing.suffix = suffix;
       continue;
     }
-
-    const gh = p.person.github;
-    const jira = p.person.jira;
-    const parts = [
-      `name=${p.person.name}`,
-      gh !== undefined ? `github=@${gh.login}` : "github=unset",
-      gh?.id !== undefined ? `githubId=${gh.id}` : null,
-      p.coAuthoredBy !== null ? `trailer ready` : p.unmappedReason,
-      jira?.accountId !== undefined ? `jiraAccountId=${jira.accountId}` : null,
-      jira?.email !== undefined ? `jiraEmail=${jira.email}` : null,
-    ].filter((b): b is string => b !== null && b.length > 0);
-    lines.push(`- **${roleLabel}** (${discordBits}): ${parts.join("; ")}`);
+    byId.set(id, { roles: [role], id, user, suffix });
   }
 
+  const whoParts = [...byId.values()].map(
+    (row) => `${row.roles.join("+")} ${row.id}@${row.user} ${row.suffix}`,
+  );
+
+  const lines: string[] = [`who: ${whoParts.join(" | ")}`];
+
   if (trailers.length > 0) {
-    lines.push("");
-    lines.push("**Co-authored-by trailers** (append to every new commit):");
-    lines.push("```");
+    lines.push("cab:");
     for (const t of trailers) lines.push(t);
-    lines.push("```");
   } else if (!anyMapped) {
-    lines.push("");
-    lines.push("No participants in identity map (operator map or explicit trailer needed).");
+    lines.push("cab: (none — unmapped)");
   } else {
-    lines.push("");
-    lines.push("Mapped participants missing resolvable GitHub email/id.");
+    lines.push("cab: (none — missing gh id/email)");
   }
 
   return lines.join("\n");

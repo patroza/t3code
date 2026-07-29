@@ -16,13 +16,8 @@ import {
   type PersonIdentity,
   type ResolvedParticipantIdentity,
 } from "../identityMap.ts";
-import {
-  buildDiscordThreadJumpUrl,
-  formatDiscordPrAttributionFooter,
-  starterDisplayName,
-  starterUserId,
-} from "./discordPrAttribution.ts";
-import { jiraBrowseUrl, mergeJiraIssueKeys } from "./jiraLinks.ts";
+import { starterDisplayName, starterUserId } from "./discordPrAttribution.ts";
+import { mergeJiraIssueKeys } from "./jiraLinks.ts";
 
 /** Absolute path to the static Discord agent policy document. */
 export function resolveAgentTurnRulesPath(): string {
@@ -99,55 +94,74 @@ export interface ThreadBootstrapContext {
 }
 
 function formatDiscordStaticRulesPointer(rulesPath: string): string {
+  // Header kept for ResponseBridge echo-suppression (isDiscordOriginatedUserPrompt).
   return `## Discord conversation context
-Static policy (reply style, audience, PR/commit attribution, Sentry bootstrap): read \`${rulesPath}\` when committing, opening PRs, or when unsure. Be concise in Discord replies. This message carries only turn-specific data.`;
+rules: ${rulesPath}`;
 }
 
-function formatRequesterMetadata(message: DiscordMessageLike | undefined): string {
-  return JSON.stringify(
-    {
-      id: message?.author?.id ?? null,
-      username: message?.author?.username ?? null,
-      displayName: message?.author?.displayName ?? message?.author?.username ?? null,
-    },
-    null,
-    2,
+/** Collapse whitespace so one-line turn fields cannot inject extra markdown headers. */
+function oneLine(value: string): string {
+  return value
+    .replace(/[\r\n\t]+/gu, " ")
+    .replace(/ {2,}/gu, " ")
+    .trim();
+}
+
+/** Compact requester line: `id@user name` (name omitted when same as user). */
+export function formatRequesterLine(message: DiscordMessageLike | undefined): string {
+  const id = oneLine(message?.author?.id?.trim() || "?") || "?";
+  const user = oneLine(message?.author?.username?.trim() || "?") || "?";
+  const name = oneLine((message?.author?.displayName ?? message?.author?.username ?? "").trim());
+  if (name.length > 0 && name !== user) return `${id}@${user} ${name}`;
+  return `${id}@${user}`;
+}
+
+/**
+ * Compress a discord.com/channels/... jump to `g/c` or `g/c/m` (no scheme/host).
+ * Returns null when the URL is missing or not a channel jump.
+ */
+export function compactDiscordJumpRef(url: string | undefined): string | null {
+  if (url === undefined) return null;
+  const trimmed = url.trim();
+  if (trimmed.length === 0) return null;
+  const match = trimmed.match(
+    /^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/([^/\s]+)\/([^/\s]+)(?:\/([^/\s]+))?$/u,
   );
+  if (match === null) return null;
+  const guild = match[1]!;
+  const channel = match[2]!;
+  const message = match[3];
+  return message !== undefined && message.length > 0
+    ? `${guild}/${channel}/${message}`
+    : `${guild}/${channel}`;
 }
 
 /**
  * Format a referenced (reply-to) Discord message for agent context.
- * Includes embeds (e.g. Sentry alert fields) and optional jump link.
+ * Jump is `g/c/m` ids only (expand with rules doc URL forms when needed).
  */
 export function formatReferencedMessageBlock(input: {
   readonly message: DiscordMessageLike;
   readonly url?: string | undefined;
 }): string {
-  const parts = ["## Referenced Discord message", formatDiscordMessage(input.message)];
-  if (input.url !== undefined && input.url.trim() !== "") {
-    parts.push(`Jump link: ${input.url.trim()}`);
-  }
+  const parts = ["## ref", formatDiscordMessage(input.message)];
+  const jump = compactDiscordJumpRef(input.url);
+  if (jump !== null) parts.push(`jump: ${jump}`);
   return parts.join("\n");
 }
 
 /**
- * Durable per-thread Jira context for agent turns.
+ * Durable per-thread Jira keys for agent turns (keys only — no browse URLs).
  * Omitted when no keys are known so ordinary prompts stay compact.
  */
 export function formatLinkedJiraWorkItemsBlock(input: {
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  /** @deprecated Ignored; keys only in prompts (browse base unused). */
   readonly jiraBrowseBaseUrl?: string | undefined;
 }): string | null {
   const ordered = mergeJiraIssueKeys([], input.jiraIssueKeys);
   if (ordered.length === 0) return null;
-
-  const lines = ordered.map((key) => {
-    const url = jiraBrowseUrl(input.jiraBrowseBaseUrl, key);
-    return url === null ? `- \`${key}\`` : `- [${key}](${url})`;
-  });
-
-  return `### Linked work items (from this Discord thread)
-${lines.join("\n")}`;
+  return `jira: ${ordered.join(" ")}`;
 }
 
 /**
@@ -194,7 +208,7 @@ export function resolveTurnIdentityParticipants(input: {
 }
 
 /**
- * Ready-to-paste Discord PR footer for agents (profile + full thread jump URLs).
+ * Compact PR footer fields for agents (ids only — expand via rules doc).
  * Returns null when starter user id is missing.
  */
 export function formatDiscordPrFooterPromptBlock(input: {
@@ -208,33 +222,21 @@ export function formatDiscordPrFooterPromptBlock(input: {
   const userId = starterUserId(attributionPerson ?? null);
   if (userId === null) return null;
 
+  const name = starterDisplayName(attributionPerson ?? null);
   const guildId = input.guildId?.trim() ?? "";
   const threadId = input.discordThreadId?.trim() ?? "";
   const messageId =
     attributionPerson?.id?.trim() ||
     input.requester?.id?.trim() ||
     (threadId.length > 0 ? threadId : "");
+  const title = input.discordThreadTitle?.trim() || "Discord";
 
-  const jumpUrl =
-    guildId.length > 0 && threadId.length > 0
-      ? buildDiscordThreadJumpUrl({
-          guildId,
-          discordThreadId: threadId,
-          messageId: messageId.length > 0 ? messageId : null,
-        })
-      : "";
-
-  const footer = formatDiscordPrAttributionFooter({
-    starterDisplayName: starterDisplayName(attributionPerson ?? null),
-    starterUserId: userId,
-    threadTitle: input.discordThreadTitle?.trim() || "Discord thread",
-    threadJumpUrl: jumpUrl,
-  });
-
-  return `### Discord PR description footer
-\`\`\`
-${footer}
-\`\`\``;
+  const parts = [`name=${name}`, `uid=${userId}`];
+  if (guildId.length > 0) parts.push(`g=${guildId}`);
+  if (threadId.length > 0) parts.push(`c=${threadId}`);
+  if (messageId.length > 0) parts.push(`m=${messageId}`);
+  parts.push(`title=${title}`);
+  return `pr: ${parts.join(" ")}`;
 }
 
 export function buildDiscordTurnPrompt(input: {
@@ -266,7 +268,7 @@ export function buildDiscordTurnPrompt(input: {
     jiraIssueKeys: input.jiraIssueKeys,
     jiraBrowseBaseUrl: input.jiraBrowseBaseUrl,
   });
-  const jiraSection = jiraBlock !== null ? `\n\n${jiraBlock}` : "";
+  const jiraSection = jiraBlock !== null ? `\n${jiraBlock}` : "";
 
   const identityBlock = formatIdentityAttributionBlock({
     participants: resolveTurnIdentityParticipants({
@@ -278,7 +280,7 @@ export function buildDiscordTurnPrompt(input: {
   // Only inject when the operator map is configured (non-empty). Empty map keeps prompts compact.
   const identitySection =
     input.identityPeople !== undefined && input.identityPeople.length > 0 && identityBlock !== null
-      ? `\n\n${identityBlock}`
+      ? `\n${identityBlock}`
       : "";
 
   const prFooterBlock = formatDiscordPrFooterPromptBlock({
@@ -288,14 +290,10 @@ export function buildDiscordTurnPrompt(input: {
     discordThreadId: input.discordThreadId,
     discordThreadTitle: input.discordThreadTitle,
   });
-  const prFooterSection = prFooterBlock !== null ? `\n\n${prFooterBlock}` : "";
+  const prFooterSection = prFooterBlock !== null ? `\n${prFooterBlock}` : "";
 
   return `${formatDiscordStaticRulesPointer(rulesPath)}
-
-### Current requester
-\`\`\`json
-${formatRequesterMetadata(input.requester)}
-\`\`\`${jiraSection}${identitySection}${prFooterSection}
+req: ${formatRequesterLine(input.requester)}${jiraSection}${identitySection}${prFooterSection}
 
 ## User request
 ${input.mentionPrompt.trim()}${referencedBlock}`;
@@ -326,14 +324,13 @@ export function formatDiscordMessage(message: DiscordMessageLike): string {
   const who =
     message.author?.username !== undefined
       ? `${message.author.username}${message.author.bot === true ? " [bot]" : ""}`
-      : "unknown";
-  const parts = [`From: ${who}`, `Message id: ${message.id}`];
+      : "?";
+  const parts = [`from=${who} id=${message.id}`];
   const content = (message.content ?? "").trim();
   if (content.length > 0) parts.push(content);
   if (message.embeds && message.embeds.length > 0) {
-    parts.push("Embeds:");
     message.embeds.forEach((embed, index) => {
-      parts.push(`--- embed ${index + 1} ---`, formatEmbed(embed));
+      parts.push(`embed${index + 1}:`, formatEmbed(embed));
     });
   }
   return parts.join("\n");
@@ -465,42 +462,33 @@ export function buildSentryBootstrapPrompt(input: ThreadBootstrapContext): strin
   ].join("\n");
   const hints = extractSentryHints(combinedForHints);
 
-  const honeycombHelp =
+  const honeycombTpl =
     input.honeycombTraceUrlTemplate !== undefined && input.honeycombTraceUrlTemplate.trim() !== ""
-      ? `When you have a trace id, build the Honeycomb URL from this template (substitute placeholders):
-\`${input.honeycombTraceUrlTemplate}\`
-Placeholders: {traceId}, {environment}, {dataset}, {team}`
-      : `When you have a trace id, post a Honeycomb deep link using the team's usual Honeycomb UI
-(environment/dataset from the alert if present). Prefer a direct trace URL if you know the team layout.`;
+      ? input.honeycombTraceUrlTemplate.trim()
+      : null;
 
-  const hintBlock = [
-    hints.issueIds.length > 0
-      ? `Detected Sentry-looking issue ids: ${hints.issueIds.join(", ")}`
-      : null,
-    hints.sentryUrls.length > 0
-      ? `Detected Sentry URLs:\n${hints.sentryUrls.map((u) => `- ${u}`).join("\n")}`
-      : null,
-    hints.possibleTraceIds.length > 0
-      ? `Possible trace ids already in the message: ${hints.possibleTraceIds.join(", ")}`
-      : null,
-  ]
-    .filter((line): line is string => line !== null)
-    .join("\n");
+  const hintBits: string[] = [];
+  if (hints.issueIds.length > 0) hintBits.push(`issues=${hints.issueIds.join(",")}`);
+  if (hints.sentryUrls.length > 0) {
+    // Prefer issue path/id over full URL when possible.
+    const compact = hints.sentryUrls.map((u) => {
+      const m = u.match(/sentry\.io(\/issues\/\d+)/iu);
+      return m?.[1] ?? u;
+    });
+    hintBits.push(`sentry=${compact.join(",")}`);
+  }
+  if (hints.possibleTraceIds.length > 0) {
+    hintBits.push(`traces=${hints.possibleTraceIds.join(",")}`);
+  }
 
-  const primaryContextNote = referencedIsDistinctStarter
-    ? "Prefer the **referenced Discord message** (what the user replied to) as the primary incident context when present; otherwise use the thread starter. The user's @mention is the request to act on that context."
-    : "Treat the **original thread starter** as the primary incident context (a Sentry alert). The user's @mention is the request to act on that context.";
+  const primary = referencedIsDistinctStarter ? "primary=ref" : "primary=starter";
 
+  const jump = compactDiscordJumpRef(input.referencedMessageUrl);
   const referencedSection =
     referencedIsDistinctStarter && referencedText !== null
       ? `
-### Referenced Discord message (user reply target)
-${referencedText}
-${
-  input.referencedMessageUrl !== undefined && input.referencedMessageUrl.trim() !== ""
-    ? `Jump link: ${input.referencedMessageUrl.trim()}`
-    : ""
-}
+## ref
+${referencedText}${jump !== null ? `\njump: ${jump}` : ""}
 `
       : "";
 
@@ -519,20 +507,14 @@ ${buildDiscordTurnPrompt({
   discordThreadTitle: input.discordThreadTitle,
 })}
 
-You were pulled into an existing Discord thread for project **${input.projectShortName}**
-(\`${input.workspaceRoot}\`).
-
-${primaryContextNote}
-Follow Sentry investigation steps in the static rules doc (path above).
+project: ${input.projectShortName} root: ${input.workspaceRoot}
+${primary}
 ${referencedSection}
-### Original Discord thread starter
+## starter
 ${starterText}
 
-### Detected hints (may be incomplete — verify with tools)
-${hintBlock.length > 0 ? hintBlock : "(none auto-detected)"}
-
-### Honeycomb
-${honeycombHelp}
+hints: ${hintBits.length > 0 ? hintBits.join(" ") : "none"}
+hc_tpl: ${honeycombTpl ?? "(none — use team UI)"}
 `;
 }
 

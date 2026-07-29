@@ -1115,6 +1115,9 @@ export function isDiscordOriginatedUserPrompt(text: string): boolean {
   if (body === "") return false;
   // buildDiscordTurnPrompt / buildSentryBootstrapPrompt markers.
   if (body.includes("## Discord conversation context")) return true;
+  // Compact turn format: `rules:` / `req:` lines under the Discord header region.
+  if (/(?:^|\n)rules:\s+\//u.test(body) && body.includes("## User request")) return true;
+  if (/(?:^|\n)req:\s+\S/u.test(body) && body.includes("## User request")) return true;
   if (body.includes("## Discord investigation bootstrap")) return true;
   // Older / compact Discord turn envelopes still include these sections together.
   if (body.includes("### Current requester") && body.includes("## User request")) return true;
