@@ -795,6 +795,11 @@ export function hasActionableProposedPlan(
   return proposedPlan !== null && proposedPlan.implementedAt === null;
 }
 
+export {
+  shouldShowPlanFollowUpComposer,
+  shouldShowPlanReadyStatus,
+} from "@t3tools/shared/proposedPlan";
+
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {

@@ -6,7 +6,9 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { memo } from "react";
+import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
+import * as Option from "effect/Option";
+import { memo, useCallback, useMemo } from "react";
 import GitActionsControl from "../GitActionsControl";
 import { type DraftId } from "~/composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -15,10 +17,13 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
+import { Button } from "../ui/button";
+import { VisualStudioCode } from "../Icons";
+import { readLocalApi } from "~/localApi";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -49,7 +54,66 @@ export function shouldShowOpenInPicker(input: {
   readonly activeThreadEnvironmentId: EnvironmentId;
   readonly primaryEnvironmentId: EnvironmentId | null;
 }): boolean {
-  return Boolean(input.activeProjectName);
+  return (
+    Boolean(input.activeProjectName) &&
+    input.primaryEnvironmentId !== null &&
+    input.activeThreadEnvironmentId === input.primaryEnvironmentId
+  );
+}
+
+/**
+ * Remote Open-in-VS-Code is mutually exclusive with the local OpenInPicker:
+ * only offer it for a named project when the local picker is hidden (non-primary
+ * environments). Pure gate so stack recovery cannot keep the URI helper while
+ * dropping the product surface without a failing unit test.
+ */
+export function shouldOfferRemoteVscodeOpen(input: {
+  readonly activeProjectName: string | undefined;
+  readonly showOpenInPicker: boolean;
+}): boolean {
+  return Boolean(input.activeProjectName) && !input.showOpenInPicker;
+}
+
+function encodeRemotePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+export function resolveRemoteVscodeOpenTarget(input: {
+  readonly entry: ConnectionCatalogEntry | null;
+  readonly cwd: string | null;
+}): { readonly authority: string; readonly uri: string } | null {
+  if (!input.cwd || !input.cwd.startsWith("/")) return null;
+  const entry = input.entry;
+  if (!entry) return null;
+
+  let hostname: string | null = null;
+  let username: string | null = null;
+
+  if (
+    entry.target._tag === "SshConnectionTarget" &&
+    Option.isSome(entry.profile) &&
+    entry.profile.value._tag === "SshConnectionProfile"
+  ) {
+    hostname = entry.profile.value.target.hostname;
+    username = entry.profile.value.target.username ?? username;
+  } else if (
+    entry.target._tag === "BearerConnectionTarget" &&
+    Option.isSome(entry.profile) &&
+    entry.profile.value._tag === "BearerConnectionProfile"
+  ) {
+    // The HTTP endpoint may be a gateway on a different machine. Remote-SSH must target
+    // the environment itself, not the transport endpoint used to reach its T3 server.
+    hostname = entry.profile.value.label.trim() || entry.target.label.trim() || null;
+  }
+
+  if (!hostname) return null;
+  const authority = username ? `${username}@${hostname}` : hostname;
+  // `windowId=_blank` focuses the window that already has this remote folder open, otherwise opens a
+  // new one — instead of replacing whatever window is currently focused.
+  const uri = `vscode://vscode-remote/ssh-remote+${encodeURIComponent(authority)}${encodeRemotePath(
+    input.cwd,
+  )}?windowId=_blank`;
+  return { authority, uri };
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -73,6 +137,7 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const activeEnvironment = useEnvironment(activeThreadEnvironmentId);
   const fileScripts = useT3ProjectFileScripts(
     activeThreadEnvironmentId,
     activeProjectScripts ? activeProjectCwd : null,
@@ -80,8 +145,22 @@ export const ChatHeader = memo(function ChatHeader({
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName,
     activeThreadEnvironmentId,
-    primaryEnvironmentId: null,
+    primaryEnvironmentId,
   });
+  const remoteVscodeTarget = useMemo(
+    () =>
+      shouldOfferRemoteVscodeOpen({ activeProjectName, showOpenInPicker })
+        ? resolveRemoteVscodeOpenTarget({
+            entry: activeEnvironment?.entry ?? null,
+            cwd: openInCwd,
+          })
+        : null,
+    [activeEnvironment?.entry, activeProjectName, openInCwd, showOpenInPicker],
+  );
+  const openRemoteVscode = useCallback(() => {
+    if (!remoteVscodeTarget) return;
+    void readLocalApi()?.shell.openExternal(remoteVscodeTarget.uri);
+  }, [remoteVscodeTarget]);
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -155,6 +234,28 @@ export const ChatHeader = memo(function ChatHeader({
             availableEditors={availableEditors}
             openInCwd={openInCwd}
           />
+        )}
+        {remoteVscodeTarget && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  aria-label={`Open in VS Code Remote SSH on ${remoteVscodeTarget.authority}`}
+                  size="xs"
+                  variant="outline"
+                  onClick={openRemoteVscode}
+                >
+                  <VisualStudioCode aria-hidden="true" className="size-3.5" />
+                  <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                    Open
+                  </span>
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">
+              Open VS Code Remote SSH: {remoteVscodeTarget.authority}
+            </TooltipPopup>
+          </Tooltip>
         )}
         {activeProjectName && (
           <GitActionsControl
