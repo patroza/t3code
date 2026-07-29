@@ -55,6 +55,30 @@
       "commit": "ce3318775d74c566b4eef309c3f374e6d220891d",
       "path": "packages/contracts/src/settings.test.ts",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "apps/web/src/components/ChatMarkdown.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "1f8a2c58ae115df840d98d5854825123c502d54c",
+      "path": "apps/web/src/components/ChatMarkdown.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "4d97aafb8e216dd27b6835b13ad20fca2884691e",
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "strategy": "theirs"
     }
   ]
 }
