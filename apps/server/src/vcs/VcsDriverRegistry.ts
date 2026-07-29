@@ -12,7 +12,14 @@ import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 
 const DETECTION_CACHE_CAPACITY = 2_048;
-const DETECTION_CACHE_TTL = Duration.seconds(2);
+/**
+ * Positive detects are stable for a worktree's lifetime; re-running 3× git
+ * rev-parse on every status/poll was a major VCS storm contributor under load.
+ * Keep negative detects short so creating a repo in a previously non-git path
+ * is still noticed quickly.
+ */
+const DETECTION_POSITIVE_CACHE_TTL = Duration.minutes(5);
+const DETECTION_NEGATIVE_CACHE_TTL = Duration.seconds(15);
 
 export interface VcsDriverResolveInput {
   readonly cwd: string;
@@ -115,7 +122,12 @@ export const make = Effect.gen(function* () {
     (key) => detectResolvedKind(parseDetectionCacheKey(key)),
     {
       capacity: DETECTION_CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETECTION_CACHE_TTL : Duration.zero),
+      timeToLive: (exit) => {
+        if (!Exit.isSuccess(exit)) {
+          return Duration.zero;
+        }
+        return exit.value === null ? DETECTION_NEGATIVE_CACHE_TTL : DETECTION_POSITIVE_CACHE_TTL;
+      },
     },
   );
 

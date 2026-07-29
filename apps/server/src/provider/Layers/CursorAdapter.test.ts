@@ -28,6 +28,7 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { pollUntil } from "../testUtils/pollUntil.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
 
@@ -97,36 +98,33 @@ async function readJsonLines(filePath: string) {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+    .flatMap((line) => {
+      // A poll can observe the mock child halfway through appending its final
+      // line. The next poll will see the complete JSON record.
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
 }
 
-async function waitForFileContent(filePath: string, attempts = 40) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      const raw = await NodeFSP.readFile(filePath, "utf8");
-      if (raw.trim().length > 0) {
-        return raw;
-      }
-    } catch {}
-    await Effect.runPromise(Effect.yieldNow);
-  }
-  throw new Error(`Timed out waiting for file content at ${filePath}`);
+function waitForFileContent(filePath: string) {
+  return pollUntil({
+    poll: Effect.promise(() => NodeFSP.readFile(filePath, "utf8").catch(() => "")),
+    until: (raw) => raw.trim().length > 0,
+    description: `file content at ${filePath}`,
+  });
 }
 
 function waitForJsonLogMatch(
   filePath: string,
   predicate: (entry: Record<string, unknown>) => boolean,
-  attempts = 40,
 ) {
-  return Effect.gen(function* () {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const requests = yield* Effect.promise(() => readJsonLines(filePath));
-      if (requests.some(predicate)) {
-        return requests;
-      }
-      yield* Effect.yieldNow;
-    }
-    return yield* Effect.promise(() => readJsonLines(filePath));
+  return pollUntil({
+    poll: Effect.promise(() => readJsonLines(filePath)),
+    until: (entries) => entries.some(predicate),
+    description: `a matching json log entry in ${filePath}`,
   });
 }
 
@@ -212,7 +210,9 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       const wrapperPath = yield* Effect.promise(() => makeMockAgentWrapper());
       yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 9).pipe(
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.takeUntil((event) => event.type === "turn.completed"),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -263,7 +263,9 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.isDefined(delta);
       if (delta?.type === "content.delta") {
         assert.equal(delta.payload.delta, "hello from mock");
-        assert.match(String(delta.itemId), /^assistant:mock-session-1:runtime:[^:]+:segment:0$/);
+        // The middle segment is a per-run id: it keeps a resumed session from
+        // reusing the item ids of its earlier runs.
+        assert.match(String(delta.itemId), /^assistant:mock-session-1:[^:]+:segment:0$/);
       }
 
       const assistantCompleted = runtimeEvents.find(
@@ -388,7 +390,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
 
       yield* adapter.stopSession(threadId);
 
-      const exitLog = yield* Effect.promise(() => waitForFileContent(exitLogPath));
+      const exitLog = yield* waitForFileContent(exitLogPath);
       assert.include(exitLog, "SIGTERM");
     }),
   );
@@ -440,7 +442,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
 
         yield* adapter.stopSession(threadId);
 
-        const exitLog = yield* Effect.promise(() => waitForFileContent(exitLogPath));
+        const exitLog = yield* waitForFileContent(exitLogPath);
         assert.equal(exitLog.match(/SIGTERM/g)?.length ?? 0, 2);
       }),
   );
@@ -551,7 +553,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           modelSelection,
         });
 
-        yield* Effect.promise(() => waitForFileContent(requestLogPath));
+        yield* waitForFileContent(requestLogPath);
 
         const requestsAfterStart = yield* Effect.promise(() => readJsonLines(requestLogPath));
         const configIdsAfterStart = requestsAfterStart.flatMap((entry) =>
@@ -722,10 +724,9 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           if (contentDelta?.type === "content.delta") {
             assert.equal(String(contentDelta.turnId), String(turn.turnId));
             assert.equal(contentDelta.payload.delta, "hello from mock");
-            assert.match(
-              String(contentDelta.itemId),
-              /^assistant:mock-session-1:runtime:[^:]+:segment:0$/,
-            );
+            // The middle segment is a per-run id: it keeps a resumed session
+            // from reusing the item ids of its earlier runs.
+            assert.match(String(contentDelta.itemId), /^assistant:mock-session-1:[^:]+:segment:0$/);
           }
         });
 
@@ -1080,6 +1081,44 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.isTrue(approvalResponses.some(isCancelledApprovalResponse));
 
       yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("removes the session and emits session.exited when the ACP process dies", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-process-exit");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_EXIT_AFTER_PROMPT: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const sessionExited = yield* Deferred.make<ProviderRuntimeEvent>();
+      yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        String(event.threadId) === String(threadId) && event.type === "session.exited"
+          ? Deferred.succeed(sessionExited, event).pipe(Effect.ignore)
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      yield* adapter
+        .sendTurn({ threadId, input: "exit now", attachments: [] })
+        .pipe(Effect.exit, Effect.timeout("5 seconds"));
+      const event = yield* Deferred.await(sessionExited).pipe(Effect.timeout("5 seconds"));
+
+      assert.equal(event.type, "session.exited");
+      if (event.type === "session.exited") {
+        assert.equal(event.payload.exitKind, "error");
+      }
+      assert.equal(yield* adapter.hasSession(threadId), false);
     }),
   );
   it.effect("stopping a session settles pending approval waits", () =>

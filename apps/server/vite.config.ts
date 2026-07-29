@@ -18,6 +18,7 @@ export function shouldBundleCliDependency(id: string): boolean {
 
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+const serverTestTimeout = 120_000;
 
 export default mergeConfig(
   baseConfig,
@@ -64,13 +65,41 @@ export default mergeConfig(
       },
     },
     test: {
-      // The server suite exercises sqlite, git, temp worktrees, and orchestration
-      // runtimes heavily. Running files in parallel introduces load-sensitive flakes.
-      fileParallelism: false,
+      fileParallelism: true,
+      maxWorkers: 4,
+      projects: [
+        {
+          test: {
+            name: "server",
+            isolate: false,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
+            exclude: [
+              "src/bootstrap.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-module-mocks",
+            isolate: true,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              "src/bootstrap.test.ts",
+              "src/terminal/NodePtyAdapter.test.ts",
+              "src/workspace/WorkspaceEntries.test.ts",
+            ],
+          },
+        },
+      ],
       // Server integration tests exercise sqlite, git, and orchestration together.
       // Under package-wide runs they can exceed the default budget on loaded CI hosts.
-      hookTimeout: 120_000,
-      testTimeout: 120_000,
+      hookTimeout: serverTestTimeout,
+      testTimeout: serverTestTimeout,
     },
   }),
 );

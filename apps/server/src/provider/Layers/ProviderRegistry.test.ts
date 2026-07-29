@@ -50,6 +50,7 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { pollUntil } from "../testUtils/pollUntil.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -1552,22 +1553,19 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
           // Boot-time probe: the default codex instance is enabled with
           // `firstMissing`, so the real spawner yields ENOENT and the
           // snapshot should be `status: "error"`.
-          let initialProviders = yield* registry.getProviders;
-          for (
-            let attempts = 0;
-            attempts < 50 &&
-            initialProviders.find((provider) => provider.instanceId === "codex")?.status !==
-              "error";
-            attempts += 1
-          ) {
-            yield* TestClock.adjust("10 millis");
-            yield* Effect.yieldNow;
-            initialProviders = yield* registry.getProviders;
-          }
+          const initialProviders = yield* pollUntil({
+            poll: TestClock.adjust("10 millis").pipe(Effect.andThen(registry.getProviders)),
+            until: (providers) =>
+              providers.find((provider) => provider.instanceId === "codex")?.status === "error",
+            description: "the boot-time codex probe to fail against the first missing binary",
+          });
           const initialCodex = initialProviders.find((provider) => provider.instanceId === "codex");
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
-          assert.deepStrictEqual(spawnedCommands, [firstMissing]);
+          assert.deepStrictEqual(
+            spawnedCommands.filter((command) => command !== "kimi"),
+            [firstMissing],
+          );
 
           // Drive a settings change. The Hydration layer's
           // `SettingsWatcherLive` consumes this via `streamChanges`,
@@ -1586,25 +1584,24 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
           // Poll until the injected process boundary observes the new
           // executable. This verifies the public settings-to-probe behavior
           // without depending on timestamps assigned by TestClock.
-          const refreshed = yield* Effect.gen(function* () {
-            for (let attempts = 0; attempts < 60; attempts += 1) {
-              const providers = yield* registry.getProviders;
+          const refreshed = yield* pollUntil({
+            poll: TestClock.adjust("50 millis").pipe(Effect.andThen(registry.getProviders)),
+            until: (providers) => {
               const codex = providers.find((provider) => provider.instanceId === "codex");
-              if (
+              return (
                 codex !== undefined &&
                 codex.status === "error" &&
                 spawnedCommands.includes(secondMissing)
-              ) {
-                return providers;
-              }
-              yield* TestClock.adjust("50 millis");
-              yield* Effect.yieldNow;
-            }
-            return yield* registry.getProviders;
+              );
+            },
+            description: "the codex re-probe against the second missing binary",
           });
 
           const reprobedCodex = refreshed.find((provider) => provider.instanceId === "codex");
-          assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
+          assert.deepStrictEqual(
+            spawnedCommands.filter((command) => command !== "kimi"),
+            [firstMissing, secondMissing],
+          );
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);
         }).pipe(Effect.provide(runtimeServices));
@@ -1756,6 +1753,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
             "codex",
             "cursor",
             "grok",
+            "kimi",
             "opencode",
           ]);
           assert.strictEqual(cursorProvider?.enabled, false);
@@ -1888,7 +1886,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
       ),
     );
 
-    it.effect("includes Claude Fable 5 on supported Claude Code versions", () =>
+    it.effect("keeps Claude Opus 4.8 first when Fable 5 is supported", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
@@ -1896,6 +1894,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
         );
         const fable5 = status.models.find((model) => model.slug === "claude-fable-5");
         assert.strictEqual(fable5?.name, "Claude Fable 5");
+        assert.strictEqual(status.models[0]?.slug, "claude-opus-4-8");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
