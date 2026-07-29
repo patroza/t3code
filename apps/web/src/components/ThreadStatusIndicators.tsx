@@ -3,12 +3,16 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { EnvironmentId, VcsStatusResult } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
   CircleCheckIcon,
   CircleDashedIcon,
   CloudIcon,
   FolderGit2Icon,
+  FolderPlusIcon,
   GitPullRequestIcon,
   PencilRulerIcon,
   TerminalIcon,
@@ -21,7 +25,11 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { cn } from "../lib/utils";
 import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
-import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
+import { connectionAtomRuntime } from "../connection/runtime";
+import {
+  resolveChangeRequestPresentation,
+  resolveThreadChangeRequest,
+} from "@t3tools/shared/sourceControl";
 import {
   resolveThreadStatusPill,
   type SidebarV2TopStatus,
@@ -156,32 +164,54 @@ export function terminalStatusFromRunningIds(
 
 export function ThreadWorktreeIndicator({
   thread,
+  onCreateSession,
 }: {
   thread: Pick<SidebarThreadSummary, "id" | "branch" | "worktreePath">;
+  onCreateSession?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const worktreePath = thread.worktreePath?.trim();
-  if (!worktreePath) {
+  if (!worktreePath && !onCreateSession) {
     return null;
   }
 
-  const displayPath = formatWorktreePathForDisplay(worktreePath);
-  const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+  const tooltip = worktreePath
+    ? thread.branch
+      ? `Worktree: ${formatWorktreePathForDisplay(worktreePath)} (${thread.branch})`
+      : `Worktree: ${formatWorktreePathForDisplay(worktreePath)}`
+    : thread.branch
+      ? `New worktree from ${thread.branch}`
+      : "New worktree";
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <span
-            role="img"
-            aria-label={tooltip}
-            data-testid={`thread-worktree-${thread.id}`}
-            className="inline-flex items-center justify-center"
-          />
+          onCreateSession ? (
+            <button
+              type="button"
+              aria-label={worktreePath ? "New session on this worktree" : tooltip}
+              data-testid={`thread-worktree-new-session-${thread.id}`}
+              className="inline-flex cursor-pointer items-center justify-center rounded-sm text-muted-foreground/55 outline-hidden transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+              onClick={onCreateSession}
+            />
+          ) : (
+            <span
+              role="img"
+              aria-label={tooltip}
+              data-testid={`thread-worktree-${thread.id}`}
+              className="inline-flex items-center justify-center"
+            />
+          )
         }
       >
-        <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        {onCreateSession ? (
+          <FolderPlusIcon className="size-3" />
+        ) : (
+          <FolderGit2Icon className="size-3 text-muted-foreground/40" />
+        )}
       </TooltipTrigger>
       <TooltipPopup side="top">{tooltip}</TooltipPopup>
     </Tooltip>
@@ -216,12 +246,6 @@ export function ThreadPlanModeIndicator({
   );
 }
 
-/**
- * Renders in the status pill slot with the same visual language as
- * `ThreadStatusLabel`. Settled-ness is context-dependent (auto-settle window,
- * PR state, server capability), so callers decide when to render this instead
- * of the indicator re-deriving it from the thread.
- */
 export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadSummary, "id"> }) {
   return (
     <Tooltip>
@@ -242,11 +266,6 @@ export function ThreadSettledIndicator({ thread }: { thread: Pick<SidebarThreadS
   );
 }
 
-/**
- * The sidebar-v2 status indicator: colored label text, with an icon only for
- * the working and done states. Shared by the v2 sidebar rows and board cards
- * so both surfaces speak the same status language.
- */
 export function ThreadStatusV2Indicator({
   status,
   className,
@@ -344,7 +363,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
   const gitCwd = thread.worktreePath ?? threadProjectCwd;
   const gitStatus = useEnvironmentQuery(
     (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })

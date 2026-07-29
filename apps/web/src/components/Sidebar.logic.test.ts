@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  buildSidebarThreadWorktreeSections,
   archiveSelectedThreadEntries,
   buildMultiSelectThreadContextMenuItems,
   buildSidebarV2ThreadContextMenuItems,
+  buildThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
+  formatWorktreeGroupLabel,
   getSidebarThreadIdsToPrewarm,
+  resolveSidebarThreadPrewarmLimit,
+  SIDEBAR_THREAD_PREWARM_LIMIT,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
@@ -13,18 +18,25 @@ import {
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
+  normalizeWorktreePathForSidebarGroup,
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
+  resolveSidebarProjectBadgeColorIndex,
+  resolveSidebarProjectBadgeLabel,
+  resolveSidebarNewThreadSeedContext,
+  resolveSidebarNewThreadEnvMode,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarV2Status,
-  resolveSidebarV2TopStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
   sortLogicalProjectsForSidebar,
+  groupSettledThreadsByRecencyForSidebarV2,
+  isThreadSettledForDisplay,
+  resolveSettledTimestamp,
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
   sortProjectsForSidebar,
@@ -37,16 +49,37 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type Project,
+  type SidebarThreadSummary,
   type Thread,
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("sidebar recent project badges", () => {
+  it.each([
+    ["example-org/scanner", "S"],
+    ["pingdotgg/t3code", "T3"],
+    ["effect-app/libs", "L"],
+    ["patroza/dotfiles-omarchy", "DO"],
+    ["configurator", "C"],
+  ])("derives a compact label for %s", (displayName, expected) => {
+    expect(resolveSidebarProjectBadgeLabel(displayName)).toBe(expected);
+  });
+
+  it("assigns the same bounded color index for a stable project key", () => {
+    const first = resolveSidebarProjectBadgeColorIndex("repository:t3code", 6);
+    expect(resolveSidebarProjectBadgeColorIndex("repository:t3code", 6)).toBe(first);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(6);
+  });
+});
 
 describe("shouldNavigateAfterProjectRemoval", () => {
   const projectThreads = [{ environmentId: "environment-local", id: "thread-1" }];
@@ -290,16 +323,21 @@ describe("resolveSidebarStageBadgeLabel", () => {
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
   startedAt?: string | null;
+  state?: OrchestrationLatestTurn["state"];
 }): OrchestrationLatestTurn {
+  const state = overrides?.state ?? "completed";
   return {
     turnId: "turn-1" as never,
-    state: "completed",
+    state,
     assistantMessageId: null,
     requestedAt: "2026-03-09T10:00:00.000Z",
-    startedAt:
-      overrides?.startedAt !== undefined ? overrides.startedAt : "2026-03-09T10:00:00.000Z",
+    startedAt: overrides?.startedAt ?? "2026-03-09T10:00:00.000Z",
     completedAt:
-      overrides?.completedAt !== undefined ? overrides.completedAt : "2026-03-09T10:05:00.000Z",
+      overrides?.completedAt !== undefined
+        ? overrides.completedAt
+        : state === "completed"
+          ? "2026-03-09T10:05:00.000Z"
+          : null,
   };
 }
 
@@ -409,6 +447,26 @@ describe("getSidebarThreadIdsToPrewarm", () => {
   });
 });
 
+describe("resolveSidebarThreadPrewarmLimit", () => {
+  it("prewarms visible rows when the pointer can hover", () => {
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: false })).toBe(
+      SIDEBAR_THREAD_PREWARM_LIMIT,
+    );
+  });
+
+  it("prewarms nothing behind a coarse pointer", () => {
+    // Each prewarmed row holds a live thread-detail subscription, so a touch
+    // client would otherwise retain ten threads of history it never asked for.
+    expect(resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true })).toBe(0);
+    expect(
+      getSidebarThreadIdsToPrewarm(
+        ["t1", "t2"],
+        resolveSidebarThreadPrewarmLimit({ hasCoarsePointer: true }),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("shouldClearThreadSelectionOnMouseDown", () => {
   it("preserves selection for thread items", () => {
     const child = {
@@ -452,6 +510,280 @@ describe("isTrailingDoubleClick", () => {
 
   it("ignores further clicks of a triple-click", () => {
     expect(isTrailingDoubleClick(3)).toBe(true);
+  });
+});
+
+describe("resolveSidebarNewThreadEnvMode", () => {
+  it("uses the app default when the caller does not request a specific mode", () => {
+    expect(
+      resolveSidebarNewThreadEnvMode({
+        defaultEnvMode: "worktree",
+      }),
+    ).toBe("worktree");
+  });
+
+  it("preserves an explicit requested mode over the app default", () => {
+    expect(
+      resolveSidebarNewThreadEnvMode({
+        requestedEnvMode: "local",
+        defaultEnvMode: "worktree",
+      }),
+    ).toBe("local");
+  });
+});
+
+describe("resolveSidebarNewThreadSeedContext", () => {
+  it("inherits an active draft worktree context even when the default is new worktree mode", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-1",
+        defaultEnvMode: "worktree",
+        activeThread: {
+          projectId: "project-1",
+          branch: "feature/existing",
+          worktreePath: "/repo/.t3/worktrees/existing",
+        },
+        activeDraftThread: {
+          projectId: "project-1",
+          branch: "feature/draft",
+          worktreePath: "/repo/.t3/worktrees/draft",
+          envMode: "worktree",
+          startFromOrigin: true,
+        },
+      }),
+    ).toEqual({
+      branch: "feature/draft",
+      worktreePath: "/repo/.t3/worktrees/draft",
+      envMode: "local",
+      startFromOrigin: true,
+    });
+  });
+
+  it("inherits an active server thread worktree context even when the default is new worktree mode", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-1",
+        defaultEnvMode: "worktree",
+        activeThread: {
+          projectId: "project-1",
+          branch: "feature/existing",
+          worktreePath: "/repo/.t3/worktrees/existing",
+        },
+        activeDraftThread: null,
+      }),
+    ).toEqual({
+      branch: "feature/existing",
+      worktreePath: "/repo/.t3/worktrees/existing",
+      envMode: "local",
+    });
+  });
+
+  it("inherits the active server thread context when creating a new thread in the same project", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-1",
+        defaultEnvMode: "local",
+        activeThread: {
+          projectId: "project-1",
+          branch: "effect-atom",
+          worktreePath: null,
+        },
+        activeDraftThread: null,
+      }),
+    ).toEqual({
+      branch: "effect-atom",
+      worktreePath: null,
+      envMode: "local",
+    });
+  });
+
+  it("prefers the active draft thread context when it matches the target project", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-1",
+        defaultEnvMode: "local",
+        activeThread: {
+          projectId: "project-1",
+          branch: "effect-atom",
+          worktreePath: null,
+        },
+        activeDraftThread: {
+          projectId: "project-1",
+          branch: "feature/new-draft",
+          worktreePath: "/repo/worktree",
+          envMode: "worktree",
+          startFromOrigin: true,
+        },
+      }),
+    ).toEqual({
+      branch: "feature/new-draft",
+      worktreePath: "/repo/worktree",
+      envMode: "local",
+      startFromOrigin: true,
+    });
+  });
+
+  it("falls back to the default env mode when there is no matching active thread context", () => {
+    expect(
+      resolveSidebarNewThreadSeedContext({
+        projectId: "project-2",
+        defaultEnvMode: "worktree",
+        activeThread: {
+          projectId: "project-1",
+          branch: "effect-atom",
+          worktreePath: null,
+        },
+        activeDraftThread: null,
+      }),
+    ).toEqual({
+      envMode: "worktree",
+    });
+  });
+});
+
+describe("buildSidebarThreadWorktreeSections", () => {
+  it("groups multiple threads on the same environment project worktree", () => {
+    const sections = buildSidebarThreadWorktreeSections([
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-a"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        branch: "feature/a",
+        worktreePath: "/repo/.t3/worktrees/feature-a/",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-b"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        branch: "feature/a",
+        worktreePath: "/repo/.t3/worktrees/feature-a",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-c"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        branch: "feature/b",
+        worktreePath: "/repo/.t3/worktrees/feature-b",
+      }),
+    ]);
+
+    expect(sections).toHaveLength(2);
+    expect(sections[0]?.kind).toBe("worktree");
+    if (sections[0]?.kind !== "worktree") {
+      throw new Error("expected worktree section");
+    }
+    expect(sections[0].label).toBe("feature/a · feature-a");
+    expect(sections[0].worktreePath).toBe("/repo/.t3/worktrees/feature-a");
+    expect(sections[0].threads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
+    ]);
+    expect(sections[1]?.kind).toBe("thread");
+    if (sections[1]?.kind !== "thread") {
+      throw new Error("expected thread section");
+    }
+    expect(sections[1].checkoutPath).toBe("/repo/.t3/worktrees/feature-b");
+  });
+
+  it("groups multiple local checkout threads by resolved project path", () => {
+    const sections = buildSidebarThreadWorktreeSections(
+      [
+        makeSidebarThreadSummary({
+          id: ThreadId.make("thread-a"),
+          environmentId: EnvironmentId.make("env-1"),
+          projectId: ProjectId.make("project-1"),
+          branch: "main",
+          worktreePath: null,
+        }),
+        makeSidebarThreadSummary({
+          id: ThreadId.make("thread-b"),
+          environmentId: EnvironmentId.make("env-1"),
+          projectId: ProjectId.make("project-1"),
+          branch: "main",
+          worktreePath: null,
+        }),
+      ],
+      {
+        resolveLocalCheckoutPath: () => "/repo/t3code/",
+      },
+    );
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.kind).toBe("worktree");
+    if (sections[0]?.kind !== "worktree") {
+      throw new Error("expected checkout section");
+    }
+    expect(sections[0].source).toBe("local");
+    expect(sections[0].label).toBe("main · t3code");
+    expect(sections[0].checkoutPath).toBe("/repo/t3code");
+    expect(sections[0].worktreePath).toBeNull();
+    expect(sections[0].threads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-b"),
+    ]);
+  });
+
+  it("attaches checkoutPath to single local checkout threads", () => {
+    const sections = buildSidebarThreadWorktreeSections(
+      [
+        makeSidebarThreadSummary({
+          id: ThreadId.make("thread-a"),
+          environmentId: EnvironmentId.make("env-1"),
+          projectId: ProjectId.make("project-1"),
+          branch: "main",
+          worktreePath: null,
+        }),
+      ],
+      {
+        resolveLocalCheckoutPath: () => "/repo/t3code/",
+      },
+    );
+
+    expect(sections).toHaveLength(1);
+    expect(sections[0]).toEqual({
+      kind: "thread",
+      checkoutPath: "/repo/t3code",
+      thread: expect.objectContaining({ id: ThreadId.make("thread-a") }),
+    });
+  });
+
+  it("does not group identical worktree paths across environments or projects", () => {
+    const sections = buildSidebarThreadWorktreeSections([
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-env-1"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-1"),
+        worktreePath: "/repo/worktree",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-env-2"),
+        environmentId: EnvironmentId.make("env-2"),
+        projectId: ProjectId.make("project-1"),
+        worktreePath: "/repo/worktree",
+      }),
+      makeSidebarThreadSummary({
+        id: ThreadId.make("thread-project-2"),
+        environmentId: EnvironmentId.make("env-1"),
+        projectId: ProjectId.make("project-2"),
+        worktreePath: "/repo/worktree",
+      }),
+    ]);
+
+    expect(sections.map((section) => section.kind)).toEqual(["thread", "thread", "thread"]);
+    for (const section of sections) {
+      if (section.kind !== "thread") {
+        throw new Error("expected thread section");
+      }
+      expect(section.checkoutPath).toBe("/repo/worktree");
+    }
+  });
+
+  it("normalizes worktree paths and formats labels", () => {
+    expect(normalizeWorktreePathForSidebarGroup(" /repo/worktree// ")).toBe("/repo/worktree");
+    expect(formatWorktreeGroupLabel({ worktreePath: "C:\\repo\\wt", branch: null })).toBe("wt");
+    expect(
+      formatWorktreeGroupLabel({ worktreePath: "/repo/t3code", branch: null, source: "local" }),
+    ).toBe("Local checkout · t3code");
   });
 });
 
@@ -740,21 +1072,6 @@ describe("resolveSidebarV2Status", () => {
   });
 });
 
-describe("resolveSidebarV2TopStatus", () => {
-  it("labels ready threads Done only when they carry an unread completion", () => {
-    expect(resolveSidebarV2TopStatus({ status: "ready", isUnread: true })).toMatchObject({
-      label: "Done",
-      icon: "done",
-    });
-    expect(resolveSidebarV2TopStatus({ status: "ready", isUnread: false })).toBeNull();
-    // Unread only matters for ready threads; active statuses keep their label.
-    expect(resolveSidebarV2TopStatus({ status: "working", isUnread: true })).toMatchObject({
-      label: "Working",
-      icon: "working",
-    });
-  });
-});
-
 describe("sortThreadsForSidebarV2", () => {
   const sortable = (input: { id: string; createdAt: string }) => ({
     id: input.id,
@@ -846,6 +1163,154 @@ describe("sortSettledThreadsForSidebarV2", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("resolveSettledTimestamp", () => {
+  it("prefers explicit settledAt over later message activity", () => {
+    expect(
+      resolveSettledTimestamp({
+        settledAt: "2026-03-09T10:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T12:00:00.000Z",
+        latestTurn: null,
+        updatedAt: "2026-03-09T13:00:00.000Z",
+      }),
+    ).toBe("2026-03-09T10:00:00.000Z");
+  });
+
+  it("falls back to the latest activity stamp when settledAt is missing", () => {
+    expect(
+      resolveSettledTimestamp({
+        settledAt: null,
+        latestUserMessageAt: "2026-03-09T09:00:00.000Z",
+        latestTurn: makeLatestTurn({ completedAt: "2026-03-09T11:00:00.000Z" }),
+        updatedAt: "2026-03-09T08:00:00.000Z",
+      }),
+    ).toBe("2026-03-09T11:00:00.000Z");
+  });
+});
+
+describe("isThreadSettledForDisplay", () => {
+  const now = "2026-04-10T00:00:00.000Z";
+  const baseThread = {
+    id: ThreadId.make("thread-settled-display"),
+    environmentId: localEnvironmentId,
+    projectId: ProjectId.make("project-1"),
+    title: "Settled display",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    interactionMode: DEFAULT_INTERACTION_MODE,
+    session: null,
+    createdAt: "2026-04-01T00:00:00.000Z",
+    updatedAt: now,
+    archivedAt: null,
+    latestTurn: null,
+    latestUserMessageAt: "2026-04-01T00:00:00.000Z",
+    branch: null,
+    worktreePath: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    settledOverride: "settled" as const,
+    settledAt: now,
+  };
+
+  it("never treats threads as settled when the server lacks threadSettlement", () => {
+    const serverConfigs = {
+      get(_environmentId: string) {
+        return {
+          environment: {
+            capabilities: { threadSettlement: false },
+          },
+        };
+      },
+    };
+
+    expect(
+      isThreadSettledForDisplay(baseThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: 7,
+        changeRequestState: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("honors settled override when the server supports settlement", () => {
+    const serverConfigs = {
+      get(_environmentId: string) {
+        return {
+          environment: {
+            capabilities: { threadSettlement: true },
+          },
+        };
+      },
+    };
+
+    expect(
+      isThreadSettledForDisplay(baseThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: 7,
+        changeRequestState: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("groupSettledThreadsByRecencyForSidebarV2", () => {
+  // Fixed local afternoon so last-hour and earlier-today both fit the day.
+  const now = new Date(2026, 2, 15, 14, 30, 0);
+
+  const settled = (input: {
+    id: string;
+    settledAt?: string | null;
+    latestUserMessageAt?: string | null;
+    updatedAt?: string;
+  }) => ({
+    id: input.id,
+    settledAt: input.settledAt ?? null,
+    latestUserMessageAt: input.latestUserMessageAt ?? null,
+    latestTurn: null,
+    updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
+  });
+
+  it("groups by settle/activity time and shows headers when multiple buckets", () => {
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const olderIso = new Date(
+      new Date(2026, 2, 15).getTime() - 40 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const ordered = sortSettledThreadsForSidebarV2([
+      settled({ id: "old", settledAt: olderIso }),
+      settled({ id: "fresh", settledAt: lastHourIso }),
+    ]);
+    const layout = groupSettledThreadsByRecencyForSidebarV2(ordered, now);
+    expect(layout.showHeaders).toBe(true);
+    expect(layout.groups.map((group) => group.id)).toEqual(["last_hour", "older"]);
+    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["fresh"]);
+    expect(layout.groups[1]?.threads.map((thread) => thread.id)).toEqual(["old"]);
+  });
+
+  it("suppresses headers when every row is in one bucket", () => {
+    const lastHourIso = new Date(now.getTime() - 5 * 60_000).toISOString();
+    const layout = groupSettledThreadsByRecencyForSidebarV2(
+      [settled({ id: "a", settledAt: lastHourIso }), settled({ id: "b", settledAt: lastHourIso })],
+      now,
+    );
+    expect(layout.showHeaders).toBe(false);
+    expect(layout.groups).toHaveLength(1);
+    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+
+  it("preserves input order within a bucket", () => {
+    const t1 = new Date(now.getTime() - 2 * 60_000).toISOString();
+    const t2 = new Date(now.getTime() - 10 * 60_000).toISOString();
+    // Caller is expected to pre-sort; newer first.
+    const layout = groupSettledThreadsByRecencyForSidebarV2(
+      [settled({ id: "newer", settledAt: t1 }), settled({ id: "older-hour", settledAt: t2 })],
+      now,
+    );
+    expect(layout.groups[0]?.threads.map((thread) => thread.id)).toEqual(["newer", "older-hour"]);
   });
 });
 
@@ -967,6 +1432,38 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Working", pulse: true });
   });
 
+  it("shows that an interrupted mid-turn session needs a wake-up", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          latestTurn: makeLatestTurn({ state: "running" }),
+          session: {
+            ...baseThread.session,
+            status: "interrupted",
+            activeTurnId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Wake Required", pulse: false });
+  });
+
+  it("does not show wake-up for zombie interrupted sessions with a completed turn", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          latestTurn: makeLatestTurn({ state: "completed" }),
+          session: {
+            ...baseThread.session,
+            status: "interrupted",
+            activeTurnId: null,
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {
     expect(
       resolveThreadStatusPill({
@@ -978,6 +1475,24 @@ describe("resolveThreadStatusPill", () => {
             ...baseThread.session,
             status: "ready",
             activeTurnId: null,
+          },
+        },
+      }),
+    ).toMatchObject({ label: "Plan Ready", pulse: false });
+  });
+
+  it("shows plan ready over working when a plan is captured mid-turn", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          interactionMode: "plan",
+          latestTurn: makeLatestTurn({ completedAt: null }),
+          session: {
+            ...baseThread.session,
+            status: "running",
+            activeTurnId: TurnId.make("turn-running"),
           },
         },
       }),
@@ -1191,6 +1706,19 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     checkpoints: [],
     activities: [],
+    ...overrides,
+  };
+}
+
+function makeSidebarThreadSummary(
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    ...makeThread(overrides),
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
     ...overrides,
   };
 }
