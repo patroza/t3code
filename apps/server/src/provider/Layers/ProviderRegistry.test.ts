@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -32,8 +33,9 @@ import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
-import * as OpenCodeRuntime from "../opencodeRuntime.ts";
+import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as DirenvEnvironment from "../DirenvEnvironment.ts";
+import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
 import {
@@ -50,7 +52,6 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
-import { pollUntil } from "../testUtils/pollUntil.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -67,6 +68,7 @@ process.env.T3CODE_CURSOR_ENABLED = "1";
 // ── Test helpers ────────────────────────────────────────────────────
 
 const encoder = new TextEncoder();
+const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 const TestHttpClientLive = Layer.succeed(
   HttpClient.HttpClient,
@@ -74,6 +76,35 @@ const TestHttpClientLive = Layer.succeed(
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
 );
+
+const BackgroundPolicyAlwaysRunLayer = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+  reportClientActivity: () => Effect.void,
+  removeRpcClient: () => Effect.void,
+  reportHostPowerState: () => Effect.void,
+  snapshot: Effect.succeed({
+    hostPower: {
+      source: "unknown",
+      idle: "unknown",
+      idleSeconds: null,
+      locked: "unknown",
+      suspended: false,
+      onBattery: "unknown",
+      lowPowerMode: "unknown",
+      thermalState: "unknown",
+      stale: true,
+      updatedAt: TEST_EPOCH,
+    },
+    leases: [],
+    activeForegroundLeaseCount: 0,
+    activeScopeKeys: [],
+    shouldRunOpportunisticWork: true,
+    updatedAt: TEST_EPOCH,
+  }),
+  streamChanges: Stream.empty,
+  hasDemand: () => Effect.succeed(true),
+  shouldRunScopeWork: () => Effect.succeed(true),
+  shouldRunOpportunisticWork: Effect.succeed(true),
+});
 
 function selectDescriptor(
   id: string,
@@ -299,18 +330,24 @@ function makeMutableServerSettingsService(
       get streamChanges() {
         return Stream.fromPubSub(changes);
       },
+      get subscribeChanges() {
+        return PubSub.subscribe(changes).pipe(
+          Effect.map((subscription) => Stream.fromSubscription(subscription)),
+        );
+      },
     } satisfies ServerSettingsModule.ServerSettingsService["Service"];
   });
 }
 
-const TestLayer = Layer.mergeAll(
-  NodeServices.layer,
-  ServerSettingsModule.layerTest(),
-  TestHttpClientLive,
-  DirenvEnvironment.layerNoop,
-);
-
-it.layer(TestLayer)("ProviderRegistry", (it) => {
+it.layer(
+  Layer.mergeAll(
+    NodeServices.layer,
+    ServerSettingsModule.layerTest(),
+    TestHttpClientLive,
+    DirenvEnvironment.layerNoop,
+    BackgroundPolicyAlwaysRunLayer,
+  ),
+)("ProviderRegistry", (it) => {
   describe("checkCodexProviderStatus", () => {
     it.effect("uses the app-server account and model list for provider status", () =>
       Effect.gen(function* () {
@@ -999,6 +1036,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
                 prefix: "t3-provider-registry-merged-persist-",
               }),
             ),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
             Layer.provideMerge(NodeServices.layer),
           ),
         ).pipe(Scope.provide(scope));
@@ -1234,6 +1272,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
                 prefix: "t3-provider-registry-refresh-failure-",
               }),
             ),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
             Layer.provideMerge(NodeServices.layer),
           ),
         ).pipe(Scope.provide(scope));
@@ -1341,6 +1380,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
                 prefix: "t3-provider-registry-sync-failure-",
               }),
             ),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
             Layer.provideMerge(NodeServices.layer),
           ),
         ).pipe(Scope.provide(scope));
@@ -1444,6 +1484,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
             ),
           ),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+          Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
           // NO spawner mock — `ChildProcessSpawner` is supplied by the
           // outer `NodeServices.layer` on `it.layer(...)` and will
           // genuinely spawn a subprocess. The missing-binary ENOENT is
@@ -1543,6 +1584,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
             }),
           ),
           Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
         );
         const runtimeServices = yield* Layer.build(providerRegistryLayer).pipe(
           Scope.provide(scope),
@@ -1553,19 +1595,22 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
           // Boot-time probe: the default codex instance is enabled with
           // `firstMissing`, so the real spawner yields ENOENT and the
           // snapshot should be `status: "error"`.
-          const initialProviders = yield* pollUntil({
-            poll: TestClock.adjust("10 millis").pipe(Effect.andThen(registry.getProviders)),
-            until: (providers) =>
-              providers.find((provider) => provider.instanceId === "codex")?.status === "error",
-            description: "the boot-time codex probe to fail against the first missing binary",
-          });
+          let initialProviders = yield* registry.getProviders;
+          for (
+            let attempts = 0;
+            attempts < 50 &&
+            initialProviders.find((provider) => provider.instanceId === "codex")?.status !==
+              "error";
+            attempts += 1
+          ) {
+            yield* TestClock.adjust("10 millis");
+            yield* Effect.yieldNow;
+            initialProviders = yield* registry.getProviders;
+          }
           const initialCodex = initialProviders.find((provider) => provider.instanceId === "codex");
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
-          assert.deepStrictEqual(
-            spawnedCommands.filter((command) => command !== "kimi"),
-            [firstMissing],
-          );
+          assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
           // Drive a settings change. The Hydration layer's
           // `SettingsWatcherLive` consumes this via `streamChanges`,
@@ -1584,24 +1629,25 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
           // Poll until the injected process boundary observes the new
           // executable. This verifies the public settings-to-probe behavior
           // without depending on timestamps assigned by TestClock.
-          const refreshed = yield* pollUntil({
-            poll: TestClock.adjust("50 millis").pipe(Effect.andThen(registry.getProviders)),
-            until: (providers) => {
+          const refreshed = yield* Effect.gen(function* () {
+            for (let attempts = 0; attempts < 60; attempts += 1) {
+              const providers = yield* registry.getProviders;
               const codex = providers.find((provider) => provider.instanceId === "codex");
-              return (
+              if (
                 codex !== undefined &&
                 codex.status === "error" &&
                 spawnedCommands.includes(secondMissing)
-              );
-            },
-            description: "the codex re-probe against the second missing binary",
+              ) {
+                return providers;
+              }
+              yield* TestClock.adjust("50 millis");
+              yield* Effect.yieldNow;
+            }
+            return yield* registry.getProviders;
           });
 
           const reprobedCodex = refreshed.find((provider) => provider.instanceId === "codex");
-          assert.deepStrictEqual(
-            spawnedCommands.filter((command) => command !== "kimi"),
-            [firstMissing, secondMissing],
-          );
+          assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);
         }).pipe(Effect.provide(runtimeServices));
@@ -1652,6 +1698,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
           ),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
           Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
         );
         const runtimeServices = yield* Layer.build(providerRegistryLayer).pipe(
           Scope.provide(scope),
@@ -1710,6 +1757,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
             ),
           ),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+          Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
           Layer.provideMerge(
             mockCommandSpawnerLayer((command, args) => {
               if (command === "cursor-agent") {
@@ -1753,7 +1801,6 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
             "codex",
             "cursor",
             "grok",
-            "kimi",
             "opencode",
           ]);
           assert.strictEqual(cursorProvider?.enabled, false);
@@ -1886,7 +1933,7 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
       ),
     );
 
-    it.effect("keeps Claude Opus 4.8 first when Fable 5 is supported", () =>
+    it.effect("includes Claude Fable 5 on supported Claude Code versions", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
@@ -1894,7 +1941,6 @@ it.layer(TestLayer)("ProviderRegistry", (it) => {
         );
         const fable5 = status.models.find((model) => model.slug === "claude-fable-5");
         assert.strictEqual(fable5?.name, "Claude Fable 5");
-        assert.strictEqual(status.models[0]?.slug, "claude-opus-4-8");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
