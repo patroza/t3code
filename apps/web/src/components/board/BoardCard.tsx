@@ -97,7 +97,6 @@ function BoardCardBody({
   });
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
-    hasDedicatedWorktree: thread.worktreePath != null,
     gitStatus,
   });
   const prStatus = prStatusIndicator(pr, appliedGitStatus?.sourceControlProvider);
