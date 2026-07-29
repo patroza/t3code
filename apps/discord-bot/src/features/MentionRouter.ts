@@ -822,6 +822,8 @@ const make = (botConfig: DiscordBotConfig) =>
             identityPeople: identityMap.list(),
             guildId: input.guildId,
             discordThreadId: input.discordThreadId,
+            t3ThreadId: existing.t3ThreadId,
+            webUiBaseUrl: botConfig.webUiBaseUrl,
           });
           if (stagedFiles.skipped.length > 0) {
             yield* Effect.logWarning("Skipped some Discord file attachments", {
