@@ -1,11 +1,12 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import Constants from "expo-constants";
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";import {
+import {
   NativeHeaderToolbar,
   NativeStackScreenOptions,
   nativeHeaderScrollEdgeEffects,
-} from "../../native/StackHeader";import { useCallback, useMemo, useRef } from "react";
+} from "../../native/StackHeader";
+import { useCallback, useMemo, useRef } from "react";
 import { Platform, Pressable, Text as RNText, TextInput, View } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,7 +15,9 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
-import { resolveMobileStageLabel } from "../../lib/mobileBranding";import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";import { useThemeColor } from "../../lib/useThemeColor";
+import { resolveMobileStageLabel } from "../../lib/mobileBranding";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
+import { useThemeColor } from "../../lib/useThemeColor";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import {
