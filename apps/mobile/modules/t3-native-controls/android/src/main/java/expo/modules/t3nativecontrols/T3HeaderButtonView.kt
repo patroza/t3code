@@ -51,10 +51,10 @@ private class HeaderIconView(context: Context) : View(context) {
     val cx = width / 2f
     val cy = height / 2f
     val size = minOf(width, height).toFloat()
-    if (systemImage == "square.and.pencil") {
-      drawNewTask(canvas, cx, cy, size)
-    } else {
-      drawSettings(canvas, cx, cy, size)
+    when (systemImage) {
+      "square.and.pencil" -> drawNewTask(canvas, cx, cy, size)
+      "square.split.2x1" -> drawBoard(canvas, cx, cy, size)
+      else -> drawSettings(canvas, cx, cy, size)
     }
   }
 
@@ -93,5 +93,16 @@ private class HeaderIconView(context: Context) : View(context) {
       cy - size * 0.13f,
       paint
     )
+  }
+
+  /** Two-column board glyph (session dashboard). */
+  private fun drawBoard(canvas: Canvas, cx: Float, cy: Float, size: Float) {
+    val left = cx - size * 0.2f
+    val top = cy - size * 0.18f
+    val right = cx + size * 0.2f
+    val bottom = cy + size * 0.18f
+    val radius = size * 0.04f
+    canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint)
+    canvas.drawLine(cx, top + size * 0.04f, cx, bottom - size * 0.04f, paint)
   }
 }

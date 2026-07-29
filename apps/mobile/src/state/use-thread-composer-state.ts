@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CommandId,
@@ -12,6 +12,11 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
+import {
+  useOlderThreadActivities,
+  type OlderActivitiesCursor,
+} from "@t3tools/client-runtime/state/older-thread-activities";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
@@ -36,12 +41,20 @@ import {
   updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
-import { setPendingConnectionError } from "../state/use-remote-environment-registry";
+import {
+  setPendingConnectionError,
+  useRemoteConnectionStatus,
+} from "../state/use-remote-environment-registry";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { useAtomCommand } from "./use-atom-command";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
+import { threadEnvironment } from "./threads";
+import {
+  enqueueThreadOutboxMessage,
+  removeThreadOutboxMessage,
+  updateThreadOutboxMessage,
+} from "./thread-outbox";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
@@ -82,6 +95,7 @@ export function useThreadComposerState() {
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const { connectedEnvironments } = useRemoteConnectionStatus();
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -95,118 +109,122 @@ export function useThreadComposerState() {
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
 
-  // ── Older-history lazy-load (mirrors web ChatView) ──────────────────────────
+  // ── Older-history lazy-load (shared engine; see useOlderThreadActivities) ──
   // The detail snapshot windows activities to the most recent page (the server
   // sets `hasMoreActivities`); older pages are fetched on demand and prepended.
-  const [olderActivities, setOlderActivities] = useState<
-    ReadonlyArray<OrchestrationThreadActivity>
-  >([]);
-  const [olderLoaded, setOlderLoaded] = useState(false);
-  const [olderHasMore, setOlderHasMore] = useState(false);
-  const [loadingOlderActivities, setLoadingOlderActivities] = useState(false);
   const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
     reportFailure: false,
   });
-
-  const activityRequestKey = selectedThreadShell
-    ? `${selectedThreadShell.environmentId}\u0000${selectedThreadShell.id}`
-    : null;
-  const activityRequestKeyRef = useRef(activityRequestKey);
-  activityRequestKeyRef.current = activityRequestKey;
-  useEffect(() => {
-    setOlderActivities([]);
-    setOlderLoaded(false);
-    setOlderHasMore(false);
-    setLoadingOlderActivities(false);
-  }, [activityRequestKey]);
-
-  const liveActivities = selectedThreadDetail?.activities ?? EMPTY_ACTIVITIES;
-  const mergedActivities = useMemo(
-    () => (olderActivities.length > 0 ? [...olderActivities, ...liveActivities] : liveActivities),
-    [olderActivities, liveActivities],
-  );
-  // Before any page is loaded, the server tells us whether older history exists.
-  const hasMoreOlderActivities = olderLoaded
-    ? olderHasMore
-    : (selectedThreadDetail?.hasMoreActivities ?? false);
-
-  // Synchronous in-flight guard keyed by thread: the list fires onLoadOlder
-  // repeatedly while pinned at the top, but loading *state* only updates next
-  // render, so without this a fast scroll dispatches duplicate same-cursor calls.
-  const inFlightOlderKeyRef = useRef<string | null>(null);
-  const onLoadOlderActivities = useCallback(() => {
-    if (!selectedThreadShell || !hasMoreOlderActivities) {
-      return;
-    }
-    const oldestActivity = mergedActivities[0];
-    if (!oldestActivity || !activityRequestKey) {
-      return;
-    }
-    if (inFlightOlderKeyRef.current === activityRequestKey) {
-      return;
-    }
-    const cursorInput =
-      oldestActivity.sequence !== undefined
-        ? { beforeSequence: oldestActivity.sequence }
-        : { beforeCreatedAt: oldestActivity.createdAt, beforeActivityId: oldestActivity.id };
-    const requestKey = activityRequestKey;
-    inFlightOlderKeyRef.current = requestKey;
-    setLoadingOlderActivities(true);
-    void loadThreadActivities({
-      environmentId: selectedThreadShell.environmentId,
-      input: { threadId: selectedThreadShell.id, ...cursorInput },
-    })
-      .then((result) => {
-        if (activityRequestKeyRef.current !== requestKey) {
-          return;
-        }
-        if (result._tag !== "Success") {
-          return;
-        }
-        const page = result.value;
-        setOlderActivities((prev) => {
-          // Dedup against both already-loaded older pages and the live window,
-          // since mobile merges everything into one array (duplicate ids would
-          // produce duplicate React keys in the feed).
-          const seen = new Set(prev.map((activity) => activity.id));
-          for (const activity of liveActivities) {
-            seen.add(activity.id);
-          }
-          const fresh = page.activities.filter((activity) => !seen.has(activity.id));
-          return [...fresh, ...prev];
-        });
-        setOlderLoaded(true);
-        setOlderHasMore(page.hasMore);
-      })
-      .finally(() => {
-        if (inFlightOlderKeyRef.current === requestKey) {
-          inFlightOlderKeyRef.current = null;
-        }
-        if (activityRequestKeyRef.current === requestKey) {
-          setLoadingOlderActivities(false);
-        }
+  const steerQueuedMessage = useAtomCommand(threadEnvironment.steerQueuedMessage, {
+    label: "steer queued message",
+  });
+  const removeServerQueuedMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
+    label: "remove queued message",
+  });
+  const updateServerQueuedMessage = useAtomCommand(threadEnvironment.updateQueuedMessage, {
+    label: "update queued message",
+  });
+  const [editingQueuedMessage, setEditingQueuedMessage] = useState<{
+    readonly messageId: MessageId;
+    readonly source: "local" | "server";
+    readonly previousDraftText: string;
+  } | null>(null);
+  const selectedEnvironmentIdForActivities = selectedThreadShell?.environmentId ?? null;
+  const selectedThreadIdForActivities = selectedThreadShell?.id ?? null;
+  const loadOlderActivitiesPage = useCallback(
+    async (cursor: OlderActivitiesCursor) => {
+      if (selectedEnvironmentIdForActivities === null || selectedThreadIdForActivities === null) {
+        return null;
+      }
+      const result = await loadThreadActivities({
+        environmentId: selectedEnvironmentIdForActivities,
+        input: { threadId: selectedThreadIdForActivities, ...cursor },
       });
-  }, [
-    selectedThreadShell,
-    hasMoreOlderActivities,
-    mergedActivities,
-    activityRequestKey,
-    liveActivities,
-    loadThreadActivities,
-  ]);
-
-  const selectedThreadFeed = useMemo(
-    () =>
-      selectedThreadDetail
-        ? buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities })
-        : [],
-    [selectedThreadDetail, mergedActivities],
+      if (result._tag !== "Success") {
+        // Surface real failures (a spinner that quietly gives up reads as
+        // missing history); keep `hasMore` so scrolling back retries.
+        if (!isAtomCommandInterrupted(result)) {
+          setPendingConnectionError("Could not load older thread history.");
+        }
+        return null;
+      }
+      return result.value;
+    },
+    [selectedEnvironmentIdForActivities, selectedThreadIdForActivities, loadThreadActivities],
   );
+  const {
+    mergedActivities,
+    hasMoreOlder: hasMoreOlderActivities,
+    loadingOlder: loadingOlderActivities,
+    loadOlder: onLoadOlderActivities,
+  } = useOlderThreadActivities({
+    threadKey: selectedThreadShell
+      ? `${selectedThreadShell.environmentId}\u0000${selectedThreadShell.id}`
+      : null,
+    liveActivities: selectedThreadDetail?.activities ?? EMPTY_ACTIVITIES,
+    hasMoreLiveActivities: selectedThreadDetail?.hasMoreActivities ?? false,
+    loadPage: loadOlderActivitiesPage,
+  });
+
+  // Queued / outbox rows are composer chips (KeyboardStickyView), not feed
+  // bubbles — same model as web QueuedMessageChips + contracts.
+  const selectedThreadFeed = useMemo(() => {
+    if (!selectedThreadDetail) {
+      return [];
+    }
+    return buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities });
+  }, [selectedThreadDetail, mergedActivities]);
+
+  const composerQueueItems = useMemo(() => {
+    type QueueItem = {
+      readonly messageId: MessageId;
+      readonly text: string;
+      readonly attachmentCount: number;
+      readonly deliveryState: "waiting" | "sending" | "queued";
+      readonly queueSource: "local" | "server";
+      readonly sortAt: string;
+    };
+    const byId = new Map<MessageId, QueueItem>();
+    const timelineIds = new Set(selectedThreadDetail?.messages.map((message) => message.id) ?? []);
+
+    for (const message of selectedThreadDetail?.queuedMessages ?? []) {
+      if (timelineIds.has(message.messageId)) continue;
+      byId.set(message.messageId, {
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
+        deliveryState: "queued",
+        queueSource: "server",
+        sortAt: message.queuedAt,
+      });
+    }
+
+    // Local outbox wins for the same id until the ack removes it (sending →
+    // queued transition without a double chip).
+    for (const message of selectedThreadQueuedMessages) {
+      if (timelineIds.has(message.messageId)) continue;
+      byId.set(message.messageId, {
+        messageId: message.messageId,
+        text: message.text,
+        attachmentCount: message.attachments.length,
+        queueSource: "local",
+        deliveryState: connectedEnvironments.some(
+          (environment) =>
+            environment.environmentId === message.environmentId &&
+            environment.connectionState === "connected",
+        )
+          ? "sending"
+          : "waiting",
+        sortAt: message.createdAt,
+      });
+    }
+
+    return Array.from(byId.values()).sort((left, right) => left.sortAt.localeCompare(right.sortAt));
+  }, [connectedEnvironments, selectedThreadDetail, selectedThreadQueuedMessages]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
-  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
@@ -251,34 +269,118 @@ export function useThreadComposerState() {
     const thread = selectedThreadDetail ?? selectedThreadShell;
     const text = draft.text.trim();
     const attachments = draft.attachments;
+    if (editingQueuedMessage !== null) {
+      if (editingQueuedMessage.source === "local") {
+        const message = selectedThreadQueuedMessages.find(
+          (candidate) => candidate.messageId === editingQueuedMessage.messageId,
+        );
+        if (message) {
+          if (text.length === 0) {
+            await removeThreadOutboxMessage(message);
+          } else {
+            const updated = await updateThreadOutboxMessage({ ...message, text });
+            if (!updated) return null;
+          }
+        }
+      } else if (text.length === 0) {
+        const result = await removeServerQueuedMessage({
+          environmentId: selectedThreadShell.environmentId,
+          input: { threadId: selectedThreadShell.id, messageId: editingQueuedMessage.messageId },
+        });
+        if (result._tag !== "Success") return null;
+      } else {
+        const result = await updateServerQueuedMessage({
+          environmentId: selectedThreadShell.environmentId,
+          input: {
+            threadId: selectedThreadShell.id,
+            messageId: editingQueuedMessage.messageId,
+            text,
+          },
+        });
+        if (result._tag !== "Success") return null;
+      }
+      setComposerDraftText(threadKey, editingQueuedMessage.previousDraftText);
+      setEditingQueuedMessage(null);
+      return editingQueuedMessage.messageId;
+    }
     if (text.length === 0 && attachments.length === 0) {
       return null;
     }
 
     const metadata = makeQueuedMessageMetadata();
     const messageId = MessageId.make(metadata.messageId);
-    try {
-      await enqueueThreadOutboxMessage({
-        environmentId: selectedThreadShell.environmentId,
-        threadId: selectedThreadShell.id,
-        messageId,
-        commandId: CommandId.make(metadata.commandId),
-        text,
-        attachments,
-        modelSelection: draft.modelSelection ?? thread.modelSelection,
-        runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-        interactionMode: draft.interactionMode ?? thread.interactionMode,
-        createdAt: metadata.createdAt,
-      });
-      clearComposerDraftContent(threadKey);
-      return messageId;
-    } catch (error) {
+    // Enqueue updates the in-memory outbox synchronously so the feed can paint
+    // "Sending" before disk I/O finishes. Clear the draft in the same turn and
+    // return immediately — durability trails off the critical path.
+    void enqueueThreadOutboxMessage({
+      environmentId: selectedThreadShell.environmentId,
+      threadId: selectedThreadShell.id,
+      messageId,
+      commandId: CommandId.make(metadata.commandId),
+      text,
+      attachments,
+      modelSelection: draft.modelSelection ?? thread.modelSelection,
+      runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+      interactionMode: draft.interactionMode ?? thread.interactionMode,
+      createdAt: metadata.createdAt,
+    }).catch((error) => {
+      // Memory outbox already rolled back on write failure; restore the draft.
+      setComposerDraftText(threadKey, draft.text);
+      if (draft.attachments.length > 0) {
+        appendComposerDraftAttachments(threadKey, draft.attachments);
+      }
       setPendingConnectionError(
         error instanceof Error ? error.message : "Failed to save the queued message.",
       );
-      return null;
-    }
-  }, [selectedThreadDetail, selectedThreadShell]);
+    });
+    clearComposerDraftContent(threadKey);
+    return messageId;
+  }, [
+    editingQueuedMessage,
+    removeServerQueuedMessage,
+    selectedThreadDetail,
+    selectedThreadQueuedMessages,
+    selectedThreadShell,
+    updateServerQueuedMessage,
+  ]);
+
+  const onSteerQueuedMessage = useCallback(
+    async (messageId: MessageId) => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      await steerQueuedMessage({
+        environmentId: selectedThreadShell.environmentId,
+        input: { threadId: selectedThreadShell.id, messageId },
+      });
+    },
+    [selectedThreadShell, steerQueuedMessage],
+  );
+
+  const onEditQueuedMessage = useCallback(
+    async (messageId: MessageId, source: "local" | "server") => {
+      if (!selectedThreadShell) {
+        return;
+      }
+      const message =
+        source === "local"
+          ? selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId)
+          : selectedThreadDetail?.queuedMessages.find(
+              (candidate) => candidate.messageId === messageId,
+            );
+      if (!message) return;
+      const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
+      const previousDraftText =
+        editingQueuedMessage?.previousDraftText ?? getComposerDraftSnapshot(threadKey).text;
+      setEditingQueuedMessage({
+        messageId,
+        source,
+        previousDraftText,
+      });
+      setComposerDraftText(threadKey, message.text);
+    },
+    [editingQueuedMessage, selectedThreadDetail, selectedThreadQueuedMessages, selectedThreadShell],
+  );
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -400,7 +502,7 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
-    selectedThreadQueueCount,
+    composerQueueItems,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,
@@ -408,6 +510,11 @@ export function useThreadComposerState() {
     runtimeMode,
     interactionMode,
     activeThreadBusy,
+    isEditingQueuedMessage: editingQueuedMessage !== null,
+    // Lazy-loaded older pages + the live window — the full loaded activity set.
+    // Request derivations must run over this (not the windowed live set alone)
+    // so prompts pulled in by scroll-up still surface, matching web.
+    mergedActivities,
     hasMoreOlderActivities,
     loadingOlderActivities,
     onLoadOlderActivities,
@@ -417,6 +524,8 @@ export function useThreadComposerState() {
     onNativePasteImages,
     onRemoveDraftImage,
     onSendMessage,
+    onSteerQueuedMessage,
+    onEditQueuedMessage,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,

@@ -88,11 +88,24 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     return loadPromise;
   };
 
-  const enqueue = (message: QueuedThreadMessage): Promise<void> =>
-    serialize(async () => {
+  const enqueue = (message: QueuedThreadMessage): Promise<void> => {
+    // Paint the optimistic bubble immediately. Disk durability trails the
+    // in-memory queue so send UX never waits on filesystem latency.
+    setMessages([
+      ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+      message,
+    ]);
+    return serialize(async () => {
+      // Dropped while the write was queued (e.g. user discarded / delivered).
+      if (!currentMessages().some((candidate) => candidate.messageId === message.messageId)) {
+        return;
+      }
       try {
         await options.storage.write(message);
       } catch (cause) {
+        setMessages(
+          currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+        );
         throw new ThreadOutboxManagerError({
           operation: "enqueue",
           environmentId: message.environmentId,
@@ -101,11 +114,8 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
-      setMessages([
-        ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
-        message,
-      ]);
     });
+  };
 
   // Rewrites an already-queued message. A no-op when the message has been
   // removed in the meantime (e.g. deleted or delivered), so a trailing editor
