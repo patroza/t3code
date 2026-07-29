@@ -129,6 +129,11 @@ import {
   sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
 } from "./Sidebar.logic";
+import { sortThreads } from "../lib/threadSort";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   prStatusIndicator,
@@ -174,17 +179,26 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import {
   DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+  DEFAULT_WEB_THREAD_GROUPING,
   EMPTY_LIST_ENVIRONMENT_FILTER,
   LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  LIST_MODE_STORAGE_KEY,
+  LIST_THREAD_GROUPING_STORAGE_KEY,
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
   SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+  WEB_THREAD_GROUPING_LABELS,
+  WEB_THREAD_GROUPINGS,
+  WebThreadGroupingSchema,
+  defaultThreadGroupingFromLegacyModeStorage,
   isAllEnvironmentsSelected,
   isEnvironmentSelected,
   matchesEnvironmentFilter,
   resolveSelectedEnvironmentIds,
   toggleEnvironmentId,
+  usesFlatThreadGrouping,
+  type WebThreadGrouping,
 } from "./listEnvironmentFilter";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
@@ -563,9 +577,15 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   }
                 : null;
 
+  // Settled history must not retain list VCS subscriptions: PR auto-settle
+  // already applied (or wasn't needed), and the settled tail is high-cardinality.
+  // Active + snoozed rows keep list-mode status for badges and partition lifts.
+  const isSettledHistoryRow = variant === "slim" && variantAction === "unsettle";
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+    !isSettledHistoryRow &&
+      (thread.branch != null || thread.worktreePath !== null) &&
+      gitCwd !== null
       ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
@@ -586,10 +606,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,
   // and a merged/closed PR auto-settles a thread — data only rows have.
+  // Settled rows skip this lift; last reported state (if any) stays in the map.
   const prState = pr?.state ?? null;
   useEffect(() => {
+    if (isSettledHistoryRow) return;
     onChangeRequestState(threadKey, prState);
-  }, [onChangeRequestState, prState, threadKey]);
+  }, [isSettledHistoryRow, onChangeRequestState, prState, threadKey]);
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1165,6 +1187,23 @@ export default function SidebarV2() {
     EMPTY_LIST_ENVIRONMENT_FILTER,
     ListEnvironmentFilterSchema,
   );
+  // Shared with classic sidebar so Recent / project / none stays aligned when
+  // flipping the Sidebar V2 beta toggle.
+  const defaultThreadGrouping = useMemo(() => {
+    if (typeof window === "undefined") return DEFAULT_WEB_THREAD_GROUPING;
+    try {
+      return defaultThreadGroupingFromLegacyModeStorage(
+        window.localStorage.getItem(LIST_MODE_STORAGE_KEY),
+      );
+    } catch {
+      return DEFAULT_WEB_THREAD_GROUPING;
+    }
+  }, []);
+  const [storedThreadGrouping, setStoredThreadGrouping] = useLocalStorage(
+    LIST_THREAD_GROUPING_STORAGE_KEY,
+    defaultThreadGrouping,
+    WebThreadGroupingSchema,
+  );
   const [settledRecencyHeadersEnabled, setSettledRecencyHeadersEnabled] = useLocalStorage(
     SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
     DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
@@ -1228,6 +1267,7 @@ export default function SidebarV2() {
   );
   const listOptionsActive =
     !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
+    storedThreadGrouping !== DEFAULT_WEB_THREAD_GROUPING ||
     settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS ||
     settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED;
   const orderedProjects = useMemo(
@@ -1559,8 +1599,14 @@ export default function SidebarV2() {
         active.push(thread);
       }
     }
+    // Recent / none: activity order (same as classic flat lists). Project
+    // grouping keeps V2's static creation spine so rows don't jump on every
+    // message while work is open.
+    const sortedActive = usesFlatThreadGrouping(storedThreadGrouping)
+      ? sortThreads(active, "updated_at")
+      : sortThreadsForSidebarV2(active);
     return {
-      activeThreads: sortThreadsForSidebarV2(active),
+      activeThreads: sortedActive,
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
         (left, right) =>
@@ -1578,6 +1624,7 @@ export default function SidebarV2() {
     selectedEnvironmentIds,
     serverConfigs,
     snoozeWakeTick,
+    storedThreadGrouping,
     threads,
   ]);
 
@@ -1646,10 +1693,9 @@ export default function SidebarV2() {
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
 
-  // Date headers on the settled tail only (lifecycle spine stays intact).
-  // Recompute when the minute clock advances so Last Hour / Earlier Today
-  // boundaries stay honest. Single-bucket pages omit headers. View menu can
-  // disable headers entirely without changing settle order.
+  // Date headers on the settled tail. Recompute when the minute clock advances
+  // so Last Hour / Earlier Today boundaries stay honest. Single-bucket pages
+  // omit headers. View menu can disable headers without changing settle order.
   const settledRecencyLayout = useMemo(() => {
     void nowMinute;
     const layout = groupSettledThreadsByRecencyForSidebarV2(renderedSettledThreads, new Date());
@@ -1658,6 +1704,21 @@ export default function SidebarV2() {
     }
     return layout;
   }, [nowMinute, renderedSettledThreads, settledRecencyHeadersEnabled]);
+
+  // Active-list day buckets when Threads is grouped by recency (shared mode
+  // with classic Recent). "none" stays flat activity order; "project" keeps
+  // the static V2 creation spine without headers.
+  const activeRecencyLayout = useMemo(() => {
+    void nowMinute;
+    if (storedThreadGrouping !== "recency" || activeThreads.length === 0) {
+      return { groups: [] as const, showHeaders: false as const };
+    }
+    const groups = groupSortedThreadsByRecency(activeThreads);
+    return {
+      groups,
+      showHeaders: shouldShowRecencySectionHeaders(groups),
+    };
+  }, [activeThreads, nowMinute, storedThreadGrouping]);
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -2571,6 +2632,32 @@ export default function SidebarV2() {
                 <MenuPopup align="end" side="bottom" className="min-w-56">
                   <MenuGroup>
                     <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      Group threads
+                    </div>
+                    <MenuRadioGroup
+                      value={storedThreadGrouping}
+                      onValueChange={(value) => {
+                        if (value != null) {
+                          setStoredThreadGrouping(value as WebThreadGrouping);
+                        }
+                      }}
+                    >
+                      {WEB_THREAD_GROUPINGS.map((grouping) => (
+                        <MenuRadioItem
+                          key={grouping}
+                          value={grouping}
+                          closeOnClick={false}
+                          className="min-h-7 py-1 sm:text-xs"
+                          data-testid={`sidebar-v2-thread-grouping-${grouping}`}
+                        >
+                          {WEB_THREAD_GROUPING_LABELS[grouping]}
+                        </MenuRadioItem>
+                      ))}
+                    </MenuRadioGroup>
+                  </MenuGroup>
+                  <MenuSeparator />
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
                       Settled shelf
                     </div>
                     <MenuCheckboxItem
@@ -2756,9 +2843,33 @@ export default function SidebarV2() {
                     />
                   );
                 };
-                const items: ReactNode[] = activeThreads.map((thread) =>
-                  renderThreadRow(thread, "active"),
-                );
+                const items: ReactNode[] = [];
+                // Recent mode: day buckets on the active inbox (Last Hour /
+                // Earlier Today / …). Same header rules as classic Threads
+                // recency and the settled shelf.
+                if (activeRecencyLayout.showHeaders) {
+                  for (const group of activeRecencyLayout.groups) {
+                    items.push(
+                      <li
+                        key={`active-recency-${group.id}`}
+                        data-thread-selection-safe
+                        data-testid={`sidebar-v2-active-recency-${group.id}`}
+                        className="list-none px-2.5 pb-0.5 pt-2 first:pt-1"
+                      >
+                        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/45">
+                          {group.label}
+                        </div>
+                      </li>,
+                    );
+                    for (const thread of group.threads) {
+                      items.push(renderThreadRow(thread, "active"));
+                    }
+                  }
+                } else {
+                  for (const thread of activeThreads) {
+                    items.push(renderThreadRow(thread, "active"));
+                  }
+                }
                 // Snoozed shelf: between the inbox and Settled — out of the
                 // way, never gone. The header always renders while anything
                 // is snoozed (the count is the whole footprint when

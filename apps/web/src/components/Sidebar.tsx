@@ -13,6 +13,7 @@ import {
   LayersIcon,
   ListFilterIcon,
   LoaderIcon,
+  MessageSquareIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -21,6 +22,7 @@ import {
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  Undo2Icon,
 } from "lucide-react";
 import {
   prStatusIndicator,
@@ -218,6 +220,7 @@ import {
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
   groupSettledThreadsByRecencyForSidebarV2,
+  resolveSettledTimestamp,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   sortSettledThreadsForSidebarV2,
@@ -3053,8 +3056,10 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   const isDesktopLocalThread =
     environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
   const gitCwd = thread.worktreePath ?? project.workspaceRoot;
+  // Settled shelf rows match Sidebar V2 history: no list VCS subscription
+  // (PR auto-settle is out of scope here; badges aren't live on history).
   const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+    !props.isSettled && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
@@ -3095,6 +3100,15 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     RECENT_PROJECT_BADGE_CLASSES[
       resolveSidebarProjectBadgeColorIndex(project.projectKey, RECENT_PROJECT_BADGE_CLASSES.length)
     ];
+  const settledTimestamp = resolveSettledTimestamp(thread);
+  const settledTimeLabel =
+    settledTimestamp === null
+      ? ""
+      : (() => {
+          const label = formatRelativeTimeLabel(settledTimestamp);
+          if (label === "just now") return "now";
+          return label.endsWith(" ago") ? label.slice(0, -4) : label;
+        })();
 
   const attemptArchive = useCallback(() => {
     setConfirmingArchive(false);
@@ -3352,6 +3366,149 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     },
     [thread.title],
   );
+
+  const handleUnsettleClick = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void props.unsettleThread(threadRef).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to un-settle thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [props, threadRef],
+  );
+
+  // Settled shelf: Sidebar V2 slim history chrome (dimmed favicon, muted
+  // title, settle-time label, un-settle on hover) — not the dense inbox row.
+  if (props.isSettled) {
+    const supportsSettlement = readEnvironmentSupportsSettlement(thread.environmentId);
+    return (
+      <SidebarMenuSubItem
+        className="group/recent-thread w-full"
+        data-thread-item
+        data-testid={`recent-thread-settled-${thread.id}`}
+      >
+        <SidebarMenuSubButton
+          render={<div role="button" tabIndex={0} />}
+          size="sm"
+          isActive={props.isActive}
+          data-testid={`recent-thread-${thread.id}`}
+          className={cn(
+            resolveThreadRowClassName({
+              isActive: props.isActive,
+              isSelected,
+            }),
+            "relative isolate min-h-9 items-center gap-2.5 py-1.5",
+          )}
+          onClick={handleRowClick}
+          onDoubleClick={handleRowDoubleClick}
+          onContextMenu={handleContextMenu}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            props.navigateToThread(threadRef);
+          }}
+        >
+          <span
+            className={cn(
+              "shrink-0 transition-opacity",
+              !props.isActive &&
+                "opacity-40 grayscale group-hover/recent-thread:opacity-100 group-hover/recent-thread:grayscale-0",
+            )}
+          >
+            <ProjectFavicon
+              environmentId={thread.environmentId}
+              cwd={project.workspaceRoot}
+              className="size-4"
+              fallbackIcon={MessageSquareIcon}
+            />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            {isRenaming ? (
+              <input
+                ref={renameInputRef}
+                className="min-w-0 flex-1 rounded border border-ring bg-transparent px-0.5 text-sm outline-none"
+                value={renamingTitle}
+                onChange={(event) => setRenamingTitle(event.target.value)}
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  event.stopPropagation();
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void commitRename();
+                  } else if (event.key === "Escape") {
+                    setIsRenaming(false);
+                  }
+                }}
+                onBlur={() => void commitRename()}
+              />
+            ) : (
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
+                  props.isActive ? "text-foreground" : "text-muted-foreground/70",
+                )}
+              >
+                {thread.title}
+              </span>
+            )}
+            <span className="flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground/55">
+              <span className="truncate">{project.displayName}</span>
+              {environment?.label ? (
+                <>
+                  <span aria-hidden className="shrink-0 text-muted-foreground/40">
+                    ·
+                  </span>
+                  <span className="inline-flex min-w-0 items-center gap-0.5 truncate">
+                    {isRemoteThread ? (
+                      <ServerIcon
+                        aria-hidden
+                        className="size-2.5 shrink-0 text-muted-foreground/50"
+                      />
+                    ) : null}
+                    <span className="truncate">{environment.label}</span>
+                  </span>
+                </>
+              ) : null}
+            </span>
+          </div>
+          <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
+            <span className="inline-flex justify-end text-xs tabular-nums text-muted-foreground/55 transition-opacity group-hover/recent-thread:opacity-0">
+              {settledTimeLabel}
+            </span>
+            {supportsSettlement ? (
+              <button
+                type="button"
+                aria-label="Un-settle thread"
+                onClick={handleUnsettleClick}
+                className="absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/recent-thread:opacity-100"
+              >
+                <Undo2Icon className="mb-px size-3.5" />
+              </button>
+            ) : null}
+          </span>
+          {props.jumpLabel ? (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 right-1.5 z-10 -translate-y-1/2 rounded-md border border-border/70 bg-background/95 px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+            >
+              {props.jumpLabel}
+            </span>
+          ) : null}
+        </SidebarMenuSubButton>
+      </SidebarMenuSubItem>
+    );
+  }
 
   return (
     <SidebarMenuSubItem
