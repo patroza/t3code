@@ -145,6 +145,30 @@
       "commit": "d21149c3666035d6afd61fbc87b4e6ceac2314e8",
       "path": "package.json",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/tim",
+      "commit": "*",
+      "path": "apps/web/src/localApi.test.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/tim",
+      "commit": "*",
+      "path": "packages/contracts/src/ipc.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/tim",
+      "commit": "*",
+      "path": "apps/server/src/server.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/tim",
+      "commit": "*",
+      "path": "apps/server/src/provider/Layers/ProviderRegistry.test.ts",
+      "strategy": "theirs"
     }
   ]
 }
