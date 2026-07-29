@@ -158,6 +158,15 @@ Processed deliveries are persisted atomically in:
 ${T3CODE_HOME}/userdata/github-webhook-deliveries.json
 ```
 
+Inbound webhook intake is also logged (24h retention) to:
+
+```text
+${T3CODE_HOME}/userdata/github-webhook-debug.ndjson
+```
+
+Each row records outcome (`accepted_202`, `ignored_202`, `invalid_400`, `unauthorized_401`,
+`repo_denied_202`, …), delivery id, and a capped body preview on failures. Best-effort only.
+
 Development mode uses the corresponding dev state directory. The newest 2,000 deliveries are kept.
 Claiming a delivery is serialized, so a GitHub retry cannot create a second T3 turn. Each record stores
 the response comment, T3 thread, and previous turn id.
