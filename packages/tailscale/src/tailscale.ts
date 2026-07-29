@@ -128,6 +128,15 @@ export class TailscaleStatusParseError extends Schema.TaggedErrorClass<Tailscale
   }
 }
 
+export class TailscaleServeStatusParseError extends Schema.TaggedErrorClass<TailscaleServeStatusParseError>()(
+  "TailscaleServeStatusParseError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Failed to decode tailscale serve status JSON.";
+  }
+}
+
 const TailscaleStatusSelf = Schema.Struct({
   DNSName: Schema.optional(Schema.Unknown),
   TailscaleIPs: Schema.optional(Schema.Unknown),
@@ -217,59 +226,177 @@ export const parseTailscaleStatus = (
     }),
   );
 
-export const readTailscaleStatus = Effect.gen(function* () {
-  const args = ["status", "--json"];
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const hostPlatform = yield* HostProcessPlatform;
-  const executable = tailscaleCommandForPlatform(hostPlatform);
-  const commandContext = {
-    executable,
-    subcommand: "status" as const,
-    argumentCount: args.length,
-  };
-  return yield* Effect.gen(function* () {
-    const child = yield* spawner
-      .spawn(ChildProcess.make(executable, args))
-      .pipe(
-        Effect.mapError((cause) => new TailscaleCommandSpawnError({ ...commandContext, cause })),
+/**
+ * Runs a tailscale subcommand that answers on stdout, applying the same
+ * spawn/exit/timeout error mapping as the rest of this module. `serve status`
+ * and `status` differ only in arguments and how the payload is decoded.
+ */
+const readTailscaleCommandStdout = (input: {
+  readonly args: readonly string[];
+  readonly subcommand: "status" | "serve";
+  readonly timeout: Duration.Duration;
+}) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const hostPlatform = yield* HostProcessPlatform;
+    const executable = tailscaleCommandForPlatform(hostPlatform);
+    const commandContext = {
+      executable,
+      subcommand: input.subcommand,
+      argumentCount: input.args.length,
+    };
+    return yield* Effect.gen(function* () {
+      const child = yield* spawner
+        .spawn(ChildProcess.make(executable, input.args))
+        .pipe(
+          Effect.mapError((cause) => new TailscaleCommandSpawnError({ ...commandContext, cause })),
+        );
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          collectStdout(child.stdout),
+          collectStderr(child.stderr),
+          child.exitCode.pipe(Effect.map(Number)),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
       );
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStdout(child.stdout),
-        collectStderr(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
+      if (exitCode !== 0) {
+        return yield* new TailscaleCommandExitError({
+          ...commandContext,
+          exitCode,
+          stdoutLength: stdout.length,
+          stderrLength: stderr.length,
+          ...(stderrDiagnosticOf(stderr) !== undefined
+            ? { stderrDiagnostic: stderrDiagnosticOf(stderr) }
+            : {}),
+        });
+      }
+      return stdout;
+    }).pipe(
+      Effect.scoped,
+      Effect.timeout(input.timeout),
+      Effect.catchTags({
+        TimeoutError: (cause) =>
+          Effect.fail(
+            new TailscaleCommandTimeoutError({
+              ...commandContext,
+              timeoutMs: Duration.toMillis(input.timeout),
+              cause,
+            }),
+          ),
+      }),
     );
-    if (exitCode !== 0) {
-      return yield* new TailscaleCommandExitError({
-        ...commandContext,
-        exitCode,
-        stdoutLength: stdout.length,
-        stderrLength: stderr.length,
-        ...(stderrDiagnosticOf(stderr) !== undefined
-          ? { stderrDiagnostic: stderrDiagnosticOf(stderr) }
-          : {}),
-      });
-    }
-    return yield* parseTailscaleStatus(stdout);
-  }).pipe(
-    Effect.scoped,
-    Effect.timeout(TAILSCALE_STATUS_TIMEOUT),
-    Effect.catchTags({
-      TimeoutError: (cause) =>
-        Effect.fail(
-          new TailscaleCommandTimeoutError({
-            ...commandContext,
-            timeoutMs: Duration.toMillis(TAILSCALE_STATUS_TIMEOUT),
-            cause,
-          }),
-        ),
+  });
+
+export const readTailscaleStatus = readTailscaleCommandStdout({
+  args: ["status", "--json"],
+  subcommand: "status",
+  timeout: TAILSCALE_STATUS_TIMEOUT,
+}).pipe(Effect.flatMap(parseTailscaleStatus));
+
+/**
+ * One `tailscale serve` HTTPS mapping, flattened from the `Web` section of
+ * `tailscale serve status --json`.
+ *
+ * `servePort` is the port the tailnet dials and `localPort` the loopback port
+ * behind it. They are frequently different — nothing forces serve mappings to
+ * preserve the port number — which is why callers must read this instead of
+ * assuming the local port is also reachable on the tailnet.
+ */
+export interface TailscaleServeMapping {
+  readonly magicDnsName: string;
+  readonly servePort: number;
+  readonly path: string;
+  readonly localHost: string;
+  readonly localPort: number;
+  /** Always https: `tailscale serve` terminates TLS for every Web handler. */
+  readonly url: string;
+}
+
+const TailscaleServeHandler = Schema.Struct({
+  Proxy: Schema.optional(Schema.Unknown),
+});
+
+const TailscaleServeWebEntry = Schema.Struct({
+  Handlers: Schema.optional(Schema.Record(Schema.String, TailscaleServeHandler)),
+});
+
+const TailscaleServeStatusJson = Schema.Struct({
+  Web: Schema.optional(Schema.Record(Schema.String, TailscaleServeWebEntry)),
+});
+
+const decodeTailscaleServeStatusJson = Schema.decodeEffect(
+  Schema.fromJsonString(TailscaleServeStatusJson),
+);
+
+/** Splits a `host:port` serve key, tolerating bracketed IPv6 literals. */
+const parseServeHostKey = (key: string): { host: string; port: number } | null => {
+  const separator = key.lastIndexOf(":");
+  if (separator <= 0) return null;
+  const host = key.slice(0, separator).replace(/^\[|\]$/gu, "");
+  const port = Number.parseInt(key.slice(separator + 1), 10);
+  return host.length > 0 && Number.isInteger(port) && port > 0 && port < 65536
+    ? { host, port }
+    : null;
+};
+
+export const parseTailscaleServeMappings = (
+  rawServeStatusJson: string,
+): Effect.Effect<readonly TailscaleServeMapping[], TailscaleServeStatusParseError> =>
+  decodeTailscaleServeStatusJson(rawServeStatusJson).pipe(
+    Effect.mapError((cause) => new TailscaleServeStatusParseError({ cause })),
+    Effect.map((parsed) => {
+      const mappings: Array<TailscaleServeMapping> = [];
+      for (const [hostKey, entry] of Object.entries(parsed.Web ?? {})) {
+        const target = parseServeHostKey(hostKey);
+        if (!target) continue;
+        for (const [path, handler] of Object.entries(entry.Handlers ?? {})) {
+          if (typeof handler.Proxy !== "string") continue;
+          // A non-proxy handler (static text, a file share) has no local port
+          // to match against, so it is not a route to a dev server.
+          let proxy: URL;
+          try {
+            proxy = new URL(handler.Proxy);
+          } catch {
+            continue;
+          }
+          const localPort = Number.parseInt(proxy.port, 10);
+          if (!Number.isInteger(localPort) || localPort <= 0) continue;
+          const url = new URL(`https://${hostKey}`);
+          url.pathname = path;
+          mappings.push({
+            magicDnsName: target.host,
+            servePort: target.port,
+            path,
+            localHost: proxy.hostname.replace(/^\[|\]$/gu, ""),
+            localPort,
+            url: url.toString(),
+          });
+        }
+      }
+      return mappings;
     }),
   );
-});
+
+export const readTailscaleServeMappings = readTailscaleCommandStdout({
+  args: ["serve", "status", "--json"],
+  subcommand: "serve",
+  timeout: TAILSCALE_STATUS_TIMEOUT,
+}).pipe(Effect.flatMap(parseTailscaleServeMappings));
+
+/**
+ * The mapping that serves `localPort` at the site root, if one exists.
+ *
+ * Root-only: a mapping under a sub-path rewrites neither the dev server's
+ * absolute asset URLs (`/@vite/client`) nor its HMR websocket, so handing one
+ * out would load a blank page instead of failing honestly.
+ */
+export const findRootServeMappingForLocalPort = (
+  mappings: readonly TailscaleServeMapping[],
+  localPort: number,
+): TailscaleServeMapping | undefined =>
+  mappings.find((mapping) => mapping.localPort === localPort && mapping.path === "/");
 
 export function buildTailscaleHttpsBaseUrl(input: {
   readonly magicDnsName: string;
