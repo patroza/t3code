@@ -275,6 +275,71 @@ export const DiscoveredLocalServerList = Schema.Struct({
 });
 export type DiscoveredLocalServerList = typeof DiscoveredLocalServerList.Type;
 
+export const PreviewPortResolveRequest = Schema.Struct({
+  port: Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThan(65536)),
+  /**
+   * The environment base URL this client is actually connected through.
+   *
+   * Reachability is a property of the pair (client, port), not of the port
+   * alone: a client on loopback wants `localhost`, one on the tailnet needs a
+   * tailnet route. The client is the only side that knows which it is, so it
+   * says so rather than letting the server infer it from a request header that
+   * a proxy may have rewritten.
+   */
+  clientBaseUrl: Url,
+});
+export type PreviewPortResolveRequest = typeof PreviewPortResolveRequest.Type;
+
+export const PreviewPortExposureStrategy = Schema.Literals([
+  "loopback",
+  /**
+   * The port already answers on the environment's own address — a dev server
+   * bound to a wildcard or interface address, reached over WSL, a LAN, or an
+   * existing tunnel. Nothing is published for these.
+   */
+  "direct-private-network",
+  "tailnet-serve",
+]);
+export type PreviewPortExposureStrategy = typeof PreviewPortExposureStrategy.Type;
+
+export const PreviewPortResolution = Schema.Struct({
+  /** Origin only — the caller keeps its own path, query, and hash. */
+  origin: Url,
+  strategy: PreviewPortExposureStrategy,
+  /** True when this call created the tailnet mapping rather than reusing one. */
+  createdExposure: Schema.Boolean,
+});
+export type PreviewPortResolution = typeof PreviewPortResolution.Type;
+
+/**
+ * Why a local port cannot be reached from this client.
+ *
+ * Carries a `remedy` because the consumer is frequently an agent driving the
+ * preview: without a next action it retries the same unreachable URL. The
+ * reasons are a closed set so the UI can special-case them, and `remedy` never
+ * quotes raw CLI stderr (tailscale prints auth keys there).
+ */
+export class PreviewPortUnreachableError extends Schema.TaggedErrorClass<PreviewPortUnreachableError>()(
+  "PreviewPortUnreachableError",
+  {
+    port: Schema.Int,
+    reason: Schema.Literals([
+      "tailscale-unavailable",
+      "tailscale-not-logged-in",
+      "tailscale-permission-denied",
+      "serve-port-conflict",
+      "exposure-failed",
+      "not-listening",
+      "not-reachable",
+    ]),
+    remedy: TrimmedNonEmptyString,
+  },
+) {
+  override get message() {
+    return `Port ${this.port} is not reachable from this client (${this.reason}). ${this.remedy}`;
+  }
+}
+
 export class PreviewSessionLookupError extends Schema.TaggedErrorClass<PreviewSessionLookupError>()(
   "PreviewSessionLookupError",
   {
