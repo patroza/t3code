@@ -268,6 +268,55 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
+  it.effect("reports ping timeout instead of a bare disconnected message", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const socket = yield* awaitSocket(sockets);
+
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
+
+        // Effect RPC pinger: first 5s sends ping; second 5s without pong opens the timeout latch.
+        yield* TestClock.adjust("10 seconds");
+        const error = yield* Effect.flip(session.closed);
+
+        expect(error).toBeInstanceOf(ConnectionTransientError);
+        expect(error).toMatchObject({
+          reason: "timeout",
+          message: "Test environment ping timeout.",
+        });
+      }),
+    ),
+  );
+
+  it.effect("reports abnormal close codes from the socket failure path", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const socket = yield* awaitSocket(sockets);
+
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
+
+        socket.close(1006, "");
+        const error = yield* Effect.flip(session.closed);
+
+        expect(error).toBeInstanceOf(ConnectionTransientError);
+        expect(error).toMatchObject({
+          reason: "transport",
+          message: "Test environment closed (1006 abnormal).",
+        });
+      }),
+    ),
+  );
+
   it.effect("closes the websocket when the session scope is released", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
@@ -343,7 +392,7 @@ describe("RpcSessionFactory", () => {
 
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
-        reason: "transport",
+        reason: "timeout",
         message: "Test environment could not open WebSocket.",
       });
       expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
