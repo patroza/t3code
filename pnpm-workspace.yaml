@@ -23,6 +23,7 @@ allowBuilds:
   workerd: false
 
 catalog:
+  dfx: 1.0.15
   "@clerk/backend": 3.13.0
   "@clerk/clerk-js": 6.25.7
   "@clerk/electron": 0.0.18
@@ -148,3 +149,4 @@ supportedArchitectures:
   cpu: [current, x64]
   libc: [current, glibc]
   os: [current, linux]
+# (workspace already includes apps/*)
