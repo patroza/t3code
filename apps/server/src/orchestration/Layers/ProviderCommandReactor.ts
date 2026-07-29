@@ -589,6 +589,22 @@ const make = Effect.gen(function* () {
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
       if (
+        cwdChanged &&
+        activeSession?.provider === "opencode" &&
+        activeSession.resumeCursor !== undefined
+      ) {
+        return yield* new ProviderAdapterRequestError({
+          provider: activeSession.provider,
+          method: "thread.turn.start",
+          detail: [
+            `OpenCode session for thread '${threadId}' is bound to '${activeSession.cwd ?? "unknown"}' but the thread workspace is '${effectiveCwd ?? "unknown"}'.`,
+            "Refusing to resume or replace it silently because that would either run in the wrong directory or lose conversation history.",
+            "Stop this provider session and start a fresh thread/session for the selected worktree.",
+          ].join(" "),
+        });
+      }
+
+      if (
         !runtimeModeChanged &&
         !cwdChanged &&
         !instanceChanged &&
@@ -942,7 +958,32 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    // Clearing the projection here is authoritative: a persisted session may
+    // say "running" even though its provider process disappeared yesterday.
+    // Provider cancellation remains best-effort so Abort always restores a
+    // usable composer without mistaking a quiet, live process for a dead one.
+    yield* providerService
+      .interruptTurn({ threadId: event.payload.threadId })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider turn interrupt failed", { cause }),
+        ),
+      );
+
+    const latestThread = yield* resolveThread(event.payload.threadId);
+    const session = latestThread?.session;
+    if (session && session.status !== "stopped") {
+      yield* setThreadSession({
+        threadId: event.payload.threadId,
+        session: {
+          ...session,
+          status: "ready",
+          activeTurnId: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1587,6 +1628,9 @@ const make = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
     );
+    // Startup recovery must finish before server startup settles orphaned
+    // sessions. Otherwise the orphan audit can clear the persisted recovery
+    // marker or stop the replacement process while it is being started.
     yield* reconcileStartup().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("provider restart reconciliation failed", {
@@ -1594,7 +1638,6 @@ const make = Effect.gen(function* () {
         }),
       ),
       Effect.ensuring(Deferred.succeed(startupReconciliationDone, undefined).pipe(Effect.ignore)),
-      Effect.forkScoped,
     );
   });
 
