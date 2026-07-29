@@ -124,8 +124,8 @@ const STATUS_RESULT_CACHE_TTL = Duration.seconds(5);
  */
 const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(35);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
-/** PR lookup is the list-badge path; keep aligned with remote status freshness. */
-const PR_LOOKUP_CACHE_TTL = Duration.seconds(45);
+/** PR lookup is the list-badge path; 1 min balances gh load vs badge freshness. */
+const PR_LOOKUP_CACHE_TTL = Duration.minutes(1);
 const PR_LOOKUP_FAILURE_TTL = Duration.seconds(20);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
