@@ -7,10 +7,11 @@ branches.
 
 - Before the documented one-time cutover, implementation PRs continue to target `main`.
 - After cutover, `main` is an upstream mirror. Never merge downstream fork work into it.
-- Update `main` only through the `Rebase fork PR stack` workflow. Do not use GitHub's **Sync fork**
-  button, open a PR into `main`, or push it manually. The scheduled/manual workflow uses the
-  repository-scoped `FORK_STACK_DEPLOY_KEY` to bypass `main` protection, preserve the exact upstream
-  commit SHA, and atomically rebuild `fork/tim`, `fork/changes`, and `fork/integration`.
+- Update `main` only through the **manual** `Rebase fork PR stack` workflow (`workflow_dispatch`).
+  Do not use GitHub's **Sync fork** button, open a PR into `main`, or push `main` manually. That
+  workflow uses the repository-scoped `FORK_STACK_DEPLOY_KEY` to bypass `main` protection, preserve
+  the exact upstream commit SHA, and rebuild `fork/tim` / `fork/candidates` / `fork/changes` (then
+  compose `fork/integration`).
 - `fork/tim` contains only selected Tim Smart integrations above upstream. `fork/candidates`
   contains selected open upstream PRs that we run before upstream accepts them, one provenance
   commit per source PR. The permanent `fork/changes` PR is based on `fork/candidates`, contains only
@@ -55,17 +56,26 @@ branches.
 ### Automatic integration and deployment
 
 - Opening or updating a PR runs CI but does not deploy.
-- The stack workflow runs every six hours and may be dispatched manually to mirror
-  `pingdotgg/t3code:main`. Its deploy key is the only automation bypass for protected `main`; agents
-  must never print, replace, or reuse that credential outside this workflow.
+- **Fast path (day-to-day):** `.github/workflows/compose-integration.yml` (**Compose fork
+  integration**) runs when:
+  - a commit is pushed to **`fork/changes`** (including merges into `fork/changes`), or
+  - a commit is pushed to a **registered overlay branch** (including merges of child PRs into
+    desktop / discord / vscode overlays), or
+  - it is started with `workflow_dispatch`.
+    It composes `fork/changes` + every registered overlay tip into `fork/integration` (deploy key
+    force-with-lease) and dispatches **Fork CI** for that tip. It does **not** rewrite
+    main/tim/candidates. If an overlay is not based on current `fork/changes`, compose fails — rebase
+    that overlay tip first. When adding an overlay to `.github/pr-stack.json`, also add its branch to
+    the `on.push` / `on.pull_request` lists in `compose-integration.yml`.
+- **Slow path (upstream / Tim / candidates):** `Rebase fork PR stack` is **manual only**
+  (`workflow_dispatch`). It mirrors `pingdotgg/t3code:main`, rebuilds provenance layers, rebases the
+  PR tree, composes integration, and dispatches Fork CI. Deploy key is the only automation bypass
+  for protected `main`; agents must never print, replace, or reuse that credential outside these
+  workflows.
 - Fork checks live in `.github/workflows/fork-ci.yml` and run for PRs or by explicit integration
   dispatch. The inherited upstream `.github/workflows/ci.yml` and `deploy-relay.yml` workflows are
   disabled at repository level so mirror updates do not run redundant CI or attempt upstream relay
   deployment. Do not re-enable or target those workflows for fork releases.
-- Updating `fork/tim` or merging a PR into `fork/changes` triggers the stack workflow, which rebases
-  the provenance layers, rebuilds `fork/integration`, and parent-first force-with-lease rebases the
-  complete same-repository PR tree rooted at `fork/changes` (including overlay children and deeper
-  dependent PRs), then dispatches CI for the exact integration SHA.
 - Successful `fork/integration` CI classifies the complete tree diff from the previous approved
   integration tree. Runtime-affecting changes hand the exact tested SHA to the private operations
   repository; tests, documentation, agent metadata, and GitHub-only metadata do not deploy.
