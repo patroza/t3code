@@ -10,7 +10,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import { type ChatMessage, type SessionPhase, type Thread } from "../types";
+import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -140,25 +140,6 @@ export function resolveServerThreadError(input: {
   return serverError === input.dismissedServerError ? null : serverError;
 }
 
-export function shouldWriteThreadErrorToCurrentServerThread(input: {
-  serverThread:
-    | {
-        environmentId: EnvironmentId;
-        id: ThreadId;
-      }
-    | null
-    | undefined;
-  routeThreadRef: ScopedThreadRef;
-  targetThreadId: ThreadId;
-}): boolean {
-  return Boolean(
-    input.serverThread &&
-    input.targetThreadId === input.routeThreadRef.threadId &&
-    input.serverThread.environmentId === input.routeThreadRef.environmentId &&
-    input.serverThread.id === input.targetThreadId,
-  );
-}
-
 export function shouldTreatServerThreadAsActive(input: {
   readonly hasServerThreadShell: boolean;
   readonly hasServerThreadDetail: boolean;
@@ -171,6 +152,25 @@ export function shouldRenderServerThreadRoute(input: {
   readonly hasDraftThread: boolean;
 }): boolean {
   return input.hasServerThreadShell || input.hasDraftThread;
+}
+
+export function shouldWriteThreadErrorToCurrentServerThread(input: {
+  activeServerThread:
+    | {
+        environmentId: EnvironmentId;
+        id: ThreadId;
+      }
+    | null
+    | undefined;
+  routeThreadRef: ScopedThreadRef;
+  targetThreadId: ThreadId;
+}): boolean {
+  return Boolean(
+    input.activeServerThread &&
+    input.targetThreadId === input.routeThreadRef.threadId &&
+    input.activeServerThread.environmentId === input.routeThreadRef.environmentId &&
+    input.activeServerThread.id === input.targetThreadId,
+  );
 }
 
 export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
