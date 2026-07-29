@@ -20,7 +20,7 @@ describe("GrokPlanMode", () => {
 
   it("resolves interaction modes back to Grok ACP mode ids", () => {
     expect(resolveGrokAcpModeIdForInteractionMode("plan")).toBe("plan");
-    expect(resolveGrokAcpModeIdForInteractionMode("default")).toBe("default");
+    expect(resolveGrokAcpModeIdForInteractionMode("default")).toBe("agent");
     expect(resolveGrokAcpModeIdForInteractionMode(undefined)).toBeUndefined();
   });
 
