@@ -10,7 +10,7 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
 - Before the documented one-time cutover, implementation PRs continue to target `main`.
 - After cutover, `main` is an upstream mirror. Never merge downstream fork work into it.
 - Update `main` only via a **local** provenance restack (`node scripts/rebase-pr-stack.ts sync
-  --push` or hand-applied layer rewrites), never via GitHub's **Sync fork** button, a PR into
+--push` or hand-applied layer rewrites), never via GitHub's **Sync fork** button, a PR into
   `main`, or a casual force-push. The GitHub Actions workflow **Rebase fork PR stack** is
   **`disabled_manually` — leave it disabled.** Do not enable or dispatch it. Local restacks that
   must move protected tips use the repository-scoped `FORK_STACK_DEPLOY_KEY` (or an allowed bypass

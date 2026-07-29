@@ -210,12 +210,12 @@ you intentionally freeze merges for a cutover window.
 
 ## Current automation state
 
-| Job                          | Intended role                                   | Status                                                                                                                                                                      |
-| ---------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compose fork integration** | Integration tip from changes + **all** overlays | **Active** — `.github/workflows/compose-integration.yml` on push/merge to `fork/changes` and registered overlay branches (and `workflow_dispatch`)                          |
-| **Fork CI**                  | Green gate on PR tips / composed integration    | **Active**                                                                                                                                                                  |
+| Job                          | Intended role                                   | Status                                                                                                                                                                     |
+| ---------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compose fork integration** | Integration tip from changes + **all** overlays | **Active** — `.github/workflows/compose-integration.yml` on push/merge to `fork/changes` and registered overlay branches (and `workflow_dispatch`)                         |
+| **Fork CI**                  | Green gate on PR tips / composed integration    | **Active**                                                                                                                                                                 |
 | **Rebase fork PR stack**     | Full layer rebuild + PR cascade                 | **`disabled_manually` in GitHub Actions — leave it that way.** Do **not** enable or dispatch this workflow. Slow-path restacks are **local only** (see slow path section). |
-| **Smart integration poller** | Deploy CI-approved integration SHA              | On when fleet should track green integration                                                                                                                                |
+| **Smart integration poller** | Deploy CI-approved integration SHA              | On when fleet should track green integration                                                                                                                               |
 
 **Do not re-enable `Rebase fork PR stack`.** Operators who need a full upstream rewrite run
 `node scripts/rebase-pr-stack.ts sync --push` (or equivalent) **locally** with appropriate credentials,
