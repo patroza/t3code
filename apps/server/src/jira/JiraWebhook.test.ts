@@ -114,6 +114,22 @@ describe("Jira mention extraction", () => {
     );
   });
 
+  it("matches Automation wiki accountId mentions via bot accountId alias", () => {
+    const body =
+      "[~accountid:712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab] do you have some ideas what span events could be reduced";
+    const botAccountId = "712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab";
+    // Handle alone does not match accountId wiki form.
+    expect(extractJiraMentionPrompt(body, "omegent")).toBeNull();
+    // Alias (T3CODE_JIRA_BOT_ACCOUNT_ID) matches the picker serialization.
+    expect(extractJiraMentionPrompt(body, "omegent", { aliases: [botAccountId] })).toBe(
+      "do you have some ideas what span events could be reduced",
+    );
+    expect(parseJiraCommentInvocation(webhook(body), "omegent", { botAccountId })).toMatchObject({
+      issueKey: "SA-402",
+      prompt: "do you have some ideas what span events could be reduced",
+    });
+  });
+
   it("matches ADF mention nodes by id and text", () => {
     const adf = {
       type: "doc",
@@ -339,6 +355,16 @@ describe("Jira helpers", () => {
   it("bodyMentionsIdentity distinguishes misses", () => {
     expect(bodyMentionsIdentity("hello world", "omegent").matched).toBe(false);
     expect(bodyMentionsIdentity("@omegent please", "omegent").matched).toBe(true);
+    expect(
+      bodyMentionsIdentity(
+        "[~accountid:712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab] hi",
+        "omegent",
+        { aliases: ["712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab"] },
+      ),
+    ).toMatchObject({
+      matched: true,
+      matchedAs: "712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab",
+    });
   });
 });
 
