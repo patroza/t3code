@@ -41,11 +41,14 @@ pnpm fork:stack overlay-promote 10 upstream/desktop-deep-links
 
 To change an overlay, commit directly to its branch or create a child PR with the overlay branch as
 its base and merge the child into the overlay PR. Do not put the same change into `fork/changes`.
-When `fork/changes` rewrites, stack automation rebases the overlay first and then recursively rebases
-its child and descendant PRs onto their rewritten parents. A conflict blocks only that PR's subtree.
-Landing an overlay is deliberate: remove its manifest entry in the same reviewed change that lands
-the implementation in `fork/changes`, then verify that the resulting `fork/integration` tree is
-unchanged.
+Pushing or merging into a registered overlay branch triggers **Compose fork integration** (same as
+landing on `fork/changes`), so `fork/integration` picks up the new overlay tip automatically once
+the tip is based on current `fork/changes`.
+When `fork/changes` rewrites, rebase each overlay onto the new tip (or use the manual stack restack),
+then compose runs again. Landing an overlay into shared product is deliberate: remove its manifest
+entry in the same reviewed change that lands the implementation in `fork/changes`, drop its branch
+from `compose-integration.yml` `on:` lists, then verify that the resulting `fork/integration` tree
+is unchanged.
 
 Some overlays also own complete client integrations. Their path ownership and change-routing rules
 live in [client-overlays.md](./client-overlays.md). Check that ownership before starting ordinary
@@ -58,20 +61,40 @@ Do not use GitHub's **Sync fork** button, create a PR into this repository's `ma
 manually. A GitHub PR merge would rewrite upstream commits, while an ordinary push is correctly
 blocked by the `Protect upstream main` ruleset.
 
-The `Rebase fork PR stack` workflow is the sole synchronization path. It runs every six hours and
-can also be started with:
+### Fast path — compose `fork/integration` after product or overlay landings
+
+Day-to-day merges do **not** run a full layer restack. Workflow **Compose fork integration**
+(`.github/workflows/compose-integration.yml`) rebuilds `fork/integration` and dispatches Fork CI
+when:
+
+- something is pushed/merged to **`fork/changes`**, or
+- something is pushed/merged to a **registered overlay branch** (child PR into desktop/discord/vscode
+  tip), or
+- it is started manually:
+
+```sh
+gh workflow run compose-integration.yml --repo patroza/t3code --ref fork/changes
+```
+
+Compose requires every registered overlay tip to be based on current `fork/changes`. Overlay branch
+names are listed in the workflow `on:` block and must stay aligned with
+`.github/pr-stack.json` → `integrationOverlays`.
+
+### Slow path — full provenance restack
+
+The `Rebase fork PR stack` workflow is **manual only** (`workflow_dispatch`). Use it when taking new
+upstream, Tim, or candidates — not after ordinary feature merges:
 
 ```sh
 gh workflow run rebase-pr-stack.yml --repo patroza/t3code --ref fork/changes
 ```
 
-The workflow fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged,
+That workflow fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged,
 and atomically updates `main`, `fork/tim`, `fork/candidates`, `fork/changes`, and
-`fork/integration` with
-force-with-lease. A repository-scoped write deploy key stored as `FORK_STACK_DEPLOY_KEY` is the
-automation actor that bypasses branch rulesets for those force-with-lease updates (including
-`main`'s PR and status-check requirements). It cannot access other repositories. Never expose or
-reuse it.
+`fork/integration` with force-with-lease. A repository-scoped write deploy key stored as
+`FORK_STACK_DEPLOY_KEY` is the automation actor that bypasses branch rulesets for those
+force-with-lease updates (including `main`'s PR and status-check requirements). It cannot access
+other repositories. Never expose or reuse it.
 
 ## Branch rulesets (protection vs rewrites)
 
@@ -84,8 +107,9 @@ Repository rulesets gate **long-lived stack branches**. Ordinary feature branche
 | Protect fork/changes (PR + CI)            | `fork/changes`                                    | No delete, no force-push, linear history, **PR required** (squash/rebase), **strict Fork CI** (Check, Test, Mobile Native Static Analysis, Release Smoke) | `patroza`, `omegabot`, deploy key                                                              |
 | Protect fork/tim, candidates, integration | `fork/tim`, `fork/candidates`, `fork/integration` | No delete, no force-push, linear history (no PR requirement — stack rebuilds these tips)                                                                  | `patroza`, `omegabot`, deploy key                                                              |
 
-**CI path:** the stack workflow authenticates with the deploy key, not `GITHUB_TOKEN` (default
-workflow token is read-only and cannot be added as an Integration bypass on this personal fork).
+**CI path:** compose / stack workflows authenticate with the deploy key for protected branch
+pushes, not `GITHUB_TOKEN` alone (default workflow token is read-only and cannot be added as an
+Integration bypass on this personal fork).
 
 **Who cannot force-push protected branches:** write collaborators without a User bypass entry.
 They can still open PRs into `fork/changes` and merge only when required checks are green.
@@ -95,9 +119,9 @@ deploy key. Feature-branch force-pushes do not need bypass.
 
 Upstream's `.github/workflows/ci.yml` and `.github/workflows/deploy-relay.yml` remain present on the
 exact `main` mirror but are disabled in this repository. Fork PR and integration checks use
-`.github/workflows/fork-ci.yml`; the stack workflow dispatches that workflow for the exact generated
-integration SHA. This avoids redundant CI and prevents an upstream-mirror update from being treated
-as a fork product or relay deployment.
+`.github/workflows/fork-ci.yml`; **Compose fork integration** (and the manual stack restack) dispatch
+that workflow for the generated integration tip. This avoids redundant CI and prevents an
+upstream-mirror update from being treated as a fork product or relay deployment.
 
 ## Starting work
 
@@ -211,7 +235,8 @@ CI= pnpm install --no-frozen-lockfile
 git add pnpm-lock.yaml
 # commit, open/merge PR to fork/changes if the rewrite already landed without this
 # then recompose integration and re-dispatch Fork CI
-node scripts/compose-integration-overlays.ts   # when integration tip must pick up the fix
+node scripts/compose-integration-overlays.ts --push
+# or: gh workflow run compose-integration.yml --repo patroza/t3code --ref fork/changes
 gh workflow run fork-ci.yml --repo patroza/t3code --ref fork/integration
 ```
 
