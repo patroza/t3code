@@ -36,6 +36,56 @@ describe("ElectronShell", () => {
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 
+  it.effect("opens VS Code Remote SSH URLs", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+      const url =
+        "vscode://vscode-remote/ssh-remote+tester%40remote.example.test/home/tester/project";
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal(url);
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [[url]]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("opens local editor file/folder URLs", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+      const url = "vscode://file/home/tester/projects/example";
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal(url);
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [[url]]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("opens Cursor local file/folder URLs", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+      const url = "cursor://file/home/tester/projects/example";
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal(url);
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [[url]]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("does not open arbitrary VS Code URLs", () =>
+    Effect.gen(function* () {
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal("vscode://evil.example/command");
+
+      assert.equal(result, false);
+      assert.equal(openExternalMock.mock.calls.length, 0);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("does not open unsafe external URLs", () =>
     Effect.gen(function* () {
       const electronShell = yield* ElectronShell.ElectronShell;
