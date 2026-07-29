@@ -598,13 +598,17 @@ describe("VcsStatusBroadcaster", () => {
       }
       const afterInitial = state.remoteStatusCalls;
 
-      // Over ~90s: shared list cadence (~60s) should add about one sweep for both
-      // cwds (+2), not two independent 30s full pollers (≈ +6).
-      yield* TestClock.adjust(Duration.seconds(90));
+      // Shared ~30s list cadence: one budgeted sweep refreshes both cwds together
+      // (still no force-invalidate / upstream fetch on the list path).
+      yield* TestClock.adjust(Duration.seconds(35));
       yield* Effect.yieldNow;
       const delta = state.remoteStatusCalls - afterInitial;
       assert.isAtLeast(delta, 2);
       assert.isAtMost(delta, 4);
+      assert.equal(state.remoteInvalidationCalls, 0);
+      for (const flag of state.remoteStatusRefreshUpstreamValues) {
+        assert.equal(flag, false);
+      }
 
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));

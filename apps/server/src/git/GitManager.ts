@@ -118,13 +118,14 @@ const TOAST_DESCRIPTION_MAX = 72;
  */
 const STATUS_RESULT_CACHE_TTL = Duration.seconds(5);
 /**
- * Remote status (PR list/view/checks via `gh`) is expensive. TTL must be **≥** the
- * default VCS remote poll interval (30s) so automatic poller ticks hit cache instead
- * of re-running detect + fetch + gh on every cwd every cycle under load.
+ * Remote status (PR list/view/checks via `gh`) is expensive. Keep TTL **≥** the
+ * default 30s poll/list cadence so concurrent subscribers still coalesce, but short
+ * enough that PR number/state badges update within about one refresh cycle.
  */
-const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(90);
+const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(35);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
-const PR_LOOKUP_CACHE_TTL = Duration.minutes(2);
+/** PR lookup is the list-badge path; keep aligned with remote status freshness. */
+const PR_LOOKUP_CACHE_TTL = Duration.seconds(45);
 const PR_LOOKUP_FAILURE_TTL = Duration.seconds(20);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;

@@ -27,9 +27,10 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 /**
  * Shared list-mode remote refresh: one loop for all list-interested worktrees,
- * not one fiber per cwd. Keeps PR badges fresh without O(N) independent pollers.
+ * not one fiber per cwd. Keeps PR numbers/states fresh without O(N) independent
+ * pollers. Match full-mode cadence (~30s) so badges do not lag a full minute.
  */
-const LIST_REMOTE_REFRESH_INTERVAL = Duration.seconds(60);
+const LIST_REMOTE_REFRESH_INTERVAL = Duration.seconds(30);
 const LIST_REMOTE_REFRESH_CONCURRENCY = 2;
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
