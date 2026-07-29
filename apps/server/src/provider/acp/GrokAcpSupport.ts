@@ -1,6 +1,7 @@
 import {
   type GrokSettings,
   type ModelSelection,
+  type ProviderInteractionMode,
   type ProviderOptionSelection,
   ProviderDriverKind,
 } from "@t3tools/contracts";
