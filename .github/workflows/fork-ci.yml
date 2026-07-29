@@ -1,0 +1,247 @@
+name: Fork CI
+
+env:
+  # Install dependencies without downloading Electron in every job. The desktop jobs
+  # fetch and verify the runtime explicitly below; mobile lint and release smoke do not need it.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+on:
+  workflow_dispatch:
+  # Full PR CI is for our implementation layer. Candidate and Tim imports are
+  # verified after they are folded into fork/integration; including their
+  # permanent stack PRs here creates duplicate runs on every stack rewrite.
+  pull_request:
+    branches:
+      - fork/changes
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Restore Vite Task check cache
+        id: vite-task-check-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-check-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-check-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Check
+        run: vp check
+
+      - name: Typecheck
+        run: vp run -r --cache --log labeled typecheck
+
+      - name: Build desktop pipeline
+        run: vp run --cache build:desktop
+
+      - name: Verify preload bundle output
+        run: |
+          test -f apps/desktop/dist-electron/preload.cjs
+          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
+          grep -n "__clerk_internal_electron_passkeys" apps/desktop/dist-electron/preload.cjs
+
+      - name: Save Vite Task check cache
+        if: success()
+        uses: actions/cache/save@v6
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.vite-task-check-cache.outputs.cache-primary-key }}
+
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Test
+        run: vp run test
+
+  mobile_native_static_analysis:
+    name: Mobile Native Static Analysis
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          # Saving the complete macOS node_modules cache takes ~95 seconds and
+          # loses the cache reservation whenever parallel PR runs overlap.
+          # A clean install is faster and has deterministic completion time.
+          cache: false
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Test macOS Open With integration
+        run: vp test run apps/desktop/src/shell/DesktopOpenWith.test.ts
+
+      - name: Install mobile native static analysis tools
+        run: brew bundle install --file apps/mobile/Brewfile
+
+      - name: Lint mobile native sources
+        run: vp run lint:mobile
+
+  release_smoke:
+    name: Release Smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
+
+  deployment_scope:
+    name: Classify Deployment Scope
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/fork/integration'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      deploy: ${{ steps.classify.outputs.deploy }}
+      server: ${{ steps.classify.outputs.server }}
+      discord: ${{ steps.classify.outputs.discord }}
+      vscode: ${{ steps.classify.outputs.vscode }}
+      mobile: ${{ steps.classify.outputs.mobile }}
+      desktop: ${{ steps.classify.outputs.desktop }}
+    steps:
+      - name: Checkout integration source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Find previous successful integration CI
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous_sha="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-ci.yml/runs" \
+              -f branch=fork/integration \
+              -f event=workflow_dispatch \
+              -f status=success \
+              -f per_page=20 \
+              --jq ".workflow_runs | map(select(.head_sha != \"${GITHUB_SHA}\")) | first | .head_sha // \"\""
+          )"
+          echo "sha=${previous_sha}" >>"${GITHUB_OUTPUT}"
+
+      - name: Classify changes since previous successful integration CI
+        id: classify
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          deploy=true
+          server=true
+          discord=true
+          vscode=true
+          mobile=true
+          desktop=true
+          if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              git fetch --quiet origin "${PREVIOUS_SHA}" || true
+            fi
+            if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              classification="$(
+                scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${GITHUB_SHA}"
+              )"
+              printf '%s\n' "${classification}" >&2
+              deploy="$(sed -n 's/^deploy=//p' <<<"${classification}")"
+              server="$(sed -n 's/^server=//p' <<<"${classification}")"
+              discord="$(sed -n 's/^discord=//p' <<<"${classification}")"
+              vscode="$(sed -n 's/^vscode=//p' <<<"${classification}")"
+              mobile="$(sed -n 's/^mobile=//p' <<<"${classification}")"
+              desktop="$(sed -n 's/^desktop=//p' <<<"${classification}")"
+            else
+              echo "Previous successful integration SHA is unavailable; deployment remains enabled."
+            fi
+          else
+            echo "No previous successful integration SHA; deployment remains enabled."
+          fi
+          echo "deploy=${deploy}" >>"${GITHUB_OUTPUT}"
+          echo "server=${server}" >>"${GITHUB_OUTPUT}"
+          echo "discord=${discord}" >>"${GITHUB_OUTPUT}"
+          echo "vscode=${vscode}" >>"${GITHUB_OUTPUT}"
+          echo "mobile=${mobile}" >>"${GITHUB_OUTPUT}"
+          echo "desktop=${desktop}" >>"${GITHUB_OUTPUT}"
+
+  dispatch_mobile_releases:
+    name: Dispatch Mobile Releases
+    needs: [check, test, mobile_native_static_analysis, release_smoke, deployment_scope]
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/fork/integration' &&
+      needs.deployment_scope.outputs.mobile == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch exact integration SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # mode=auto, not update: an OTA alone never reaches a phone when the
+          # native runtime changed, so the fingerprint decides between an update
+          # and a TestFlight build. iOS only, because Android has no keystore.
+          gh workflow run mobile-eas-production.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref fork/integration \
+            -f mode=auto \
+            -f platform=ios \
+            -f sha="$GITHUB_SHA" \
+            -f message="Integration ${GITHUB_SHA}"
+          gh workflow run mobile-eas-development.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref fork/integration \
+            -f platform=ios \
+            -f sha="$GITHUB_SHA"
