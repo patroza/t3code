@@ -212,14 +212,16 @@ describe("ConnectionResolver", () => {
         wsBaseUrl: "ws://127.0.0.1:3777",
       });
 
-      expect(yield* broker.prepare(catalogEntry(target))).toEqual({
+      const prepared = yield* broker.prepare(catalogEntry(target));
+      expect(prepared).toMatchObject({
         environmentId: ENVIRONMENT_ID,
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
-        socketUrl: "ws://127.0.0.1:3777/ws",
         httpAuthorization: null,
         target,
       });
+      expect(prepared.socketUrl.startsWith("ws://127.0.0.1:3777/ws?")).toBe(true);
+      expect(new URL(prepared.socketUrl).searchParams.get("productFamily")).toBe("omegent-t3");
     }),
   );
 

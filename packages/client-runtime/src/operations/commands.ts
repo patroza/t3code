@@ -46,6 +46,7 @@ export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type SteerQueuedMessageInput = CommandInput<"thread.queue.steer">;
 export type RemoveQueuedMessageInput = CommandInput<"thread.queue.remove">;
+export type UpdateQueuedMessageInput = CommandInput<"thread.queue.update">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
@@ -275,6 +276,18 @@ export const removeQueuedMessage: (input: RemoveQueuedMessageInput) => CommandEf
   return yield* dispatch({
     ...input,
     type: "thread.queue.remove",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const updateQueuedMessage: (input: UpdateQueuedMessageInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.updateQueuedMessage",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.queue.update",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

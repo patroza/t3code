@@ -101,7 +101,7 @@ describe("createAssetEnvironmentAtoms", () => {
     expect(
       assets.createUrls({
         environmentId,
-        resources: [...resources].toReversed(),
+        resources: [...resources].reverse(),
       }),
     ).not.toBe(assets.createUrls({ environmentId, resources }));
   });
