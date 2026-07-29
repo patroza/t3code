@@ -85,6 +85,21 @@ export T3_WEB_UI_BASE_URL=http://127.0.0.1:5173
 pnpm --filter @t3tools/discord-bot start
 ```
 
+## Agent turn prompts
+
+Each Discord turn injects a **compact** dynamic block only:
+
+- `rules:` absolute path to static policy
+- `req:` `id@user name`
+- `cab: Name <email> | …` (bot-resolved; agent prefixes `Co-authored-by:`)
+- `unmapped:` only when someone has no resolvable GitHub trailer
+- `pr:` `name` / `uid` / `g` / `c` / `m` / `title` (ids — expand via rules)
+- `jira:` issue keys (no browse URLs)
+- `jump:` `g/c/m` for referenced messages
+
+Static policy lives in
+[`apps/discord-bot/docs/agent-turn-rules.md`](../../apps/discord-bot/docs/agent-turn-rules.md).
+
 ## Browser automation
 
 The bot can register a headless Playwright host for the same `preview_*` tools used by the desktop app. Create a named persistent profile in a headed browser first:

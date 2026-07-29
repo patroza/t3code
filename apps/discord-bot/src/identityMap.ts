@@ -372,8 +372,11 @@ export function resolveGitHubCoAuthorEmail(github: GitHubIdentityRef): string | 
   return null;
 }
 
-/** `Co-authored-by: Name <email>` or null when GitHub email cannot be resolved. */
-export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null {
+/**
+ * Co-author body only: `Name <email>` (no trailer prefix).
+ * Prefix with `Co-authored-by: ` when writing git commits (see agent-turn-rules).
+ */
+export function formatCoAuthoredByBody(person: PersonIdentity): string | null {
   const github = person.github;
   if (github === undefined) return null;
   const email = resolveGitHubCoAuthorEmail(github);
@@ -381,7 +384,13 @@ export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null
   const name = (github.name ?? person.name).trim() || person.name;
   // Git trailers must be a single line; strip newlines from names.
   const safeName = name.replace(/[\r\n]+/gu, " ").trim();
-  return `Co-authored-by: ${safeName} <${email}>`;
+  return `${safeName} <${email}>`;
+}
+
+/** Full git trailer `Co-authored-by: Name <email>`, or null when unresolved. */
+export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null {
+  const body = formatCoAuthoredByBody(person);
+  return body === null ? null : `Co-authored-by: ${body}`;
 }
 
 export type ResolvedParticipantIdentity = {
@@ -448,7 +457,9 @@ export function resolveParticipantIdentity(input: {
 
 /**
  * Build the agent-facing attribution block for commits/PRs.
- * Returns null when there is nothing useful to inject (empty map + no participants).
+ * Bot already resolved the identity map — inject cab bodies only (no lookup, no
+ * repeated `Co-authored-by:` prefix). Unmapped participants listed briefly.
+ * Returns null when there is nothing useful to inject.
  */
 export function formatIdentityAttributionBlock(input: {
   readonly participants: ReadonlyArray<ResolvedParticipantIdentity>;
@@ -457,99 +468,55 @@ export function formatIdentityAttributionBlock(input: {
   if (participants.length === 0) return null;
 
   const anyMapped = participants.some((p) => p.person !== null);
-  const trailers = uniqueTrailers(
-    participants.map((p) => p.coAuthoredBy).filter((t): t is string => t !== null),
+  // Dedupe by trailer body; starter+req same person → one entry.
+  const cabBodies = uniqueStrings(
+    participants
+      .map((p) => {
+        if (p.coAuthoredBy === null) return null;
+        return p.coAuthoredBy.replace(/^Co-authored-by:\s*/iu, "").trim();
+      })
+      .filter((t): t is string => t !== null && t.length > 0),
   );
 
-  const lines: string[] = [
-    "### Identity map (git / GitHub / Jira attribution) — REQUIRED",
-    "Operator-maintained map from Discord users to GitHub (and optional Jira).",
-    "**Do not invent emails or logins.** Attribution is mandatory for Discord-originated commits/PRs when trailers are listed below.",
-  ];
-
+  // Only surface unmapped / incomplete rows (mapped people are fully covered by cab).
+  const unmappedParts: string[] = [];
+  const seenUnmapped = new Set<string>();
   for (const p of participants) {
-    const roleLabel =
-      p.role === "requester"
-        ? "Current requester"
-        : p.role === "thread_starter"
-          ? "Thread starter"
-          : "Participant";
-    const discordBits = [
-      p.discordDisplayName ?? p.discordUsername ?? "unknown",
-      p.discordId !== null ? `id=${p.discordId}` : null,
-      p.discordUsername !== null ? `username=${p.discordUsername}` : null,
-    ]
-      .filter((b): b is string => b !== null)
-      .join(", ");
-
-    if (p.person === null) {
-      lines.push(
-        `- **${roleLabel}** (${discordBits}): unmapped (${p.unmappedReason ?? "unknown"})`,
-      );
-      continue;
-    }
-
-    const gh = p.person.github;
-    const jira = p.person.jira;
-    const parts = [
-      `name=${p.person.name}`,
-      gh !== undefined ? `github=@${gh.login}` : "github=unset",
-      gh?.id !== undefined ? `githubId=${gh.id}` : null,
-      p.coAuthoredBy !== null ? `trailer ready` : p.unmappedReason,
-      jira?.accountId !== undefined ? `jiraAccountId=${jira.accountId}` : null,
-      jira?.email !== undefined ? `jiraEmail=${jira.email}` : null,
-    ].filter((b): b is string => b !== null && b.length > 0);
-    lines.push(`- **${roleLabel}** (${discordBits}): ${parts.join("; ")}`);
+    if (p.coAuthoredBy !== null) continue;
+    const role = p.role === "requester" ? "req" : p.role === "thread_starter" ? "starter" : "p";
+    const id = p.discordId ?? "?";
+    const user = p.discordUsername ?? p.person?.discord?.username ?? "?";
+    const key = `${id}@${user}`;
+    if (seenUnmapped.has(key)) continue;
+    seenUnmapped.add(key);
+    const why = p.person === null ? "unmapped" : "no-gh";
+    unmappedParts.push(`${role} ${key} ${why}`);
   }
 
-  lines.push("");
-  lines.push("**REQUIRED when creating commits for this Discord work:**");
-  lines.push("1. Keep the environment default author/committer (usually the GitHub App bot).");
-  lines.push(
-    "2. **Every** new commit message MUST end with the `Co-authored-by` trailers below for **mapped** participants (thread starter and/or current requester). Skip unmapped people — do not invent emails.",
-  );
-  lines.push(
-    "3. Put trailers at the end of the commit message after a blank line. Use the exact lines below.",
-  );
-  lines.push(
-    "4. Verify with `git log -1 --format=%B` before push/PR. Commits missing these trailers are incomplete.",
-  );
-  lines.push(
-    "5. When opening a PR: paste the **Discord PR description footer** from turn context when present (user link = `https://discord.com/users/<id>`, thread link = full `https://discord.com/channels/...`). Never use bare snowflakes or truncated channel URLs. The bot may hard-append the footer later — still write it on create. GitHub multi-author avatars come from **commit** trailers. Optional PR-body co-author list: profile links that look like mentions (`[@login](https://github.com/login)`), **never** bare `@login` (notifies).",
-  );
-  lines.push(
-    "6. **Always open a PR** for this work once there are commits (or the change is clearly intended to land). Prefer a **draft PR** until full lint / typecheck / focused tests / `vp check` are done; then **you must mark it ready** (draft is not done). Do not leave drafts abandoned and do not hold the PR closed waiting for perfect green.",
-  );
-
-  if (trailers.length > 0) {
-    lines.push("");
-    lines.push("**Mandatory** ready-to-paste trailers for this turn (append to every new commit):");
-    lines.push("```");
-    for (const t of trailers) lines.push(t);
-    lines.push("```");
+  const lines: string[] = [];
+  if (cabBodies.length > 0) {
+    // Single line; agent prefixes each with `Co-authored-by: ` when committing.
+    lines.push(`cab: ${cabBodies.join(" | ")}`);
   } else if (!anyMapped) {
-    lines.push("");
-    lines.push(
-      "No participants are in the identity map yet. Ask an operator to add Discord→GitHub entries to the ops identity map (see ops docs), or the user can supply an explicit `Co-authored-by` line.",
-    );
+    lines.push("cab: (none)");
   } else {
-    lines.push("");
-    lines.push(
-      "Mapped participants are missing a resolvable GitHub email/id. Operator should set `githubId` or `githubEmail` on their map entry.",
-    );
+    lines.push("cab: (none — missing gh id/email)");
+  }
+  if (unmappedParts.length > 0) {
+    lines.push(`unmapped: ${unmappedParts.join(" | ")}`);
   }
 
   return lines.join("\n");
 }
 
-function uniqueTrailers(trailers: ReadonlyArray<string>): ReadonlyArray<string> {
+function uniqueStrings(values: ReadonlyArray<string>): ReadonlyArray<string> {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const t of trailers) {
-    const key = t.toLowerCase();
+  for (const value of values) {
+    const key = value.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(t);
+    out.push(value);
   }
   return out;
 }
