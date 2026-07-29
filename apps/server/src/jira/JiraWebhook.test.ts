@@ -7,9 +7,9 @@ import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
   classifyWebhookBodyFailure,
   previewWebhookBody,
-  pruneJiraWebhookDebugRecords,
-  type JiraWebhookDebugRecord,
-} from "./JiraWebhookDebugLog.ts";
+  pruneWebhookDebugRecords,
+  type WebhookDebugRecord,
+} from "../webhooks/WebhookDebugLog.ts";
 import {
   bodyMentionsIdentity,
   buildJiraTurnPrompt,
@@ -342,7 +342,7 @@ describe("Jira helpers", () => {
   });
 });
 
-describe("Jira webhook debug log helpers", () => {
+describe("Webhook debug log helpers", () => {
   it("classifies empty, broken JSON, and schema-shaped failures", () => {
     expect(classifyWebhookBodyFailure("").reason).toBe("empty_body");
     expect(classifyWebhookBodyFailure("  ").reason).toBe("empty_body");
@@ -368,31 +368,34 @@ describe("Jira webhook debug log helpers", () => {
 
   it("prunes records older than max age and applies a hard cap", () => {
     const now = Date.parse("2026-07-29T14:00:00.000Z");
-    const records: JiraWebhookDebugRecord[] = [
+    const records: WebhookDebugRecord[] = [
       {
         ts: "2026-07-28T13:00:00.000Z",
+        source: "jira",
         outcome: "invalid_400",
         status: 400,
         bodyBytes: 1,
       },
       {
         ts: "2026-07-29T12:00:00.000Z",
+        source: "github",
         outcome: "accepted_202",
         status: 202,
         bodyBytes: 2,
       },
       {
         ts: "2026-07-29T13:30:00.000Z",
+        source: "jira",
         outcome: "ignored_202",
         status: 202,
         bodyBytes: 3,
       },
     ];
 
-    const pruned = pruneJiraWebhookDebugRecords(records, now, 24 * 60 * 60 * 1000);
+    const pruned = pruneWebhookDebugRecords(records, now, 24 * 60 * 60 * 1000);
     expect(pruned.map((r) => r.outcome)).toEqual(["accepted_202", "ignored_202"]);
 
-    const capped = pruneJiraWebhookDebugRecords(records, now, 48 * 60 * 60 * 1000, 1);
+    const capped = pruneWebhookDebugRecords(records, now, 48 * 60 * 60 * 1000, 1);
     expect(capped).toHaveLength(1);
     expect(capped[0]?.outcome).toBe("ignored_202");
   });

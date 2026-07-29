@@ -2,14 +2,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
-import { JiraIssueBridge } from "./JiraIssueBridge.ts";
 import {
   classifyWebhookBodyFailure,
-  JiraWebhookDebugLog,
   previewWebhookBody,
-  type JiraWebhookDebugAppendInput,
-} from "./JiraWebhookDebugLog.ts";
+  WebhookDebugLog,
+  type WebhookDebugAppendInput,
+} from "../webhooks/WebhookDebugLog.ts";
+import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
+import { JiraIssueBridge } from "./JiraIssueBridge.ts";
 import {
   isAcceptedJiraCommentEvent,
   jiraDeliveryIdFor,
@@ -67,10 +67,10 @@ export const jiraWebhookRouteLayer = HttpRouter.add(
   JIRA_WEBHOOK_PATH,
   Effect.gen(function* () {
     const config = yield* JiraAppConfig;
-    const debugLog = yield* JiraWebhookDebugLog;
+    const debugLog = yield* WebhookDebugLog;
 
-    const logDebug = (input: JiraWebhookDebugAppendInput) =>
-      debugLog.append(input).pipe(Effect.ignore, Effect.forkDetach);
+    const logDebug = (input: Omit<WebhookDebugAppendInput, "source">) =>
+      debugLog.append({ ...input, source: "jira" }).pipe(Effect.ignore, Effect.forkDetach);
 
     if (!config.enabled) {
       yield* logDebug({

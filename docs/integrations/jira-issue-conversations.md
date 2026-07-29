@@ -99,19 +99,22 @@ ${T3CODE stateDir}/thread-work-items.json
 
 ## Webhook debug log
 
-Every inbound `POST /api/jira/webhook` writes one NDJSON row to:
+Every inbound integration webhook writes one NDJSON row under the server state dir:
 
 ```text
 ${T3CODE stateDir}/jira-webhook-debug.ndjson
+${T3CODE stateDir}/github-webhook-debug.ndjson
 ```
 
 Outcomes include `accepted_202`, `ignored_202`, `invalid_400`, `unauthorized_401`,
-`project_denied_202`, `too_large_413`, and `disabled_404`. Invalid rows store a capped
-`bodyPreview` plus a `reason` (`json_parse_failed` is common when Automation injects
-unescaped newlines into Custom data JSON).
+`project_denied_202` / `repo_denied_202`, `too_large_413`, `missing_delivery_id_400`
+(GitHub), and `disabled_404`. Invalid rows store a capped `bodyPreview` plus a `reason`
+(`json_parse_failed` is common when Jira Automation injects unescaped newlines into
+Custom data JSON).
 
-Retention: **24 hours** (and a hard cap of 5 000 rows). Older lines are pruned on each
-append and on process start. Best-effort only — append failures never fail the webhook.
+Retention: **24 hours** (and a hard cap of 5 000 rows per source). Older lines are pruned
+on each append and on process start. Best-effort only — append failures never fail the
+webhook.
 
 ## Configuration
 

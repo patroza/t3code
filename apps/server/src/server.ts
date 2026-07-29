@@ -113,8 +113,8 @@ import * as JiraAppClient from "./jira/JiraAppClient.ts";
 import * as JiraAppConfig from "./jira/JiraAppConfig.ts";
 import * as JiraDeliveryStore from "./jira/JiraDeliveryStore.ts";
 import * as JiraIssueBridge from "./jira/JiraIssueBridge.ts";
-import * as JiraWebhookDebugLog from "./jira/JiraWebhookDebugLog.ts";
 import { jiraWebhookRouteLayer } from "./jira/http.ts";
+import * as WebhookDebugLog from "./webhooks/WebhookDebugLog.ts";
 import * as ThreadWorkItemStore from "./workItems/ThreadWorkItemStore.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -265,11 +265,9 @@ const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(
   Layer.provideMerge(ThreadWorkItemStoreLive),
 );
 
-const JiraAppDependenciesLive = Layer.mergeAll(
-  JiraAppClient.layer,
-  JiraDeliveryStore.layer,
-  JiraWebhookDebugLog.layer,
-).pipe(Layer.provideMerge(JiraAppConfig.layer));
+const JiraAppDependenciesLive = Layer.mergeAll(JiraAppClient.layer, JiraDeliveryStore.layer).pipe(
+  Layer.provideMerge(JiraAppConfig.layer),
+);
 
 const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
   Layer.provideMerge(JiraAppDependenciesLive),
@@ -417,6 +415,8 @@ const RuntimeCoreWithGitHubLive = GitHubPrBridgeLive.pipe(
 
 const RuntimeCoreWithIntegrationsLive = JiraIssueBridgeLive.pipe(
   Layer.provideMerge(RuntimeCoreWithGitHubLive),
+  // Shared 24h NDJSON debug logs for GitHub + Jira inbound webhooks.
+  Layer.provideMerge(WebhookDebugLog.layer),
 );
 
 const RuntimeDependenciesLive = RuntimeCoreWithIntegrationsLive.pipe(
