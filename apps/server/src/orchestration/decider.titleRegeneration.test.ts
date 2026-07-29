@@ -1,19 +1,14 @@
-import {
-  CommandId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-  type OrchestrationReadModel,
-} from "@t3tools/contracts";
+import { CommandId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 
 const UPDATED_AT = "2026-01-01T00:00:00.000Z";
 
-const readModel: OrchestrationReadModel = {
+const readModel: CommandReadModel = fromWireReadModel({
   snapshotSequence: 0,
   projects: [],
   threads: [
@@ -36,6 +31,8 @@ const readModel: OrchestrationReadModel = {
       snoozedAt: null,
       deletedAt: null,
       messages: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       proposedPlans: [],
       activities: [],
       checkpoints: [],
@@ -43,7 +40,7 @@ const readModel: OrchestrationReadModel = {
     },
   ],
   updatedAt: UPDATED_AT,
-};
+});
 
 it.layer(NodeServices.layer)("title regeneration decider", (it) => {
   it.effect("preserves updatedAt for a stale completion", () =>
