@@ -292,6 +292,18 @@ export function ThreadStatusV2Indicator({
   );
 }
 
+/** Sidebar cue for an unsent composer draft on a thread row. */
+export function ComposerDraftDot({ className }: { className?: string }) {
+  return (
+    <span
+      aria-label="Unsent draft"
+      title="Unsent draft"
+      data-testid="composer-draft-dot"
+      className={cn("size-1.5 shrink-0 rounded-full bg-blue-500", className)}
+    />
+  );
+}
+
 export function ThreadStatusLabel({
   status,
   compact = false,
