@@ -1,0 +1,99 @@
+name: Rebase fork PR stack
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, converted_to_draft]
+    branches: [fork/changes]
+  push:
+    branches:
+      - fork/tim
+      - fork/candidates
+      - fork/changes
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fork-pr-stack
+  # Every event is classified inside the workflow. Cancelling a managed-overlay
+  # rebuild because a later ordinary PR event arrived can drop the only
+  # integration refresh for that overlay. Serialize the events instead.
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: write
+
+jobs:
+  classify:
+    name: Classify stack event
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.classify.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fork/changes
+          fetch-depth: 1
+      - id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if jq -e --argjson number "${PR_NUMBER}" \
+            '.integrationOverlays | any(.number == $number)' \
+            .github/pr-stack.json >/dev/null; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  rebase:
+    name: Rebase and dispatch integration CI
+    needs: classify
+    if: needs.classify.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout canonical fork changes
+        uses: actions/checkout@v6
+        with:
+          ref: fork/changes
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Configure protected stack push key
+        env:
+          FORK_STACK_DEPLOY_KEY: ${{ secrets.FORK_STACK_DEPLOY_KEY }}
+        run: |
+          key_path="${RUNNER_TEMP}/fork-stack-deploy-key"
+          printf '%s\n' "${FORK_STACK_DEPLOY_KEY}" > "${key_path}"
+          chmod 600 "${key_path}"
+          ssh-keyscan -H github.com >> "${RUNNER_TEMP}/github-known-hosts"
+          echo "GIT_SSH_COMMAND=ssh -i ${key_path} -o IdentitiesOnly=yes -o UserKnownHostsFile=${RUNNER_TEMP}/github-known-hosts" >> "${GITHUB_ENV}"
+          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/pingdotgg/t3code.git
+
+      - name: Rebase and atomically update stack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/rebase-pr-stack.ts sync --push
+
+      - name: Compose registered integration overlays
+        run: node scripts/compose-integration-overlays.ts
+
+      - name: Dispatch integration CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run fork-ci.yml --repo "$GITHUB_REPOSITORY" --ref fork/integration

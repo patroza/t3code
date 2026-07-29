@@ -1,0 +1,150 @@
+{
+  "upstreamRemote": "upstream",
+  "upstreamBranch": "main",
+  "forkChangesBranch": "fork/changes",
+  "integrationBranch": "fork/integration",
+  "pullRequests": [
+    {
+      "number": 1,
+      "branch": "fork/tim"
+    },
+    {
+      "number": 27,
+      "branch": "fork/candidates"
+    },
+    {
+      "number": 2,
+      "branch": "fork/changes"
+    }
+  ],
+  "integrationOverlays": [
+    {
+      "number": 10,
+      "branch": "t3-discord/f7d37879-desktop-deeplinks"
+    },
+    {
+      "number": 80,
+      "branch": "fork/discord"
+    },
+    {
+      "number": 79,
+      "branch": "fork/vscode"
+    }
+  ],
+  "conflictResolutions": [
+    {
+      "branch": "fork/changes",
+      "commit": "10de598e790218c772ada3d908bc7b1eb1e54f0e",
+      "path": "apps/mobile/src/lib/threadActivity.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "apps/mobile/src/lib/threadActivity.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "packages/contracts/src/settings.test.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "ce3318775d74c566b4eef309c3f374e6d220891d",
+      "path": "packages/contracts/src/settings.test.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "apps/web/src/components/ChatMarkdown.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "1f8a2c58ae115df840d98d5854825123c502d54c",
+      "path": "apps/web/src/components/ChatMarkdown.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "4d97aafb8e216dd27b6835b13ad20fca2884691e",
+      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "*",
+      "path": "pnpm-lock.yaml",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "286efa51172d3cbf46684c9923ca9d2b003d0967",
+      "path": "pnpm-lock.yaml",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "*",
+      "path": "AGENTS.md",
+      "strategy": "ours"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "46c3697f207ea2de04c0a9ef72ca867d4d9f01da",
+      "path": "AGENTS.md",
+      "strategy": "ours"
+    },
+    {
+      "branch": "fork/integration",
+      "commit": "*",
+      "path": "docs/fork-stack.md",
+      "strategy": "ours"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "AGENTS.md",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "206981716ef30b5fb58338e32653339ed958a7f7",
+      "path": "AGENTS.md",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/candidates",
+      "commit": "*",
+      "path": "apps/web/src/components/SidebarV2.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/candidates",
+      "commit": "0cf437e7681face0550d5f9620b58f7b6327e57f",
+      "path": "apps/web/src/components/SidebarV2.tsx",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "package.json",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "d21149c3666035d6afd61fbc87b4e6ceac2314e8",
+      "path": "package.json",
+      "strategy": "theirs"
+    }
+  ]
+}
