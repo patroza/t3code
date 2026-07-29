@@ -169,6 +169,12 @@
       "commit": "*",
       "path": "apps/server/src/provider/Layers/ProviderRegistry.test.ts",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/tim",
+      "commit": "*",
+      "path": "apps/server/src/ws.ts",
+      "strategy": "theirs"
     }
   ]
 }
