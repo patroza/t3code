@@ -234,17 +234,26 @@ export function verifyReplayHead(
   const subject = git(repoDir, ["log", "-1", "--format=%s"], gitOpts);
   console.log(`verify-head: ${sha} ${subject} → ${packages.join(", ")}`);
   for (const pkg of packages) {
-    const result = run("pnpm", ["--filter", pkg, "run", "typecheck"], {
+    // Prefer `exec tsgo` over `run typecheck` so pnpm does not try a frozen
+    // install against a historical package.json/lockfile pair mid-rebase.
+    const result = run("pnpm", ["--filter", pkg, "exec", "tsgo", "--noEmit"], {
       cwd: repoDir,
       allowFailure: true,
-      env: { ELECTRON_SKIP_BINARY_DOWNLOAD: "1" },
+      env: {
+        ELECTRON_SKIP_BINARY_DOWNLOAD: "1",
+        // Historical commits often disagree with the worktree lockfile; never
+        // auto-install mid-verify (install once before the rewrite).
+        npm_config_frozen_lockfile: "false",
+        CI: "",
+      },
       ...gitOpts,
     });
     if (result.status !== 0) {
       throw new StackError(
         `Commit ${sha} ("${subject}") failed typecheck for ${pkg}. ` +
           `Fix the replayed commit (or the conflict resolution that produced it); ` +
-          `do not land a tip-only fix(stack) product patch.`,
+          `do not land a tip-only fix(stack) product patch.\n` +
+          `${(result.stderr || result.stdout).trim().slice(-1200)}`,
         options?.stateDir === undefined ? undefined : { stateDir: options.stateDir },
       );
     }
