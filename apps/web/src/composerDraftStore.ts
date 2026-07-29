@@ -703,6 +703,37 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   );
 }
 
+/**
+ * True when the composer holds unsent user content (text, images, or
+ * attached contexts). Model/mode sticky state alone does not count — sidebar
+ * draft dots should only light when there's a message to send.
+ */
+export function hasComposerDraftMessage(
+  draft:
+    | {
+        readonly prompt: string;
+        readonly images: readonly unknown[];
+        readonly persistedAttachments: readonly unknown[];
+        readonly terminalContexts: readonly unknown[];
+        readonly elementContexts: readonly unknown[];
+        readonly previewAnnotations: readonly unknown[];
+        readonly reviewComments: readonly unknown[];
+      }
+    | null
+    | undefined,
+): boolean {
+  if (!draft) return false;
+  return (
+    draft.prompt.trim().length > 0 ||
+    draft.images.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.length > 0 ||
+    draft.elementContexts.length > 0 ||
+    draft.previewAnnotations.length > 0 ||
+    draft.reviewComments.length > 0
+  );
+}
+
 function normalizeProviderDriverKind(value: unknown): ProviderDriverKind | null {
   return isProviderDriverKind(value) ? value : null;
 }

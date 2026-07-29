@@ -53,6 +53,11 @@ export interface Preferences {
    * Projects list: hide settled threads. Default false when omitted (full history).
    */
   readonly hideSettledOnProjects?: boolean;
+  /**
+   * Threads list organization: recency (Recent), project, or none.
+   * Device-local; survives restarts. Omitted = default project grouping.
+   */
+  readonly threadGrouping?: "recency" | "project" | "none";
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -109,6 +114,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     hideSettledThreads?: boolean;
     hideSettledOnRecent?: boolean;
     hideSettledOnProjects?: boolean;
+    threadGrouping?: "recency" | "project" | "none";
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -158,7 +164,26 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.hideSettledOnProjects === "boolean") {
     preferences.hideSettledOnProjects = parsed.hideSettledOnProjects;
   }
+  if (
+    parsed.threadGrouping === "recency" ||
+    parsed.threadGrouping === "project" ||
+    parsed.threadGrouping === "none"
+  ) {
+    preferences.threadGrouping = parsed.threadGrouping;
+  }
   return preferences;
+}
+
+/** Resolve stored Threads grouping; default project when never chosen. */
+export function resolveThreadGrouping(preferences: Preferences): "recency" | "project" | "none" {
+  if (
+    preferences.threadGrouping === "recency" ||
+    preferences.threadGrouping === "project" ||
+    preferences.threadGrouping === "none"
+  ) {
+    return preferences.threadGrouping;
+  }
+  return "project";
 }
 
 /** Recent: default hide settled. Honors legacy hideSettledThreads when set. */
