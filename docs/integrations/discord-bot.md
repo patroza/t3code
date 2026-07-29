@@ -94,6 +94,8 @@ Each Discord turn injects a **compact** dynamic block only:
 - `cab: Name <email> | …` (bot-resolved; agent prefixes `Co-authored-by:`)
 - `unmapped:` only when someone has no resolvable GitHub trailer
 - `pr:` `name` / `uid` / `g` / `c` / `m` / `title` (ids — expand via rules)
+- `t3: full=… short=…` — T3 web thread link for PR footers (`full` on private
+  GitHub repos, `short` host `t3vm` on public; bot hard-appends the same rule)
 - `jira:` issue keys (no browse URLs)
 - `jump:` `g/c/m` for referenced messages
 

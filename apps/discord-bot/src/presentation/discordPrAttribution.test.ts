@@ -3,13 +3,17 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appendDiscordPrAttributionFooter,
   buildDiscordThreadJumpUrl,
+  buildT3WebThreadUrl,
   DISCORD_PR_ATTRIBUTION_MARKER,
   ensureDiscordPrAttributionFooters,
   formatDiscordPrAttributionFooter,
   newlyObservedPullRequestUrls,
+  pickT3ThreadUrlForGithubRepo,
   prBodyHasDiscordAttribution,
   starterDisplayName,
   starterUserId,
+  toT3PublicShortThreadUrl,
+  withT3ThreadLink,
 } from "./discordPrAttribution.ts";
 
 describe("formatDiscordPrAttributionFooter", () => {
@@ -49,6 +53,55 @@ describe("formatDiscordPrAttributionFooter", () => {
     });
     expect(footer).toContain("[a\\[b\\]c](https://discord.com/users/1)");
     expect(footer).toContain("[Title \\[x\\]](https://discord.com/channels/1/2/3)");
+  });
+
+  it("appends T3 thread link when provided", () => {
+    expect(
+      formatDiscordPrAttributionFooter({
+        starterDisplayName: "patroza",
+        starterUserId: "1",
+        threadTitle: "Thread",
+        threadJumpUrl: "https://discord.com/channels/1/2/3",
+        t3ThreadUrl: "https://t3vm.tail.example.ts.net/?thread=abc",
+      }),
+    ).toContain(" · [T3](https://t3vm.tail.example.ts.net/?thread=abc)");
+  });
+});
+
+describe("T3 thread URL helpers", () => {
+  it("builds full and short t3 thread URLs", () => {
+    expect(buildT3WebThreadUrl("https://t3vm.tail86038f.ts.net/", "tid-1")).toBe(
+      "https://t3vm.tail86038f.ts.net/?thread=tid-1",
+    );
+    expect(toT3PublicShortThreadUrl("https://t3vm.tail86038f.ts.net/?thread=tid-1")).toBe(
+      "https://t3vm/?thread=tid-1",
+    );
+    expect(
+      pickT3ThreadUrlForGithubRepo({
+        fullUrl: "https://t3vm.tail86038f.ts.net/?thread=tid-1",
+        repoIsPrivate: true,
+      }),
+    ).toBe("https://t3vm.tail86038f.ts.net/?thread=tid-1");
+    expect(
+      pickT3ThreadUrlForGithubRepo({
+        fullUrl: "https://t3vm.tail86038f.ts.net/?thread=tid-1",
+        repoIsPrivate: false,
+      }),
+    ).toBe("https://t3vm/?thread=tid-1");
+    expect(
+      pickT3ThreadUrlForGithubRepo({
+        fullUrl: "https://t3vm.tail86038f.ts.net/?thread=tid-1",
+        repoIsPrivate: null,
+      }),
+    ).toBe("https://t3vm/?thread=tid-1");
+  });
+
+  it("withT3ThreadLink is idempotent", () => {
+    const base =
+      "opened by [x](https://discord.com/users/1) in chat thread **Discord** · [t](https://discord.com/channels/1/2/3)";
+    const once = withT3ThreadLink(base, "https://t3vm/?thread=1");
+    expect(once).toBe(`${base} · [T3](https://t3vm/?thread=1)`);
+    expect(withT3ThreadLink(once, "https://t3vm/?thread=1")).toBe(once);
   });
 });
 
@@ -144,7 +197,9 @@ describe("ensureDiscordPrAttributionFooters", () => {
         `## Summary\n\n---\n\nopened by [x](1) ${DISCORD_PR_ATTRIBUTION_MARKER} [t](https://discord.com/channels/1/2/3)\n`,
       ],
     ]);
+    const repoPrivate = new Map<string, string>([["repos/o/r", "true"]]);
     const patched: string[] = [];
+    const writtenBodies: string[] = [];
 
     const results = await ensureDiscordPrAttributionFooters({
       prUrls: [
@@ -158,9 +213,14 @@ describe("ensureDiscordPrAttributionFooters", () => {
         threadTitle: "Open Random PR Test",
         threadJumpUrl: "https://discord.com/channels/1/2/3",
       }),
+      t3FullThreadUrl: "https://t3vm.tail.example.ts.net/?thread=t1",
       execFile: async (_file, args) => {
         const path = String(args[1] ?? "");
         if (args.includes("--jq")) {
+          const jq = String(args[args.indexOf("--jq") + 1] ?? "");
+          if (jq.includes(".private")) {
+            return { stdout: repoPrivate.get(path) ?? "false", stderr: "" };
+          }
           if (!bodies.has(path)) {
             throw new Error(`not found: ${path}`);
           }
@@ -168,6 +228,8 @@ describe("ensureDiscordPrAttributionFooters", () => {
         }
         if (args.includes("PATCH")) {
           patched.push(path);
+          // body written via temp file; just record path
+          writtenBodies.push(path);
           return { stdout: "", stderr: "" };
         }
         throw new Error(`unexpected gh args: ${args.join(" ")}`);
