@@ -1243,6 +1243,73 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
+  it.effect("maps app build/plan interaction onto Grok ACP session modes", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-session-mode-mapping");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-acp-mode-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockGrokWrapper({
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const turnCompleted = yield* Deferred.make<void>();
+      const completedCountRef = yield* Ref.make(0);
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (event.type !== "turn.completed" || String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          const completedCount = yield* Ref.updateAndGet(completedCountRef, (count) => count + 1);
+          if (completedCount === 2) {
+            yield* Deferred.succeed(turnCompleted, undefined);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId,
+        input: "build this",
+        attachments: [],
+        interactionMode: "default",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "plan this",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      yield* Deferred.await(turnCompleted);
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const modeIds = requests
+        .filter((entry) => entry.method === "session/set_mode")
+        .map((entry) => {
+          const params = entry.params as Record<string, unknown> | undefined;
+          return typeof params?.modeId === "string" ? params.modeId : undefined;
+        })
+        .filter((modeId): modeId is string => modeId !== undefined);
+
+      // startSession pins agent; default turn may no-op if already agent; plan turn switches.
+      assert.include(modeIds, "agent");
+      assert.include(modeIds, "plan");
+      assert.equal(modeIds[modeIds.length - 1], "plan");
+    }),
+  );
+
   it.effect("handles xAI ask_user_question extension requests", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-xai-ask-user-question");

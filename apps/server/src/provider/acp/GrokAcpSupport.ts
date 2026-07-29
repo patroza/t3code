@@ -20,6 +20,11 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import { makeXAiPromptCompletionRuntime } from "./XAiAcpExtension.ts";
 
+/** Preferred Grok ACP mode when the T3 thread is in Plan. */
+export const GROK_PLAN_MODE_ID = "plan";
+/** Preferred Grok ACP mode when the T3 thread is in Build (default). */
+export const GROK_AGENT_MODE_ID = "agent";
+
 const GROK_API_KEY_ENV = "XAI_API_KEY";
 const GROK_OAUTH2_REFERRER_ENV = "GROK_OAUTH2_REFERRER";
 const T3_CODE_OAUTH_REFERRER = "t3code";
@@ -210,4 +215,24 @@ export function applyGrokAcpModelSelection<E>(input: {
       .pipe(Effect.mapError((cause) => input.mapError({ cause, step: "set-effort" })));
     return boundModelId;
   });
+}
+
+/**
+ * Maps T3 interaction mode onto Grok ACP session modes.
+ * Build/default always targets agent mode; Plan targets plan mode.
+ * Never selects ask mode — that was leaving Grok read-only/approval-heavy in Build.
+ */
+export function resolveGrokRequestedModeId(
+  interactionMode: ProviderInteractionMode | undefined,
+): string {
+  return interactionMode === "plan" ? GROK_PLAN_MODE_ID : GROK_AGENT_MODE_ID;
+}
+
+export function applyGrokAcpSessionMode<E>(input: {
+  readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setMode">;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
+}): Effect.Effect<string, E> {
+  const modeId = resolveGrokRequestedModeId(input.interactionMode);
+  return input.runtime.setMode(modeId).pipe(Effect.mapError(input.mapError), Effect.as(modeId));
 }
