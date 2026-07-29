@@ -43,6 +43,18 @@
       "commit": "*",
       "path": "apps/mobile/src/lib/threadActivity.ts",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "*",
+      "path": "packages/contracts/src/settings.test.ts",
+      "strategy": "theirs"
+    },
+    {
+      "branch": "fork/changes",
+      "commit": "ce3318775d74c566b4eef309c3f374e6d220891d",
+      "path": "packages/contracts/src/settings.test.ts",
+      "strategy": "theirs"
     }
   ]
 }
