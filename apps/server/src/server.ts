@@ -121,6 +121,7 @@ import * as JiraAppConfig from "./jira/JiraAppConfig.ts";
 import * as JiraDeliveryStore from "./jira/JiraDeliveryStore.ts";
 import * as JiraIssueBridge from "./jira/JiraIssueBridge.ts";
 import { jiraWebhookRouteLayer } from "./jira/http.ts";
+import * as WebhookDebugLog from "./webhooks/WebhookDebugLog.ts";
 import * as ThreadWorkItemStore from "./workItems/ThreadWorkItemStore.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
