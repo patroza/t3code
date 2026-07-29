@@ -108,6 +108,13 @@ export type AcpParsedSessionEvent =
       readonly itemId?: string;
       readonly text: string;
       readonly rawPayload: unknown;
+    }
+  | {
+      /** ACP session-level context window update (`sessionUpdate: "usage_update"`). */
+      readonly _tag: "UsageUpdated";
+      readonly used: number;
+      readonly size: number;
+      readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
@@ -569,6 +576,25 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         events.push({
           _tag: "ContentDelta",
           text: upd.content.text,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "usage_update": {
+      const used =
+        typeof upd.used === "number" && Number.isFinite(upd.used)
+          ? Math.round(upd.used)
+          : undefined;
+      const size =
+        typeof upd.size === "number" && Number.isFinite(upd.size)
+          ? Math.round(upd.size)
+          : undefined;
+      if (used !== undefined && used >= 0 && size !== undefined && size > 0) {
+        events.push({
+          _tag: "UsageUpdated",
+          used,
+          size,
           rawPayload: params,
         });
       }

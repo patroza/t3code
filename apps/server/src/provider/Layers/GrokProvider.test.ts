@@ -6,9 +6,62 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { GrokSettings } from "@t3tools/contracts";
 
-import { buildInitialGrokProviderSnapshot, checkGrokProviderStatus } from "./GrokProvider.ts";
+import {
+  buildGrokCapabilitiesFromModelMeta,
+  buildGrokReasoningEffortCapabilities,
+  buildInitialGrokProviderSnapshot,
+  checkGrokProviderStatus,
+} from "./GrokProvider.ts";
 
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
+
+describe("buildGrokCapabilitiesFromModelMeta", () => {
+  it("maps Grok ACP reasoning effort meta onto option descriptors with catalog default", () => {
+    const caps = buildGrokCapabilitiesFromModelMeta({
+      supportsReasoningEffort: true,
+      reasoningEffort: "high",
+      reasoningEfforts: [
+        {
+          id: "high",
+          value: "high",
+          label: "High Effort",
+          description: "Highest implementation quality with extensive reasoning",
+          default: true,
+        },
+        {
+          id: "medium",
+          value: "medium",
+          label: "Medium Effort",
+          default: false,
+        },
+        {
+          id: "low",
+          value: "low",
+          label: "Low Effort",
+          default: false,
+        },
+      ],
+    });
+
+    const descriptors = caps.optionDescriptors ?? [];
+    expect(descriptors).toHaveLength(1);
+    const effort = descriptors[0];
+    expect(effort?.id).toBe("reasoningEffort");
+    expect(effort?.type).toBe("select");
+    if (effort?.type !== "select") return;
+    expect(effort.currentValue).toBe("high");
+    expect(effort.options.map((option) => option.id)).toEqual(["high", "medium", "low"]);
+    expect(effort.options.find((option) => option.id === "high")?.isDefault).toBe(true);
+    expect(effort.options.find((option) => option.id === "high")?.label).toBe("High");
+  });
+
+  it("returns empty capabilities when the model does not support reasoning effort", () => {
+    expect(buildGrokCapabilitiesFromModelMeta({ supportsReasoningEffort: false })).toEqual(
+      buildGrokReasoningEffortCapabilities([]),
+    );
+    expect(buildGrokCapabilitiesFromModelMeta(undefined).optionDescriptors).toEqual([]);
+  });
+});
 
 describe("buildInitialGrokProviderSnapshot", () => {
   it.effect("returns a disabled snapshot when settings.enabled is false", () =>
@@ -32,6 +85,12 @@ describe("buildInitialGrokProviderSnapshot", () => {
       expect(snapshot.version).toBeNull();
       expect(snapshot.message).toContain("Checking Grok");
       expect(snapshot.requiresNewThreadForModelChange).toBe(true);
+      const builtIn = snapshot.models.find((model) => model.slug === "grok-build");
+      expect(
+        (builtIn?.capabilities?.optionDescriptors ?? []).some(
+          (descriptor) => descriptor.id === "reasoningEffort",
+        ),
+      ).toBe(true);
     }),
   );
 });
