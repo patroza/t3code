@@ -101,6 +101,8 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
   return {
     ...shell,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities: [],
     checkpoints: [],
