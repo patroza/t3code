@@ -8,6 +8,7 @@ import {
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
   type RemoveQueuedMessageInput,
+  type UpdateQueuedMessageInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
   type RevertThreadCheckpointInput,
@@ -27,6 +28,7 @@ import {
   deleteThread,
   interruptThreadTurn,
   removeQueuedMessage,
+  updateQueuedMessage,
   respondToThreadApproval,
   respondToThreadUserInput,
   revertThreadCheckpoint,
@@ -50,6 +52,7 @@ export type {
   DeleteThreadInput,
   InterruptThreadTurnInput,
   RemoveQueuedMessageInput,
+  UpdateQueuedMessageInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
@@ -70,6 +73,7 @@ export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
 ) {
   const scheduler = createAtomCommandScheduler();
+  const urgentScheduler = createAtomCommandScheduler();
   const concurrency = {
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: { threadId: string } }) =>
@@ -151,7 +155,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     interruptTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:interrupt-turn",
       execute: (input: InterruptThreadTurnInput) => interruptThreadTurn(input),
-      scheduler,
+      scheduler: urgentScheduler,
       concurrency,
     }),
     steerQueuedMessage: createEnvironmentCommand(runtime, {
@@ -163,6 +167,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     removeQueuedMessage: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:remove-queued-message",
       execute: (input: RemoveQueuedMessageInput) => removeQueuedMessage(input),
+      scheduler,
+      concurrency,
+    }),
+    updateQueuedMessage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:update-queued-message",
+      execute: (input: UpdateQueuedMessageInput) => updateQueuedMessage(input),
       scheduler,
       concurrency,
     }),
@@ -187,7 +197,7 @@ export function createThreadEnvironmentAtoms<R, E>(
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
-      scheduler,
+      scheduler: urgentScheduler,
       concurrency,
     }),
   };
