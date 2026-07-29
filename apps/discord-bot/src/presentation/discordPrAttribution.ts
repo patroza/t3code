@@ -31,6 +31,9 @@ type ExecFileLike = (
 /** Marker used to detect an existing Discord attribution footer (idempotent). */
 export const DISCORD_PR_ATTRIBUTION_MARKER = "in chat thread **Discord** ·";
 
+/** Marker for optional T3 thread link on the same footer line. */
+export const T3_PR_THREAD_LINK_MARKER = " · [T3](";
+
 export type DiscordPrAttributionInput = {
   /** Thread starter display name (fallback: username). */
   readonly starterDisplayName: string;
@@ -40,6 +43,11 @@ export type DiscordPrAttributionInput = {
   readonly threadTitle: string;
   /** Jump URL into the Discord thread (prefer starter message). */
   readonly threadJumpUrl: string;
+  /**
+   * Optional T3 web thread URL. Full host for private GitHub repos; short
+   * `https://t3vm/?thread=…` for public repos (see pickT3ThreadUrlForGithubRepo).
+   */
+  readonly t3ThreadUrl?: string | null | undefined;
 };
 
 export type DiscordThreadStarterLike = {
@@ -73,8 +81,68 @@ export function isValidDiscordChannelJumpUrl(url: string): boolean {
 }
 
 /**
+ * Full T3 web UI deep link for a thread (`{base}/?thread={id}`).
+ * Returns null when base or thread id is missing.
+ */
+export function buildT3WebThreadUrl(
+  webUiBaseUrl: string | undefined | null,
+  threadId: string | undefined | null,
+): string | null {
+  const base = webUiBaseUrl?.trim();
+  const id = threadId?.trim();
+  if (base === undefined || base.length === 0 || id === undefined || id.length === 0) {
+    return null;
+  }
+  return `${base.replace(/\/+$/u, "")}/?thread=${id}`;
+}
+
+/**
+ * Public-safe short form: same URL with hostname forced to `t3vm` (no port).
+ * Example: `https://t3vm.tail….ts.net/?thread=x` → `https://t3vm/?thread=x`
+ */
+export function toT3PublicShortThreadUrl(fullUrl: string): string {
+  const trimmed = fullUrl.trim();
+  try {
+    const url = new URL(trimmed);
+    url.hostname = "t3vm";
+    url.port = "";
+    return url.toString();
+  } catch {
+    return trimmed.replace(/^(https?:\/\/)[^/?#]+/u, "$1t3vm");
+  }
+}
+
+/**
+ * Private GitHub repo → full t3vm host URL. Public/unknown → short `t3vm` host only
+ * (avoids leaking tailnet hostnames on public PR bodies).
+ */
+export function pickT3ThreadUrlForGithubRepo(input: {
+  readonly fullUrl: string | null | undefined;
+  readonly repoIsPrivate: boolean | null;
+}): string | null {
+  const full = input.fullUrl?.trim();
+  if (full === undefined || full.length === 0) return null;
+  if (input.repoIsPrivate === true) return full;
+  return toT3PublicShortThreadUrl(full);
+}
+
+/** Append ` · [T3](url)` when missing. */
+export function withT3ThreadLink(
+  discordFooter: string,
+  t3ThreadUrl: string | null | undefined,
+): string {
+  const base = discordFooter.trim();
+  const t3 = t3ThreadUrl?.trim();
+  if (base.length === 0) return t3 !== undefined && t3.length > 0 ? `[T3](${t3})` : "";
+  if (t3 === undefined || t3.length === 0) return base;
+  if (base.includes(T3_PR_THREAD_LINK_MARKER) || base.includes(`](${t3})`)) return base;
+  return `${base}${T3_PR_THREAD_LINK_MARKER}${t3})`;
+}
+
+/**
  * Build the single-line attribution footer from thread starter + title.
  * User link uses Discord profile URL; thread link must be a full channel jump URL.
+ * Optional T3 thread link is appended as ` · [T3](url)`.
  */
 export function formatDiscordPrAttributionFooter(input: DiscordPrAttributionInput): string {
   const displayName = input.starterDisplayName.trim() || "unknown";
@@ -84,10 +152,10 @@ export function formatDiscordPrAttributionFooter(input: DiscordPrAttributionInpu
   const jumpUrl = input.threadJumpUrl.trim();
 
   const openedBy = `opened by [${escapeMarkdownLinkLabel(displayName)}](${profileUrl}) in chat thread **Discord**`;
-  if (!isValidDiscordChannelJumpUrl(jumpUrl)) {
-    return openedBy;
-  }
-  return `${openedBy} · [${escapeMarkdownLinkLabel(title)}](${jumpUrl})`;
+  const withDiscord = isValidDiscordChannelJumpUrl(jumpUrl)
+    ? `${openedBy} · [${escapeMarkdownLinkLabel(title)}](${jumpUrl})`
+    : openedBy;
+  return withT3ThreadLink(withDiscord, input.t3ThreadUrl);
 }
 
 export function buildDiscordThreadJumpUrl(input: {
@@ -188,15 +256,21 @@ export type EnsureDiscordPrAttributionResult = {
 
 /**
  * For each PR URL, append the Discord attribution footer when missing.
+ * When `t3FullThreadUrl` is set, appends ` · [T3](…)` using the full host for
+ * private GitHub repos and the short `t3vm` host for public/unknown repos.
  * Best-effort: failures are returned per-URL and never throw.
  */
 export async function ensureDiscordPrAttributionFooters(input: {
   readonly prUrls: ReadonlyArray<string>;
+  /** Discord attribution line (may already include T3; otherwise T3 is chosen per-repo). */
   readonly footer: string;
+  /** Full T3 web URL (`{T3_WEB_UI_BASE_URL}/?thread=…`). Shortened for public repos. */
+  readonly t3FullThreadUrl?: string | null | undefined;
   readonly execFile?: ExecFileLike;
 }): Promise<ReadonlyArray<EnsureDiscordPrAttributionResult>> {
   const execImpl = input.execFile ?? execFile;
   const results: EnsureDiscordPrAttributionResult[] = [];
+  const footerHasT3 = input.footer.includes(T3_PR_THREAD_LINK_MARKER);
 
   for (const raw of input.prUrls) {
     const normalized = normalizePullRequestUrl(raw);
@@ -207,7 +281,16 @@ export async function ensureDiscordPrAttributionFooters(input: {
 
     try {
       const currentBody = await readPullRequestBody(normalized, execImpl);
-      const nextBody = appendDiscordPrAttributionFooter(currentBody, input.footer);
+      let footer = input.footer;
+      if (!footerHasT3 && input.t3FullThreadUrl !== undefined && input.t3FullThreadUrl !== null) {
+        const repoIsPrivate = await readGithubRepoIsPrivate(normalized, execImpl);
+        const t3Url = pickT3ThreadUrlForGithubRepo({
+          fullUrl: input.t3FullThreadUrl,
+          repoIsPrivate,
+        });
+        footer = withT3ThreadLink(input.footer, t3Url);
+      }
+      const nextBody = appendDiscordPrAttributionFooter(currentBody, footer);
       if (nextBody === null) {
         results.push({ url: normalized.url, status: "already_present" });
         continue;
@@ -225,6 +308,25 @@ export async function ensureDiscordPrAttributionFooters(input: {
   }
 
   return results;
+}
+
+async function readGithubRepoIsPrivate(
+  pr: { readonly owner: string; readonly repo: string },
+  execImpl: ExecFileLike,
+): Promise<boolean | null> {
+  try {
+    const { stdout } = await execImpl(
+      "gh",
+      ["api", `repos/${pr.owner}/${pr.repo}`, "--jq", ".private"],
+      { env: gitCommandEnv(), maxBuffer: 64 * 1024 },
+    );
+    const value = stdout.trim().toLowerCase();
+    if (value === "true") return true;
+    if (value === "false") return false;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 async function readPullRequestBody(
