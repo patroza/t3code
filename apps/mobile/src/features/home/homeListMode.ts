@@ -59,6 +59,11 @@ export function isHomeThreadGrouping(value: unknown): value is HomeThreadGroupin
 
 export const DEFAULT_HOME_THREAD_GROUPING: HomeThreadGrouping = "project";
 
+/** Stored / preference value → valid grouping (default project when unset). */
+export function resolveHomeThreadGrouping(value: unknown): HomeThreadGrouping {
+  return isHomeThreadGrouping(value) ? value : DEFAULT_HOME_THREAD_GROUPING;
+}
+
 export function usesProjectThreadGrouping(grouping: HomeThreadGrouping): boolean {
   return grouping === "project";
 }
