@@ -16,7 +16,12 @@ import {
   type PersonIdentity,
   type ResolvedParticipantIdentity,
 } from "../identityMap.ts";
-import { starterDisplayName, starterUserId } from "./discordPrAttribution.ts";
+import {
+  buildT3WebThreadUrl,
+  starterDisplayName,
+  starterUserId,
+  toT3PublicShortThreadUrl,
+} from "./discordPrAttribution.ts";
 import { mergeJiraIssueKeys } from "./jiraLinks.ts";
 
 /** Absolute path to the static Discord agent policy document. */
@@ -91,6 +96,10 @@ export interface ThreadBootstrapContext {
   readonly discordThreadId?: string | null | undefined;
   /** Discord thread title (channel name) for the PR footer label. */
   readonly discordThreadTitle?: string | null | undefined;
+  /** T3 Code thread id for PR footer T3 link (when known). */
+  readonly t3ThreadId?: string | null | undefined;
+  /** T3 web UI base (e.g. https://t3vm.tail….ts.net) for full private PR links. */
+  readonly webUiBaseUrl?: string | null | undefined;
 }
 
 function formatDiscordStaticRulesPointer(rulesPath: string): string {
@@ -239,6 +248,24 @@ export function formatDiscordPrFooterPromptBlock(input: {
   return `pr: ${parts.join(" ")}`;
 }
 
+/**
+ * Compact T3 thread link fields for PR footers.
+ * Agents pick full (private GH repo) vs short host `t3vm` (public).
+ */
+export function formatT3PrLinkPromptBlock(input: {
+  readonly t3ThreadId?: string | null | undefined;
+  readonly webUiBaseUrl?: string | null | undefined;
+}): string | null {
+  const id = input.t3ThreadId?.trim();
+  if (id === undefined || id.length === 0) return null;
+
+  const full = buildT3WebThreadUrl(input.webUiBaseUrl, id);
+  const short = full !== null ? toT3PublicShortThreadUrl(full) : `https://t3vm/?thread=${id}`;
+
+  if (full !== null) return `t3: full=${full} short=${short}`;
+  return `t3: short=${short}`;
+}
+
 export function buildDiscordTurnPrompt(input: {
   readonly mentionPrompt: string;
   readonly requester?: DiscordMessageLike | undefined;
@@ -251,6 +278,8 @@ export function buildDiscordTurnPrompt(input: {
   readonly guildId?: string | null | undefined;
   readonly discordThreadId?: string | null | undefined;
   readonly discordThreadTitle?: string | null | undefined;
+  readonly t3ThreadId?: string | null | undefined;
+  readonly webUiBaseUrl?: string | null | undefined;
   /** Override static rules path (tests). Defaults to package docs path. */
   readonly agentTurnRulesPath?: string | undefined;
 }): string {
@@ -292,8 +321,14 @@ export function buildDiscordTurnPrompt(input: {
   });
   const prFooterSection = prFooterBlock !== null ? `\n${prFooterBlock}` : "";
 
+  const t3Block = formatT3PrLinkPromptBlock({
+    t3ThreadId: input.t3ThreadId,
+    webUiBaseUrl: input.webUiBaseUrl,
+  });
+  const t3Section = t3Block !== null ? `\n${t3Block}` : "";
+
   return `${formatDiscordStaticRulesPointer(rulesPath)}
-req: ${formatRequesterLine(input.requester)}${jiraSection}${identitySection}${prFooterSection}
+req: ${formatRequesterLine(input.requester)}${jiraSection}${identitySection}${prFooterSection}${t3Section}
 
 ## User request
 ${input.mentionPrompt.trim()}${referencedBlock}`;
@@ -415,6 +450,8 @@ export function buildFirstTurnPrompt(input: ThreadBootstrapContext): string {
     guildId: input.guildId,
     discordThreadId: input.discordThreadId,
     discordThreadTitle: input.discordThreadTitle,
+    t3ThreadId: input.t3ThreadId,
+    webUiBaseUrl: input.webUiBaseUrl,
   });
 
   if (input.starter !== null) {
@@ -505,6 +542,8 @@ ${buildDiscordTurnPrompt({
   guildId: input.guildId,
   discordThreadId: input.discordThreadId,
   discordThreadTitle: input.discordThreadTitle,
+  t3ThreadId: input.t3ThreadId,
+  webUiBaseUrl: input.webUiBaseUrl,
 })}
 
 project: ${input.projectShortName} root: ${input.workspaceRoot}

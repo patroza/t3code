@@ -343,6 +343,8 @@ describe("buildDiscordTurnPrompt", () => {
       guildId: "1083767712431480922",
       discordThreadId: "1531376362399465595",
       discordThreadTitle: "Open Random PR Test",
+      t3ThreadId: "t3-thread-1",
+      webUiBaseUrl: "https://t3vm.tail86038f.ts.net",
     });
     expect(prompt).toContain("pr:");
     expect(prompt).toContain("uid=593167616273809448");
@@ -351,6 +353,9 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).toContain("m=1531376362399465595");
     expect(prompt).toContain("title=Open Random PR Test");
     expect(prompt).not.toContain("https://discord.com/");
+    expect(prompt).toContain(
+      "t3: full=https://t3vm.tail86038f.ts.net/?thread=t3-thread-1 short=https://t3vm/?thread=t3-thread-1",
+    );
   });
 
   it("falls back to bare keys when browse base is unset", () => {
