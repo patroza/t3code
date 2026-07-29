@@ -27,6 +27,7 @@ import {
   type SupervisorConnectionState,
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
@@ -194,6 +195,7 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
       ConnectionDriver.ConnectionDriver,
       ConnectionDriver.ConnectionDriver.of({ connect }),
     ),
+    ConnectionDiagnosticsLog.layer,
   );
 
   return {

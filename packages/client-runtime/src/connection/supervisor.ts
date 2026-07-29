@@ -27,6 +27,7 @@ import {
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
+import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
@@ -223,6 +224,28 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const diagnosticsLog = yield* Effect.serviceOption(
+    ConnectionDiagnosticsLog.ConnectionDiagnosticsLog,
+  );
+
+  const recordDiagnostic = (input: {
+    readonly kind: ConnectionDiagnosticsLog.ConnectionDiagnosticKind;
+    readonly error: ConnectionAttemptError;
+    readonly attempt: number;
+  }) =>
+    Option.match(diagnosticsLog, {
+      onNone: () => Effect.void,
+      onSome: (log) =>
+        log.record({
+          environmentId: target.environmentId,
+          label: target.label,
+          kind: input.kind,
+          reason: input.error.reason,
+          detail: input.error.detail,
+          traceId: input.error.traceId,
+          attempt: input.attempt,
+        }),
+    });
   const initialIntent: SupervisorIntent = {
     desired: options?.initiallyDesired ?? false,
     network: yield* connectivity.status,
@@ -638,9 +661,21 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
 
       const attemptSpan: Option.Option<Tracer.Span> = outcome.failure.attemptSpan;
-      const error: ConnectionAttemptError = outcome.failure.error;
+      let error: ConnectionAttemptError = outcome.failure.error;
+      // Attach the environment label to short transport messages from the RPC layer.
+      if (
+        error._tag === "ConnectionTransientError" &&
+        (error.detail === "ping timeout" || error.detail === "ping timeout.")
+      ) {
+        error = new ConnectionTransientError({
+          reason: error.reason,
+          detail: `${target.label} ping timeout.`,
+          ...(error.traceId !== undefined ? { traceId: error.traceId } : {}),
+        });
+      }
       latestFailure = error;
       if (error._tag === "ConnectionBlockedError") {
+        yield* recordDiagnostic({ kind: "blocked", error, attempt });
         const blockedIntent = yield* Ref.get(intent);
         yield* setState({
           desired: blockedIntent.desired,
@@ -664,6 +699,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         delayMs,
         reason: error.reason,
       }));
+      yield* recordDiagnostic({
+        kind: outcome.established ? "disconnect" : "connect_failed",
+        error,
+        attempt,
+      });
       const failedIntent = yield* Ref.get(intent);
       yield* setState({
         desired: failedIntent.desired,
