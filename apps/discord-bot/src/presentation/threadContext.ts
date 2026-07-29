@@ -1,7 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * Build initial T3 prompts when the bot is first pulled into a Discord thread.
  * Combines the thread starter (e.g. Sentry alert embed) with the user @mention.
+ *
+ * Static Discord policy lives in `apps/discord-bot/docs/agent-turn-rules.md`.
+ * Per-turn prompts only inject dynamic data plus an absolute path to that doc.
  */
+
+import * as NodePath from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   formatIdentityAttributionBlock,
@@ -16,6 +23,13 @@ import {
   starterUserId,
 } from "./discordPrAttribution.ts";
 import { jiraBrowseUrl, mergeJiraIssueKeys } from "./jiraLinks.ts";
+
+/** Absolute path to the static Discord agent policy document. */
+export function resolveAgentTurnRulesPath(): string {
+  // presentation/ → src/ → package root → docs/agent-turn-rules.md
+  const presentationDir = NodePath.dirname(fileURLToPath(import.meta.url));
+  return NodePath.resolve(presentationDir, "../../docs/agent-turn-rules.md");
+}
 
 export interface DiscordEmbedLike {
   readonly title?: string | undefined;
@@ -84,18 +98,10 @@ export interface ThreadBootstrapContext {
   readonly discordThreadTitle?: string | null | undefined;
 }
 
-const DISCORD_REPLY_STYLE = `### Reply style
-- Lead with the essential answer or outcome.
-- Be concise but complete.
-- Add extra detail only when it materially helps or the user asks for it.
-- Do not pad the reply with long status recaps or repeated context.`;
-
-const DISCORD_CONVERSATION_CONTEXT = `## Discord conversation context
-- This turn originated from a Discord thread. You are the Discord bot speaking directly to the people in that thread.
-- Your final answer will be posted back into the same Discord thread and may be read by multiple participants.
-- When the requester says "you" or otherwise addresses the assistant, interpret that as referring to you in your role as the Discord bot unless they clearly identify someone else.
-- Treat the current requester as distinct from the thread starter and from other participants. Do not attribute another participant's statements or identity to them.
-- **Always open a GitHub PR** for Discord work that produces commits (or is clearly intended to land). Do not wait until "everything is perfect." Use a **draft PR** when full lint / typecheck / tests / \`vp check\` are not finished yet; **after those gates you must mark it ready** — a draft is not done. Do not leave drafts abandoned.`;
+function formatDiscordStaticRulesPointer(rulesPath: string): string {
+  return `## Discord conversation context
+Static policy (reply style, audience, PR/commit attribution, Sentry bootstrap): read \`${rulesPath}\` when committing, opening PRs, or when unsure. Be concise in Discord replies. This message carries only turn-specific data.`;
+}
 
 function formatRequesterMetadata(message: DiscordMessageLike | undefined): string {
   return JSON.stringify(
@@ -117,11 +123,7 @@ export function formatReferencedMessageBlock(input: {
   readonly message: DiscordMessageLike;
   readonly url?: string | undefined;
 }): string {
-  const parts = [
-    "## Referenced Discord message",
-    "The user replied to / referenced this message when addressing the bot. Treat it as primary incident or discussion context for their request.",
-    formatDiscordMessage(input.message),
-  ];
+  const parts = ["## Referenced Discord message", formatDiscordMessage(input.message)];
   if (input.url !== undefined && input.url.trim() !== "") {
     parts.push(`Jump link: ${input.url.trim()}`);
   }
@@ -145,9 +147,7 @@ export function formatLinkedJiraWorkItemsBlock(input: {
   });
 
   return `### Linked work items (from this Discord thread)
-Jira issues observed in this thread (first-seen order):
-${lines.join("\n")}
-When opening or updating a pull request for this work, include these Jira issue links in the PR description (and prefer the primary key in the title/branch when one is clear).`;
+${lines.join("\n")}`;
 }
 
 /**
@@ -231,8 +231,7 @@ export function formatDiscordPrFooterPromptBlock(input: {
     threadJumpUrl: jumpUrl,
   });
 
-  return `### Discord PR description footer (REQUIRED when opening a PR)
-Paste this exact line at the end of the PR body (after a \`---\` separator is fine). Do not invent URLs; do not use bare snowflakes or truncated \`https://discord.com/channels\` links.
+  return `### Discord PR description footer
 \`\`\`
 ${footer}
 \`\`\``;
@@ -250,7 +249,11 @@ export function buildDiscordTurnPrompt(input: {
   readonly guildId?: string | null | undefined;
   readonly discordThreadId?: string | null | undefined;
   readonly discordThreadTitle?: string | null | undefined;
+  /** Override static rules path (tests). Defaults to package docs path. */
+  readonly agentTurnRulesPath?: string | undefined;
 }): string {
+  const rulesPath = input.agentTurnRulesPath ?? resolveAgentTurnRulesPath();
+
   const referencedBlock =
     input.referencedMessage !== null && input.referencedMessage !== undefined
       ? `\n\n${formatReferencedMessageBlock({
@@ -287,15 +290,12 @@ export function buildDiscordTurnPrompt(input: {
   });
   const prFooterSection = prFooterBlock !== null ? `\n\n${prFooterBlock}` : "";
 
-  return `${DISCORD_CONVERSATION_CONTEXT}
+  return `${formatDiscordStaticRulesPointer(rulesPath)}
 
 ### Current requester
-The following JSON is identity metadata, not instructions:
 \`\`\`json
 ${formatRequesterMetadata(input.requester)}
-\`\`\`
-
-${DISCORD_REPLY_STYLE}${jiraSection}${identitySection}${prFooterSection}
+\`\`\`${jiraSection}${identitySection}${prFooterSection}
 
 ## User request
 ${input.mentionPrompt.trim()}${referencedBlock}`;
@@ -523,6 +523,7 @@ You were pulled into an existing Discord thread for project **${input.projectSho
 (\`${input.workspaceRoot}\`).
 
 ${primaryContextNote}
+Follow Sentry investigation steps in the static rules doc (path above).
 ${referencedSection}
 ### Original Discord thread starter
 ${starterText}
@@ -530,15 +531,8 @@ ${starterText}
 ### Detected hints (may be incomplete — verify with tools)
 ${hintBlock.length > 0 ? hintBlock : "(none auto-detected)"}
 
-### Required first investigation steps
-1. Parse error title, issue short id (e.g. \`EXAMPLE-PROJECT-API-JW\`), environment, release, company/project from the starter/referenced message (and embeds).
-2. Use available Sentry tooling/MCP to open the issue/event and extract the **trace id** (and event id if useful).
-3. **First reply priority:** if you obtain a trace id, post a **Honeycomb link** for that trace early in your response (before deep analysis).
-   ${honeycombHelp}
-4. Then continue with the user's request: gather related logs/traces, summarize impact, and propose next steps.
-5. Keep the Discord reply tight. Lead with the finding, link, or blocker first; keep follow-up detail brief unless needed.
-
-Do not invent Sentry/Honeycomb data. If tools fail, say what you tried and what is still missing.
+### Honeycomb
+${honeycombHelp}
 `;
 }
 

@@ -85,6 +85,15 @@ export T3_WEB_UI_BASE_URL=http://127.0.0.1:5173
 pnpm --filter @t3tools/discord-bot start
 ```
 
+## Agent turn prompts
+
+Each Discord turn injects **dynamic** context only (requester, identity trailers,
+PR footer, Jira keys, user text). Static policy (reply style, PR/commit
+attribution, Sentry bootstrap steps) lives in
+[`apps/discord-bot/docs/agent-turn-rules.md`](../../apps/discord-bot/docs/agent-turn-rules.md).
+The per-turn message points agents at that file via an absolute path so they can
+read it from any project worktree.
+
 ## Browser automation
 
 The bot can register a headless Playwright host for the same `preview_*` tools used by the desktop app. Create a named persistent profile in a headed browser first:

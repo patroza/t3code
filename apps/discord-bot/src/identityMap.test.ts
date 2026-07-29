@@ -189,9 +189,9 @@ describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
     expect(block).toContain(
       "Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>",
     );
-    expect(block).toContain("do not invent emails");
-    expect(block).toContain("Always open a PR");
-    expect(block).toContain("draft PR");
+    expect(block).not.toContain("do not invent emails");
+    expect(block).not.toContain("Always open a PR");
+    expect(block).not.toContain("draft PR");
   });
 
   it("dedupes identical trailers when starter is also requester", () => {

@@ -461,11 +461,9 @@ export function formatIdentityAttributionBlock(input: {
     participants.map((p) => p.coAuthoredBy).filter((t): t is string => t !== null),
   );
 
-  const lines: string[] = [
-    "### Identity map (git / GitHub / Jira attribution) — REQUIRED",
-    "Operator-maintained map from Discord users to GitHub (and optional Jira).",
-    "**Do not invent emails or logins.** Attribution is mandatory for Discord-originated commits/PRs when trailers are listed below.",
-  ];
+  // Static attribution policy lives in docs/agent-turn-rules.md; only inject
+  // per-turn resolved participants and ready-to-paste trailers here.
+  const lines: string[] = ["### Identity map (this turn)"];
 
   for (const p of participants) {
     const roleLabel =
@@ -502,41 +500,18 @@ export function formatIdentityAttributionBlock(input: {
     lines.push(`- **${roleLabel}** (${discordBits}): ${parts.join("; ")}`);
   }
 
-  lines.push("");
-  lines.push("**REQUIRED when creating commits for this Discord work:**");
-  lines.push("1. Keep the environment default author/committer (usually the GitHub App bot).");
-  lines.push(
-    "2. **Every** new commit message MUST end with the `Co-authored-by` trailers below for **mapped** participants (thread starter and/or current requester). Skip unmapped people — do not invent emails.",
-  );
-  lines.push(
-    "3. Put trailers at the end of the commit message after a blank line. Use the exact lines below.",
-  );
-  lines.push(
-    "4. Verify with `git log -1 --format=%B` before push/PR. Commits missing these trailers are incomplete.",
-  );
-  lines.push(
-    "5. When opening a PR: paste the **Discord PR description footer** from turn context when present (user link = `https://discord.com/users/<id>`, thread link = full `https://discord.com/channels/...`). Never use bare snowflakes or truncated channel URLs. The bot may hard-append the footer later — still write it on create. GitHub multi-author avatars come from **commit** trailers. Optional PR-body co-author list: profile links that look like mentions (`[@login](https://github.com/login)`), **never** bare `@login` (notifies).",
-  );
-  lines.push(
-    "6. **Always open a PR** for this work once there are commits (or the change is clearly intended to land). Prefer a **draft PR** until full lint / typecheck / focused tests / `vp check` are done; then **you must mark it ready** (draft is not done). Do not leave drafts abandoned and do not hold the PR closed waiting for perfect green.",
-  );
-
   if (trailers.length > 0) {
     lines.push("");
-    lines.push("**Mandatory** ready-to-paste trailers for this turn (append to every new commit):");
+    lines.push("**Co-authored-by trailers** (append to every new commit):");
     lines.push("```");
     for (const t of trailers) lines.push(t);
     lines.push("```");
   } else if (!anyMapped) {
     lines.push("");
-    lines.push(
-      "No participants are in the identity map yet. Ask an operator to add Discord→GitHub entries to the ops identity map (see ops docs), or the user can supply an explicit `Co-authored-by` line.",
-    );
+    lines.push("No participants in identity map (operator map or explicit trailer needed).");
   } else {
     lines.push("");
-    lines.push(
-      "Mapped participants are missing a resolvable GitHub email/id. Operator should set `githubId` or `githubEmail` on their map entry.",
-    );
+    lines.push("Mapped participants missing resolvable GitHub email/id.");
   }
 
   return lines.join("\n");

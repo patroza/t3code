@@ -1,3 +1,5 @@
+import * as NodeFS from "node:fs";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -10,6 +12,7 @@ import {
   formatLinkedJiraWorkItemsBlock,
   formatReferencedMessageBlock,
   looksLikeSentryContext,
+  resolveAgentTurnRulesPath,
 } from "./threadContext.ts";
 
 describe("formatEmbed", () => {
@@ -79,11 +82,13 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
     expect(sentryPrompt).toContain("Discord investigation bootstrap");
     expect(sentryPrompt).toContain("Honeycomb");
     expect(sentryPrompt).toContain("CarrierErrorWrapped");
-    expect(sentryPrompt).toContain("Lead with the essential answer");
-    expect(sentryPrompt).toContain("Be concise but complete");
+    expect(sentryPrompt).toContain(resolveAgentTurnRulesPath());
+    expect(sentryPrompt).toContain("turn-specific data");
     expect(sentryPrompt).toContain('"username": "tester"');
     expect(sentryPrompt).toContain('"displayName": "Example User"');
-    expect(sentryPrompt).toContain("You are the Discord bot");
+    // Static policy is not inlined every turn.
+    expect(sentryPrompt).not.toContain("Lead with the essential answer");
+    expect(sentryPrompt).not.toContain("Always open a GitHub PR");
   });
 
   it("does not use Sentry bootstrap for ordinary thread starters", () => {
@@ -109,7 +114,7 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
     });
     expect(prompt).not.toContain("Discord investigation bootstrap");
     expect(prompt).not.toContain("Honeycomb");
-    expect(prompt).toContain("Lead with the essential answer");
+    expect(prompt).toContain(resolveAgentTurnRulesPath());
     expect(prompt).toContain("Can you check the open PR?");
     expect(prompt).toContain("please review");
   });
@@ -122,13 +127,25 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
       honeycombTraceUrlTemplate: undefined,
       starter: null,
     });
-    expect(prompt).toContain("Lead with the essential answer");
+    expect(prompt).toContain(resolveAgentTurnRulesPath());
     expect(prompt).toContain("## User request");
     expect(prompt).toContain("hello");
     expect(buildSentryBootstrapPrompt).toBeTypeOf("function");
     expect(formatDiscordMessage({ id: "x", content: "hi", author: { username: "a" } })).toContain(
       "hi",
     );
+  });
+});
+
+describe("resolveAgentTurnRulesPath", () => {
+  it("points at the package static policy document", () => {
+    const path = resolveAgentTurnRulesPath();
+    expect(path.endsWith("docs/agent-turn-rules.md")).toBe(true);
+    expect(NodeFS.existsSync(path)).toBe(true);
+    const body = NodeFS.readFileSync(path, "utf8");
+    expect(body).toContain("Always open a GitHub PR");
+    expect(body).toContain("Co-authored-by");
+    expect(body).toContain("Reply style");
   });
 });
 
@@ -146,12 +163,11 @@ describe("buildDiscordTurnPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("originated from a Discord thread");
-    expect(prompt).toContain("posted back into the same Discord thread");
-    expect(prompt).toContain("Always open a GitHub PR");
-    expect(prompt).toContain("draft PR");
-    expect(prompt).toContain("must mark it ready");
-    expect(prompt).toContain('"you"');
+    expect(prompt).toContain("## Discord conversation context");
+    expect(prompt).toContain(resolveAgentTurnRulesPath());
+    expect(prompt).toContain("turn-specific data");
+    expect(prompt).not.toContain("Always open a GitHub PR");
+    expect(prompt).not.toContain("posted back into the same Discord thread");
     expect(prompt).toContain('"id": "user-1"');
     expect(prompt).toContain('"username": "example-user"');
     expect(prompt).toContain('"displayName": "Example User"');
@@ -222,7 +238,7 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).toContain("### Linked work items (from this Discord thread)");
     expect(prompt).toContain("[PROJ-367](https://example.atlassian.net/browse/PROJ-367)");
     expect(prompt).toContain("[PROJ-400](https://example.atlassian.net/browse/PROJ-400)");
-    expect(prompt).toContain("include these Jira issue links in the PR description");
+    expect(prompt).not.toContain("include these Jira issue links in the PR description");
     expect(prompt).toContain("create a PR for this");
   });
 
@@ -270,7 +286,8 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).toContain(
       "Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>",
     );
-    expect(prompt).toContain("do not invent emails");
+    expect(prompt).not.toContain("do not invent emails");
+    expect(prompt).not.toContain("Always open a PR");
   });
 
   it("omits identity block when the map is empty/unset", () => {
