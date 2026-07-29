@@ -8,8 +8,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type {
@@ -27,11 +27,13 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 /**
  * Shared list-mode remote refresh: one loop for all list-interested worktrees,
- * not one fiber per cwd. Keeps PR numbers/states fresh without O(N) independent
- * pollers. Match full-mode cadence (~30s) so badges do not lag a full minute.
+ * not one fiber per cwd. Interval starts only after a sweep fully finishes so
+ * slow gh/git work never overlaps the next wait (and never stampedes reconnect).
  */
-const LIST_REMOTE_REFRESH_INTERVAL = Duration.seconds(30);
-const LIST_REMOTE_REFRESH_CONCURRENCY = 2;
+const LIST_REMOTE_REFRESH_INTERVAL = Duration.seconds(45);
+/** Cap work per tick so a large sidebar cannot monopolize the process for minutes. */
+const LIST_REMOTE_REFRESH_BATCH_SIZE = 4;
+const LIST_REMOTE_REFRESH_CONCURRENCY = 1;
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
 const MAX_FAILURE_DIAGNOSTIC_VALUES = 8;
@@ -203,6 +205,13 @@ export const make = Effect.gen(function* () {
   /** cwd → list-mode subscriber count (high-cardinality sidebar/board rows). */
   const listInterestRef = yield* SynchronizedRef.make(new Map<string, number>());
   const listRefreshFiberRef = yield* SynchronizedRef.make<Fiber.Fiber<void, never> | null>(null);
+  /** Round-robin cursor across list-interested cwds. */
+  const listRefreshCursorRef = yield* Ref.make(0);
+  /**
+   * Exclusive list sweep lock: subscribe-time kicks and the periodic loop share
+   * this so remotes never pile up on top of an in-flight sweep.
+   */
+  const listSweepMutex = yield* Semaphore.make(1);
 
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")(function* (
     cwd: string,
@@ -400,6 +409,8 @@ export const make = Effect.gen(function* () {
     return Effect.gen(function* () {
       const consecutiveFailuresRef = yield* Ref.make(0);
       const needsInitialRefreshRef = yield* Ref.make(refreshImmediately);
+      /** When false, sleep once before the first refresh (warm cache path). */
+      const mayRefreshImmediatelyRef = yield* Ref.make(refreshImmediately);
       const refreshRemoteStatusIfEnabled = Effect.gen(function* () {
         const configuredInterval = yield* automaticRemoteRefreshInterval;
         const activeInterval = Duration.isZero(configuredInterval)
@@ -438,22 +449,22 @@ export const make = Effect.gen(function* () {
         return nextDelay;
       });
 
-      if (!refreshImmediately) {
-        const configuredInterval = yield* automaticRemoteRefreshInterval;
-        yield* Effect.sleep(
-          Duration.isZero(configuredInterval)
-            ? DEFAULT_VCS_STATUS_REFRESH_INTERVAL
-            : configuredInterval,
-        );
-      }
-
-      return yield* refreshRemoteStatusIfEnabled.pipe(
-        Effect.repeat(
-          Schedule.identity<Duration.Duration>().pipe(
-            Schedule.addDelay(({ output: delay }) => Effect.succeed(delay)),
-          ),
-        ),
-        Effect.asVoid,
+      // Work → wait → work. Delay starts only after refresh fully completes.
+      return yield* Effect.forever(
+        Effect.gen(function* () {
+          const mayRefreshImmediately = yield* Ref.get(mayRefreshImmediatelyRef);
+          if (!mayRefreshImmediately) {
+            const configuredInterval = yield* automaticRemoteRefreshInterval;
+            yield* Effect.sleep(
+              Duration.isZero(configuredInterval)
+                ? DEFAULT_VCS_STATUS_REFRESH_INTERVAL
+                : configuredInterval,
+            );
+            yield* Ref.set(mayRefreshImmediatelyRef, true);
+          }
+          const delay = yield* refreshRemoteStatusIfEnabled;
+          yield* Effect.sleep(delay);
+        }),
       );
     });
   };
@@ -521,33 +532,55 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * Budgeted remote refresh for every list-interested cwd that does not already
-   * have a full-mode poller. One fiber total, concurrency-capped — not O(N) fibers.
+   * Budgeted remote refresh for list-interested cwds without a full-mode poller.
+   * Exclusive (mutex): never overlaps another list sweep. Round-robins a small
+   * batch so dozens of worktrees cannot run multi-minute all-at-once storms that
+   * starve SessionStore.verify / websocket-ticket (SQLite is single-permit).
    */
   const runListRemoteRefreshSweep = Effect.fn("VcsStatusBroadcaster.runListRemoteRefreshSweep")(
     function* () {
-      const interests = yield* SynchronizedRef.get(listInterestRef);
-      const fullPollers = yield* SynchronizedRef.get(pollersRef);
-      const cwds = [...interests.keys()].filter((cwd) => !fullPollers.has(cwd));
-      if (cwds.length === 0) {
-        return;
-      }
-      yield* Effect.forEach(
-        cwds,
-        (cwd) => refreshRemoteStatus(cwd, { refreshUpstream: false }).pipe(Effect.ignore),
-        { concurrency: LIST_REMOTE_REFRESH_CONCURRENCY },
+      yield* listSweepMutex.withPermits(1)(
+        Effect.gen(function* () {
+          const interests = yield* SynchronizedRef.get(listInterestRef);
+          const fullPollers = yield* SynchronizedRef.get(pollersRef);
+          const cwds = [...interests.keys()].filter((cwd) => !fullPollers.has(cwd));
+          if (cwds.length === 0) {
+            return;
+          }
+
+          const cursor = yield* Ref.get(listRefreshCursorRef);
+          const start = cwds.length === 0 ? 0 : cursor % cwds.length;
+          const batch: string[] = [];
+          for (let i = 0; i < Math.min(LIST_REMOTE_REFRESH_BATCH_SIZE, cwds.length); i += 1) {
+            const cwd = cwds[(start + i) % cwds.length];
+            if (cwd !== undefined) {
+              batch.push(cwd);
+            }
+          }
+          yield* Ref.set(
+            listRefreshCursorRef,
+            cwds.length === 0 ? 0 : (start + batch.length) % cwds.length,
+          );
+
+          yield* Effect.forEach(
+            batch,
+            (cwd) => refreshRemoteStatus(cwd, { refreshUpstream: false }).pipe(Effect.ignore),
+            { concurrency: LIST_REMOTE_REFRESH_CONCURRENCY },
+          );
+        }),
       );
     },
   );
 
   const makeListRemoteRefreshLoop = () =>
-    Effect.gen(function* () {
-      // Initial sweep so list badges do not wait a full interval after first open.
-      yield* runListRemoteRefreshSweep();
-      return yield* Effect.forever(
-        Effect.sleep(LIST_REMOTE_REFRESH_INTERVAL).pipe(Effect.andThen(runListRemoteRefreshSweep)),
-      );
-    });
+    // Always: complete a sweep → then wait → repeat. Never schedule the next
+    // wait until the previous batch has fully finished.
+    Effect.forever(
+      Effect.gen(function* () {
+        yield* runListRemoteRefreshSweep();
+        yield* Effect.sleep(LIST_REMOTE_REFRESH_INTERVAL);
+      }),
+    );
 
   const retainListInterest = Effect.fn("VcsStatusBroadcaster.retainListInterest")(function* (
     cwd: string,
@@ -613,15 +646,18 @@ export const make = Effect.gen(function* () {
         let release: Effect.Effect<void> = Effect.void;
         if (mode === "list") {
           // Registers cwd with the shared budgeted refresher (keeps PR/remote fresh).
-          // No per-cwd poller — that was the O(N) storm root.
+          // No per-cwd poller and no per-subscribe remote stampede (reconnect storms
+          // used to fire N concurrent remoteStatus calls and block auth SQL).
           yield* retainListInterest(cwd);
           cachedStatus = yield* getCachedStatus(cwd);
-          // New cwd (or cache cold): fill once now so badges are not empty until the
-          // next shared sweep. The shared loop continues periodic updates for all
-          // list-interested cwds with bounded concurrency.
+          // If cold, kick the exclusive shared sweep without awaiting it so the
+          // stream can open immediately; the sweep publishes remoteUpdated.
           if (cachedStatus?.remote === null || cachedStatus?.remote === undefined) {
-            yield* refreshRemoteStatus(cwd, { refreshUpstream: false }).pipe(Effect.ignore);
-            cachedStatus = yield* getCachedStatus(cwd);
+            yield* runListRemoteRefreshSweep().pipe(
+              Effect.forkIn(broadcasterScope),
+              Effect.asVoid,
+              Effect.ignore,
+            );
           }
           release = releaseListInterest(cwd).pipe(Effect.ignore, Effect.asVoid);
         } else {
