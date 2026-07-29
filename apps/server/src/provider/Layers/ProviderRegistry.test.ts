@@ -52,6 +52,7 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { pollUntil } from "../testUtils/pollUntil.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -1552,6 +1553,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
             }),
@@ -1595,26 +1597,17 @@ it.layer(
           // Boot-time probe: the default codex instance is enabled with
           // `firstMissing`, so the real spawner yields ENOENT and the
           // snapshot should be `status: "error"`.
-          let initialProviders = yield* registry.getProviders;
-          for (
-            let attempts = 0;
-            attempts < 50 &&
-            initialProviders.find((provider) => provider.instanceId === "codex")?.status !==
-              "error";
-            attempts += 1
-          ) {
-            yield* TestClock.adjust("10 millis");
-            yield* Effect.yieldNow;
-            initialProviders = yield* registry.getProviders;
-          }
+          // Use live-time pollUntil so child-process ENOENT can complete under TestClock.
+          const initialProviders = yield* pollUntil({
+            poll: TestClock.adjust("10 millis").pipe(Effect.andThen(registry.getProviders)),
+            until: (providers) =>
+              providers.find((provider) => provider.instanceId === "codex")?.status === "error",
+            description: "the boot-time codex probe to fail against the first missing binary",
+          });
           const initialCodex = initialProviders.find((provider) => provider.instanceId === "codex");
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
-          // Kimi may probe in the background; only assert the codex binaries under test.
-          assert.deepStrictEqual(
-            spawnedCommands.filter((command) => command !== "kimi"),
-            [firstMissing],
-          );
+          assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
           // Drive a settings change. The Hydration layer's
           // `SettingsWatcherLive` consumes this via `streamChanges`,
@@ -1630,31 +1623,23 @@ it.layer(
             },
           });
 
-          // Poll until the injected process boundary observes the new
-          // executable. This verifies the public settings-to-probe behavior
-          // without depending on timestamps assigned by TestClock.
-          const refreshed = yield* Effect.gen(function* () {
-            for (let attempts = 0; attempts < 60; attempts += 1) {
-              const providers = yield* registry.getProviders;
+          // Poll with real wall time so libuv/process exit callbacks run; pure
+          // TestClock.adjust was enough locally but flaked on CI (only firstMissing).
+          const refreshed = yield* pollUntil({
+            poll: TestClock.adjust("50 millis").pipe(Effect.andThen(registry.getProviders)),
+            until: (providers) => {
               const codex = providers.find((provider) => provider.instanceId === "codex");
-              if (
+              return (
                 codex !== undefined &&
                 codex.status === "error" &&
                 spawnedCommands.includes(secondMissing)
-              ) {
-                return providers;
-              }
-              yield* TestClock.adjust("50 millis");
-              yield* Effect.yieldNow;
-            }
-            return yield* registry.getProviders;
+              );
+            },
+            description: "the codex re-probe against the second missing binary",
           });
 
           const reprobedCodex = refreshed.find((provider) => provider.instanceId === "codex");
-          assert.deepStrictEqual(
-            spawnedCommands.filter((command) => command !== "kimi"),
-            [firstMissing, secondMissing],
-          );
+          assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);
         }).pipe(Effect.provide(runtimeServices));
