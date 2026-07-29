@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -19,8 +20,39 @@ import {
   ConnectionBlockedError,
   ConnectionTransientError as ConnectionTransientErrorClass,
 } from "../connection/model.ts";
+import { formatDisconnectDetail, type SocketCloseCapture } from "../connection/disconnectDetail.ts";
+import * as ConnectionDiagnosticsLog from "../connection/diagnosticsLog.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
+
+function socketHostFromUrl(socketUrl: string): string | undefined {
+  try {
+    return new URL(socketUrl).host;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureSocketClose(
+  webSocketConstructor: (url: string, protocols?: string | string[]) => globalThis.WebSocket,
+  sink: { current: SocketCloseCapture },
+): (url: string, protocols?: string | string[]) => globalThis.WebSocket {
+  return (url, protocols) => {
+    const socket = webSocketConstructor(url, protocols);
+    socket.addEventListener(
+      "close",
+      (event) => {
+        const closeEvent = event as CloseEvent;
+        sink.current = {
+          code: typeof closeEvent.code === "number" ? closeEvent.code : undefined,
+          reason: typeof closeEvent.reason === "string" ? closeEvent.reason : undefined,
+        };
+      },
+      { once: true },
+    );
+    return socket;
+  };
+}
 
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
@@ -57,16 +89,27 @@ function mapSessionRpcError(error: InitialConfigError | ProbeError): ConnectionA
         reason: "remote-unavailable",
         detail: error.message,
       });
-    case "RpcClientError":
+    case "RpcClientError": {
+      const lower = error.message.toLowerCase();
+      if (lower.includes("ping timeout")) {
+        return new ConnectionTransientErrorClass({
+          reason: "timeout",
+          detail: "ping timeout",
+        });
+      }
       return new ConnectionTransientErrorClass({
         reason: "transport",
         detail: error.message,
       });
+    }
   }
 }
 
 export const make = Effect.gen(function* () {
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
+  const diagnosticsLog = yield* Effect.serviceOption(
+    ConnectionDiagnosticsLog.ConnectionDiagnosticsLog,
+  );
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
     yield* Effect.annotateCurrentSpan({
@@ -75,26 +118,42 @@ export const make = Effect.gen(function* () {
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    const closeCapture: { current: SocketCloseCapture } = { current: {} };
+    const trackedConstructor = captureSocketClose(webSocketConstructor, closeCapture);
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
       onDisconnect: Deferred.isDone(connected).pipe(
-        Effect.flatMap((wasConnected) =>
-          Deferred.fail(
-            disconnected,
-            new ConnectionTransientErrorClass({
-              reason: "transport",
-              detail: wasConnected
-                ? `${connection.label} disconnected.`
-                : `${connection.label} could not establish a WebSocket connection.`,
-            }),
-          ),
-        ),
-        Effect.asVoid,
+        Effect.flatMap((wasConnected) => {
+          const detail = formatDisconnectDetail({
+            label: connection.label,
+            wasConnected,
+            close: closeCapture.current,
+          });
+          const error = new ConnectionTransientErrorClass({
+            reason: "transport",
+            detail,
+          });
+          const record = Option.match(diagnosticsLog, {
+            onNone: () => Effect.void,
+            onSome: (log) =>
+              log.record({
+                environmentId: connection.environmentId,
+                label: connection.label,
+                kind: wasConnected ? "disconnect" : "connect_failed",
+                reason: error.reason,
+                detail: error.detail,
+                closeCode: closeCapture.current.code,
+                closeReason: closeCapture.current.reason,
+                socketHost: socketHostFromUrl(connection.socketUrl),
+              }),
+          });
+          return record.pipe(Effect.andThen(Deferred.fail(disconnected, error)), Effect.asVoid);
+        }),
       ),
     });
     const socketLayer = Socket.layerWebSocket(connection.socketUrl, {
       openTimeout: SOCKET_OPEN_TIMEOUT,
-    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
+    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, trackedConstructor)));
     const protocolLayer = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
