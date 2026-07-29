@@ -1508,11 +1508,30 @@ export const make = Effect.gen(function* () {
           ? Effect.forEach(pending, (output) => emitHookOutput(null, output), { discard: true })
           : Effect.void;
       });
+    // TRACE2 hook child_exit can lag behind git's own stdout (commit summary).
+    // Never attribute those porcelain lines to a commit hook.
+    const isGitCommitPorcelainLine = (text: string): boolean => {
+      const line = text.trim();
+      return (
+        /^\[[^\]]+ [0-9a-f]+\] /.test(line) ||
+        /^\d+ files? changed/.test(line) ||
+        line.startsWith("create mode ") ||
+        line.startsWith("delete mode ") ||
+        line.startsWith("rewrite ") ||
+        line.startsWith(" mode change ") ||
+        line.startsWith("rename ")
+      );
+    };
     const commitProgress =
       progressReporter && actionId
         ? {
             onOutputLine: (output: { stream: "stdout" | "stderr"; text: string }) =>
               Effect.suspend(() => {
+                if (isGitCommitPorcelainLine(output.text)) {
+                  // Git summary is post-hook; drop stale active-hook attribution.
+                  currentHookName = null;
+                  return emitHookOutput(null, output);
+                }
                 if (currentHookName === null) {
                   pendingUnattributedOutput.push(output);
                   return Effect.void;
