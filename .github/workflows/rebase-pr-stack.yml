@@ -1,5 +1,10 @@
 # Slow path only: full main → tim → candidates → changes rewrite + overlay cascade.
 # Day-to-day merges onto fork/changes use "Compose fork integration" instead.
+#
+# This workflow is intentionally left DISABLED at repository level (disabled_manually).
+# Do not enable it for schedule/push automation. Prefer local:
+#   node scripts/rebase-pr-stack.ts sync --push
+# if a full provenance restack is required.
 name: Rebase fork PR stack
 
 on:
