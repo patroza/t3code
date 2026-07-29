@@ -203,9 +203,42 @@ Typical uses:
 
 Use `t3 auth --help` and the nested subcommand help pages for the full reference.
 
+## Previewing Dev Server Ports
+
+When you connect to a remote environment, the ports its agents open — a Vite dev server, a
+preview build, an API — are usually bound to that machine's loopback interface. They are not
+reachable at the address you use to reach T3, even though that address names the right machine.
+
+Opening such a port in the in-app browser asks the environment to resolve it, in this order:
+
+1. An existing `tailscale serve` route for the port is reused, at whatever tailnet port and scheme
+   it was published under.
+2. If the port already answers on the environment's own address — a dev server bound to a wildcard
+   address, reached over WSL, a LAN, or a tunnel — that address is used and nothing is published.
+3. Otherwise the environment publishes a **tailnet-only** HTTPS route for the port
+   (`tailscale serve`, never Tailscale Funnel), confirms it answers, and hands back that URL. The
+   route is withdrawn when the dev server exits or the environment shuts down.
+
+The environment never guesses: it answers with a URL it has verified, or explains why it cannot —
+the dev server is not running, tailscale is not logged in, the server may not manage tailnet routes,
+or the tailnet port is already taken by something else.
+
+Requirements for step 3: tailscale must be logged in on the environment host, and the T3 server
+must be allowed to manage serve routes (`sudo tailscale set --operator=$USER`). Without those,
+steps 1 and 2 still work, and you can publish a port yourself:
+
+```sh
+tailscale serve --bg --https=5173 http://127.0.0.1:5173
+```
+
+Routes published this way are visible to your tailnet only. If you would rather not have ports
+published automatically, start the dev server bound to a routable address so step 2 applies, or
+publish the specific ports you want by hand.
+
 ## Security Notes
 
 - Treat pairing URLs and pairing tokens like passwords.
+- Ports published for preview are tailnet-only; they are never exposed through Tailscale Funnel. Anyone on your tailnet can reach a published dev server while it runs.
 - Prefer binding `--host` to a trusted private address, such as a Tailnet IP, instead of exposing the server broadly.
 - Anyone with a valid pairing credential can create a session until that credential expires or is revoked.
 - Hosted pairing links keep the credential in the URL hash so it is not sent to the hosted app server, but it can still be exposed through browser history, screenshots, logs, or copy/paste.
