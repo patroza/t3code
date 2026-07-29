@@ -772,6 +772,15 @@ const ThreadQueueRemoveCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadQueueUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -824,6 +833,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnInterruptCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -851,6 +861,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadTurnInterruptCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -935,6 +946,24 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Rebuild a thread's transcript tail from an authoritative external source.
+ *
+ * Server-internal: raised when T3 notices a provider's own session log has run
+ * ahead of the thread (the ACP stream dropped updates, or the session was driven
+ * from another client). See ThreadMessagesResyncedPayload for the rewind
+ * semantics.
+ */
+const ThreadMessagesResyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.messages.resync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -944,6 +973,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadQueueDrainCommand,
   ThreadRevertCompleteCommand,
+  ThreadMessagesResyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -977,6 +1007,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
   "thread.reverted",
+  "thread.messages-resynced",
   "thread.session-stop-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -1174,6 +1205,28 @@ export const ThreadRevertedPayload = Schema.Struct({
   turnCount: NonNegativeInt,
 });
 
+/**
+ * A thread's transcript was rebuilt from an authoritative external source (e.g.
+ * a grok session backfill after the ACP stream dropped updates).
+ *
+ * Out-of-band writes straight to the projection are invisible to clients: a
+ * warm-cache client resumes from `afterSequence` and only ever receives events
+ * past that cursor. This event is what makes such a rebuild observable — it
+ * lands past every client's cursor, so the existing catch-up replay delivers it.
+ *
+ * It carries a rewind point rather than a whole snapshot: everything up to and
+ * including `afterMessageId` is known-good and untouched; only the tail after it
+ * is replaced by `messages`. `afterMessageId: null` replaces the whole
+ * transcript. A client that does not hold `afterMessageId` cannot rewind
+ * precisely and must reload the thread instead.
+ */
+export const ThreadMessagesResyncedPayload = Schema.Struct({
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
+});
+
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   createdAt: IsoDateTime,
@@ -1341,6 +1394,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.reverted"),
     payload: ThreadRevertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.messages-resynced"),
+    payload: ThreadMessagesResyncedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

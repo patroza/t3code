@@ -105,10 +105,30 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 
 // RPC Inputs
 
+/**
+ * How the server should refresh remote VCS status for a subscription.
+ *
+ * - `full` (default): dedicated per-cwd remote poller (automatic git fetch interval) —
+ *   for the active thread / git chrome.
+ * - `list`: still keeps remote/PR state **up to date** via a **shared budgeted**
+ *   refresher for all list-interested worktrees (not one poller fiber per row).
+ *   Use for sidebar/board/list PR badges.
+ */
+export const VcsStatusSubscribeMode = Schema.Literals(["full", "list"]);
+export type VcsStatusSubscribeMode = typeof VcsStatusSubscribeMode.Type;
+
 export const VcsStatusInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
+  /** Omit or `full` for active surfaces; use `list` for high-cardinality list UIs. */
+  mode: Schema.optionalKey(VcsStatusSubscribeMode),
 });
 export type VcsStatusInput = typeof VcsStatusInput.Type;
+
+export const VcsResolveBranchChangeRequestInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsResolveBranchChangeRequestInput = typeof VcsResolveBranchChangeRequestInput.Type;
 
 export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -237,14 +257,22 @@ export type VcsInitInput = typeof VcsInitInput.Type;
 
 // RPC Results
 
-const VcsStatusChangeRequest = Schema.Struct({
+export const VcsStatusChangeRequest = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
   url: Schema.String,
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
+  hasFailingChecks: Schema.optional(Schema.Boolean),
 });
+export type VcsStatusChangeRequest = typeof VcsStatusChangeRequest.Type;
+
+export const VcsResolveBranchChangeRequestResult = Schema.Struct({
+  sourceControlProvider: Schema.optional(SourceControlProviderInfo),
+  pr: Schema.NullOr(VcsStatusChangeRequest),
+});
+export type VcsResolveBranchChangeRequestResult = typeof VcsResolveBranchChangeRequestResult.Type;
 
 const VcsStatusLocalShape = {
   isRepo: Schema.Boolean,
