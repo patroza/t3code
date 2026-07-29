@@ -90,3 +90,18 @@ paper over with changes-layer tips. Next full upstream stack rewrite:
 2. `node scripts/compose-integration-overlays.ts` (or stack workflow compose).
 3. Full Fork CI on `fork/integration`.
 4. Confirm no new product `fix(stack):` tips landed.
+
+## Historical note on per-commit typecheck
+
+Verifying **every** historical SHA with the tip `node_modules` will false-fail: older
+`package.json` / lock pairs do not match. Meaningful `--verify-each-commit` use is during a
+**forward** rewrite after `CI= pnpm install` on the new base, and after each pick when the
+worktree install still matches (re-install when `package.json` / lock change).
+
+This rewrite (fold pure-manifest registry commits; keep tip tree identical) does **not** claim
+every historical intermediate SHA typechecks in isolation — only that:
+
+1. tip tree is unchanged from the pre-rewrite product tip;
+2. pure-manifest `fix(stack): record …` noise is collapsed into `chore(stack): durable conflictResolutions registry`;
+3. product recovery is named `fix(vcs): …` not `fix(stack): rejoin …`;
+4. going forward, rewrites use `--verify-each-commit` with a matching install.
