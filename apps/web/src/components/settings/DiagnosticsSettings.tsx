@@ -905,12 +905,16 @@ export function DiagnosticsSettingsPanel() {
       if (environmentId === null) {
         return;
       }
+      const process = processData?.processes.find((entry) => entry.pid === pid);
+      if (process === undefined) {
+        return;
+      }
 
       setSignalingPid(pid);
       void (async () => {
         const result = await signalServerProcess({
           environmentId,
-          input: { pid, signal },
+          input: { pid, startTimeMs: process.startTimeMs, signal },
         });
         setSignalingPid(null);
         if (result._tag === "Failure") {
