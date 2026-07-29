@@ -152,8 +152,8 @@ describe("LocalApi", () => {
   });
 
   it("prefers the native LocalApi when one is injected", async () => {
-    const nativeApi = { dialogs: {} };
-    testWindow().nativeApi = nativeApi as never;
+    const nativeApi = { dialogs: {} } as never;
+    testWindow().nativeApi = nativeApi;
     const { readLocalApi } = await import("./localApi");
 
     expect(readLocalApi()).toBe(nativeApi);

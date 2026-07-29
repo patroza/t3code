@@ -550,16 +550,43 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
       return;
     }
 
-    if (traceRecord.success.child_class !== "hook") {
-      return;
-    }
-
     const event = traceRecord.success.event;
     const childKey = trace2ChildKey(traceRecord.success);
     if (childKey === null) {
       return;
     }
     const started = hookStartByChildKey.get(childKey);
+
+    // Git 2.55+ TRACE2 child_exit records omit child_class:"hook". Still finish
+    // hooks we previously saw start via the child_id map.
+    if (event === "child_exit") {
+      if (!started) {
+        return;
+      }
+      hookStartByChildKey.delete(childKey);
+      const rawCode = traceRecord.success.code ?? traceRecord.success.exitCode;
+      const exitCode = typeof rawCode === "number" && Number.isInteger(rawCode) ? rawCode : null;
+      const now = yield* DateTime.now;
+      const durationMs = Math.max(0, DateTime.toEpochMillis(now) - started.startedAtMs);
+      yield* addCurrentSpanEvent("git.hook.finished", {
+        hookName: started.hookName,
+        exitCode,
+        durationMs,
+      });
+      if (progress.onHookFinished) {
+        yield* progress.onHookFinished({
+          hookName: started.hookName,
+          exitCode,
+          durationMs,
+        });
+      }
+      return;
+    }
+
+    if (traceRecord.success.child_class !== "hook") {
+      return;
+    }
+
     const hookNameFromEvent =
       typeof traceRecord.success.hook_name === "string" ? traceRecord.success.hook_name.trim() : "";
     const hookName = hookNameFromEvent.length > 0 ? hookNameFromEvent : (started?.hookName ?? "");
@@ -575,29 +602,6 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
       });
       if (progress.onHookStarted) {
         yield* progress.onHookStarted(hookName);
-      }
-      return;
-    }
-
-    if (event === "child_exit") {
-      hookStartByChildKey.delete(childKey);
-      const code = traceRecord.success.exitCode;
-      const exitCode = typeof code === "number" && Number.isInteger(code) ? code : null;
-      const now = yield* DateTime.now;
-      const durationMs = started
-        ? Math.max(0, DateTime.toEpochMillis(now) - started.startedAtMs)
-        : null;
-      yield* addCurrentSpanEvent("git.hook.finished", {
-        hookName: started?.hookName ?? hookName,
-        exitCode,
-        durationMs,
-      });
-      if (progress.onHookFinished) {
-        yield* progress.onHookFinished({
-          hookName: started?.hookName ?? hookName,
-          exitCode,
-          durationMs,
-        });
       }
     }
   });
