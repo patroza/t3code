@@ -167,18 +167,37 @@ export function extractTextAndMentionsFromBody(body: unknown): {
   };
 }
 
-/**
- * True when the comment body addresses `mention` via plain @handle, wiki markup, or ADF mention.
- * `mention` may be a handle without @, a display name, or an accountId (with or without `accountid:`).
- */
-export function bodyMentionsIdentity(
-  body: unknown,
-  mention: string,
-): { readonly matched: boolean; readonly text: string } {
-  const normalized = mention.trim().replace(/^@/u, "");
-  if (normalized.length === 0) return { matched: false, text: "" };
+/** Normalize a mention handle / display name / accountId for comparison. */
+function normalizeMentionToken(mention: string): string {
+  return mention.trim().replace(/^@/u, "");
+}
 
-  const extracted = extractTextAndMentionsFromBody(body);
+/**
+ * Primary mention plus optional aliases (e.g. bot accountId for wiki/ADF picker mentions).
+ * Order is preserved; duplicates (case-insensitive) are dropped.
+ */
+export function jiraMentionCandidates(
+  mention: string,
+  aliases: ReadonlyArray<string | null | undefined> = [],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [mention, ...aliases]) {
+    if (raw === null || raw === undefined) continue;
+    const normalized = normalizeMentionToken(raw);
+    if (normalized.length === 0) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function bodyMentionsSingleIdentity(
+  extracted: ReturnType<typeof extractTextAndMentionsFromBody>,
+  normalized: string,
+): boolean {
   const text = extracted.text;
   const lowerMention = normalized.toLowerCase();
   const mentionAccountId = lowerMention.startsWith("accountid:")
@@ -192,57 +211,93 @@ export function bodyMentionsIdentity(
       lower === mentionAccountId ||
       lower.endsWith(`:${lowerMention}`)
     ) {
-      return { matched: true, text };
+      return true;
     }
   }
   for (const mentionText of extracted.mentionTexts) {
     const stripped = mentionText.replace(/^@/u, "").trim().toLowerCase();
-    if (stripped === lowerMention) return { matched: true, text };
+    if (stripped === lowerMention) return true;
   }
 
   // Plain @handle (word-ish boundary)
   const atMatcher = new RegExp(`(?:^|\\s)@${escapeRegExp(normalized)}(?:\\s+|$)`, "iu");
-  if (atMatcher.test(text)) return { matched: true, text };
+  if (atMatcher.test(text)) return true;
 
   // Wiki / legacy: [~accountId:…] or [~username]
+  // Automation often serializes Cloud mentions as [~accountid:712020:…].
   const wikiMatcher = new RegExp(`\\[~(?:accountId:)?${escapeRegExp(normalized)}\\]`, "iu");
-  if (wikiMatcher.test(text)) return { matched: true, text };
+  if (wikiMatcher.test(text)) return true;
 
-  return { matched: false, text };
+  return false;
+}
+
+/**
+ * True when the comment body addresses `mention` via plain @handle, wiki markup, or ADF mention.
+ * `mention` may be a handle without @, a display name, or an accountId (with or without `accountid:`).
+ * `aliases` are alternate identities (typically `T3CODE_JIRA_BOT_ACCOUNT_ID`) for wiki/ADF picker form.
+ */
+export function bodyMentionsIdentity(
+  body: unknown,
+  mention: string,
+  options?: {
+    readonly aliases?: ReadonlyArray<string | null | undefined>;
+  },
+): { readonly matched: boolean; readonly text: string; readonly matchedAs: string | null } {
+  const extracted = extractTextAndMentionsFromBody(body);
+  const text = extracted.text;
+  const candidates = jiraMentionCandidates(mention, options?.aliases ?? []);
+  if (candidates.length === 0) return { matched: false, text, matchedAs: null };
+
+  for (const candidate of candidates) {
+    if (bodyMentionsSingleIdentity(extracted, candidate)) {
+      return { matched: true, text, matchedAs: candidate };
+    }
+  }
+  return { matched: false, text, matchedAs: null };
 }
 
 /** Strip the first matching mention token and return the remaining prompt, or null. */
-export function extractJiraMentionPrompt(body: unknown, mention: string): string | null {
-  const normalized = mention.trim().replace(/^@/u, "");
-  if (normalized.length === 0) return null;
+export function extractJiraMentionPrompt(
+  body: unknown,
+  mention: string,
+  options?: {
+    readonly aliases?: ReadonlyArray<string | null | undefined>;
+  },
+): string | null {
+  const { matched, text, matchedAs } = bodyMentionsIdentity(body, mention, options);
+  if (!matched || matchedAs === null) return null;
 
-  const { matched, text } = bodyMentionsIdentity(body, normalized);
-  if (!matched) return null;
-
-  // Prefer stripping @handle form from plain text.
-  const atMatcher = new RegExp(`(?:^|\\s)@${escapeRegExp(normalized)}(?:\\s+|$)`, "iu");
-  const atMatch = atMatcher.exec(text);
-  if (atMatch) {
-    const prompt = text.slice(atMatch.index + atMatch[0].length).trim();
-    return prompt.length > 0 ? prompt : null;
+  // Prefer stripping @handle form from plain text (try all candidates so @omegent still strips
+  // when the match was via accountId wiki markup).
+  for (const candidate of jiraMentionCandidates(mention, options?.aliases ?? [])) {
+    const atMatcher = new RegExp(`(?:^|\\s)@${escapeRegExp(candidate)}(?:\\s+|$)`, "iu");
+    const atMatch = atMatcher.exec(text);
+    if (atMatch) {
+      const prompt = text.slice(atMatch.index + atMatch[0].length).trim();
+      return prompt.length > 0 ? prompt : null;
+    }
   }
 
-  const wikiMatcher = new RegExp(`\\[~(?:accountId:)?${escapeRegExp(normalized)}\\]\\s*`, "iu");
-  const wikiMatch = wikiMatcher.exec(text);
-  if (wikiMatch) {
-    const prompt =
-      `${text.slice(0, wikiMatch.index)}${text.slice(wikiMatch.index + wikiMatch[0].length)}`
-        .replace(/\s+/gu, " ")
-        .trim();
-    return prompt.length > 0 ? prompt : null;
+  for (const candidate of jiraMentionCandidates(mention, options?.aliases ?? [])) {
+    const wikiMatcher = new RegExp(`\\[~(?:accountId:)?${escapeRegExp(candidate)}\\]\\s*`, "iu");
+    const wikiMatch = wikiMatcher.exec(text);
+    if (wikiMatch) {
+      const prompt =
+        `${text.slice(0, wikiMatch.index)}${text.slice(wikiMatch.index + wikiMatch[0].length)}`
+          .replace(/\s+/gu, " ")
+          .trim();
+      return prompt.length > 0 ? prompt : null;
+    }
   }
 
   // ADF mention: strip leading @DisplayName if present, else whole text after first mention token.
-  const mentionTextMatcher = new RegExp(`(?:^|\\s)@${escapeRegExp(normalized)}\\b`, "iu");
-  const mentionTextMatch = mentionTextMatcher.exec(text);
-  if (mentionTextMatch) {
-    const prompt = text.slice(mentionTextMatch.index + mentionTextMatch[0].length).trim();
-    return prompt.length > 0 ? prompt : null;
+  for (const candidate of jiraMentionCandidates(mention, options?.aliases ?? [])) {
+    const mentionTextMatcher = new RegExp(`(?:^|\\s)@${escapeRegExp(candidate)}\\b`, "iu");
+    const mentionTextMatch = mentionTextMatcher.exec(text);
+    if (mentionTextMatch) {
+      const prompt = text.slice(mentionTextMatch.index + mentionTextMatch[0].length).trim();
+      return prompt.length > 0 ? prompt : null;
+    }
   }
 
   // Mention matched only via ADF attrs.id — use full text as prompt when non-empty.
@@ -291,7 +346,10 @@ export function parseJiraCommentInvocation(
     return null;
   }
 
-  const prompt = extractJiraMentionPrompt(payload.comment.body, mention);
+  // Match handle (T3CODE_JIRA_MENTION) and bot accountId (picker/wiki [~accountid:…]).
+  const prompt = extractJiraMentionPrompt(payload.comment.body, mention, {
+    aliases: botAccountId !== null ? [botAccountId] : [],
+  });
   if (prompt === null) return null;
 
   const issueKey = payload.issue.key.trim().toUpperCase();
