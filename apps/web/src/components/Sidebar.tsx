@@ -524,7 +524,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const gitCwd = thread.worktreePath ?? threadProjectCwd ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
     thread.branch != null && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
@@ -3055,7 +3055,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   const gitCwd = thread.worktreePath ?? project.workspaceRoot;
   const gitStatus = useEnvironmentQuery(
     (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })

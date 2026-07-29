@@ -17,8 +17,8 @@ const EMPTY_STATUSES_ATOM = Atom.make(
 ).pipe(Atom.withLabel("mobile:board-vcs-statuses:empty"));
 
 /**
- * Aggregated VCS status for the board — one derived atom over the per-cwd
- * status family (same shape as web `useBoardVcsStatuses`).
+ * Aggregated list-mode VCS status for the board (shared budgeted refresh) —
+ * same shape as web `useBoardVcsStatuses`.
  */
 export function useBoardVcsStatuses(
   targets: ReadonlyArray<BoardVcsTarget>,
@@ -55,7 +55,7 @@ export function useBoardVcsStatuses(
             Option.getOrNull(
               AsyncResult.value(
                 get(
-                  vcsEnvironment.status({
+                  vcsEnvironment.listStatus({
                     environmentId: target.environmentId,
                     input: { cwd: target.cwd },
                   }),

@@ -11,10 +11,8 @@ export {
 } from "./thread-pr-presentation";
 
 /**
- * Live PR status for a thread's branch. Subscriptions are deduplicated per
- * (environmentId, cwd) by the atom family, so many rows on the same worktree
- * or project root share one stream — and virtualization means only visible
- * rows subscribe at all.
+ * List-mode PR status for a thread's branch (shared budgeted remote refresh).
+ * Deduped per (environmentId, cwd); use full `status` for active git chrome.
  */
 export function useThreadPr(
   thread: EnvironmentThreadShell,
@@ -23,7 +21,7 @@ export function useThreadPr(
   const cwd = thread.worktreePath ?? projectCwd;
   const gitStatus = useEnvironmentQuery(
     thread.branch !== null && cwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd },
         })

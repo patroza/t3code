@@ -554,6 +554,62 @@ describe("VcsStatusBroadcaster", () => {
     );
   });
 
+  it.effect("list mode uses a shared budgeted refresher, not a per-cwd poller", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: remoteStatusWithPr,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      remoteStatusRefreshUpstreamValues: [] as Array<boolean | undefined>,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const scope = yield* Scope.make();
+      const repoAReady = yield* Deferred.make<void>();
+      const repoBReady = yield* Deferred.make<void>();
+
+      const trackReady = (cwd: string, ready: Deferred.Deferred<void, never>) =>
+        Stream.runForEach(
+          broadcaster.streamStatus(
+            { cwd, mode: "list" },
+            { automaticRemoteRefreshInterval: Effect.succeed(Duration.seconds(30)) },
+          ),
+          (event) =>
+            event._tag === "snapshot" || event._tag === "remoteUpdated"
+              ? Deferred.succeed(ready, undefined).pipe(Effect.ignore)
+              : Effect.void,
+        ).pipe(Effect.forkIn(scope, { startImmediately: true }));
+
+      // Two list worktrees — shared refresher, not two independent 30s pollers.
+      yield* trackReady("/repo-a", repoAReady);
+      yield* trackReady("/repo-b", repoBReady);
+      yield* Deferred.await(repoAReady);
+      yield* Deferred.await(repoBReady);
+
+      // Initial fill: one remote load per list cwd (subscribe fill and/or shared sweep).
+      assert.isAtLeast(state.remoteStatusCalls, 2);
+      assert.isAtMost(state.remoteStatusCalls, 4);
+      assert.equal(state.remoteInvalidationCalls, 0);
+      for (const flag of state.remoteStatusRefreshUpstreamValues) {
+        assert.equal(flag, false);
+      }
+      const afterInitial = state.remoteStatusCalls;
+
+      // Over ~90s: shared list cadence (~60s) should add about one sweep for both
+      // cwds (+2), not two independent 30s full pollers (≈ +6).
+      yield* TestClock.adjust(Duration.seconds(90));
+      yield* Effect.yieldNow;
+      const delta = state.remoteStatusCalls - afterInitial;
+      assert.isAtLeast(delta, 2);
+      assert.isAtMost(delta, 4);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
+  });
+
   it.effect("delays automatic refresh when a cached remote snapshot is available", () => {
     const state = {
       currentLocalStatus: baseLocalStatus,
