@@ -735,9 +735,9 @@ describe("VcsStatusBroadcaster", () => {
       ).pipe(Effect.forkIn(nextScope, { startImmediately: true }));
       yield* Deferred.await(nextSnapshot);
 
-      // Releasing the final poller also evicts its cwd cache entry, so a later
-      // subscription reloads local status instead of retaining state forever.
-      assert.equal(state.localStatusCalls, 2);
+      // Snapshot is retained after the last subscriber so reconnect does not
+      // immediately re-run multi-process local status for every worktree.
+      assert.equal(state.localStatusCalls, 1);
       yield* Scope.close(nextScope, Exit.void);
     }).pipe(Effect.provide(testLayer));
   });
