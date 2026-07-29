@@ -31,3 +31,19 @@ export {
 export { ConnectionResolver } from "./resolver.ts";
 export { EnvironmentSupervisor, type EnvironmentSupervisorOptions } from "./supervisor.ts";
 export * as Wakeups from "./wakeups.ts";
+export {
+  CONNECTION_DIAGNOSTICS_RETENTION_MS,
+  CONNECTION_DIAGNOSTICS_STORAGE_KEY,
+  ConnectionDiagnosticEvent,
+  ConnectionDiagnosticsLog,
+  type ConnectionDiagnosticEventInput,
+  type ConnectionDiagnosticKind,
+  clearConnectionDiagnosticsForTests,
+} from "./diagnosticsLog.ts";
+export {
+  describeWebSocketCloseCode,
+  formatDisconnectDetail,
+  formatDisconnectStatusFragment,
+  type FormatDisconnectDetailInput,
+  type SocketCloseCapture,
+} from "./disconnectDetail.ts";
