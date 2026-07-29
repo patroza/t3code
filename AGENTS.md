@@ -5,13 +5,16 @@
 Read [docs/fork-stack.md](./docs/fork-stack.md) before creating, rebasing, merging, or retargeting
 branches.
 
+Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/stack-ship-path.md).
+
 - Before the documented one-time cutover, implementation PRs continue to target `main`.
 - After cutover, `main` is an upstream mirror. Never merge downstream fork work into it.
-- Update `main` only through the **manual** `Rebase fork PR stack` workflow (`workflow_dispatch`).
-  Do not use GitHub's **Sync fork** button, open a PR into `main`, or push `main` manually. That
-  workflow uses the repository-scoped `FORK_STACK_DEPLOY_KEY` to bypass `main` protection, preserve
-  the exact upstream commit SHA, and rebuild `fork/tim` / `fork/candidates` / `fork/changes` (then
-  compose `fork/integration`).
+- Update `main` only via a **local** provenance restack (`node scripts/rebase-pr-stack.ts sync
+--push` or hand-applied layer rewrites), never via GitHub's **Sync fork** button, a PR into
+  `main`, or a casual force-push. The GitHub Actions workflow **Rebase fork PR stack** is
+  **`disabled_manually` — leave it disabled.** Do not enable or dispatch it. Local restacks that
+  must move protected tips use the repository-scoped `FORK_STACK_DEPLOY_KEY` (or an allowed bypass
+  actor) only for that intentional rewrite; agents must never print or reuse that credential.
 - `fork/tim` contains only selected Tim Smart integrations above upstream. `fork/candidates`
   contains selected open upstream PRs that we run before upstream accepts them, one provenance
   commit per source PR. The permanent `fork/changes` PR is based on `fork/candidates`, contains only
@@ -67,11 +70,13 @@ branches.
     main/tim/candidates. If an overlay is not based on current `fork/changes`, compose fails — rebase
     that overlay tip first. When adding an overlay to `.github/pr-stack.json`, also add its branch to
     the `on.push` / `on.pull_request` lists in `compose-integration.yml`.
-- **Slow path (upstream / Tim / candidates):** `Rebase fork PR stack` is **manual only**
-  (`workflow_dispatch`). It mirrors `pingdotgg/t3code:main`, rebuilds provenance layers, rebases the
-  PR tree, composes integration, and dispatches Fork CI. Deploy key is the only automation bypass
-  for protected `main`; agents must never print, replace, or reuse that credential outside these
-  workflows.
+- **Slow path (upstream / Tim / candidates):** run **locally** with
+  `node scripts/rebase-pr-stack.ts sync --push` (or layer-by-layer hand restack). The Actions
+  workflow **Rebase fork PR stack** stays **`disabled_manually`** — do **not** enable it, schedule
+  it, or `gh workflow run` it. Local restacks mirror `pingdotgg/t3code:main`, rebuild provenance
+  layers with stop-the-line green gates, rebase overlays, compose integration, and rely on
+  **Compose fork integration** / Fork CI as needed. Deploy key (if used) is only for intentional
+  protected-branch force-with-lease; agents must never print or reuse it.
 - Fork checks live in `.github/workflows/fork-ci.yml` and run for PRs or by explicit integration
   dispatch. The inherited upstream `.github/workflows/ci.yml` and `deploy-relay.yml` workflows are
   disabled at repository level so mirror updates do not run redundant CI or attempt upstream relay
