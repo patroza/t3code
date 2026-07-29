@@ -59,6 +59,7 @@ import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import {
   applyGrokAcpModelSelection,
+  applyGrokAcpSessionMode,
   currentGrokModelIdFromSessionSetup,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
@@ -1036,6 +1037,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 context.step === "set-effort" ? "session/set_mode" : "session/set_model",
                 context.cause,
               ),
+          });
+          // Sessions start in Build by default; pin Grok to agent mode so it
+          // does not remain in ask. Plan mode is applied per sendTurn.
+          yield* applyGrokAcpSessionMode({
+            runtime: acp,
+            interactionMode: "default",
+            mapError: (cause) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_mode", cause),
           });
 
           const now = yield* nowIso;
