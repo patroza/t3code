@@ -19,6 +19,7 @@ import {
   AuthAccessReadScope,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
+  type AiUsageSnapshot,
   type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
@@ -72,6 +73,7 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import { GrokTranscriptResync } from "./externalSessions/GrokTranscriptResync.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as WorktreeLifecycle from "./orchestration/Services/WorktreeLifecycle.ts";
@@ -90,7 +92,9 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -102,6 +106,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
@@ -119,6 +124,11 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import {
+  isValidOmegentT3ProductHandshake,
+  OMEGENT_T3_CLIENT_REQUIRED_MESSAGE,
+  parseProductHandshakeFromSearchParams,
+} from "@t3tools/shared/productFamily";
 import { deriveLocalBranchNameFromRemoteRef } from "@t3tools/shared/git";
 
 const ORCHESTRATION_SUBSCRIPTION_REPLAY_LIMIT = 1_000;
@@ -284,13 +294,22 @@ function projectSetupScriptCompatibilityDetail(
   }
 }
 
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
+/**
+ * Which events a thread-detail subscriber needs.
+ *
+ * Exported for testing: a client resuming from `afterSequence` only ever sees
+ * what passes this filter, so a thread-detail event missing here is dropped on
+ * the floor and the client's transcript silently rots.
+ */
+export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
     type:
       | "thread.message-sent"
       | "thread.message-queued"
       | "thread.queued-message-removed"
+      | "thread.messages-resynced"
+      | "thread.meta-updated"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
@@ -302,6 +321,11 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.message-sent" ||
     event.type === "thread.message-queued" ||
     event.type === "thread.queued-message-removed" ||
+    event.type === "thread.meta-updated" ||
+    // Without this a resync is written, projected, and then silently dropped on
+    // its way to the client — which resumes from `afterSequence` and so never
+    // re-reads the projection. The transcript would stay stale forever.
+    event.type === "thread.messages-resynced" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
@@ -311,6 +335,11 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
+const BOOTSTRAP_WORKTREE_PROJECTION_TIMEOUT_MS = 5_000;
+const BOOTSTRAP_WORKTREE_PROJECTION_POLL_MS = 50;
+const BOOTSTRAP_WORKTREE_PROJECTION_ATTEMPTS = Math.ceil(
+  BOOTSTRAP_WORKTREE_PROJECTION_TIMEOUT_MS / BOOTSTRAP_WORKTREE_PROJECTION_POLL_MS,
+);
 
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
@@ -340,6 +369,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
+  [WS_METHODS.serverGetHostResourceSnapshot, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
@@ -360,6 +390,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.gitResolvePullRequest, AuthOrchestrationOperateScope],
   [WS_METHODS.gitPreparePullRequestThread, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsListRefs, AuthOrchestrationReadScope],
+  [WS_METHODS.vcsResolveBranchChangeRequest, AuthOrchestrationReadScope],
   [WS_METHODS.vcsCreateWorktree, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsRemoveWorktree, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsPreviewWorktreeCleanup, AuthOrchestrationReadScope],
@@ -383,12 +414,15 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.previewRefresh, AuthOrchestrationOperateScope],
   [WS_METHODS.previewClose, AuthOrchestrationOperateScope],
   [WS_METHODS.previewList, AuthOrchestrationReadScope],
+  // Operate, not read: resolving may publish the port on the tailnet.
+  [WS_METHODS.previewResolvePort, AuthOrchestrationOperateScope],
   [WS_METHODS.previewReportStatus, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationConnect, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationRespond, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationFocusHost, AuthOrchestrationOperateScope],
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeAiUsage, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
@@ -437,6 +471,7 @@ function toAuthAccessStreamEvent(
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  productHandshakeValid: boolean,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -444,6 +479,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const grokTranscriptResync = yield* GrokTranscriptResync;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -455,6 +491,8 @@ const makeWsRpcLayer = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
+      const portExposure = yield* PortExposure.PreviewPortExposure;
+      const aiUsageMonitor = yield* AiUsageMonitorModule.AiUsageMonitor;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
@@ -482,26 +520,40 @@ const makeWsRpcLayer = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
+      const hostResourceProbe = yield* HostResourceProbe.HostResourceProbe;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
           requiredScope,
         });
+      const productClientError = () =>
+        new EnvironmentAuthorizationError({
+          message: OMEGENT_T3_CLIENT_REQUIRED_MESSAGE,
+          requiredScope: AuthOrchestrationReadScope,
+        });
       const authorizeEffect = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
-      ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
-        currentSession.scopes.includes(requiredScope)
+      ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> => {
+        if (!productHandshakeValid) {
+          return Effect.fail(productClientError());
+        }
+        return currentSession.scopes.includes(requiredScope)
           ? effect
           : Effect.fail(authorizationError(requiredScope));
+      };
       const authorizeStream = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         stream: Stream.Stream<A, E, R>,
-      ): Stream.Stream<A, E | EnvironmentAuthorizationError, R> =>
-        currentSession.scopes.includes(requiredScope)
+      ): Stream.Stream<A, E | EnvironmentAuthorizationError, R> => {
+        if (!productHandshakeValid) {
+          return Stream.fail(productClientError());
+        }
+        return currentSession.scopes.includes(requiredScope)
           ? stream
           : Stream.fail(authorizationError(requiredScope));
+      };
       const requiredScopeForMethod = (method: string): AuthEnvironmentScope => {
         const requiredScope = RPC_REQUIRED_SCOPE.get(method);
         if (requiredScope === undefined) {
@@ -832,6 +884,7 @@ const makeWsRpcLayer = (
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
+          let worktreeAlreadyPrepared = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
@@ -927,9 +980,33 @@ const makeWsRpcLayer = (
               );
             });
 
+          const waitForWorktreeProjection = (worktreePath: string) =>
+            Effect.gen(function* () {
+              for (let attempt = 0; attempt < BOOTSTRAP_WORKTREE_PROJECTION_ATTEMPTS; attempt++) {
+                const projectedThread = yield* projectionSnapshotQuery
+                  .getThreadShellById(command.threadId)
+                  .pipe(Effect.orElseSucceed(() => Option.none()));
+                if (
+                  Option.isSome(projectedThread) &&
+                  projectedThread.value.worktreePath === worktreePath
+                ) {
+                  return;
+                }
+                yield* Effect.sleep(BOOTSTRAP_WORKTREE_PROJECTION_POLL_MS);
+              }
+
+              return yield* new OrchestrationDispatchCommandError({
+                message: "Worktree bootstrap did not become visible before provider start.",
+                cause: {
+                  threadId: command.threadId,
+                  worktreePath,
+                },
+              });
+            });
+
           const runSetupProgram = () =>
             Effect.gen(function* () {
-              if (!bootstrap?.runSetupScript || !targetWorktreePath) {
+              if (!bootstrap?.runSetupScript || !targetWorktreePath || worktreeAlreadyPrepared) {
                 return;
               }
               const worktreePath = targetWorktreePath;
@@ -967,23 +1044,66 @@ const makeWsRpcLayer = (
 
           const bootstrapProgram = Effect.gen(function* () {
             if (bootstrap?.createThread) {
-              yield* orchestrationEngine.dispatch({
-                type: "thread.create",
-                commandId: yield* serverCommandId("bootstrap-thread-create"),
-                threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
-                title: bootstrap.createThread.title,
-                modelSelection: bootstrap.createThread.modelSelection,
-                runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
-                branch: bootstrap.createThread.branch,
-                worktreePath: bootstrap.createThread.worktreePath,
-                createdAt: bootstrap.createThread.createdAt,
-              });
-              createdThread = true;
+              createdThread = yield* orchestrationEngine
+                .dispatch({
+                  type: "thread.create",
+                  commandId: yield* serverCommandId("bootstrap-thread-create"),
+                  threadId: command.threadId,
+                  projectId: bootstrap.createThread.projectId,
+                  title: bootstrap.createThread.title,
+                  modelSelection: bootstrap.createThread.modelSelection,
+                  runtimeMode: bootstrap.createThread.runtimeMode,
+                  interactionMode: bootstrap.createThread.interactionMode,
+                  branch: bootstrap.createThread.branch,
+                  worktreePath: bootstrap.createThread.worktreePath,
+                  createdAt: bootstrap.createThread.createdAt,
+                })
+                .pipe(
+                  Effect.as(true),
+                  Effect.catch((createError) => {
+                    if (
+                      createError._tag !== "OrchestrationCommandInvariantError" ||
+                      !createError.detail.includes("already exists")
+                    ) {
+                      return Effect.fail(createError);
+                    }
+                    return projectionSnapshotQuery.getThreadShellById(command.threadId).pipe(
+                      Effect.matchEffect({
+                        onFailure: () => Effect.fail(createError),
+                        onSuccess: Option.match({
+                          // A reconnect can replay the bootstrap after its
+                          // thread.create committed but before the turn-start
+                          // response reached the client. Resume the remaining
+                          // bootstrap instead of rejecting the duplicate.
+                          onSome: () => Effect.succeed(false),
+                          onNone: () => Effect.fail(createError),
+                        }),
+                      }),
+                    );
+                  }),
+                );
             }
 
-            if (bootstrap?.prepareWorktree) {
+            if (bootstrap?.prepareWorktree && !(bootstrap.createThread && createdThread)) {
+              // A replayed bootstrap (reconnect or outbox retry) can reach
+              // this point after the original already prepared the worktree;
+              // re-running `git worktree add` would fail on the now-existing
+              // branch. When the thread pre-existed, reuse its recorded
+              // worktree and skip setup, which the original bootstrap ran.
+              const projectedShell = yield* projectionSnapshotQuery
+                .getThreadShellById(command.threadId)
+                .pipe(Effect.orElseSucceed(() => Option.none()));
+              const existingWorktreePath = Option.isSome(projectedShell)
+                ? projectedShell.value.worktreePath
+                : null;
+              if (existingWorktreePath !== null) {
+                targetWorktreePath = existingWorktreePath;
+                worktreeAlreadyPrepared = true;
+                yield* refreshGitStatus(existingWorktreePath);
+              }
+            }
+
+            if (bootstrap?.prepareWorktree && !worktreeAlreadyPrepared) {
               const prepareWorktree = bootstrap.prepareWorktree;
               let worktreeBaseRef = prepareWorktree.baseBranch;
               let worktreeNewRefName = prepareWorktree.branch;
@@ -1033,6 +1153,7 @@ const makeWsRpcLayer = (
                 branch: worktree.worktree.refName,
                 worktreePath: targetWorktreePath,
               });
+              yield* waitForWorktreeProjection(targetWorktreePath);
               yield* refreshGitStatus(targetWorktreePath);
             }
 
@@ -1372,6 +1493,13 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              // Opening a thread is when we find out its provider ran ahead of us
+              // (dropped ACP updates, or the session driven from another client).
+              // Awaited rather than forked: once this returns, any resync is
+              // persisted, so it is picked up by the snapshot read or the
+              // catch-up replay below instead of racing them.
+              yield* grokTranscriptResync.resyncThread(input.threadId);
+
               const isThisThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
@@ -1642,6 +1770,10 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverGetHostResourceSnapshot]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetHostResourceSnapshot, hostResourceProbe.read, {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverSignalProcess]: (input) =>
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
@@ -1906,6 +2038,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
             "rpc.aggregate": "vcs",
           }),
+        [WS_METHODS.vcsResolveBranchChangeRequest]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsResolveBranchChangeRequest,
+            gitWorkflow.resolveBranchChangeRequest(input),
+            { "rpc.aggregate": "vcs" },
+          ),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateWorktree,
@@ -2035,6 +2173,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.previewList, previewManager.list(input), {
             "rpc.aggregate": "preview",
           }),
+        [WS_METHODS.previewResolvePort]: (input) =>
+          observeRpcEffect(WS_METHODS.previewResolvePort, portExposure.resolve(input), {
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.previewReportStatus]: (input) =>
           observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
             "rpc.aggregate": "preview",
@@ -2082,6 +2224,20 @@ const makeWsRpcLayer = (
               }),
             ),
             { "rpc.aggregate": "preview" },
+          ),
+        [WS_METHODS.subscribeAiUsage]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeAiUsage,
+            Stream.callback<AiUsageSnapshot>((queue) =>
+              Effect.gen(function* () {
+                yield* aiUsageMonitor.retain;
+                yield* Queue.offer(queue, yield* aiUsageMonitor.current());
+                yield* aiUsageMonitor.subscribe((snapshot) =>
+                  Effect.asVoid(Queue.offer(queue, snapshot)),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "ai-usage" },
           ),
         [WS_METHODS.subscribeServerConfig]: (_input) =>
           observeRpcStreamEffect(
@@ -2204,11 +2360,17 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
+        const requestUrl = HttpServerRequest.toURL(request);
+        const productHandshakeValid =
+          Option.isSome(requestUrl) &&
+          isValidOmegentT3ProductHandshake(
+            parseProductHandshakeFromSearchParams(requestUrl.value.searchParams),
+          );
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, previewAutomationBroker, productHandshakeValid).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

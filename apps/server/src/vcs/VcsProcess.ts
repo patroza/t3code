@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -49,6 +50,9 @@ export class VcsProcess extends Context.Service<
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
+/** Cap concurrent source-control CLI invocations (gh/glab/az) across all worktrees. */
+const SOURCE_CONTROL_CLI_CONCURRENCY = 4;
+const SOURCE_CONTROL_COMMANDS = new Set(["gh", "glab", "az"]);
 
 const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFailureKind => {
   const normalized = stderr.toLowerCase();
@@ -88,6 +92,7 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
 
 export const make = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const sourceControlCliSemaphore = yield* Semaphore.make(SOURCE_CONTROL_CLI_CONCURRENCY);
 
   const run = Effect.fn("VcsProcess.run")(function* (input: VcsProcessInput) {
     const baseError = {
@@ -97,7 +102,7 @@ export const make = Effect.gen(function* () {
       argumentCount: input.args.length,
     };
 
-    const result = yield* processRunner
+    const runProcess = processRunner
       .run({
         command: input.command,
         args: input.args,
@@ -140,6 +145,10 @@ export const make = Effect.gen(function* () {
           }),
         ),
       );
+
+    const result = yield* SOURCE_CONTROL_COMMANDS.has(input.command)
+      ? sourceControlCliSemaphore.withPermits(1)(runProcess)
+      : runProcess;
 
     if (result.code === null) {
       return yield* new VcsProcessMissingExitCodeError(baseError);

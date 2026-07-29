@@ -51,6 +51,7 @@ interface FakeGhScenario {
     baseRefName: string;
     headRefName: string;
     state?: "open" | "closed" | "merged";
+    hasFailingChecks?: boolean;
     isCrossRepository?: boolean;
     headRepositoryNameWithOwner?: string | null;
     headRepositoryOwnerLogin?: string | null;
@@ -555,6 +556,8 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         }).pipe(
           Effect.map((result) => JSON.parse(result.stdout) as GitHubCli.GitHubPullRequestSummary),
         ),
+      getPullRequestHasFailingChecks: () =>
+        Effect.succeed(scenario.pullRequest?.hasFailingChecks === true),
       getRepositoryCloneUrls: (input) =>
         execute({
           cwd: input.cwd,
@@ -610,6 +613,7 @@ const configureFailingCommitSigner = Effect.fn("configureFailingCommitSigner")(f
     { mode: 0o755 },
   );
   yield* runGit(repoDir, ["config", "commit.gpgSign", "true"]);
+  yield* runGit(repoDir, ["config", "gpg.format", "openpgp"]);
   yield* runGit(repoDir, ["config", "gpg.program", signerPath]);
 });
 
@@ -1258,6 +1262,137 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(status.refName).toBe("main");
       expect(status.pr).toBeNull();
     }),
+  );
+
+  it.effect("resolveBranchChangeRequest returns PR for a branch that is not checked out", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/sidebar-pr"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 31,
+                title: "Sidebar PR lookup",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/31",
+                baseRefName: "main",
+                headRefName: "feature/sidebar-pr",
+                state: "OPEN",
+                updatedAt: "2026-01-30T10:00:00Z",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const resolved = yield* manager.resolveBranchChangeRequest({
+        cwd: repoDir,
+        refName: "feature/sidebar-pr",
+      });
+      expect(resolved.pr).toEqual({
+        number: 31,
+        title: "Sidebar PR lookup",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/31",
+        baseRef: "main",
+        headRef: "feature/sidebar-pr",
+        state: "open",
+      });
+    }),
+  );
+
+  it.effect("resolveBranchChangeRequest surfaces failing GitHub checks for open PRs", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/failing-checks"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            '[{"number":41,"title":"Failing checks PR","url":"https://github.com/pingdotgg/codething-mvp/pull/41","baseRefName":"main","headRefName":"feature/failing-checks","state":"OPEN","updatedAt":"2026-01-30T10:00:00Z"}]',
+          ],
+          pullRequest: {
+            number: 41,
+            title: "Failing checks PR",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/41",
+            baseRefName: "main",
+            headRefName: "feature/failing-checks",
+            state: "open",
+            hasFailingChecks: true,
+          },
+        },
+      });
+
+      const resolved = yield* manager.resolveBranchChangeRequest({
+        cwd: repoDir,
+        refName: "feature/failing-checks",
+      });
+      expect(resolved.pr).toEqual({
+        number: 41,
+        title: "Failing checks PR",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/41",
+        baseRef: "main",
+        headRef: "feature/failing-checks",
+        state: "open",
+        hasFailingChecks: true,
+      });
+    }),
+  );
+
+  it.effect(
+    "resolveBranchChangeRequest falls back to a direct GitHub head lookup when the primary lookup returns null",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, [
+          "config",
+          "remote.origin.url",
+          "https://github.com/pingdotgg/codething-mvp.git",
+        ]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/direct-fallback"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify([
+                {
+                  number: 44,
+                  title: "Fallback PR lookup",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+                  baseRefName: "main",
+                  headRefName: "feature/direct-fallback",
+                  state: "MERGED",
+                  mergedAt: "2026-01-30T10:00:00Z",
+                  updatedAt: "2026-01-30T10:00:00Z",
+                },
+              ]),
+            ],
+          },
+        });
+
+        const resolved = yield* manager.resolveBranchChangeRequest({
+          cwd: repoDir,
+          refName: "feature/direct-fallback",
+        });
+        expect(resolved.pr).toEqual({
+          number: 44,
+          title: "Fallback PR lookup",
+          url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+          baseRef: "main",
+          headRef: "feature/direct-fallback",
+          state: "merged",
+        });
+      }),
   );
 
   it.effect("status prefers open PR when merged PR has newer updatedAt", () =>
@@ -3942,9 +4077,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(preCommitOutput).toBeDefined();
-      expect([null, "pre-commit"]).toContain(preCommitOutput?.hookName);
+      expect(preCommitOutput).toMatchObject({ hookName: null });
       expect(commitMsgOutput).toBeDefined();
-      expect([null, "commit-msg"]).toContain(commitMsgOutput?.hookName);
+      expect(commitMsgOutput).toMatchObject({ hookName: null });
       expect(gitOutput).toMatchObject({ hookName: null });
     }),
   );

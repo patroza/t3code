@@ -1,8 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics preferSchemaOverJson:off
 import {
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ModelSelection,
+  type OrchestrationSession,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -21,6 +24,9 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import { SERVER_RUNTIME_DESCRIPTOR_FILE } from "@t3tools/shared/serverRuntime";
 
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -34,6 +40,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as OrphanSessionRecovery from "./orchestration/Services/OrphanSessionRecovery.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -288,11 +295,43 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+/**
+ * Pure helper for session rows that claimed to be live across a process restart.
+ * Only marks **Wake Required** (`interrupted`) when a turn was actually in flight.
+ * Zombie `running`/`starting` sessions with no active turn settle to `ready`.
+ */
+export function interruptSessionAfterServerRestart(
+  session: OrchestrationSession | null,
+  updatedAt: string,
+): OrchestrationSession | null {
+  if (session?.status !== "starting" && session?.status !== "running") {
+    return null;
+  }
+  const hadActiveTurn = session.activeTurnId != null;
+  if (!hadActiveTurn) {
+    return {
+      ...session,
+      status: "ready",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt,
+    };
+  }
+  return {
+    ...session,
+    status: "interrupted",
+    activeTurnId: null,
+    lastError: "Server restarted while the agent was working. Send a follow-up to resume it.",
+    updatedAt,
+  };
+}
+
 export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const keybindings = yield* Keybindings.Keybindings;
   const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
   const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+  const orphanSessionRecovery = yield* OrphanSessionRecovery.OrphanSessionRecovery;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -343,6 +382,22 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+      }),
+    );
+
+    yield* runStartupPhase(
+      "sessions.interrupt-stale",
+      Effect.gen(function* () {
+        // Full orphan audit: clear shell sessions *and* provider runtimes that
+        // claim to be live. No provider process can have survived the restart,
+        // so leaving them "running" deadlocks resync/reaper behind active turns.
+        const result = yield* orphanSessionRecovery.settleAllAfterServerRestart();
+        if (result.settledSessions > 0 || result.settledRuntimes > 0) {
+          yield* Effect.logWarning("interrupted stale provider sessions after server restart", {
+            interruptedCount: result.settledSessions,
+            settledRuntimes: result.settledRuntimes,
+          });
+        }
       }),
     );
 
@@ -432,6 +487,39 @@ export const make = Effect.gen(function* () {
       yield* commandGate.signalCommandReady;
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+      const runtimeDescriptorPath = NodePath.join(
+        serverConfig.stateDir,
+        SERVER_RUNTIME_DESCRIPTOR_FILE,
+      );
+      const descriptorHost =
+        serverConfig.host === undefined || isWildcardHost(serverConfig.host)
+          ? "127.0.0.1"
+          : serverConfig.host;
+      const runtimeStartedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          runtimeDescriptorPath,
+          `${JSON.stringify({
+            version: 1,
+            pid: process.pid,
+            stateDir: serverConfig.stateDir,
+            httpBaseUrl: `http://${formatHostForUrl(descriptorHost)}:${serverConfig.port}`,
+            startedAt: runtimeStartedAt,
+          })}\n`,
+          { mode: 0o600 },
+        ),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          try {
+            const current = JSON.parse(await NodeFSP.readFile(runtimeDescriptorPath, "utf8")) as {
+              pid?: unknown;
+            };
+            if (current.pid === process.pid)
+              await NodeFSP.rm(runtimeDescriptorPath, { force: true });
+          } catch {}
+        }),
+      );
       yield* Effect.logDebug("startup phase: publishing ready event");
       yield* runStartupPhase(
         "ready.publish",
