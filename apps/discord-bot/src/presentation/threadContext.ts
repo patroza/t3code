@@ -8,7 +8,7 @@
  */
 
 import * as NodePath from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeURL from "node:url";
 
 import {
   formatIdentityAttributionBlock,
@@ -22,7 +22,7 @@ import { mergeJiraIssueKeys } from "./jiraLinks.ts";
 /** Absolute path to the static Discord agent policy document. */
 export function resolveAgentTurnRulesPath(): string {
   // presentation/ → src/ → package root → docs/agent-turn-rules.md
-  const presentationDir = NodePath.dirname(fileURLToPath(import.meta.url));
+  const presentationDir = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
   return NodePath.resolve(presentationDir, "../../docs/agent-turn-rules.md");
 }
 
