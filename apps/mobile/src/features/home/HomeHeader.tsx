@@ -61,7 +61,7 @@ export function HomeHeader(props: {
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   /**
-   * Hide settled threads for the Threads surface. Recency/none default on;
+   * Hide settled from the main Threads inbox. Recency/none default on;
    * project grouping defaults off at the call site.
    */
   readonly hideSettledThreads: boolean;
@@ -622,7 +622,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 <NativeHeaderToolbar.MenuAction
                   isOn={props.hideSettledThreads}
                   onPress={() => props.onHideSettledThreadsChange(!props.hideSettledThreads)}
-                  subtitle="Omit settled threads from this list"
+                  subtitle="Move settled threads out of the main list"
                 >
                   <NativeHeaderToolbar.Label>Hide settled</NativeHeaderToolbar.Label>
                 </NativeHeaderToolbar.MenuAction>
