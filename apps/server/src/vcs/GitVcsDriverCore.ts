@@ -47,8 +47,17 @@ const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
-const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
+/**
+ * Align with remote status cache TTL so automatic pollers do not re-fetch upstream
+ * more often than we recompute remote status.
+ */
+const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(90);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
+/**
+ * Cap concurrent `git` spawns across all worktrees. Unbounded fan-out during
+ * reconnect/VCS storms was thrashing host memory and delaying RPC pongs.
+ */
+const GIT_PROCESS_CONCURRENCY = 8;
 
 const STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN = Duration.seconds(30);
 const STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN = Duration.minutes(15);
@@ -743,6 +752,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const gitProcessSemaphore = yield* Semaphore.make(GIT_PROCESS_CONCURRENCY);
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -851,20 +861,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         } satisfies GitVcsDriver.ExecuteGitResult;
       });
 
-      return yield* runGitCommand().pipe(
-        Effect.scoped,
-        Effect.timeoutOption(timeoutMs),
-        Effect.flatMap((result) =>
-          Option.match(result, {
-            onNone: () =>
-              Effect.fail(
-                new GitCommandError({
-                  ...gitCommandContext(commandInput),
-                  detail: "Git command timed out.",
-                }),
-              ),
-            onSome: Effect.succeed,
-          }),
+      return yield* gitProcessSemaphore.withPermits(1)(
+        runGitCommand().pipe(
+          Effect.scoped,
+          Effect.timeoutOption(timeoutMs),
+          Effect.flatMap((result) =>
+            Option.match(result, {
+              onNone: () =>
+                Effect.fail(
+                  new GitCommandError({
+                    ...gitCommandContext(commandInput),
+                    detail: "Git command timed out.",
+                  }),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
         ),
       );
     },

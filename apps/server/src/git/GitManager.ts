@@ -112,14 +112,17 @@ const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
-/** Local status is cheap; keep a short TTL for burst coalescing. */
-const STATUS_RESULT_CACHE_TTL = Duration.seconds(1);
 /**
- * Remote status (PR list/view/checks via `gh`) is expensive. Coalesce concurrent
- * subscribers and near-interval polls so we don't re-mint tokens and re-hit the API
- * for every bridge/UI client on the same worktree.
+ * Local status is multi-process but still cheaper than remote. Coalesce reconnect
+ * storms and near-simultaneous sidebar subscribers for the same worktree.
  */
-const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(25);
+const STATUS_RESULT_CACHE_TTL = Duration.seconds(5);
+/**
+ * Remote status (PR list/view/checks via `gh`) is expensive. TTL must be **≥** the
+ * default VCS remote poll interval (30s) so automatic poller ticks hit cache instead
+ * of re-running detect + fetch + gh on every cwd every cycle under load.
+ */
+const REMOTE_STATUS_RESULT_CACHE_TTL = Duration.seconds(90);
 const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 const PR_LOOKUP_CACHE_TTL = Duration.minutes(2);
 const PR_LOOKUP_FAILURE_TTL = Duration.seconds(20);
