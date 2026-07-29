@@ -562,13 +562,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(configIdsAfterStart, [
-          "model",
-          "reasoning",
-          "context",
-          "fast",
-          "mode",
-        ]);
+        assert.deepStrictEqual(configIdsAfterStart, ["model", "reasoning", "context", "fast"]);
+        const modeIdsAfterStart = requestsAfterStart
+          .filter((entry) => entry.method === "session/set_mode")
+          .map((entry) => {
+            const params = entry.params as Record<string, unknown> | undefined;
+            return typeof params?.modeId === "string" ? params.modeId : undefined;
+          })
+          .filter((modeId): modeId is string => modeId !== undefined);
+        assert.isAbove(modeIdsAfterStart.length, 0);
+        assert.include(["code", "agent", "default", "chat", "implement"], modeIdsAfterStart[0]);
 
         yield* adapter.sendTurn({
           threadId,
@@ -586,7 +589,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             ? [String((entry.params as Record<string, unknown>).configId)]
             : [],
         );
-        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast", "mode"]);
+        assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast"]);
+        const finalModeIds = finalRequests
+          .filter((entry) => entry.method === "session/set_mode")
+          .map((entry) => {
+            const params = entry.params as Record<string, unknown> | undefined;
+            return typeof params?.modeId === "string" ? params.modeId : undefined;
+          })
+          .filter((modeId): modeId is string => modeId !== undefined);
+        // Mode is applied once at startSession; first sendTurn is a no-op when already set.
+        assert.deepStrictEqual(finalModeIds, modeIdsAfterStart);
         assert.equal(finalRequests.filter((entry) => entry.method === "session/prompt").length, 1);
       }),
   );

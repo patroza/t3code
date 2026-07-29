@@ -41,10 +41,12 @@ export function resolveGrokAcpModeIdForInteractionMode(
   interactionMode: ProviderInteractionMode | undefined,
 ): string | undefined {
   if (interactionMode === "plan") {
+    // Grok plan mode (never leave Build on ask).
     return "plan";
   }
   if (interactionMode === "default") {
-    return "default";
+    // Build maps to Grok *agent* mode — "default"/"ask" leave tools approval-heavy.
+    return "agent";
   }
   return undefined;
 }
