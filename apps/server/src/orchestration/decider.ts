@@ -322,7 +322,9 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       },
     });
   }
-  if (thread.snoozedUntil !== null) {
+  // Older snapshots may omit the optional snooze fields entirely. Treat both
+  // null and undefined as awake; only a real wake timestamp needs an event.
+  if (thread.snoozedUntil != null) {
     lifecycleResetEvents.push({
       ...(yield* withEventBase({
         aggregateKind: "thread",
@@ -870,6 +872,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      const nextWorktreePath =
+        command.worktreePath === null && thread.worktreePath !== null
+          ? thread.worktreePath
+          : command.worktreePath;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -886,7 +892,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(branch !== undefined ? { branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(nextWorktreePath !== undefined ? { worktreePath: nextWorktreePath } : {}),
           updatedAt: occurredAt,
         },
       };
@@ -1097,6 +1103,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           reason: "user",
           removedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.queue.update": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const queuedMessage = thread.queuedMessages.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!queuedMessage) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued message '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-queued",
+        payload: {
+          threadId: command.threadId,
+          messageId: queuedMessage.messageId,
+          text: command.text,
+          attachments: queuedMessage.attachments,
+          ...(queuedMessage.modelSelection !== undefined
+            ? { modelSelection: queuedMessage.modelSelection }
+            : {}),
+          ...(queuedMessage.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: queuedMessage.sourceProposedPlan }
+            : {}),
+          queuedAt: queuedMessage.queuedAt,
         },
       };
     }
@@ -1420,6 +1465,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    case "thread.messages.resync": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.messages-resynced",
+        payload: {
+          threadId: command.threadId,
+          afterMessageId: command.afterMessageId,
+          messages: command.messages,
+          reason: command.reason,
         },
       };
     }

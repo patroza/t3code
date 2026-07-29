@@ -5,7 +5,11 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { type CursorSettings, type ModelSelection } from "@t3tools/contracts";
+import {
+  type CursorSettings,
+  type ModelSelection,
+  type ProviderOptionSelection,
+} from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
@@ -25,7 +29,10 @@ import {
 import {
   applyCursorAcpModelSelection,
   makeCursorAcpRuntime,
+  type CursorAcpRuntimeInput,
 } from "../provider/acp/CursorAcpSupport.ts";
+import type * as AcpSessionRuntime from "../provider/acp/AcpSessionRuntime.ts";
+import type * as EffectAcpErrors from "effect-acp/errors";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
@@ -35,15 +42,44 @@ const isTextGenerationError = Schema.is(TextGenerationError);
  * Build a Cursor text-generation closure bound to a specific `CursorSettings`
  * payload. See `makeCodexAdapter` for the overall per-instance rationale.
  */
-export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(function* (
-  cursorSettings: CursorSettings,
+interface AcpTextGenerationSettings {
+  readonly binaryPath: string;
+}
+
+export interface AcpTextGenerationDefinition<Settings extends AcpTextGenerationSettings> {
+  readonly providerName: string;
+  readonly makeRuntime: (
+    settings: Settings,
+    input: Omit<CursorAcpRuntimeInput, "cursorSettings">,
+  ) => Effect.Effect<
+    AcpSessionRuntime.AcpSessionRuntime["Service"],
+    EffectAcpErrors.AcpError,
+    Crypto.Crypto | import("effect/Scope").Scope
+  >;
+  readonly applyModelSelection: <E>(input: {
+    readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
+    readonly model: string | null | undefined;
+    readonly selections: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+    readonly mapError: (context: {
+      readonly cause: EffectAcpErrors.AcpError;
+      readonly step: "set-config-option" | "set-model";
+      readonly configId?: string;
+    }) => E;
+  }) => Effect.Effect<void, E>;
+}
+
+export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function* <
+  Settings extends AcpTextGenerationSettings,
+>(
+  settings: Settings,
+  definition: AcpTextGenerationDefinition<Settings>,
   environment?: NodeJS.ProcessEnv,
 ) {
   const crypto = yield* Crypto.Crypto;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const resolvedEnvironment = environment ?? process.env;
 
-  const runCursorJson = <S extends Schema.Top>({
+  const runAcpJson = <S extends Schema.Top>({
     operation,
     cwd,
     prompt,
@@ -62,13 +98,14 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const outputRef = yield* Ref.make("");
-      const runtime = yield* makeCursorAcpRuntime({
-        cursorSettings,
-        environment: resolvedEnvironment,
-        childProcessSpawner: commandSpawner,
-        cwd,
-        clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
-      }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      const runtime = yield* definition
+        .makeRuntime(settings, {
+          environment: resolvedEnvironment,
+          childProcessSpawner: commandSpawner,
+          cwd,
+          clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
+        })
+        .pipe(Effect.provideService(Crypto.Crypto, crypto));
 
       yield* runtime.handleSessionUpdate((notification) => {
         const update = notification.update;
@@ -85,7 +122,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const promptResult = yield* Effect.gen(function* () {
         yield* runtime.start();
         yield* Effect.ignore(runtime.setMode("ask"));
-        yield* applyCursorAcpModelSelection({
+        yield* definition.applyModelSelection({
           runtime,
           model: modelSelection.model,
           selections: modelSelection.options,
@@ -94,8 +131,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
               operation,
               detail:
                 step === "set-config-option"
-                  ? `Failed to set Cursor ACP config option "${configId}" for text generation.`
-                  : "Failed to set Cursor ACP base model for text generation.",
+                  ? `Failed to set ${definition.providerName} ACP config option "${configId}" for text generation.`
+                  : `Failed to set ${definition.providerName} ACP base model for text generation.`,
               cause,
             }),
         });
@@ -111,7 +148,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
               Effect.fail(
                 new TextGenerationError({
                   operation,
-                  detail: "Cursor Agent request timed out.",
+                  detail: `${definition.providerName} request timed out.`,
                 }),
               ),
             onSome: (value) => Effect.succeed(value),
@@ -122,7 +159,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
             ? cause
             : new TextGenerationError({
                 operation,
-                detail: "Cursor ACP request failed.",
+                detail: `${definition.providerName} ACP request failed.`,
                 cause,
               }),
         ),
@@ -134,8 +171,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           operation,
           detail:
             promptResult.stopReason === "cancelled"
-              ? "Cursor ACP request was cancelled."
-              : "Cursor Agent returned empty output.",
+              ? `${definition.providerName} ACP request was cancelled.`
+              : `${definition.providerName} returned empty output.`,
         });
       }
 
@@ -146,7 +183,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
             Effect.fail(
               new TextGenerationError({
                 operation,
-                detail: "Cursor Agent returned invalid structured output.",
+                detail: `${definition.providerName} returned invalid structured output.`,
                 cause,
               }),
             ),
@@ -158,7 +195,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           ? cause
           : new TextGenerationError({
               operation,
-              detail: "Cursor ACP text generation failed.",
+              detail: `${definition.providerName} ACP text generation failed.`,
               cause,
             }),
       ),
@@ -175,7 +212,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         policy: input.policy,
       });
 
-      const generated = yield* runCursorJson({
+      const generated = yield* runAcpJson({
         operation: "generateCommitMessage",
         cwd: input.cwd,
         prompt,
@@ -204,7 +241,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         changeRequestTemplate: input.changeRequestTemplate,
       });
 
-      const generated = yield* runCursorJson({
+      const generated = yield* runAcpJson({
         operation: "generatePrContent",
         cwd: input.cwd,
         prompt,
@@ -225,7 +262,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         attachments: input.attachments,
       });
 
-      const generated = yield* runCursorJson({
+      const generated = yield* runAcpJson({
         operation: "generateBranchName",
         cwd: input.cwd,
         prompt,
@@ -245,7 +282,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         attachments: input.attachments,
       });
 
-      const generated = yield* runCursorJson({
+      const generated = yield* runAcpJson({
         operation: "generateThreadTitle",
         cwd: input.cwd,
         prompt,
@@ -265,3 +302,18 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
     generateThreadTitle,
   } satisfies TextGeneration.TextGeneration["Service"];
 });
+
+export const makeCursorTextGeneration = (
+  cursorSettings: CursorSettings,
+  environment?: NodeJS.ProcessEnv,
+) =>
+  makeAcpTextGeneration(
+    cursorSettings,
+    {
+      providerName: "Cursor",
+      makeRuntime: (settings, input) =>
+        makeCursorAcpRuntime({ ...input, cursorSettings: settings }),
+      applyModelSelection: applyCursorAcpModelSelection,
+    },
+    environment,
+  );
