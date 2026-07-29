@@ -171,7 +171,11 @@ export function buildThreadListV2ListItems(input: {
 
 /**
  * Partitions visible threads into the active card block (creation order) and
- * the settled recency tail, matching the web v2 list. `autoSettleAfterDays`
+ * the settled recency tail, matching the web Sidebar V2 list (and classic
+ * Recent hide-settled shelf: history is shelved, never dropped). Callers must
+ * not pass settledLimit: 0 to emulate "hide settled" — use paging only.
+ *
+ * `autoSettleAfterDays`
  * mirrors the web default of 3 — mobile has no client-settings sync yet, so
  * the default is fixed here rather than user-configurable.
  */
