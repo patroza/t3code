@@ -138,7 +138,7 @@ export const githubWebhookRouteLayer = HttpRouter.add(
         reason: "missing_x_github_delivery",
         bodyBytes,
         bodyPreview,
-        webhookEvent: event,
+        ...(event !== undefined ? { webhookEvent: event } : {}),
         mention: config.mention,
       });
       return HttpServerResponse.text("Missing delivery id", { status: 400 });
@@ -150,7 +150,7 @@ export const githubWebhookRouteLayer = HttpRouter.add(
         reason: `unsupported_event=${event ?? ""}`,
         bodyBytes,
         deliveryId,
-        webhookEvent: event,
+        ...(event !== undefined ? { webhookEvent: event } : {}),
         mention: config.mention,
       });
       return HttpServerResponse.empty({ status: 202 });
@@ -171,7 +171,7 @@ export const githubWebhookRouteLayer = HttpRouter.add(
         bodyBytes,
         bodyPreview,
         deliveryId,
-        webhookEvent: event,
+        ...(event !== undefined ? { webhookEvent: event } : {}),
         mention: config.mention,
       });
       return HttpServerResponse.text("Invalid payload", { status: 400 });
@@ -184,7 +184,7 @@ export const githubWebhookRouteLayer = HttpRouter.add(
         bodyBytes,
         bodyPreview,
         deliveryId,
-        webhookEvent: event,
+        ...(event !== undefined ? { webhookEvent: event } : {}),
         mention: config.mention,
       });
       return HttpServerResponse.empty({ status: 202 });
@@ -204,7 +204,7 @@ export const githubWebhookRouteLayer = HttpRouter.add(
         reason: `repo_not_allowed=${invocation.repository}`,
         bodyBytes,
         deliveryId,
-        webhookEvent: event,
+        ...(event !== undefined ? { webhookEvent: event } : {}),
         repository: invocation.repository,
         pullRequestNumber: invocation.pullRequestNumber,
         commentSurface: invocation.commentSurface,
@@ -218,7 +218,7 @@ export const githubWebhookRouteLayer = HttpRouter.add(
       status: 202,
       bodyBytes,
       deliveryId,
-      webhookEvent: event,
+      ...(event !== undefined ? { webhookEvent: event } : {}),
       repository: invocation.repository,
       pullRequestNumber: invocation.pullRequestNumber,
       commentSurface: invocation.commentSurface,

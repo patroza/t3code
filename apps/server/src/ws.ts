@@ -41,6 +41,7 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
+  RpcClientId,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -375,8 +376,14 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
-import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
-import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
+  [WS_METHODS.serverGetHostResourceSnapshot, AuthOrchestrationReadScope],
+  [WS_METHODS.serverGetResourceTelemetryHistory, AuthOrchestrationReadScope],
+  [WS_METHODS.serverRetryResourceTelemetry, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverReportClientActivity, AuthOrchestrationReadScope],
+  [WS_METHODS.serverReportHostPowerState, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverGetBackgroundPolicy, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeResourceTelemetry, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeBackgroundPolicy, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
@@ -542,6 +549,19 @@ const makeWsRpcLayer = (
       );
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const hostResourceProbe = yield* HostResourceProbe.HostResourceProbe;
+      const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+      const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
+      yield* Effect.addFinalizer(() =>
+        Ref.get(rpcClientIds).pipe(
+          Effect.flatMap((clientIds) =>
+            Effect.forEach(
+              clientIds,
+              (clientId) => backgroundPolicy.removeRpcClient(currentSessionId, clientId),
+              { concurrency: "unbounded", discard: true },
+            ),
+          ),
+        ),
+      );
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
@@ -2458,6 +2478,16 @@ const makeWsRpcLayer = (
               );
             }),
             { "rpc.aggregate": "auth" },
+          ),
+        [WS_METHODS.subscribeBackgroundPolicy]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeBackgroundPolicy,
+            Stream.unwrap(
+              Effect.map(backgroundPolicy.subscribe, ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
           ),
       });
     }),
