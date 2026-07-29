@@ -61,6 +61,9 @@ How associations get there:
    (`T3CODE_JIRA_DISCORD_LINKS_PATH`) when the server store has no match yet
 4. **Future** — authenticated API / web UI / agent tools to attach work items without Discord
 
+Cross-surface discovery (how a Jira ping should find a thread that only knows a PR/Discord link
+today) is sketched in [work-item thread linking](./work-item-thread-linking.md) — draft ideas only.
+
 Fail closed when:
 
 - Zero threads match the issue key
