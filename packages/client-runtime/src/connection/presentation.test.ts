@@ -129,10 +129,8 @@ describe("connection presentation", () => {
       error: "Relay request timed out.",
       traceId: "trace-retry",
     } as const;
-    expect(connectionStatusText(connection)).toBe(
-      "Failed to connect. Reconnecting... Reason: Relay request timed out.",
-    );
-    expect(connectionStatusTitle(connection)).toBe("Failed to connect. Reconnecting...");
+    expect(connectionStatusText(connection)).toBe("Reconnecting… · Relay request timed out");
+    expect(connectionStatusTitle(connection)).toBe("Reconnecting...");
   });
 
   it("presents the supervisor's offline state without consulting shell state", () => {
