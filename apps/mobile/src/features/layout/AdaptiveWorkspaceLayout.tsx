@@ -43,6 +43,11 @@ import {
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
 import { HomeListOptionsProvider, resolveProjectGroupingMode } from "../home/home-list-options";
+import {
+  DEFAULT_HOME_THREAD_GROUPING,
+  resolveHomeThreadGrouping,
+  type HomeThreadGrouping,
+} from "../home/homeListMode";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
@@ -196,6 +201,12 @@ export function AdaptiveWorkspaceLayout(props: {
     },
     [savePreferences],
   );
+  const storeThreadGrouping = useCallback(
+    (grouping: HomeThreadGrouping) => {
+      savePreferences({ threadGrouping: grouping });
+    },
+    [savePreferences],
+  );
 
   if (!AsyncResult.isSuccess(preferencesResult)) {
     return AsyncResult.isFailure(preferencesResult) ? (
@@ -204,12 +215,15 @@ export function AdaptiveWorkspaceLayout(props: {
         projectGroupingMode="repository"
         storedEnvironmentIds={[]}
         onStoreEnvironmentIds={storeEnvironmentIds}
+        storedThreadGrouping={DEFAULT_HOME_THREAD_GROUPING}
+        onStoreThreadGrouping={storeThreadGrouping}
       />
     ) : null;
   }
 
   const storedEnvironmentIds = (preferencesResult.value.selectedEnvironmentIds ??
     []) as readonly EnvironmentId[];
+  const storedThreadGrouping = resolveHomeThreadGrouping(preferencesResult.value.threadGrouping);
 
   return (
     <AdaptiveWorkspaceLayoutContent
@@ -219,6 +233,8 @@ export function AdaptiveWorkspaceLayout(props: {
       )}
       storedEnvironmentIds={storedEnvironmentIds}
       onStoreEnvironmentIds={storeEnvironmentIds}
+      storedThreadGrouping={storedThreadGrouping}
+      onStoreThreadGrouping={storeThreadGrouping}
     />
   );
 }
@@ -231,6 +247,8 @@ function AdaptiveWorkspaceLayoutContent(
     readonly projectGroupingMode: SidebarProjectGroupingMode;
     readonly storedEnvironmentIds: readonly EnvironmentId[];
     readonly onStoreEnvironmentIds: (ids: readonly EnvironmentId[]) => void;
+    readonly storedThreadGrouping: HomeThreadGrouping;
+    readonly onStoreThreadGrouping: (grouping: HomeThreadGrouping) => void;
   },
 ) {
   const projectGroupingMode = props.projectGroupingMode;
@@ -531,6 +549,8 @@ function AdaptiveWorkspaceLayoutContent(
       projectGroupingMode={projectGroupingMode}
       storedEnvironmentIds={props.storedEnvironmentIds}
       onStoreEnvironmentIds={props.onStoreEnvironmentIds}
+      storedThreadGrouping={props.storedThreadGrouping}
+      onStoreThreadGrouping={props.onStoreThreadGrouping}
     >
       <AdaptiveWorkspaceContext.Provider value={contextValue}>
         <View testID="adaptive-workspace-layout" className="flex-1 flex-row">
