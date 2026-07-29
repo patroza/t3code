@@ -175,6 +175,12 @@
       "commit": "*",
       "path": "apps/server/src/ws.ts",
       "strategy": "theirs"
+    },
+    {
+      "branch": "fork/tim",
+      "commit": "*",
+      "path": "packages/client-runtime/src/rpc/client.ts",
+      "strategy": "theirs"
     }
   ]
 }
