@@ -1,5 +1,7 @@
 # Downstream fork workflow
 
+Day-to-day merge → compose → deploy: [stack-ship-path.md](./stack-ship-path.md).
+
 This repository separates upstream history, downstream changes, temporary review branches, and the
 runnable build:
 
@@ -80,21 +82,24 @@ Compose requires every registered overlay tip to be based on current `fork/chang
 names are listed in the workflow `on:` block and must stay aligned with
 `.github/pr-stack.json` → `integrationOverlays`.
 
-### Slow path — full provenance restack
+### Slow path — full provenance restack (local only)
 
-The `Rebase fork PR stack` workflow is **manual only** (`workflow_dispatch`). Use it when taking new
-upstream, Tim, or candidates — not after ordinary feature merges:
+Use a **local** restack when taking new upstream, Tim, or candidates — not after ordinary feature
+merges. The GitHub Actions workflow **Rebase fork PR stack** is **`disabled_manually` and must stay
+disabled.** Do not enable it, schedule it, or `gh workflow run rebase-pr-stack.yml`.
 
 ```sh
-gh workflow run rebase-pr-stack.yml --repo patroza/t3code --ref fork/changes
+export GH_TOKEN="$(gh auth token)"
+node scripts/rebase-pr-stack.ts sync --dry-run
+node scripts/rebase-pr-stack.ts sync --push
 ```
 
-That workflow fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged,
-and atomically updates `main`, `fork/tim`, `fork/candidates`, `fork/changes`, and
-`fork/integration` with force-with-lease. A repository-scoped write deploy key stored as
-`FORK_STACK_DEPLOY_KEY` is the automation actor that bypasses branch rulesets for those
-force-with-lease updates (including `main`'s PR and status-check requirements). It cannot access
-other repositories. Never expose or reuse it.
+That script fetches `pingdotgg/t3code:main`, verifies that the existing mirror has not diverged, and
+atomically updates `main`, `fork/tim`, `fork/candidates`, `fork/changes`, and `fork/integration`
+with force-with-lease when run with appropriate write credentials. A repository-scoped write deploy
+key stored as `FORK_STACK_DEPLOY_KEY` can bypass branch rulesets for those updates (including
+`main`'s PR and status-check requirements); it cannot access other repositories. Never expose or
+reuse it. Prefer per-layer green gates even when using the script; stop the line on a red parent.
 
 ## Branch rulesets (protection vs rewrites)
 
