@@ -54,6 +54,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { ThreadSyncPhase } from "../threadSync";
 import { flushSync } from "react-dom";
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
@@ -490,6 +491,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
       draftId?: never;
       threadSyncPhase?: ThreadSyncPhase | null;

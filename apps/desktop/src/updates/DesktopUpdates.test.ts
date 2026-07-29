@@ -135,6 +135,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setAsDefaultProtocolClient: () => Effect.succeed(false),
     setDesktopName: () => Effect.void,
     setDockIcon: () => Effect.void,
+    getAppMetrics: Effect.succeed([]),
     appendCommandLineSwitch: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
     on: () => Effect.void as any,
