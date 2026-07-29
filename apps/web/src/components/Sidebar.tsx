@@ -25,6 +25,7 @@ import {
   Undo2Icon,
 } from "lucide-react";
 import {
+  ComposerDraftDot,
   prStatusIndicator,
   PrStatusTooltipContent,
   resolveThreadPr,
@@ -32,6 +33,7 @@ import {
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
+import { hasComposerDraftMessage, useComposerDraftStore } from "../composerDraftStore";
 import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -119,7 +121,6 @@ import {
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { readLocalApi } from "../localApi";
-import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 import { useAiUsageSnapshot } from "../hooks/useAiUsageSnapshot";
@@ -487,6 +488,9 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   const threadKey = scopedThreadKey(threadRef);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  const hasDraft = useComposerDraftStore((state) =>
+    hasComposerDraftMessage(state.draftsByThreadKey[threadKey]),
+  );
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,
     threadId: thread.id,
@@ -825,6 +829,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </TooltipPopup>
             </Tooltip>
           )}
+          {hasDraft ? <ComposerDraftDot /> : null}
           {prStatus && pr ? (
             <Tooltip>
               <TooltipTrigger
@@ -3001,6 +3006,9 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   const threadKey = scopedThreadKey(threadRef);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  const hasDraft = useComposerDraftStore((state) =>
+    hasComposerDraftMessage(state.draftsByThreadKey[threadKey]),
+  );
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -3433,35 +3441,38 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            {isRenaming ? (
-              <input
-                ref={renameInputRef}
-                className="min-w-0 flex-1 rounded border border-ring bg-transparent px-0.5 text-sm outline-none"
-                value={renamingTitle}
-                onChange={(event) => setRenamingTitle(event.target.value)}
-                onClick={(event) => event.stopPropagation()}
-                onDoubleClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => {
-                  event.stopPropagation();
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void commitRename();
-                  } else if (event.key === "Escape") {
-                    setIsRenaming(false);
-                  }
-                }}
-                onBlur={() => void commitRename()}
-              />
-            ) : (
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
-                  props.isActive ? "text-foreground" : "text-muted-foreground/70",
-                )}
-              >
-                {thread.title}
-              </span>
-            )}
+            <div className="flex min-w-0 items-center gap-1.5">
+              {isRenaming ? (
+                <input
+                  ref={renameInputRef}
+                  className="min-w-0 flex-1 rounded border border-ring bg-transparent px-0.5 text-sm outline-none"
+                  value={renamingTitle}
+                  onChange={(event) => setRenamingTitle(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void commitRename();
+                    } else if (event.key === "Escape") {
+                      setIsRenaming(false);
+                    }
+                  }}
+                  onBlur={() => void commitRename()}
+                />
+              ) : (
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
+                    props.isActive ? "text-foreground" : "text-muted-foreground/70",
+                  )}
+                >
+                  {thread.title}
+                </span>
+              )}
+              {hasDraft ? <ComposerDraftDot /> : null}
+            </div>
             <span className="flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground/55">
               <span className="truncate">{project.displayName}</span>
               {environment?.label ? (
@@ -3573,6 +3584,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               ) : (
                 <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
               )}
+              {hasDraft ? <ComposerDraftDot /> : null}
               {prStatus && pr ? (
                 <Tooltip>
                   <TooltipTrigger

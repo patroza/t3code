@@ -17,8 +17,11 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
 import { prefetchEnvironmentThread } from "../../state/threads";
+import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadListV2Status, type ThreadListV2Status } from "./threadListV2";
+import { useAtomValue } from "@effect/atom-react";
 
 /**
  * Thread List v2 renders one flat native list: rich edge-to-edge rows for
@@ -262,10 +265,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   const pr = useThreadPr(thread, props.projectCwd ?? props.project?.workspaceRoot ?? null);
   const prState = pr?.state ?? null;
-  const threadKey = `${thread.environmentId}:${thread.id}`;
+  const threadKey = scopedThreadKey(thread.environmentId, thread.id);
   useEffect(() => {
     onChangeRequestState?.(threadKey, prState);
   }, [onChangeRequestState, prState, threadKey]);
+  const composerDrafts = useAtomValue(composerDraftsAtom);
+  const hasDraft = hasComposerDraftMessage(composerDrafts[threadKey]);
 
   const screenColor = useThemeColor("--color-screen");
   const drawerColor = useThemeColor("--color-drawer");
@@ -361,15 +366,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {statusLabel?.label ?? timeLabel}
         </Text>
       </View>
-      <Text
-        className={cn(
-          "mt-1 text-base font-t3-medium",
-          selected ? "text-user-bubble-foreground" : "text-foreground",
-        )}
-        numberOfLines={2}
-      >
-        {thread.title}
-      </Text>
+      <View className="mt-1 flex-row items-center gap-1.5">
+        <Text
+          className={cn(
+            "flex-1 text-base font-t3-medium",
+            selected ? "text-user-bubble-foreground" : "text-foreground",
+          )}
+          numberOfLines={2}
+        >
+          {thread.title}
+        </Text>
+        {hasDraft ? (
+          <View
+            accessibilityLabel="Unsent draft"
+            className="size-1.5 shrink-0 rounded-full bg-blue-500"
+          />
+        ) : null}
+      </View>
       <View className="mt-1 flex-row items-center gap-2">
         {status === "failed" && thread.session?.lastError ? (
           <Text
@@ -533,6 +546,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {thread.title}
           </Text>
+          {hasDraft ? (
+            <View
+              accessibilityLabel="Unsent draft"
+              className="size-1.5 shrink-0 rounded-full bg-blue-500"
+            />
+          ) : null}
           <Text
             className={cn(
               "text-sm tabular-nums",
