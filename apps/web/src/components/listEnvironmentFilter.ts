@@ -64,8 +64,15 @@ export function isWebListMode(value: unknown): value is WebListMode {
 }
 
 /**
- * How the Threads list is organized. Custom user groups are intentionally
- * out of scope for the first cut.
+ * How the Threads list is organized. Shared by classic sidebar and Sidebar V2
+ * (`LIST_THREAD_GROUPING_STORAGE_KEY`) so Recent / project / none stay aligned
+ * across the beta toggle.
+ *
+ * - `recency`: activity order + day buckets on the active list
+ * - `project`: classic nests by project; V2 keeps its static creation spine
+ * - `none`: activity order, flat (no day headers)
+ *
+ * Custom user groups are intentionally out of scope for the first cut.
  */
 export type WebThreadGrouping = "recency" | "project" | "none";
 
