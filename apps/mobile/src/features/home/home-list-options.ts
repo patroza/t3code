@@ -97,8 +97,9 @@ const HomeListOptionsContext = createContext<HomeListOptionsContextValue | null>
 
 /**
  * Keeps list preferences stable while the app moves between compact and split
- * shells. Optional storedEnvironmentIds + onStoreEnvironmentIds make the
- * multi-select env filter survive app restarts (device preferences).
+ * shells. Optional storedEnvironmentIds / storedThreadGrouping + store
+ * callbacks make the env filter and Recent/project/none grouping survive app
+ * restarts (device preferences).
  */
 export function HomeListOptionsProvider({
   children,
@@ -109,14 +110,24 @@ export function HomeListOptionsProvider({
    */
   storedEnvironmentIds,
   onStoreEnvironmentIds,
+  /**
+   * `undefined` = storage not loaded yet (do not hydrate).
+   * Valid grouping = apply once when preferences land.
+   */
+  storedThreadGrouping,
+  onStoreThreadGrouping,
 }: PropsWithChildren<{
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly storedEnvironmentIds?: readonly EnvironmentId[];
   readonly onStoreEnvironmentIds?: (ids: readonly EnvironmentId[]) => void;
+  readonly storedThreadGrouping?: HomeThreadGrouping;
+  readonly onStoreThreadGrouping?: (grouping: HomeThreadGrouping) => void;
 }>) {
   const [options, setOptions] = useState<HomeListOptions>(defaultHomeListOptions);
   const envFilterHydratedRef = useRef(false);
   const lastPersistedEnvKeyRef = useRef<string | null>(null);
+  const threadGroupingHydratedRef = useRef(false);
+  const lastPersistedThreadGroupingRef = useRef<HomeThreadGrouping | null>(null);
 
   useEffect(() => {
     if (envFilterHydratedRef.current) return;
@@ -142,6 +153,26 @@ export function HomeListOptionsProvider({
     onStoreEnvironmentIds(options.selectedEnvironmentIds);
   }, [onStoreEnvironmentIds, options.selectedEnvironmentIds]);
 
+  useEffect(() => {
+    if (threadGroupingHydratedRef.current) return;
+    if (storedThreadGrouping === undefined) return;
+    setOptions((current) =>
+      current.threadGrouping === storedThreadGrouping
+        ? current
+        : { ...current, threadGrouping: storedThreadGrouping },
+    );
+    lastPersistedThreadGroupingRef.current = storedThreadGrouping;
+    threadGroupingHydratedRef.current = true;
+  }, [storedThreadGrouping]);
+
+  useEffect(() => {
+    if (!threadGroupingHydratedRef.current) return;
+    if (!onStoreThreadGrouping) return;
+    if (lastPersistedThreadGroupingRef.current === options.threadGrouping) return;
+    lastPersistedThreadGroupingRef.current = options.threadGrouping;
+    onStoreThreadGrouping(options.threadGrouping);
+  }, [onStoreThreadGrouping, options.threadGrouping]);
+
   const value = useMemo(
     () => ({ options, setOptions, projectGroupingMode }),
     [options, projectGroupingMode],
@@ -161,6 +192,7 @@ export function hasCustomHomeListOptions(
   return (
     options.selectedEnvironmentIds.length > 0 ||
     (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
+    options.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||
     options.projectSortOrder !== defaultProjectSortOrder ||
     options.threadSortOrder !== DEFAULT_SIDEBAR_THREAD_SORT_ORDER
   );

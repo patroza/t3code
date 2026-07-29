@@ -40,6 +40,14 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("sidebar-v2-active-recency-");
     expect(sidebarV2).toContain("isSettledHistoryRow");
     expect(sidebarV2).toContain("LIST_THREAD_GROUPING_STORAGE_KEY");
+    expect(sidebarV2).toContain("ComposerDraftDot");
+    expect(sidebarV2).toContain("hasComposerDraftMessage");
+  });
+
+  it("classic sidebar marks composer draft threads", () => {
+    const sidebar = readSrc("components/Sidebar.tsx");
+    expect(sidebar).toContain("ComposerDraftDot");
+    expect(sidebar).toContain("hasComposerDraftMessage");
   });
 
   it("chat header keeps remote Open in VS Code control markers", () => {

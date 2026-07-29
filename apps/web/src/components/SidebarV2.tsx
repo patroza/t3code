@@ -137,6 +137,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-recency-groups";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
+  ComposerDraftDot,
   prStatusIndicator,
   resolveThreadPr,
   settledPrHoverColorClass,
@@ -206,7 +207,7 @@ import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./u
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-import { useComposerDraftStore } from "../composerDraftStore";
+import { hasComposerDraftMessage, useComposerDraftStore } from "../composerDraftStore";
 
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -510,6 +511,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const threadKey = scopedThreadKey(threadRef);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  const hasDraft = useComposerDraftStore((state) =>
+    hasComposerDraftMessage(state.draftsByThreadKey[threadKey]),
+  );
   const openPrLink = useOpenPrLink();
 
   // Same semantics as v1 (never-visited counts as read): flipping the beta
@@ -775,47 +779,52 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       "opacity-70 transition-opacity hover:opacity-100",
   );
 
-  const title = isRenaming ? (
-    <input
-      autoFocus
-      value={renamingTitle}
-      aria-label="Thread title"
-      onChange={(event) => onRenameTitleChange(event.target.value)}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={handleRenameKeyDown}
-      onBlur={handleRenameBlur}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
-    />
-  ) : (
-    <span
-      className={cn(
-        "min-w-0 flex-1 text-sm",
-        shouldRecede ? "font-normal" : "font-medium",
-        variant === "card"
-          ? cn(
-              "truncate",
-              isUnread || isWoke
-                ? "text-foreground"
-                : shouldRecede
-                  ? "text-muted-foreground/80"
-                  : status === "failed"
-                    ? "text-foreground/95"
-                    : "text-foreground/90",
-            )
-          : cn(
-              "truncate group-hover/v2-row:text-foreground",
-              props.isActive || isWoke
-                ? "text-foreground"
-                : isUnread
-                  ? "text-muted-foreground"
-                  : "text-muted-foreground/70",
-            ),
+  const title = (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={renamingTitle}
+          aria-label="Thread title"
+          onChange={(event) => onRenameTitleChange(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={handleRenameKeyDown}
+          onBlur={handleRenameBlur}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
+        />
+      ) : (
+        <span
+          className={cn(
+            "min-w-0 flex-1 text-sm",
+            shouldRecede ? "font-normal" : "font-medium",
+            variant === "card"
+              ? cn(
+                  "truncate",
+                  isUnread || isWoke
+                    ? "text-foreground"
+                    : shouldRecede
+                      ? "text-muted-foreground/80"
+                      : status === "failed"
+                        ? "text-foreground/95"
+                        : "text-foreground/90",
+                )
+              : cn(
+                  "truncate group-hover/v2-row:text-foreground",
+                  props.isActive || isWoke
+                    ? "text-foreground"
+                    : isUnread
+                      ? "text-muted-foreground"
+                      : "text-muted-foreground/70",
+                ),
+          )}
+        >
+          {thread.title}
+        </span>
       )}
-    >
-      {thread.title}
-    </span>
+      {hasDraft ? <ComposerDraftDot /> : null}
+    </div>
   );
 
   const prBadge =

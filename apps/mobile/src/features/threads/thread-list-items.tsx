@@ -20,10 +20,12 @@ import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useEnvironmentServerConfig } from "../../state/entities";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { prefetchEnvironmentThread } from "../../state/threads";
 import { useAiUsageSnapshot } from "../../state/useAiUsageSnapshot";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
+import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { resolveThreadStatus } from "./threadPresentation";
@@ -33,6 +35,7 @@ import {
   resolveDriverUsage,
 } from "@t3tools/client-runtime/state/aiUsagePresentation";
 import type { ProviderDriverKind } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
 
 /**
  * Shared presentation for the thread lists: the compact (phone) Home list and
@@ -541,6 +544,9 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const settlementSupported = props.settlementSupported === true;
   const isSettled = props.isSettled === true;
   const status = resolveThreadStatus(thread);
+  const threadKey = scopedThreadKey(thread.environmentId, thread.id);
+  const composerDrafts = useAtomValue(composerDraftsAtom);
+  const hasDraft = hasComposerDraftMessage(composerDrafts[threadKey]);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
@@ -691,6 +697,12 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
                   {thread.title}
                 </Text>
+                {hasDraft ? (
+                  <View
+                    accessibilityLabel="Unsent draft"
+                    className="size-1.5 shrink-0 rounded-full bg-blue-500"
+                  />
+                ) : null}
               </View>
               <View className="flex-row items-center gap-2">
                 {statusPill}
@@ -762,6 +774,12 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
               >
                 {thread.title}
               </Text>
+              {hasDraft ? (
+                <View
+                  accessibilityLabel="Unsent draft"
+                  className="size-1.5 shrink-0 rounded-full bg-blue-500"
+                />
+              ) : null}
             </View>
             <View className="flex-row items-center gap-2">
               {statusPill}
