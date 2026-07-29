@@ -53,6 +53,7 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { pollUntil } from "../testUtils/pollUntil.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -1553,6 +1554,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
             }),
@@ -1606,11 +1608,7 @@ it.layer(
           const initialCodex = initialProviders.find((provider) => provider.instanceId === "codex");
           assert.strictEqual(initialCodex?.status, "error");
           assert.strictEqual(initialCodex?.installed, false);
-          // Kimi may probe in the background; only assert the codex binaries under test.
-          assert.deepStrictEqual(
-            spawnedCommands.filter((command) => command !== "kimi"),
-            [firstMissing],
-          );
+          assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
           // Drive a settings change. The Hydration layer's
           // `SettingsWatcherLive` consumes this via `streamChanges`,
@@ -1626,14 +1624,13 @@ it.layer(
             },
           });
 
-          // Poll until the injected process boundary observes the new
-          // executable. This verifies the public settings-to-probe behavior
-          // without depending on timestamps assigned by TestClock.
-          const refreshed = yield* Effect.gen(function* () {
-            for (let attempts = 0; attempts < 60; attempts += 1) {
-              const providers = yield* registry.getProviders;
+          // Poll with real wall time so libuv/process exit callbacks run; pure
+          // TestClock.adjust was enough locally but flaked on CI (only firstMissing).
+          const refreshed = yield* pollUntil({
+            poll: TestClock.adjust("50 millis").pipe(Effect.andThen(registry.getProviders)),
+            until: (providers) => {
               const codex = providers.find((provider) => provider.instanceId === "codex");
-              if (
+              return (
                 codex !== undefined &&
                 codex.status === "error" &&
                 spawnedCommands.includes(secondMissing)
@@ -1643,10 +1640,7 @@ it.layer(
           });
 
           const reprobedCodex = refreshed.find((provider) => provider.instanceId === "codex");
-          assert.deepStrictEqual(
-            spawnedCommands.filter((command) => command !== "kimi"),
-            [firstMissing, secondMissing],
-          );
+          assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
           assert.strictEqual(reprobedCodex?.status, "error");
           assert.strictEqual(reprobedCodex?.installed, false);
         }).pipe(Effect.provide(runtimeServices));
