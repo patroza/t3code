@@ -70,6 +70,54 @@ const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
 } satisfies NodeJS.ProcessEnv);
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const GIT_LIST_BRANCHES_DEFAULT_LIMIT = 100;
+
+const COMMIT_SIGNING_FAILURE_PATTERNS = [
+  /gpg(?:2)?(?:\.exe)?: .*failed to sign/i,
+  /gpg failed to sign the data/i,
+  /signing failed:/i,
+  /failed to sign the data/i,
+  /pinentry.*(?:failed|error|not found|no such file|cancell?ed)/i,
+  /(?:failed|error|no such file|cancell?ed).*pinentry/i,
+  /inappropriate ioctl for device/i,
+  /cannot open \/dev\/tty/i,
+  /no secret key/i,
+  /secret key not available/i,
+  /ssh-keygen(?:\.exe)?:?.*(?:failed|error|couldn['’]t).*sign/i,
+  /couldn['’]t sign (?:message|data)/i,
+  /couldn['’]t load public key/i,
+  /no private key found for public key/i,
+  /load key .*: (?:invalid format|no such file or directory|permission denied)/i,
+  /agent refused operation/i,
+] as const;
+
+export function isCommitSigningFailureStderr(stderr: string): boolean {
+  return COMMIT_SIGNING_FAILURE_PATTERNS.some((pattern) => pattern.test(stderr));
+}
+
+/** Longer than any real git error line, short enough to keep logs readable. */
+const GIT_STDERR_LOG_LIMIT = 2000;
+
+/**
+ * Strip credentials from git output so it can be logged.
+ *
+ * git echoes the remote URL it used, and those URLs routinely carry secrets
+ * (`https://x-access-token:TOKEN@github.com/...`), so raw stderr must never
+ * reach a log. Redacts the userinfo component of any URL plus bare tokens that
+ * commonly appear on their own.
+ */
+export function redactGitOutput(stderr: string): string {
+  return (
+    stderr
+      .slice(0, GIT_STDERR_LOG_LIMIT)
+      .replace(/([a-zA-Z][\w+.-]*:\/\/)[^/@\s]*@/g, "$1<redacted>@")
+      .replace(/\b(gh[pousr]_|github_pat_|glpat-)[A-Za-z0-9_-]+/g, "$1<redacted>")
+      // Take the whole value, not just the scheme word: `Authorization: Bearer X`
+      // must not redact `Bearer` and leave `X` behind.
+      .replace(/\b(Authorization)\s*[:=]\s*.*/gi, "$1: <redacted>")
+      .replace(/\b(Bearer|token)\s*[:=]?\s+\S+/gi, "$1 <redacted>")
+  );
+}
+
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
   hasOriginRemote: false,
@@ -379,6 +427,7 @@ function gitCommandContext(
     command: "git",
     cwd: input.cwd,
     argumentCount: input.args.length,
+    failureKind: "unknown" as const,
   } as const;
 }
 
@@ -1737,25 +1786,52 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     body,
     options?: GitVcsDriver.GitCommitOptions,
   ) {
-    const args = ["commit", "-m", subject];
+    const args = ["commit"];
+    if (options?.disableSigning) {
+      args.push("--no-gpg-sign");
+    }
+    args.push("-m", subject);
     const trimmedBody = body.trim();
     if (trimmedBody.length > 0) {
       args.push("-m", trimmedBody);
     }
-    const progress =
-      options?.progress?.onOutputLine === undefined
-        ? options?.progress
-        : {
-            ...options.progress,
+    let hookFailed = false;
+    const progress: GitVcsDriver.ExecuteGitProgress = {
+      ...(options?.progress?.onOutputLine
+        ? {
             onStdoutLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stdout", text: line }) ?? Effect.void,
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
-          };
-    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+          }
+        : {}),
+      ...(options?.progress?.onHookStarted
+        ? { onHookStarted: options.progress.onHookStarted }
+        : {}),
+      onHookFinished: (input) => {
+        if (input.exitCode !== null && input.exitCode !== 0) {
+          hookFailed = true;
+        }
+        return options?.progress?.onHookFinished?.(input) ?? Effect.void;
+      },
+    };
+    const result = yield* executeGitWithStableDiagnostics("GitVcsDriver.commit.commit", cwd, args, {
+      allowNonZeroExit: true,
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-      ...(progress ? { progress } : {}),
-    }).pipe(Effect.asVoid);
+      progress,
+    });
+    if (result.exitCode !== 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.commit.commit", cwd, args }),
+        detail: "Git command exited with a non-zero status.",
+        ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+        ...(!options?.disableSigning && !hookFailed && isCommitSigningFailureStderr(result.stderr)
+          ? { failureKind: "commit_signing_failed" as const }
+          : {}),
+      });
+    }
     const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
       "rev-parse",
       "HEAD",
@@ -2107,6 +2183,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               operation: "GitVcsDriver.getReviewDiffPreview.hash",
               command: "crypto.digest SHA-256",
               cwd: input.cwd,
+              failureKind: "unknown",
               detail: "Failed to hash review diff.",
               cause,
             }),
