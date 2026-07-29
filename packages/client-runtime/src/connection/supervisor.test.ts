@@ -27,6 +27,7 @@ import {
   type SupervisorConnectionState,
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
@@ -194,6 +195,7 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
       ConnectionDriver.ConnectionDriver,
       ConnectionDriver.ConnectionDriver.of({ connect }),
     ),
+    ConnectionDiagnosticsLog.layer,
   );
 
   return {
@@ -755,7 +757,7 @@ it.effect("recovers from a network change the platform dropped while suspended",
     }),
   );
 
-  it.effect("reconnects when the foreground liveness probe fails", () =>
+  it.effect("keeps the open session when the foreground liveness probe fails", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         probe: (attempt) =>
@@ -767,19 +769,15 @@ it.effect("recovers from a network change the platform dropped while suspended",
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.wake("application-active");
-      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
-      yield* TestClock.adjust("1 second");
-      yield* eventuallyState(
-        supervisor.state,
-        (state) => state.phase === "connected" && state.generation === 2,
-      );
+      yield* Effect.yieldNow;
 
-      expect(yield* Ref.get(harness.sessionCount)).toBe(2);
-      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
-    }).pipe(Effect.provide(TestClock.layer())),
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connected");
+    }),
   );
 
-  it.effect("times out a stalled foreground liveness probe and reconnects", () =>
+  it.effect("keeps the open session when the foreground liveness probe times out", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         probe: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
@@ -791,15 +789,10 @@ it.effect("recovers from a network change the platform dropped while suspended",
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.wake("application-active");
       yield* TestClock.adjust("15 seconds");
-      yield* awaitState(
-        supervisor.state,
-        (state) => state.phase === "backoff" && state.lastFailure?.reason === "timeout",
-      );
-      yield* TestClock.adjust("1 second");
-      yield* eventuallyState(
-        supervisor.state,
-        (state) => state.phase === "connected" && state.generation === 2,
-      );
+
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connected");
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
