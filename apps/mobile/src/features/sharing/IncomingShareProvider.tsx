@@ -1,12 +1,7 @@
+import { requireOptionalNativeModule } from "expo";
 import Constants from "expo-constants";
 import * as Crypto from "expo-crypto";
-import {
-  clearSharedPayloads,
-  getResolvedSharedPayloadsAsync,
-  getSharedPayloads,
-  type ResolvedSharePayload,
-  type SharePayload,
-} from "expo-sharing";
+import type { ResolvedSharePayload, SharePayload } from "expo-sharing";
 import React, { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { Alert, AppState, Platform } from "react-native";
 
@@ -21,6 +16,17 @@ import {
   removeIncomingShareDraft,
   writeIncomingShareDraft,
 } from "./incoming-share-storage";
+
+type ExpoSharingModule = {
+  readonly getSharedPayloads: () => SharePayload[];
+  readonly getResolvedSharedPayloadsAsync: () => Promise<ResolvedSharePayload[]>;
+  readonly clearSharedPayloads: () => void;
+};
+
+// A development client can connect to Metro after the JS checkout gains a new
+// native dependency. Keep the app usable in that state; rebuilding the client
+// enables incoming sharing without changing this bundle.
+const expoSharing = requireOptionalNativeModule<ExpoSharingModule>("ExpoSharing");
 
 type IncomingShareContextValue = {
   readonly pendingShare: IncomingShareDraft | null;
@@ -39,6 +45,9 @@ type IncomingShareContextValue = {
 const IncomingShareContext = React.createContext<IncomingShareContextValue | null>(null);
 
 function receiveSharingEnabled(): boolean {
+  if (expoSharing === null) {
+    return false;
+  }
   if (Platform.OS === "android") {
     return true;
   }
@@ -49,8 +58,11 @@ function receiveSharingEnabled(): boolean {
 }
 
 async function resolvedPayloadsForImages(): Promise<ReadonlyArray<ResolvedSharePayload>> {
+  if (expoSharing === null) {
+    return [];
+  }
   try {
-    return await getResolvedSharedPayloadsAsync();
+    return await expoSharing.getResolvedSharedPayloadsAsync();
   } catch (error) {
     // iOS already gives the containing app a copied file:// URL, so raw
     // payloads remain usable. Android normally resolves content:// into a
@@ -121,8 +133,8 @@ const incomingShareInbox = new IncomingShareInbox({
   loadDrafts: loadIncomingShareDrafts,
   writeDraft: writeIncomingShareDraft,
   removeDraft: removeIncomingShareDraft,
-  getPayloads: getSharedPayloads,
-  clearPayloads: clearSharedPayloads,
+  getPayloads: () => expoSharing?.getSharedPayloads() ?? [],
+  clearPayloads: () => expoSharing?.clearSharedPayloads(),
   buildDraft: async ({ payloads, id, createdAt }) => {
     const cleanupUris = new Set<string>();
     const resolvedPayloads = payloads.some((payload) => payload.shareType === "image")
