@@ -2359,6 +2359,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       command: "git",
       cwd: input.cwd,
       detail,
+      failureKind: "unknown",
       ...(cause === undefined ? {} : { cause }),
     });
 
@@ -2397,6 +2398,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: stage,
         cwd: input.cwd,
         detail,
+        failureKind: "unknown",
         ...(cause === undefined ? {} : { cause }),
       });
     const requestedPath = path.resolve(repositoryRoot, input.newPath);
