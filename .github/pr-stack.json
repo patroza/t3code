@@ -123,42 +123,6 @@
       "strategy": "theirs"
     },
     {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/server/src/vcs/GitVcsDriverCore.test.ts",
-      "strategy": "ours"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "17c1de988fcc3db7fbb98cd2544c959ed5a9590a",
-      "path": "apps/server/src/vcs/GitVcsDriverCore.test.ts",
-      "strategy": "ours"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "packages/client-runtime/src/state/vcs.ts",
-      "strategy": "ours"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "1b0f3a0e84537949b552e71005410416bbc09440",
-      "path": "packages/client-runtime/src/state/vcs.ts",
-      "strategy": "ours"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/web/src/components/BranchToolbarBranchSelector.tsx",
-      "strategy": "ours"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "38fa39edcfe2fff33eb966541c80403fcc17b97c",
-      "path": "apps/web/src/components/BranchToolbarBranchSelector.tsx",
-      "strategy": "ours"
-    },
-    {
       "branch": "fork/candidates",
       "commit": "*",
       "path": "apps/web/src/components/SidebarV2.tsx",
@@ -173,30 +137,6 @@
     {
       "branch": "fork/changes",
       "commit": "*",
-      "path": "apps/server/src/ws.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "d21149c3666035d6afd61fbc87b4e6ceac2314e8",
-      "path": "apps/server/src/ws.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
-      "path": "apps/web/src/components/CommandPalette.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "d21149c3666035d6afd61fbc87b4e6ceac2314e8",
-      "path": "apps/web/src/components/CommandPalette.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
       "path": "package.json",
       "strategy": "theirs"
     },
@@ -205,12 +145,6 @@
       "commit": "d21149c3666035d6afd61fbc87b4e6ceac2314e8",
       "path": "package.json",
       "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/server/src/vcs/GitVcsDriverCore.ts",
-      "strategy": "ours"
     }
   ]
 }
