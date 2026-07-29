@@ -12,6 +12,7 @@ import {
 } from "../presentation/jiraLinks.ts";
 import {
   buildDiscordThreadJumpUrl,
+  buildT3WebThreadUrl,
   ensureDiscordPrAttributionFooters,
   formatDiscordPrAttributionFooter,
   starterDisplayName,
@@ -327,6 +328,7 @@ const ensureAttributionFootersForIncomingPrs = (input: {
   readonly discordThreadId: string;
   readonly link: ThreadLink | null;
   readonly incomingPrUrls: ReadonlyArray<string>;
+  readonly webUiBaseUrl?: string | undefined;
 }) =>
   Effect.gen(function* () {
     const prUrls = mergePullRequestUrls([], input.incomingPrUrls);
@@ -361,11 +363,14 @@ const ensureAttributionFootersForIncomingPrs = (input: {
       return;
     }
 
+    const t3FullThreadUrl = buildT3WebThreadUrl(input.webUiBaseUrl, link.t3ThreadId);
+
     const results = yield* Effect.tryPromise({
       try: () =>
         ensureDiscordPrAttributionFooters({
           prUrls,
           footer: attribution.footer,
+          t3FullThreadUrl,
         }),
       catch: (cause) => cause,
     }).pipe(
@@ -561,10 +566,12 @@ export const upsertThreadInfoPin = (input: {
     // Hardcode Discord PR attribution (thread starter + title) — no agent prompt.
     // Only runs for *incoming* PR URLs this call (pin refresh with empty incoming is a no-op).
     // ensureDiscordPrAttributionFooters is idempotent if the footer is already present.
+    // Also appends T3 thread link: full host for private GH repos, short t3vm host for public.
     yield* ensureAttributionFootersForIncomingPrs({
       discordThreadId: input.discordThreadId,
       link: existing,
       incomingPrUrls: input.incomingPrUrls ?? [],
+      webUiBaseUrl: input.botConfig.webUiBaseUrl,
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Discord PR attribution side-effect failed", {
