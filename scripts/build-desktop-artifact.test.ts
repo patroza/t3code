@@ -2,8 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -21,6 +23,7 @@ import {
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
+  promoteDesktopBuildArtifacts,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
@@ -79,6 +82,40 @@ function iconResizeSpawnerLayer(
 }
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("promotes unpacked desktop directories recursively", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({
+        prefix: "desktop-artifact-promotion-",
+      });
+      const stageDist = path.join(root, "stage-dist");
+      const output = path.join(root, "release");
+      const executable = path.join(stageDist, "linux-unpacked", "t3code");
+      const resource = path.join(stageDist, "linux-unpacked", "resources", "app.asar");
+
+      yield* fs.makeDirectory(path.dirname(resource), { recursive: true });
+      yield* fs.writeFileString(executable, "binary");
+      yield* fs.writeFileString(resource, "asar");
+      yield* fs.writeFileString(path.join(stageDist, "builder-debug.yml"), "debug");
+
+      const artifacts = yield* promoteDesktopBuildArtifacts(stageDist, output, "linux", "x64");
+
+      assert.deepStrictEqual(artifacts.map((artifact) => path.basename(artifact)).sort(), [
+        "builder-debug.yml",
+        "linux-unpacked",
+      ]);
+      assert.equal(
+        yield* fs.readFileString(path.join(output, "linux-unpacked", "t3code")),
+        "binary",
+      );
+      assert.equal(
+        yield* fs.readFileString(path.join(output, "linux-unpacked", "resources", "app.asar")),
+        "asar",
+      );
+    }),
+  );
+
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
