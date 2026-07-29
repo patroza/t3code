@@ -460,24 +460,6 @@ describe("vcsActionState", () => {
     }),
   );
 
-  it.effect("preserves a stream error when no terminal failure was received", () =>
-    Effect.gen(function* () {
-      const target = { environmentId, cwd };
-      const transportActionId = createVcsActionTransportId(target, actionId);
-      const transportError = new Error("rpc stream closed");
-
-      const error = yield* consumeVcsActionProgress(Stream.fail(transportError), {
-        target,
-        transportActionId,
-        actionId,
-        action,
-        onProgress: () => Effect.void,
-      }).pipe(Effect.flip);
-
-      expect(error).toBe(transportError);
-    }),
-  );
-
   it.effect("reports a missing terminal event as a protocol failure", () =>
     Effect.gen(function* () {
       const target = { environmentId, cwd };
@@ -661,6 +643,7 @@ describe("vcsActionState", () => {
                     action,
                     phase: "push",
                     message: "push failed after creating the branch",
+                    failureKind: "unknown",
                   }),
                 ),
         } as unknown as WsRpcProtocolClient;

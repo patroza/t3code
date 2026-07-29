@@ -126,6 +126,8 @@ export function PrStatusTooltipContent({ status }: { status: PrStatusIndicator }
 export function resolveThreadPr(input: {
   threadBranch: string | null;
   gitStatus: VcsStatusResult | null;
+  /** When true, board UI may still show PR state for worktree threads. Accepted for call-site parity. */
+  hasDedicatedWorktree?: boolean;
 }): ThreadPr | null {
   const { threadBranch, gitStatus } = input;
   if (gitStatus === null) {

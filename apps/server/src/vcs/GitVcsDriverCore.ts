@@ -28,7 +28,6 @@ import {
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
-import { DirenvEnvironment } from "../provider/DirenvEnvironment.ts";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import {
@@ -94,6 +93,31 @@ const COMMIT_SIGNING_FAILURE_PATTERNS = [
 export function isCommitSigningFailureStderr(stderr: string): boolean {
   return COMMIT_SIGNING_FAILURE_PATTERNS.some((pattern) => pattern.test(stderr));
 }
+
+/** Longer than any real git error line, short enough to keep logs readable. */
+const GIT_STDERR_LOG_LIMIT = 2000;
+
+/**
+ * Strip credentials from git output so it can be logged.
+ *
+ * git echoes the remote URL it used, and those URLs routinely carry secrets
+ * (`https://x-access-token:TOKEN@github.com/...`), so raw stderr must never
+ * reach a log. Redacts the userinfo component of any URL plus bare tokens that
+ * commonly appear on their own.
+ */
+export function redactGitOutput(stderr: string): string {
+  return (
+    stderr
+      .slice(0, GIT_STDERR_LOG_LIMIT)
+      .replace(/([a-zA-Z][\w+.-]*:\/\/)[^/@\s]*@/g, "$1<redacted>@")
+      .replace(/\b(gh[pousr]_|github_pat_|glpat-)[A-Za-z0-9_-]+/g, "$1<redacted>")
+      // Take the whole value, not just the scheme word: `Authorization: Bearer X`
+      // must not redact `Bearer` and leave `X` behind.
+      .replace(/\b(Authorization)\s*[:=]\s*.*/gi, "$1: <redacted>")
+      .replace(/\b(Bearer|token)\s*[:=]?\s+\S+/gi, "$1 <redacted>")
+  );
+}
+
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze<GitVcsDriver.GitStatusDetails>({
   isRepo: false,
   hasOriginRemote: false,
@@ -516,15 +540,16 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
       return;
     }
 
+    if (traceRecord.success.child_class !== "hook") {
+      return;
+    }
+
     const event = traceRecord.success.event;
     const childKey = trace2ChildKey(traceRecord.success);
     if (childKey === null) {
       return;
     }
     const started = hookStartByChildKey.get(childKey);
-    if (traceRecord.success.child_class !== "hook" && started === undefined) {
-      return;
-    }
     const hookNameFromEvent =
       typeof traceRecord.success.hook_name === "string" ? traceRecord.success.hook_name.trim() : "";
     const hookName = hookNameFromEvent.length > 0 ? hookNameFromEvent : (started?.hookName ?? "");
@@ -546,7 +571,7 @@ const createTrace2Monitor = Effect.fn("createTrace2Monitor")(function* (
 
     if (event === "child_exit") {
       hookStartByChildKey.delete(childKey);
-      const code = traceRecord.success.code ?? traceRecord.success.exitCode;
+      const code = traceRecord.success.exitCode;
       const exitCode = typeof code === "number" && Number.isInteger(code) ? code : null;
       const now = yield* DateTime.now;
       const durationMs = started
@@ -718,17 +743,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
-  const direnvEnvironment = yield* DirenvEnvironment;
-
-  const approveWorktreeEnvironment = (cwd: string) =>
-    direnvEnvironment.allow({ cwd, environment: process.env }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Failed to approve direnv for a newly created worktree.", {
-          cwd,
-          detail: error.message,
-        }),
-      ),
-    );
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -2531,8 +2545,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       fallbackErrorDetail: "git worktree add failed",
     });
 
-    yield* approveWorktreeEnvironment(worktreePath);
-
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(
@@ -2656,7 +2668,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     args.push(input.path);
     yield* executeGit("GitVcsDriver.removeWorktree", input.cwd, args, {
-      timeoutMs: 30_000,
+      timeoutMs: 15_000,
       fallbackErrorDetail: "git worktree remove failed",
     });
   });
