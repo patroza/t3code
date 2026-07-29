@@ -531,16 +531,66 @@ function ThreadNavigationSidebarPane(
     );
   }, [hideSettledThreads, scopedThreads, settledThreadKeys]);
 
-  const visibleRecentEntries = useMemo(() => {
-    if (!showFlatThreadList) return [];
-    return recentEntries.flatMap((entry) => {
+  // Classic flat/recency: hide-settled → active inbox + settled shelf
+  // (web classic Recent). Project mode still omits via threadsForProjectList.
+  const { visibleRecentEntries, classicSettledEntries } = useMemo(() => {
+    if (!showFlatThreadList) {
+      return {
+        visibleRecentEntries: [] as ReadonlyArray<{
+          thread: (typeof recentEntries)[number]["thread"];
+          projectTitle: string;
+        }>,
+        classicSettledEntries: [] as ReadonlyArray<{
+          thread: (typeof recentEntries)[number]["thread"];
+          projectTitle: string;
+        }>,
+      };
+    }
+    if (!hideSettledThreads) {
+      return {
+        visibleRecentEntries: recentEntries.map((entry) => ({
+          thread: entry.thread,
+          projectTitle: entry.project.title,
+        })),
+        classicSettledEntries: [] as ReadonlyArray<{
+          thread: (typeof recentEntries)[number]["thread"];
+          projectTitle: string;
+        }>,
+      };
+    }
+    const active: Array<{
+      thread: (typeof recentEntries)[number]["thread"];
+      projectTitle: string;
+    }> = [];
+    const settled: Array<{
+      thread: (typeof recentEntries)[number]["thread"];
+      projectTitle: string;
+    }> = [];
+    for (const entry of recentEntries) {
       const key = scopedThreadKey(entry.thread.environmentId, entry.thread.id);
-      if (hideSettledThreads && settledThreadKeys.has(key)) {
-        return [];
-      }
-      return [{ thread: entry.thread, projectTitle: entry.project.title }];
+      const row = { thread: entry.thread, projectTitle: entry.project.title };
+      if (settledThreadKeys.has(key)) settled.push(row);
+      else active.push(row);
+    }
+    settled.sort((left, right) => {
+      const leftMs = Date.parse(
+        left.thread.settledAt ?? left.thread.latestUserMessageAt ?? left.thread.updatedAt ?? "",
+      );
+      const rightMs = Date.parse(
+        right.thread.settledAt ?? right.thread.latestUserMessageAt ?? right.thread.updatedAt ?? "",
+      );
+      const safeLeft = Number.isNaN(leftMs) ? 0 : leftMs;
+      const safeRight = Number.isNaN(rightMs) ? 0 : rightMs;
+      return safeRight - safeLeft || left.thread.id.localeCompare(right.thread.id);
     });
+    return { visibleRecentEntries: active, classicSettledEntries: settled };
   }, [hideSettledThreads, recentEntries, settledThreadKeys, showFlatThreadList]);
+
+  const classicSettledHiddenCount = Math.max(0, classicSettledEntries.length - settledVisibleCount);
+  const pagedClassicSettledEntries = useMemo(
+    () => classicSettledEntries.slice(0, settledVisibleCount),
+    [classicSettledEntries, settledVisibleCount],
+  );
 
   const groups = useMemo(
     () =>
@@ -569,11 +619,39 @@ function ThreadNavigationSidebarPane(
 
   const listLayout = useMemo(() => {
     if (showFlatThreadList) {
-      return buildHomeRecentListLayout({
+      const activeLayout = buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
         entries: visibleRecentEntries,
         groupByRecency: options.threadGrouping === "recency",
       });
+      if (pagedClassicSettledEntries.length === 0) {
+        return activeLayout;
+      }
+      const items: HomeListItem[] = activeLayout.items.map((item, index) => {
+        if (index !== activeLayout.items.length - 1) return item;
+        if (item.type === "thread") return { ...item, isLast: false };
+        if (item.type === "pending-task") return { ...item, isLast: false };
+        return item;
+      });
+      const stickyHeaderIndices = [...activeLayout.stickyHeaderIndices];
+      stickyHeaderIndices.push(items.length);
+      items.push({
+        type: "section-header",
+        key: "section:settled-shelf",
+        title: "Settled",
+        isFirst: items.length === 0,
+      });
+      for (const [index, entry] of pagedClassicSettledEntries.entries()) {
+        items.push({
+          type: "thread",
+          key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
+          thread: entry.thread,
+          projectTitle: entry.projectTitle,
+          isLast:
+            index === pagedClassicSettledEntries.length - 1 && classicSettledHiddenCount === 0,
+        });
+      }
+      return { items, stickyHeaderIndices };
     }
     if (!showProjectThreadList) {
       return { items: [] as HomeListItem[], stickyHeaderIndices: [] as number[] };
@@ -584,10 +662,12 @@ function ThreadNavigationSidebarPane(
       showAllThreads: hasSearchQuery,
     });
   }, [
+    classicSettledHiddenCount,
     groupDisplayStates,
     groups,
     hasSearchQuery,
     options.threadGrouping,
+    pagedClassicSettledEntries,
     recentPendingEntries,
     showFlatThreadList,
     showProjectThreadList,
@@ -597,7 +677,9 @@ function ThreadNavigationSidebarPane(
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
-    const layout = buildThreadListV2Items({
+    // Always partition settled into the slim tail (web V2 / classic Recent
+    // shelf). Hide-settled must not erase that history on mobile.
+    return buildThreadListV2Items({
       threads: threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: options.selectedEnvironmentIds,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
@@ -605,19 +687,12 @@ function ThreadNavigationSidebarPane(
       changeRequestStateByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      settledLimit: hideSettledThreads ? 0 : settledVisibleCount,
+      settledLimit: settledVisibleCount,
       now: `${nowMinute}:00.000Z`,
       snoozeNow: new Date().toISOString(),
     });
-    if (!hideSettledThreads) return layout;
-    return {
-      ...layout,
-      items: layout.items.filter((item) => item.variant === "card"),
-      hiddenSettledCount: 0,
-    };
   }, [
     changeRequestStateByKey,
-    hideSettledThreads,
     nowMinute,
     snoozeWakeTick,
     options.selectedEnvironmentIds,
@@ -644,7 +719,17 @@ function ThreadNavigationSidebarPane(
     // range) the boundary string is identical and the chain would die.
   }, [nextSnoozeWakeAt, snoozeWakeTick]);
   const listItems = useMemo<readonly SidebarListItem[]>(() => {
-    if (!threadListV2Enabled) return listLayout.items;
+    if (!threadListV2Enabled) {
+      if (classicSettledHiddenCount <= 0) return listLayout.items;
+      return [
+        ...listLayout.items,
+        {
+          type: "v2-show-more" as const,
+          key: "classic-settled-show-more",
+          hiddenCount: classicSettledHiddenCount,
+        },
+      ];
+    }
     // Queued offline tasks are not thread shells, so the v2 item builder
     // never sees them; the shared splice puts them below the active block
     // (mirrors the compact Home v2 list) where they stay visible and
@@ -677,6 +762,7 @@ function ThreadNavigationSidebarPane(
     }
     return items;
   }, [
+    classicSettledHiddenCount,
     listLayout.items,
     options.selectedEnvironmentIds,
     pendingTasks,

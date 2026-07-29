@@ -89,8 +89,13 @@ interface HomeScreenProps {
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   /**
-   * When true, omit settled threads from the Threads list. Recency/none default
-   * on; project grouping defaults off (call site). Toggle in the filter menu.
+   * When true, settled threads leave the main inbox:
+   * - **Threads v2:** always keeps a settled slim shelf (web V2 parity); this
+   *   flag is ignored for the v2 partition.
+   * - **Classic recency/none:** collapsible-style bottom Settled section
+   *   (web classic Recent shelf parity) — not hard-deleted.
+   * - **Classic project:** omit from each project group (web project parity).
+   * Recency/none default on; project grouping defaults off (call site).
    */
   readonly hideSettledThreads: boolean;
   readonly projectSortOrder: HomeProjectSortOrder;
@@ -487,9 +492,8 @@ export function HomeScreen(props: HomeScreenProps) {
   );
   const handleDeleteThread = props.onDeleteThread;
   const handleUnsettleThread = props.onUnsettleThread;
-  // The settled tail renders in pages; expansion resets when the filter
-  // context changes so environment/search flips never inherit a deep page.
-  // Thread List v2 only (classic Recent uses hide-settled filter instead).
+  // Settled shelf/tail paging (v2 always; classic recency/none when hide
+  // settled shelves history). Expansion resets when filter context changes.
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
@@ -601,24 +605,105 @@ export function HomeScreen(props: HomeScreenProps) {
     ],
   );
 
-  const visibleRecentEntries = useMemo(() => {
-    if (!showFlatThreadList) return [];
-    return recentEntries.flatMap((entry) => {
+  // Classic flat/recency: when hide-settled, active inbox + settled shelf
+  // (web classic Recent). When hide is off, settled stay mixed into activity
+  // order like a normal flat list.
+  const { visibleRecentEntries, classicSettledEntries } = useMemo(() => {
+    if (!showFlatThreadList) {
+      return {
+        visibleRecentEntries: [] as ReadonlyArray<{
+          thread: (typeof recentEntries)[number]["thread"];
+          projectTitle: string;
+        }>,
+        classicSettledEntries: [] as ReadonlyArray<{
+          thread: (typeof recentEntries)[number]["thread"];
+          projectTitle: string;
+        }>,
+      };
+    }
+    if (!props.hideSettledThreads) {
+      return {
+        visibleRecentEntries: recentEntries.map((entry) => ({
+          thread: entry.thread,
+          projectTitle: entry.project.title,
+        })),
+        classicSettledEntries: [] as ReadonlyArray<{
+          thread: (typeof recentEntries)[number]["thread"];
+          projectTitle: string;
+        }>,
+      };
+    }
+    const active: Array<{
+      thread: (typeof recentEntries)[number]["thread"];
+      projectTitle: string;
+    }> = [];
+    const settled: Array<{
+      thread: (typeof recentEntries)[number]["thread"];
+      projectTitle: string;
+    }> = [];
+    for (const entry of recentEntries) {
       const key = scopedThreadKey(entry.thread.environmentId, entry.thread.id);
-      if (props.hideSettledThreads && settledThreadKeys.has(key)) {
-        return [];
-      }
-      return [{ thread: entry.thread, projectTitle: entry.project.title }];
+      const row = { thread: entry.thread, projectTitle: entry.project.title };
+      if (settledThreadKeys.has(key)) settled.push(row);
+      else active.push(row);
+    }
+    // History order: most recently settled/ended first (matches v2 tail).
+    settled.sort((left, right) => {
+      const leftMs = Date.parse(
+        left.thread.settledAt ?? left.thread.latestUserMessageAt ?? left.thread.updatedAt ?? "",
+      );
+      const rightMs = Date.parse(
+        right.thread.settledAt ?? right.thread.latestUserMessageAt ?? right.thread.updatedAt ?? "",
+      );
+      const safeLeft = Number.isNaN(leftMs) ? 0 : leftMs;
+      const safeRight = Number.isNaN(rightMs) ? 0 : rightMs;
+      return safeRight - safeLeft || left.thread.id.localeCompare(right.thread.id);
     });
+    return { visibleRecentEntries: active, classicSettledEntries: settled };
   }, [props.hideSettledThreads, recentEntries, settledThreadKeys, showFlatThreadList]);
+
+  const classicSettledHiddenCount = Math.max(0, classicSettledEntries.length - settledVisibleCount);
+  const pagedClassicSettledEntries = useMemo(
+    () => classicSettledEntries.slice(0, settledVisibleCount),
+    [classicSettledEntries, settledVisibleCount],
+  );
 
   const listLayout = useMemo(() => {
     if (showFlatThreadList) {
-      return buildHomeRecentListLayout({
+      const activeLayout = buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
         entries: visibleRecentEntries,
         groupByRecency: props.threadGrouping === "recency",
       });
+      if (pagedClassicSettledEntries.length === 0) {
+        return activeLayout;
+      }
+      // Append Settled shelf under the active inbox (web classic Recent).
+      const items: HomeListItem[] = activeLayout.items.map((item, index) => {
+        if (index !== activeLayout.items.length - 1) return item;
+        if (item.type === "thread") return { ...item, isLast: false };
+        if (item.type === "pending-task") return { ...item, isLast: false };
+        return item;
+      });
+      const stickyHeaderIndices = [...activeLayout.stickyHeaderIndices];
+      stickyHeaderIndices.push(items.length);
+      items.push({
+        type: "section-header",
+        key: "section:settled-shelf",
+        title: "Settled",
+        isFirst: items.length === 0,
+      });
+      for (const [index, entry] of pagedClassicSettledEntries.entries()) {
+        items.push({
+          type: "thread",
+          key: `thread:${entry.thread.environmentId}:${entry.thread.id}`,
+          thread: entry.thread,
+          projectTitle: entry.projectTitle,
+          isLast:
+            index === pagedClassicSettledEntries.length - 1 && classicSettledHiddenCount === 0,
+        });
+      }
+      return { items, stickyHeaderIndices };
     }
     if (!showProjectThreadList) {
       return { items: [] as HomeListItem[], stickyHeaderIndices: [] as number[] };
@@ -629,8 +714,10 @@ export function HomeScreen(props: HomeScreenProps) {
       showAllThreads: hasSearchQuery,
     });
   }, [
+    classicSettledHiddenCount,
     effectiveGroupDisplayStates,
     hasSearchQuery,
+    pagedClassicSettledEntries,
     projectGroups,
     props.threadGrouping,
     recentPendingEntries,
@@ -641,9 +728,9 @@ export function HomeScreen(props: HomeScreenProps) {
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
-    // Settled threads are live shells; archived threads keep their original
-    // "hidden from lists" meaning.
-    const layout = buildThreadListV2Items({
+    // Settled always partition into the slim tail (web Sidebar V2 / classic
+    // Recent shelf). Hide-settled must not drop that history on mobile.
+    return buildThreadListV2Items({
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: props.selectedEnvironmentIds,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
@@ -651,18 +738,10 @@ export function HomeScreen(props: HomeScreenProps) {
       changeRequestStateByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      settledLimit: props.hideSettledThreads ? 0 : settledVisibleCount,
+      settledLimit: settledVisibleCount,
       now: `${nowMinute}:00.000Z`,
       snoozeNow: new Date().toISOString(),
     });
-    if (!props.hideSettledThreads) return layout;
-    // Drop settled-tail rows when hide is on (limit 0 still leaves the
-    // divider path empty; strip any slim rows for safety).
-    return {
-      ...layout,
-      items: layout.items.filter((item) => item.variant === "card"),
-      hiddenSettledCount: 0,
-    };
   }, [
     changeRequestStateByKey,
     nowMinute,
@@ -670,7 +749,6 @@ export function HomeScreen(props: HomeScreenProps) {
     settledVisibleCount,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
-    props.hideSettledThreads,
     props.searchQuery,
     props.selectedEnvironmentIds,
     props.threads,
@@ -1158,6 +1236,21 @@ export function HomeScreen(props: HomeScreenProps) {
           estimatedItemSize={ESTIMATED_THREAD_ROW_HEIGHT}
           extraData={extraData}
           ListHeaderComponent={listHeader}
+          ListFooterComponent={
+            classicSettledHiddenCount > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Show ${Math.min(classicSettledHiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+                onPress={showMoreSettled}
+                className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+              >
+                <Text className="text-xs font-t3-medium text-foreground-muted">
+                  Show more ({classicSettledHiddenCount} settled hidden)
+                </Text>
+              </Pressable>
+            ) : null
+          }
           ListEmptyComponent={listEmpty}
           style={{ flex: 1 }}
           automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}

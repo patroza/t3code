@@ -132,7 +132,7 @@ export function buildHomeListFilterMenu(props: {
     items.push({
       type: "action",
       title: "Hide settled",
-      subtitle: "Omit settled threads from this list",
+      subtitle: "Move settled threads out of the main list",
       state: props.hideSettledThreads ? "on" : "off",
       onPress: () => props.onHideSettledThreadsChange?.(!props.hideSettledThreads),
     });
