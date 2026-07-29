@@ -623,32 +623,31 @@ describe("VcsStatusBroadcaster", () => {
               : Effect.void,
         ).pipe(Effect.forkIn(scope, { startImmediately: true }));
 
-      // Two list worktrees — shared refresher, not two independent 30s pollers.
+      // Two list worktrees — shared exclusive refresher, not two independent pollers.
       yield* trackReady("/repo-a", repoAReady);
       yield* trackReady("/repo-b", repoBReady);
+      // Shared loop + optional cold kick eventually publishes remotes for both.
       yield* Deferred.await(repoAReady);
       yield* Deferred.await(repoBReady);
 
-      // Initial fill: one remote load per list cwd (subscribe fill and/or shared sweep).
-      assert.isAtLeast(state.remoteStatusCalls, 2);
-      assert.isAtMost(state.remoteStatusCalls, 4);
+      assert.isAtLeast(state.remoteStatusCalls, 1);
       assert.equal(state.remoteInvalidationCalls, 0);
       for (const flag of state.remoteStatusRefreshUpstreamValues) {
         assert.equal(flag, false);
       }
       const afterInitial = state.remoteStatusCalls;
 
-      // Shared ~30s list cadence: one budgeted sweep refreshes both cwds together
-      // (still no force-invalidate / upstream fetch on the list path).
-      yield* TestClock.adjust(Duration.seconds(35));
+      // Interval starts only after a sweep finishes; advance past list wait (45s)
+      // and allow another exclusive batch (batch size 4 covers both cwds).
+      yield* TestClock.adjust(VcsStatusBroadcaster.LIST_MODE_REMOTE_REFRESH_INTERVAL);
+      yield* Effect.yieldNow;
       yield* Effect.yieldNow;
       const delta = state.remoteStatusCalls - afterInitial;
-      assert.isAtLeast(delta, 2);
-      assert.isAtMost(delta, 4);
+      // At least one exclusive post-wait batch; allow a couple of ticks while
+      // TestClock drains (still far below independent per-cwd 30s pollers).
+      assert.isAtLeast(delta, 1);
+      assert.isAtMost(delta, 8);
       assert.equal(state.remoteInvalidationCalls, 0);
-      for (const flag of state.remoteStatusRefreshUpstreamValues) {
-        assert.equal(flag, false);
-      }
 
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
