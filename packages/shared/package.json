@@ -87,6 +87,10 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./backgroundActivitySettings": {
+      "types": "./src/backgroundActivitySettings.ts",
+      "import": "./src/backgroundActivitySettings.ts"
+    },
     "./serverRuntime": {
       "types": "./src/serverRuntime.ts",
       "import": "./src/serverRuntime.ts"
