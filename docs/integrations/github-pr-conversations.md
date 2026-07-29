@@ -12,6 +12,9 @@ The GitHub entry point is lookup-only. It never creates a project, clones a repo
 branch, creates or repairs a worktree, or creates a T3 thread. If no unique live match exists, the
 complete response is exactly:
 
+Ideas for sharing one thread across GitHub + Jira + Discord via the work-item store (without vague
+“relatedness”) are in [work-item thread linking](./work-item-thread-linking.md) (draft).
+
 ```text
 not yet linked/checked out.
 ```
