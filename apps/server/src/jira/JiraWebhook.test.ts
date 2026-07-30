@@ -222,6 +222,18 @@ describe("parseJiraCommentInvocation", () => {
     });
   });
 
+  it("uses the mention itself as replyTo when the comment is top-level", () => {
+    const invocation = parseJiraCommentInvocation(
+      webhook("@omegent investigate packing"),
+      "omegent",
+    );
+    expect(invocation).toMatchObject({
+      commentId: "10700",
+      replyToCommentId: "10700",
+      commentSurface: "issue",
+    });
+  });
+
   it("parses comment_updated and uses a distinct delivery id per edit", () => {
     const invocation = parseJiraCommentInvocation(
       webhook("@omegent fix the null check properly", {
