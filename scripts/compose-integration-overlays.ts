@@ -256,6 +256,24 @@ function regenerateIntegrationLockfile(repoDir: string, sourceRoot: string): boo
       `pnpm install --no-frozen-lockfile failed after overlay compose (exit ${install.status}): ${install.stderr || install.stdout}`,
     );
   }
+  // A warm node_modules seed can make pnpm's first install preserve stale,
+  // unused snapshots even though every manifest is satisfied. Run a lock-only
+  // canonicalization pass so the committed artifact is also a fixed point for
+  // later pnpm commands in clean deployment checkouts.
+  const canonicalize = run(
+    pnpm,
+    ["install", "--lockfile-only", "--no-frozen-lockfile", "--prefer-offline"],
+    repoDir,
+    {
+      allowFailure: true,
+      env: envWithoutProxy(),
+    },
+  );
+  if (canonicalize.status !== 0) {
+    throw new StackError(
+      `pnpm lock-only canonicalization failed after overlay compose (exit ${canonicalize.status}): ${canonicalize.stderr || canonicalize.stdout}`,
+    );
+  }
   const dirty = run("git", ["status", "--porcelain", "--", "pnpm-lock.yaml"], repoDir, {
     allowFailure: true,
   }).stdout;
