@@ -329,6 +329,20 @@ Goal: reduce mis-clicks on the wrong person when the map is large; still **close
 
 Sidebar / command palette: Mine | Theirs; Starter | Participant; source chips.
 
+### Thread attribute search
+
+Command palette + mobile list search index more than title:
+
+| Query             | Matches                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `@patroza`        | participant / origin username or personId                        |
+| `patroza@desktop` | person@firstChannel / origin handle                              |
+| `@desktop`        | origin or participant channel                                    |
+| `#123` / `pr/123` | PR number from branch, title, or `originSource.location.number`  |
+| `SA-123`          | Jira key from title, branch, or `originSource.location.issueKey` |
+
+Implementation: `@t3tools/shared/threadAttributeSearch` builds lowercased term bags; clients reuse the existing substring filter. Terms are empty until source stamping (PR3) fills shell fields — title/branch/Jira-in-title still work immediately.
+
 ## API sketch (contracts)
 
 New module `packages/contracts/src/identity.ts` (see initial draft in repo):
