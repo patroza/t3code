@@ -142,6 +142,54 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
+  it("matches identity handles, PR numbers, and Jira keys in thread search", () => {
+    const threadItems = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-attributed"),
+          title: "Harden claim gate SA-49",
+          branch: "pr/9001-claim-gate",
+          originSource: {
+            channel: "desktop",
+            personId: "patroza",
+            username: "patroza",
+            location: { issueKey: "SA-49", number: 9001, kind: "pr" },
+          },
+          participantSummaries: [
+            {
+              personId: "patroza",
+              username: "patroza",
+              firstChannel: "desktop",
+              firstParticipatedAt: "2026-03-20T00:00:00.000Z",
+            },
+          ],
+        }),
+        makeThread({
+          id: ThreadId.make("thread-other"),
+          title: "Unrelated cleanup",
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    for (const query of ["@patroza", "patroza@desktop", "@desktop", "#9001", "SA-49"]) {
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: threadItems,
+      });
+      expect(
+        groups[0]?.items.map((item) => item.value),
+        query,
+      ).toEqual(["thread:thread-attributed"]);
+    }
+  });
+
   it("preserves thread project-name matches when there is no stronger title match", () => {
     const group: CommandPaletteGroup = {
       value: "threads-search",
