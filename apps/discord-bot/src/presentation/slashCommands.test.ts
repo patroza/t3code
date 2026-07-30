@@ -25,6 +25,7 @@ describe("Omegent slash command definition", () => {
       "steernow",
       "help",
       "stop",
+      "compact",
       "thread-talk",
       "link",
       "refresh-indicators",
