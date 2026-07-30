@@ -82,11 +82,12 @@ describe("mergeParticipantSummaries", () => {
     expect(merged.map((entry) => entry.personId)).toEqual(["patroza", "julius"]);
   });
 
-  it("ignores unmapped sources and duplicates", () => {
+  it("ignores unmapped sources and folds a person's channels into one summary", () => {
     const existing = [
       {
         personId: "patroza",
         username: "patroza",
+        firstChannel: "discord" as const,
         firstParticipatedAt: "2026-01-01T00:00:00.000Z",
       },
     ];
@@ -97,12 +98,19 @@ describe("mergeParticipantSummaries", () => {
         participatedAt: "2026-01-01T00:01:00.000Z",
       }),
     ).toEqual(existing);
+    const folded = mergeParticipantSummaries({
+      existing,
+      source: { personId: "patroza", username: "patroza", channel: "desktop" },
+      participatedAt: "2026-01-01T00:02:00.000Z",
+    });
+    expect(folded).toHaveLength(1);
+    expect(folded[0]?.channels).toEqual(["discord", "desktop"]);
     expect(
       mergeParticipantSummaries({
-        existing,
-        source: { personId: "patroza", username: "patroza", channel: "web" },
-        participatedAt: "2026-01-01T00:02:00.000Z",
+        existing: folded,
+        source: { personId: "patroza", username: "patroza", channel: "desktop" },
+        participatedAt: "2026-01-01T00:03:00.000Z",
       }),
-    ).toEqual(existing);
+    ).toBe(folded);
   });
 });
