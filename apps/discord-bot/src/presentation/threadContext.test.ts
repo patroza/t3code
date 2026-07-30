@@ -111,7 +111,9 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
     expect(sentryPrompt).toContain("Discord investigation bootstrap");
     expect(sentryPrompt).toContain("hc_tpl:");
     expect(sentryPrompt).toContain("CarrierErrorWrapped");
-    expect(sentryPrompt).toContain(resolveAgentTurnRulesPath());
+    expect(sentryPrompt).toContain("## Agent rules");
+    expect(sentryPrompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
+    expect(sentryPrompt).toContain("## Discord conversation context");
     expect(sentryPrompt).toContain("req: 42@tester Example User");
     expect(sentryPrompt).not.toContain("Lead with the essential answer");
     expect(sentryPrompt).not.toContain("Always open a GitHub PR");
@@ -141,7 +143,7 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
     });
     expect(prompt).not.toContain("Discord investigation bootstrap");
     expect(prompt).not.toContain("hc_tpl:");
-    expect(prompt).toContain(resolveAgentTurnRulesPath());
+    expect(prompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
     expect(prompt).toContain("Can you check the open PR?");
     expect(prompt).toContain("please review");
   });
@@ -154,7 +156,7 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
       honeycombTraceUrlTemplate: undefined,
       starter: null,
     });
-    expect(prompt).toContain(resolveAgentTurnRulesPath());
+    expect(prompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
     expect(prompt).toContain("## User request");
     expect(prompt).toContain("hello");
     expect(buildSentryBootstrapPrompt).toBeTypeOf("function");
@@ -173,11 +175,12 @@ describe("resolveAgentTurnRulesPath", () => {
     expect(body).toContain("cab");
     expect(body).toContain("PR footer");
     expect(body).toContain("Style:");
+    expect(body).toContain("client overlay");
   });
 });
 
 describe("buildDiscordTurnPrompt", () => {
-  it("adds compact Discord turn header and requester", () => {
+  it("adds unified agent rules + Discord context and requester", () => {
     const prompt = buildDiscordTurnPrompt({
       mentionPrompt: "Can you check your last reply?",
       requester: {
@@ -190,8 +193,13 @@ describe("buildDiscordTurnPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("## Discord conversation context");
+    expect(prompt).toContain("## Agent rules");
     expect(prompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
+    // Global product rules listed first when monorepo layout is present.
+    expect(prompt.indexOf("## Agent rules")).toBeLessThan(
+      prompt.indexOf("## Discord conversation context"),
+    );
+    expect(prompt).toContain("## Discord conversation context");
     expect(prompt).toContain("req: user-1@example-user Example User");
     expect(prompt).not.toContain("Always open a GitHub PR");
     expect(prompt).not.toContain("posted back into the same Discord thread");

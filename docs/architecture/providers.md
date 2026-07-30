@@ -13,9 +13,9 @@ Methods mirror the `NativeApi` interface defined in `@t3tools/contracts`:
 - `providers.respondToRequest`, `providers.stopSession`
 - `shell.openInEditor`, `server.getConfig`
 
-`providers.sendTurn` prepends a [global T3 agent rules](./agent-rules.md) **file
-pointer** (`rules: /…/t3-agent-rules.md`) to the provider harness input (not the
-stored chat message) — same pattern as Discord turn rules.
+`providers.sendTurn` ensures a [global T3 agent rules](./agent-rules.md) **file
+pointer** under `## Agent rules` (`rules: /…/t3-agent-rules.md`), merged with
+any client overlay paths already present (Discord). Stored chat is unchanged.
 
 Codex is the only implemented provider. `claudeCode` is reserved in contracts/UI.
 

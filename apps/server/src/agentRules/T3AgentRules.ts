@@ -1,23 +1,20 @@
 /**
- * Product-wide agent rules — file pointer injection (same pattern as Discord).
+ * Product-wide agent rules — file pointer injection (unified with Discord).
  *
- * Surfaces (web, desktop, mobile, Discord bot, GitHub PR bridge, Jira issue
- * bridge) all reach the agent through `ProviderService.sendTurn`. On every turn
- * we prepend a compact pointer:
+ * Layering:
+ * 1. Global file: `apps/server/docs/t3-agent-rules.md` (all surfaces)
+ * 2. Optional client overlays (e.g. Discord `agent-turn-rules.md`) — extra
+ *    `rules:` lines under the same `## Agent rules` block
  *
- * ```
- * ## T3 agent context
- * rules: /absolute/path/to/t3-agent-rules.md
- * ```
- *
- * The agent reads the markdown file. We do **not** embed the rules body in the
- * prompt (matches Discord's `agent-turn-rules.md` pointer).
- *
- * Discord-only policy stays in `apps/discord-bot/docs/agent-turn-rules.md`.
- * Stored chat messages are not rewritten — only the provider payload is wrapped.
+ * `ProviderService.sendTurn` ensures the global path is present (merged +
+ * de-duplicated). Surfaces never embed rule bodies in the prompt.
  */
 
-import { formatAgentRulesPointer } from "@t3tools/shared/agentRulesPointer";
+import {
+  AGENT_RULES_HEADER,
+  ensureAgentRulesPaths,
+  formatAgentRulesPointers,
+} from "@t3tools/shared/agentRulesPointer";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as NodePath from "node:path";
@@ -29,8 +26,8 @@ const T3_AGENT_RULES_FALLBACK_MARKDOWN = `# T3 agent rules (all surfaces)
 Product rules for every T3 turn (web, desktop, mobile, Discord, GitHub, Jira).
 Project \`AGENTS.md\` still owns repo-local conventions.
 
-The T3 server injects an absolute path to this file on every provider turn
-(\`rules: /…/t3-agent-rules.md\`). Read the file; do not expect the body inline.
+Read this file when a turn lists it under \`## Agent rules\` as \`rules: …\`.
+Do not expect the body inline in the prompt.
 
 **Links:** always markdown hyperlinks \`[label](url)\` — never bare \`https://…\` —
 in Jira/Confluence comments, PR bodies, handoff notes, and any reply where a URL
@@ -39,10 +36,7 @@ Jira API Markdown→ADF often leaves bare URLs as plain text; explicit link synt
 becomes a real hyperlink.
 `;
 
-/** Header used for idempotent re-injection detection. */
-export const T3_AGENT_RULES_HEADER = "## T3 agent context";
-
-export { formatAgentRulesPointer };
+export { AGENT_RULES_HEADER };
 
 /**
  * Absolute path to the product-wide rules markdown file.
@@ -51,7 +45,6 @@ export { formatAgentRulesPointer };
 export function resolveT3AgentRulesPath(): string {
   const moduleDir = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
   // src/agentRules → apps/server/docs/t3-agent-rules.md (source / monorepo deploy)
-  // dist chunk → may not exist; fall through to materialize
   const candidates = [
     NodePath.resolve(moduleDir, "../../docs/t3-agent-rules.md"),
     NodePath.resolve(moduleDir, "../docs/t3-agent-rules.md"),
@@ -72,30 +65,20 @@ export function resolveT3AgentRulesPath(): string {
   return materialized;
 }
 
-/** Compact pointer block prepended to provider turn input. */
+/** Compact pointer block for the global rules file alone. */
 export function formatT3AgentRulesPointer(rulesPath: string = resolveT3AgentRulesPath()): string {
-  return formatAgentRulesPointer(rulesPath, T3_AGENT_RULES_HEADER);
+  return formatAgentRulesPointers([rulesPath]);
 }
 
 /**
- * Prepend a rules **file path** pointer (not the rules body).
- * Idempotent when the header is already present.
+ * Ensure the global rules **file path** is listed under `## Agent rules`.
+ * Merges with any existing paths (client overlays) and de-duplicates.
  */
 export function withT3AgentRules(providerInput: string | undefined): string | undefined {
   if (providerInput === undefined) {
     return undefined;
   }
-  if (providerInput.includes(T3_AGENT_RULES_HEADER)) {
-    return providerInput;
-  }
-  const pointer = formatT3AgentRulesPointer();
-  const body = providerInput.trimEnd();
-  if (body.length === 0) {
-    return pointer;
-  }
-  return `${pointer}
-
-${body}`;
+  return ensureAgentRulesPaths(providerInput, [resolveT3AgentRulesPath()]);
 }
 
 /**

@@ -1,22 +1,101 @@
 import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
-import { formatAgentRulesPointer } from "./agentRulesPointer.ts";
+import {
+  AGENT_RULES_HEADER,
+  dedupeAgentRulesPaths,
+  ensureAgentRulesPaths,
+  extractAgentRulesPaths,
+  formatAgentRulesPointer,
+  formatAgentRulesPointers,
+  stripAgentRulesBlock,
+} from "./agentRulesPointer.ts";
 
-describe("formatAgentRulesPointer", () => {
-  it("formats header + rules path like Discord turns", () => {
+describe("formatAgentRulesPointers", () => {
+  it("formats global + overlay under one header", () => {
     assert.equal(
-      formatAgentRulesPointer("/var/lib/t3/agent-turn-rules.md", "## Discord conversation context"),
-      `## Discord conversation context
-rules: /var/lib/t3/agent-turn-rules.md`,
+      formatAgentRulesPointers([
+        "/opt/t3/docs/t3-agent-rules.md",
+        "/opt/t3/discord/agent-turn-rules.md",
+      ]),
+      `## Agent rules
+rules: /opt/t3/docs/t3-agent-rules.md
+rules: /opt/t3/discord/agent-turn-rules.md`,
     );
   });
 
-  it("formats product-wide T3 agent context the same way", () => {
+  it("dedupes paths", () => {
     assert.equal(
-      formatAgentRulesPointer("/opt/t3/docs/t3-agent-rules.md", "## T3 agent context"),
-      `## T3 agent context
-rules: /opt/t3/docs/t3-agent-rules.md`,
+      formatAgentRulesPointers(["/a.md", "/a.md", "/b.md"]),
+      `## Agent rules
+rules: /a.md
+rules: /b.md`,
     );
+  });
+
+  it("returns empty for no paths", () => {
+    assert.equal(formatAgentRulesPointers([]), "");
+  });
+});
+
+describe("formatAgentRulesPointer", () => {
+  it("still supports a custom single-path header", () => {
+    assert.equal(
+      formatAgentRulesPointer("/tmp/rules.md", "## Discord conversation context"),
+      `## Discord conversation context
+rules: /tmp/rules.md`,
+    );
+  });
+});
+
+describe("extract / strip / ensure", () => {
+  const sample = `## Agent rules
+rules: /global.md
+rules: /discord.md
+
+## Discord conversation context
+req: 1@user
+## User request
+hello`;
+
+  it("extracts rules paths from the agent-rules block", () => {
+    assert.deepEqual(extractAgentRulesPaths(sample), ["/global.md", "/discord.md"]);
+  });
+
+  it("strips the agent-rules block", () => {
+    const stripped = stripAgentRulesBlock(sample);
+    assert.equal(stripped.includes(AGENT_RULES_HEADER), false);
+    assert.equal(stripped.includes("## Discord conversation context"), true);
+    assert.equal(stripped.includes("hello"), true);
+  });
+
+  it("merges required paths first and dedupes", () => {
+    const merged = ensureAgentRulesPaths(sample, ["/global.md", "/extra.md"]);
+    assert.equal(
+      merged,
+      `## Agent rules
+rules: /global.md
+rules: /extra.md
+rules: /discord.md
+
+## Discord conversation context
+req: 1@user
+## User request
+hello`,
+    );
+  });
+
+  it("adds a block when missing", () => {
+    assert.equal(
+      ensureAgentRulesPaths("just text", ["/global.md"]),
+      `## Agent rules
+rules: /global.md
+
+just text`,
+    );
+  });
+
+  it("dedupeAgentRulesPaths preserves order", () => {
+    assert.deepEqual(dedupeAgentRulesPaths(["/b", "/a", "/b", ""]), ["/b", "/a"]);
   });
 });
