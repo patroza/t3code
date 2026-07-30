@@ -15,6 +15,7 @@ import {
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { T3Session } from "../t3/T3Session.ts";
+import { discordSourceHint } from "../t3/sourceHint.ts";
 import { bridgeThreadToDiscord } from "./ResponseBridge.ts";
 
 export interface LinkedTurnFlags {
@@ -128,12 +129,25 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
               : { overrideInstanceId: input.flags.provider }),
             ...(input.flags.model === undefined ? {} : { overrideModel: input.flags.model }),
           });
+    const mentionAuthor =
+      input.promptContext?.kind === "discord" ? input.promptContext.mentionMessage?.author : null;
+    const sourceHint =
+      input.source.sourceKind === "discord"
+        ? discordSourceHint({
+            authorId: mentionAuthor?.id,
+            authorUsername: mentionAuthor?.username,
+            guildId: input.externalTenantId,
+            channelId: input.externalParentId,
+            discordThreadId: input.externalConversationId,
+          })
+        : undefined;
     yield* t3.startTurn({
       threadId: existing.t3ThreadId,
       prompt: input.prompt,
       ...(continueModelSelection === undefined ? {} : { modelSelection: continueModelSelection }),
       ...(input.flags.plan ? { interactionMode: "plan" as const } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(sourceHint === undefined ? {} : { sourceHint }),
     });
     return { threadId: existing.t3ThreadId, isNew: false } as const;
   }
@@ -152,6 +166,18 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
     guildId: input.externalTenantId,
     discordThreadId: input.externalConversationId,
   });
+  const mentionAuthor =
+    input.promptContext?.kind === "discord" ? input.promptContext.mentionMessage?.author : null;
+  const sourceHint =
+    input.source.sourceKind === "discord"
+      ? discordSourceHint({
+          authorId: mentionAuthor?.id,
+          authorUsername: mentionAuthor?.username,
+          guildId: input.externalTenantId,
+          channelId: input.externalParentId,
+          discordThreadId: input.externalConversationId,
+        })
+      : undefined;
   const { threadId } = yield* t3.startTurnWithWorktree({
     project: resolved.project,
     prompt: enrichedPrompt,
@@ -160,6 +186,7 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
     baseBranch: input.flags.base ?? config.t3DefaultBaseBranch,
     local: input.flags.local ?? false,
     ...(attachments.length > 0 ? { attachments } : {}),
+    ...(sourceHint === undefined ? {} : { sourceHint }),
   });
 
   yield* links.put({
