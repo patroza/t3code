@@ -190,8 +190,7 @@ export function rebaseIntegrationOverlays(
       }
 
       const isAncestor =
-        run("git", ["merge-base", "--is-ancestor", newBase, tip], {
-          cwd: repoDir,
+        run("git", ["merge-base", "--is-ancestor", newBase, tip], repoDir, {
           allowFailure: true,
         }).status === 0;
       const mergeBase = git(repoDir, ["merge-base", newBase, tip], { allowFailure: true }) || null;
@@ -283,8 +282,7 @@ export function rebaseIntegrationOverlays(
           });
           const alreadyBased =
             latest !== "" &&
-            run("git", ["merge-base", "--is-ancestor", newBase, latest], {
-              cwd: repoDir,
+            run("git", ["merge-base", "--is-ancestor", newBase, latest], repoDir, {
               allowFailure: true,
             }).status === 0;
           if (alreadyBased) {
