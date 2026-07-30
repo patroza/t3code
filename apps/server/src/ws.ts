@@ -3,6 +3,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -428,6 +429,7 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const fileSystem = yield* FileSystem.FileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -1020,23 +1022,63 @@ const makeWsRpcLayer = (
             if (bootstrap?.prepareWorktree && !(bootstrap.createThread && createdThread)) {
               // A replayed bootstrap (reconnect or outbox retry) can reach
               // this point after the original already prepared the worktree;
-              // re-running `git worktree add` would fail on the now-existing
-              // branch. When the thread pre-existed, reuse its recorded
-              // worktree and skip setup, which the original bootstrap ran.
+              // re-running `git worktree add -b` would fail on the now-existing
+              // branch. When the thread pre-existed:
+              //   - path still on disk → reuse and skip setup
+              //   - path missing (GC / manual cleanup) → re-add worktree at the
+              //     same path for the existing branch (post-checkout runs pnpm)
+              //     and re-run project setup
               const projectedShell = yield* projectionSnapshotQuery
                 .getThreadShellById(command.threadId)
                 .pipe(Effect.orElseSucceed(() => Option.none()));
               const existingWorktreePath = Option.isSome(projectedShell)
                 ? projectedShell.value.worktreePath
                 : null;
+              const existingBranch = Option.isSome(projectedShell)
+                ? projectedShell.value.branch
+                : null;
               if (existingWorktreePath !== null) {
-                targetWorktreePath = existingWorktreePath;
-                worktreeAlreadyPrepared = true;
-                yield* refreshGitStatus(existingWorktreePath);
+                const pathExists = yield* fileSystem
+                  .exists(existingWorktreePath)
+                  .pipe(Effect.orElseSucceed(() => false));
+                if (pathExists) {
+                  targetWorktreePath = existingWorktreePath;
+                  worktreeAlreadyPrepared = true;
+                  yield* refreshGitStatus(existingWorktreePath);
+                } else if (existingBranch !== null && existingBranch.length > 0) {
+                  // Disk GC removed the tree; re-add at the same path. Leave
+                  // worktreeAlreadyPrepared false so setup scripts re-run.
+                  const prepareWorktree = bootstrap.prepareWorktree;
+                  const worktree = yield* gitWorkflow.createWorktree({
+                    cwd: prepareWorktree.projectCwd,
+                    // Existing branch: no newRefName → `git worktree add <path> <branch>`
+                    refName: existingBranch,
+                    path: existingWorktreePath,
+                  });
+                  targetWorktreePath = worktree.worktree.path;
+                  yield* orchestrationEngine.dispatch({
+                    type: "thread.meta.update",
+                    commandId: yield* serverCommandId("bootstrap-thread-meta-recreate-worktree"),
+                    threadId: command.threadId,
+                    branch: worktree.worktree.refName,
+                    worktreePath: targetWorktreePath,
+                  });
+                  yield* waitForWorktreeProjection(targetWorktreePath);
+                  yield* refreshGitStatus(targetWorktreePath);
+                }
               }
             }
 
-            if (bootstrap?.prepareWorktree && !worktreeAlreadyPrepared) {
+            // Recreate sets targetWorktreePath without worktreeAlreadyPrepared;
+            // skip a second createWorktree while still allowing setup scripts.
+            const worktreePathAlreadyMaterialized =
+              targetWorktreePath !== null && targetWorktreePath.length > 0;
+
+            if (
+              bootstrap?.prepareWorktree &&
+              !worktreeAlreadyPrepared &&
+              !worktreePathAlreadyMaterialized
+            ) {
               const prepareWorktree = bootstrap.prepareWorktree;
               let worktreeBaseRef = prepareWorktree.baseBranch;
               let worktreeNewRefName = prepareWorktree.branch;
