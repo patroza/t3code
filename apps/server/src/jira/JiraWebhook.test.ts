@@ -8,7 +8,7 @@ import {
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
 import { formatJiraComment } from "./JiraIssueBridge.ts";
-import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
   classifyWebhookBodyFailure,
   previewWebhookBody,
@@ -321,11 +321,13 @@ describe("Jira thread lookup", () => {
       links: [
         {
           t3ThreadId: "thread-a",
+          discordThreadId: "discord-a",
           status: "active",
           jiraIssueKeys: ["SA-402", "SA-409"],
         },
         {
           t3ThreadId: "thread-b",
+          discordThreadId: "discord-b",
           status: "tombstone",
           jiraIssueKeys: ["SA-402"],
         },
@@ -334,6 +336,13 @@ describe("Jira thread lookup", () => {
     expect(resolveThreadIdForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
       _tag: "linked",
       threadId: "thread-a",
+    });
+    expect(resolveDiscordLinkForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
+      _tag: "linked",
+      discordThreadId: "discord-a",
+      t3ThreadId: "thread-a",
+      channelId: null,
+      guildId: null,
     });
   });
 
@@ -352,6 +361,28 @@ describe("Jira thread lookup", () => {
           links: [
             { t3ThreadId: "a", status: "active", jiraIssueKeys: ["SA-1"] },
             { t3ThreadId: "b", status: "active", jiraIssueKeys: ["sa-1"] },
+          ],
+        }),
+      }),
+    ).toMatchObject({ _tag: "ambiguous" });
+
+    expect(
+      resolveDiscordLinkForJiraIssue({
+        issueKey: "SA-1",
+        linksJson: JSON.stringify({
+          links: [
+            {
+              t3ThreadId: "a",
+              discordThreadId: "d1",
+              status: "active",
+              jiraIssueKeys: ["SA-1"],
+            },
+            {
+              t3ThreadId: "b",
+              discordThreadId: "d2",
+              status: "active",
+              jiraIssueKeys: ["SA-1"],
+            },
           ],
         }),
       }),
