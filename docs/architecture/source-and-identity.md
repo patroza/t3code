@@ -35,7 +35,9 @@ Threads and messages have no durable notion of **who** started or participated, 
 | ------------------ | ----------------------------------------------------------------- | -------------------------------------------- |
 | Scope of username  | **Per auth session** (claim), not one env-global string           | Shared server; multiple humans               |
 | Allowed identities | **Closed set** from server identity map file                      | Operator-controlled; matches Discord bot map |
-| Free-form entry    | **Rejected**                                                      | Prevents “alice” vs “Alice” / spoofing       |
+| Free-form entry    | **Rejected**                                                      | Only map members; no invent-a-handle         |
+| Username length    | **No product min/max** (soft wire max only)                       | Map membership is the constraint             |
+| Claim UI           | **Typeahead after 3 chars**, not a full dropdown                  | Fewer wrong-person misclicks on large maps   |
 | Map location       | Server file path (env), not client settings                       | Same host of truth as secrets/aliases        |
 | Stamp site         | User-originated orchestration events (`message-sent`, turn start) | Source of truth is event log                 |
 | Thread origin      | First user message’s `SourceRef`                                  | Simple; no separate origin command for v1    |
@@ -49,7 +51,7 @@ Threads and messages have no durable notion of **who** started or participated, 
 A human (or bot operator) listed in the identity map.
 
 - Stable **`personId`** (slug or uuid; prefer explicit `id` in map, fallback slug of `username`).
-- Required **`username`**: 3–16 chars, `^[a-z][a-z0-9_-]{2,15}$` (normalize to lowercase).
+- Required **`username`**: non-empty operator-chosen handle; **normalized lowercase** on the wire. **No min/max product length** — validity is **membership in the map**, not free-form shape rules.
 - Optional display **`name`** (for git trailers / tooltips).
 - Optional platform links: discord, github, jira, (later slack/teams).
 
@@ -134,7 +136,7 @@ Compatible with existing Discord bot map, **plus required `username`** per perso
 # identity-map.yaml
 people:
   patroza:
-    username: patroza # required; 3–16, lowercase slug
+    username: patroza # required; closed-set handle (lowercase on wire)
     name: Patrick Roza # display / Co-authored-by name
     discord:
       id: "95218063095377920"
@@ -158,7 +160,7 @@ Also accept array form and flat keys used by the bot (`discordId`, `githubLogin`
 
 - Every person must have unique `username` (case-insensitive).
 - At least one of: `username` only (T3-only person), or any platform link.
-- `username` must match the regex above.
+- `username` non-empty after trim; stored/compared case-insensitively.
 - Unknown fields ignored (forward compatible).
 
 Promote parsing into **`packages/shared` or `packages/contracts` + server loader** so Discord bot and server share one parser over time (bot can keep a thin re-export). First PR may vendor a copy if package boundaries are awkward; converge in a follow-up.
@@ -181,30 +183,30 @@ type SessionIdentityClaim = {
   username: string; // snapshot from map at claim time
   claimedAt: DateTime;
   // optional: how they claimed
-  method: "picker" | "auto-discord" | "auto-jira" | "bootstrap";
+  method: "typeahead" | "auto-discord" | "auto-jira" | "bootstrap";
 };
 ```
 
-- **One claim per session.** Re-claim allowed only to the same person, or via explicit “switch person” that requires re-pick (admin/debug); default: immutable after set.
+- **One claim per session.** Re-claim allowed only to the same person, or via explicit “switch person” that requires re-claim (admin/debug); default: immutable after set.
 - **Not** stored in client settings blob as source of truth (client may cache for UI).
 - Pairing links remain capability grants; claim is an extra session attribute after auth.
 
 ### Bootstrap / bots
 
-| Client                         | Claim path                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------ |
-| Web / desktop / mobile         | After pairing: show **picker** of map usernames; must claim before operate     |
-| Discord bot                    | Auto-resolve sender snowflake → person; stamp on turn; no picker               |
-| Jira bot                       | Auto-resolve accountId/email → person                                          |
-| Headless CLI / admin bootstrap | Optional claim; if identity-on and operate without claim → reject operate RPCs |
+| Client                         | Claim path                                                                          |
+| ------------------------------ | ----------------------------------------------------------------------------------- |
+| Web / desktop / mobile         | After pairing: **typeahead claim** against map usernames; must claim before operate |
+| Discord bot                    | Auto-resolve sender snowflake → person; stamp on turn; no UI                        |
+| Jira bot                       | Auto-resolve accountId/email → person                                               |
+| Headless CLI / admin bootstrap | Optional claim; if identity-on and operate without claim → reject operate RPCs      |
 
 ### Gate
 
 When identity map is **enabled** (non-empty people):
 
 - RPCs that need `orchestration:operate` (and thread create/send) require a claimed session.
-- Allow without claim: auth/pairing, access admin, identity list + claim endpoints, health, shell **read** optional (prefer read allowed so UI can show picker over empty shell).
-- UI: full chrome locked behind claim screen (“Who are you?” + list of usernames). Max one step; no free text field (search/filter over list is fine).
+- Allow without claim: auth/pairing, access admin, identity list + claim endpoints, health, shell **read** optional (prefer read allowed so UI can show claim gate over empty shell).
+- UI: full chrome locked behind claim screen (“Who are you?”). See typeahead below — **not** a full dropdown of everyone.
 
 When map **disabled**: behavior unchanged from today (no gate, no source required).
 
@@ -243,12 +245,18 @@ Filters (client-side over shell):
 - Message: small channel icon; tooltip full handle.
 - Icons only; no continuous animation.
 
-### Identity picker
+### Identity claim UI (typeahead, not a full dropdown)
+
+Goal: reduce mis-clicks on the wrong person when the map is large; still **closed-set only**.
 
 - Full-screen / modal after connect when unclaimed and map enabled.
-- List: `username` primary, `name` secondary, optional platform badges.
-- Selecting calls `identity.claim` (name TBD in RPC).
-- Change identity: Settings → rare; revokes claim and re-picks (or admin-only).
+- Single text field: user types their username (and/or display name).
+- **No full-list dropdown** of all people by default.
+- After **`IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS` (3)** characters, show matching suggestions from the map (prefix/substring on `username` and `name`, case-insensitive).
+- User must **select a suggestion** or submit an **exact** map username match. Free-form values that are not in the map are rejected (client validation + server `identity_unknown_person`).
+- Suggestion rows: `username` primary, `name` secondary, optional platform badges.
+- Selecting / exact confirm calls `identity.claim` with `personId` or `username`.
+- Change identity: Settings → rare; clears claim and re-runs typeahead (or admin-only).
 
 ### Filters entry points
 
@@ -312,7 +320,7 @@ Until server owns the map, bots keep co-author resolution as today; **P2** unifi
 ### PR1 — Contracts + map schema + design doc
 
 - Land this design doc.
-- Add `identity.ts` schemas + tests (username bounds, SourceRef decode).
+- Add `identity.ts` schemas + tests (username wire form, SourceRef decode, typeahead constant).
 - No runtime behavior.
 
 ### PR2 — Server identity map load + claim RPC + session persistence
@@ -328,11 +336,12 @@ Until server owns the map, bots keep co-author resolution as today; **P2** unifi
 - Attach source on message-sent / projector / shell origin + participants.
 - Focused orchestration tests (receipts, no sleeps).
 
-### PR4 — Web/desktop/mobile: picker gate + compact icons
+### PR4 — Web/desktop/mobile: typeahead claim gate + compact icons
 
 - Claim gate UI (all entry points: first paint after pair, not only settings).
+- Typeahead after 3 chars; no full-people dropdown; reject non-map values.
 - Thread/message source icons + tooltips.
-- Client settings may cache last username for preselection only if still in map.
+- Client settings may cache last username for prefill only if still in map.
 
 ### PR5 — Filters (mine / theirs / starter / participant / channel)
 
