@@ -21,6 +21,7 @@ import {
 import * as SessionStore from "../auth/SessionStore.ts";
 import { GrokTranscriptResync } from "../externalSessions/GrokTranscriptResync.ts";
 import * as IdentityService from "../identity/IdentityService.ts";
+import { stampOrchestrationCommandSource } from "../identity/stampSource.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -114,18 +115,23 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             ),
             Effect.orElseSucceed(() => undefined),
           );
-          yield* identity
-            .requireOperateClaim(session.sessionId, {
-              ...(clientDeviceType !== undefined ? { clientDeviceType } : {}),
-            })
+          const operateClaim = yield* identity
+            .requireOperateClaim(
+              session.sessionId,
+              clientDeviceType !== undefined ? { clientDeviceType } : {},
+            )
             .pipe(
               Effect.catchTag("IdentityError", (error) =>
                 failEnvironmentInvalidRequest(identityErrorToHttpReason(error)),
               ),
             );
-          const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
-            Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
-          );
+          const normalizedCommand = stampOrchestrationCommandSource({
+            command: yield* normalizeDispatchCommand(args.payload).pipe(
+              Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
+            ),
+            claim: operateClaim,
+            clientDeviceType,
+          });
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
             .pipe(
