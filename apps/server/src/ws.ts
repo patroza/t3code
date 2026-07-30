@@ -1,9 +1,9 @@
-import * as NodeFSP from "node:fs/promises";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -513,6 +513,7 @@ const makeWsRpcLayer = (
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const fileSystem = yield* FileSystem.FileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -1128,14 +1129,9 @@ const makeWsRpcLayer = (
                 ? projectedShell.value.branch
                 : null;
               if (existingWorktreePath !== null) {
-                const pathExists = yield* Effect.tryPromise({
-                  try: () =>
-                    NodeFSP.stat(existingWorktreePath).then(
-                      (s) => s.isDirectory(),
-                      () => false,
-                    ),
-                  catch: () => false,
-                });
+                const pathExists = yield* fileSystem
+                  .exists(existingWorktreePath)
+                  .pipe(Effect.orElseSucceed(() => false));
                 if (pathExists) {
                   targetWorktreePath = existingWorktreePath;
                   worktreeAlreadyPrepared = true;
