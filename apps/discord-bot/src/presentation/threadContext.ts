@@ -3,19 +3,15 @@
  * Build initial T3 prompts when the bot is first pulled into a Discord thread.
  * Combines the thread starter (e.g. Sentry alert embed) with the user @mention.
  *
- * Rules layering (file pointers only — never embed bodies):
- * 1. Global product rules — `apps/server/docs/t3-agent-rules.md`
- * 2. Discord overlay — `apps/discord-bot/docs/agent-turn-rules.md`
- *
- * Both paths are listed under one `## Agent rules` block. Dynamic Discord
- * fields (req, jira, cab, …) live under `## Discord conversation context`.
+ * Global product rules are installed into harness homes (Codex `$CODEX_HOME/AGENTS.md`,
+ * Claude `CLAUDE.md`) so they survive compaction — not re-pasted every turn.
+ * This builder only emits **dynamic** Discord fields + a pointer to the
+ * Discord-only overlay (`docs/agent-turn-rules.md`).
  */
 
-import { existsSync } from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { formatAgentRulesPointers } from "@t3tools/shared/agentRulesPointer";
 import {
   formatIdentityAttributionBlock,
   resolveParticipantIdentity,
@@ -38,30 +34,6 @@ function discordBotPackageRoot(): string {
 /** Absolute path to the Discord-only overlay policy document. */
 export function resolveAgentTurnRulesPath(): string {
   return NodePath.resolve(discordBotPackageRoot(), "docs/agent-turn-rules.md");
-}
-
-/**
- * Absolute path to global product rules when the monorepo layout is present
- * (`apps/server/docs/t3-agent-rules.md`). Null if this package is isolated.
- * The T3 server always re-ensures the global path on sendTurn.
- */
-export function resolveGlobalT3AgentRulesPath(): string | null {
-  // apps/discord-bot → apps/server/docs/t3-agent-rules.md
-  const candidate = NodePath.resolve(discordBotPackageRoot(), "../server/docs/t3-agent-rules.md");
-  return existsSync(candidate) ? candidate : null;
-}
-
-/** Global (when found) + Discord overlay paths for the unified rules block. */
-export function resolveDiscordTurnRulesPaths(input?: {
-  readonly agentTurnRulesPath?: string | undefined;
-  readonly globalAgentRulesPath?: string | null | undefined;
-}): string[] {
-  const globalPath =
-    input?.globalAgentRulesPath === undefined
-      ? resolveGlobalT3AgentRulesPath()
-      : input.globalAgentRulesPath;
-  const overlayPath = input?.agentTurnRulesPath ?? resolveAgentTurnRulesPath();
-  return [...(globalPath !== null && globalPath !== undefined ? [globalPath] : []), overlayPath];
 }
 
 export interface DiscordEmbedLike {
@@ -133,11 +105,6 @@ export interface ThreadBootstrapContext {
   readonly t3ThreadId?: string | null | undefined;
   /** T3 web UI base (e.g. https://t3vm.tail….ts.net) for full private PR links. */
   readonly webUiBaseUrl?: string | null | undefined;
-}
-
-function formatDiscordTurnRulesBlock(rulesPaths: readonly string[]): string {
-  // Unified `## Agent rules` + N `rules:` paths (global first, then Discord overlay).
-  return formatAgentRulesPointers(rulesPaths);
 }
 
 /** Collapse whitespace so one-line turn fields cannot inject extra markdown headers. */
@@ -314,17 +281,8 @@ export function buildDiscordTurnPrompt(input: {
   readonly webUiBaseUrl?: string | null | undefined;
   /** Override Discord overlay rules path (tests). Defaults to package docs path. */
   readonly agentTurnRulesPath?: string | undefined;
-  /**
-   * Override global product rules path (tests).
-   * `null` skips global; `undefined` resolves monorepo path when present.
-   */
-  readonly globalAgentRulesPath?: string | null | undefined;
 }): string {
-  const rulesPaths = resolveDiscordTurnRulesPaths({
-    agentTurnRulesPath: input.agentTurnRulesPath,
-    globalAgentRulesPath: input.globalAgentRulesPath,
-  });
-  const rulesBlock = formatDiscordTurnRulesBlock(rulesPaths);
+  const overlayRulesPath = input.agentTurnRulesPath ?? resolveAgentTurnRulesPath();
 
   const referencedBlock =
     input.referencedMessage !== null && input.referencedMessage !== undefined
@@ -369,9 +327,10 @@ export function buildDiscordTurnPrompt(input: {
   const t3Section = t3Block !== null ? `\n${t3Block}` : "";
 
   // Header kept for ResponseBridge echo-suppression (isDiscordOriginatedUserPrompt).
-  return `${rulesBlock}
-
-## Discord conversation context
+  // Global product rules: harness-global AGENTS.md/CLAUDE.md (survives compaction).
+  // Discord overlay path is surface-specific static policy for this turn.
+  return `## Discord conversation context
+rules: ${overlayRulesPath}
 req: ${formatRequesterLine(input.requester)}${jiraSection}${identitySection}${prFooterSection}${t3Section}
 
 ## User request

@@ -36,7 +36,6 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
-import { ensureT3AgentRulesInput } from "../../agentRules/T3AgentRules.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -793,14 +792,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       payload: rawInput,
     });
 
-    const attachments = parsed.attachments ?? [];
-    // Product-wide agent rules (all surfaces). Applied only to the provider
-    // payload — the stored user message in the thread is unchanged.
-    const inputWithRules = ensureT3AgentRulesInput(parsed.input, attachments.length > 0);
+    // Product rules live in harness-global AGENTS.md / CLAUDE.md (and Codex
+    // developer_instructions) so they survive compaction — not re-injected here.
     const input = {
       ...parsed,
-      attachments,
-      ...(inputWithRules !== undefined ? { input: inputWithRules } : {}),
+      attachments: parsed.attachments ?? [],
     };
     if (!input.input && input.attachments.length === 0) {
       return yield* toValidationError(

@@ -30,6 +30,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { ensureHarnessGlobalAgentRules } from "../../agentRules/HarnessGlobalAgentRules.ts";
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
@@ -142,6 +143,17 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             }),
         ),
       );
+      // Harness-global AGENTS.md under CODEX_HOME — survives compaction.
+      // Not project AGENTS.md.
+      const codexHarnessHome = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
+      try {
+        ensureHarnessGlobalAgentRules({
+          homeDir: codexHarnessHome,
+          instructionFileName: "AGENTS.md",
+        });
+      } catch {
+        // Non-fatal: developer_instructions still carries a path pointer.
+      }
       const effectiveConfig = {
         ...config,
         enabled,

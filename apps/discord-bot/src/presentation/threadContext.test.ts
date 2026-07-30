@@ -111,9 +111,8 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
     expect(sentryPrompt).toContain("Discord investigation bootstrap");
     expect(sentryPrompt).toContain("hc_tpl:");
     expect(sentryPrompt).toContain("CarrierErrorWrapped");
-    expect(sentryPrompt).toContain("## Agent rules");
-    expect(sentryPrompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
     expect(sentryPrompt).toContain("## Discord conversation context");
+    expect(sentryPrompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
     expect(sentryPrompt).toContain("req: 42@tester Example User");
     expect(sentryPrompt).not.toContain("Lead with the essential answer");
     expect(sentryPrompt).not.toContain("Always open a GitHub PR");
@@ -193,13 +192,8 @@ describe("buildDiscordTurnPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("## Agent rules");
-    expect(prompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
-    // Global product rules listed first when monorepo layout is present.
-    expect(prompt.indexOf("## Agent rules")).toBeLessThan(
-      prompt.indexOf("## Discord conversation context"),
-    );
     expect(prompt).toContain("## Discord conversation context");
+    expect(prompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
     expect(prompt).toContain("req: user-1@example-user Example User");
     expect(prompt).not.toContain("Always open a GitHub PR");
     expect(prompt).not.toContain("posted back into the same Discord thread");
