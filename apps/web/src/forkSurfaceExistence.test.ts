@@ -125,5 +125,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     const sidebarV2 = readSrc("components/SidebarV2.tsx");
     expect(sidebarV2).toContain("ParticipantStack");
     expect(sidebarV2).toContain("sidebar-v2-ownership-filter-");
+    const sidebarV1 = readSrc("components/Sidebar.tsx");
+    expect(sidebarV1).toContain("ParticipantStack");
+    expect(sidebarV1).toContain("SourceChannelGlyph");
   });
 });
