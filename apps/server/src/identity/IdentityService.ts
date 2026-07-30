@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off
 /**
  * Closed-set identity map + per-session claims.
  *
@@ -12,7 +13,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Config from "effect/Config";
 import * as Path from "effect/Path";
 import {
   AuthSessionId,
@@ -60,87 +60,79 @@ export class IdentityService extends Context.Service<
   }
 >()("t3/identity/IdentityService") {}
 
-const loadPeopleFromPath = Effect.fn("IdentityService.loadPeopleFromPath")(function* (
+function parseMapDocument(path: string, raw: string): ReadonlyArray<IdentityMapPerson> {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return [];
+  let document: unknown;
+  if (path.endsWith(".json")) {
+    document = JSON.parse(trimmed) as unknown;
+  } else {
+    try {
+      document = JSON.parse(trimmed) as unknown;
+    } catch {
+      document = parseYamlString(trimmed) as unknown;
+    }
+  }
+  return parseIdentityMapDocument(document);
+}
+
+const loadPeopleFromPath = (
   path: string,
   options: { readonly required: boolean },
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const exists = yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
-    if (options.required) {
-      return yield* Effect.fail(
-        new IdentityError({
+): Effect.Effect<ReadonlyArray<IdentityMapPerson>, IdentityError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const exists = yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) {
+      if (options.required) {
+        return yield* new IdentityError({
           code: "identity_map_invalid",
           message: `Configured identity map not found: ${path}`,
-        }),
-      );
+        });
+      }
+      return [] as ReadonlyArray<IdentityMapPerson>;
     }
-    return [] as ReadonlyArray<IdentityMapPerson>;
-  }
-  const raw = yield* fs.readFileString(path).pipe(
-    Effect.mapError(
-      (cause) =>
-        new IdentityError({
-          code: "identity_map_invalid",
-          message: `Failed to read identity map at ${path}: ${String(cause)}`,
-        }),
-    ),
-  );
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    if (options.required) {
-      return yield* Effect.fail(
-        new IdentityError({
+    const raw = yield* fs.readFileString(path).pipe(
+      Effect.mapError(
+        (cause) =>
+          new IdentityError({
+            code: "identity_map_invalid",
+            message: `Failed to read identity map at ${path}: ${String(cause)}`,
+          }),
+      ),
+    );
+    if (raw.trim().length === 0) {
+      if (options.required) {
+        return yield* new IdentityError({
           code: "identity_map_invalid",
           message: `Configured identity map is empty: ${path}`,
-        }),
-      );
-    }
-    return [];
-  }
-
-  let document: unknown;
-  try {
-    if (path.endsWith(".json")) {
-      document = JSON.parse(trimmed) as unknown;
-    } else {
-      try {
-        document = JSON.parse(trimmed) as unknown;
-      } catch {
-        document = parseYamlString(trimmed) as unknown;
+        });
       }
+      return [] as ReadonlyArray<IdentityMapPerson>;
     }
-  } catch (cause) {
-    return yield* Effect.fail(
-      new IdentityError({
-        code: "identity_map_invalid",
-        message: `Failed to parse identity map at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-    );
-  }
+    return yield* Effect.try({
+      try: () => parseMapDocument(path, raw),
+      catch: (cause) => {
+        const message =
+          cause instanceof IdentityMapParseError
+            ? cause.message
+            : cause instanceof Error
+              ? cause.message
+              : String(cause);
+        return new IdentityError({
+          code: "identity_map_invalid",
+          message: `Invalid identity map at ${path}: ${message}`,
+        });
+      },
+    });
+  });
 
-  try {
-    return parseIdentityMapDocument(document);
-  } catch (cause) {
-    const message =
-      cause instanceof IdentityMapParseError
-        ? cause.message
-        : cause instanceof Error
-          ? cause.message
-          : String(cause);
-    return yield* Effect.fail(
-      new IdentityError({
-        code: "identity_map_invalid",
-        message: `Invalid identity map at ${path}: ${message}`,
-      }),
-    );
-  }
-});
-
-const resolveMapPath = Effect.fn("IdentityService.resolveMapPath")(function* () {
-  const configured = yield* Config.string("T3_IDENTITY_MAP_PATH").pipe(Config.option);
-  if (Option.isSome(configured) && configured.value.trim().length > 0) {
-    return { path: configured.value.trim(), required: true as const };
+const resolveMapPath = Effect.gen(function* () {
+  // Read env directly so the layer does not pull ConfigProvider into the
+  // server Effect requirements channel (keeps typecheck/R clean).
+  const configured = process.env.T3_IDENTITY_MAP_PATH?.trim();
+  if (configured !== undefined && configured.length > 0) {
+    return { path: configured, required: true as const };
   }
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
@@ -191,7 +183,15 @@ export const make = Effect.gen(function* () {
     Effect.succeed({
       enabled,
       claimRequired: enabled,
-      people: people.map(toIdentityPersonPublic),
+      people: people.map((person) => {
+        const pub = toIdentityPersonPublic(person);
+        return {
+          personId: PersonId.make(pub.personId),
+          username: IdentityUsername.make(pub.username),
+          ...(pub.name !== undefined ? { name: pub.name } : {}),
+          links: pub.links,
+        };
+      }),
     });
 
   const toPublicClaim = (
@@ -343,7 +343,15 @@ export const layerWithPeople = (people: ReadonlyArray<IdentityMapPerson>) =>
           Effect.succeed({
             enabled,
             claimRequired: enabled,
-            people: people.map(toIdentityPersonPublic),
+            people: people.map((person) => {
+              const pub = toIdentityPersonPublic(person);
+              return {
+                personId: PersonId.make(pub.personId),
+                username: IdentityUsername.make(pub.username),
+                ...(pub.name !== undefined ? { name: pub.name } : {}),
+                links: pub.links,
+              };
+            }),
           }),
         getSessionClaim: (sessionId) =>
           claims.getBySessionId(sessionId).pipe(

@@ -35,12 +35,11 @@ export type IdentityMapPerson = {
 
 export class IdentityMapParseError extends Error {
   readonly _tag = "IdentityMapParseError";
-  constructor(
-    readonly pathLabel: string,
-    message: string,
-  ) {
+  readonly pathLabel: string;
+  constructor(pathLabel: string, message: string) {
     super(message);
     this.name = "IdentityMapParseError";
+    this.pathLabel = pathLabel;
   }
 }
 
