@@ -13,11 +13,13 @@ describe("buildHomeListFilterMenu", () => {
       ],
       selectedEnvironmentIds: [],
       selectedProjectKey: "environment-1:project-1",
+      ownershipFilter: "any",
       projectSortOrder: "updated_at",
       threadSortOrder: "updated_at",
       onClearEnvironments: vi.fn(),
       onToggleEnvironment: vi.fn(),
       onProjectChange,
+      onOwnershipFilterChange: vi.fn(),
       onProjectSortOrderChange: vi.fn(),
       onThreadSortOrderChange: vi.fn(),
     });
@@ -53,11 +55,13 @@ describe("buildHomeListFilterMenu", () => {
       projects: [],
       selectedEnvironmentIds: ["env-1" as never],
       selectedProjectKey: null,
+      ownershipFilter: "any",
       projectSortOrder: "updated_at",
       threadSortOrder: "updated_at",
       onClearEnvironments,
       onToggleEnvironment,
       onProjectChange: vi.fn(),
+      onOwnershipFilterChange: vi.fn(),
       onProjectSortOrderChange: vi.fn(),
       onThreadSortOrderChange: vi.fn(),
     });
@@ -78,5 +82,39 @@ describe("buildHomeListFilterMenu", () => {
     environmentMenu.items[2]?.onPress();
     expect(onClearEnvironments).toHaveBeenCalledOnce();
     expect(onToggleEnvironment).toHaveBeenCalledWith("env-2");
+  });
+
+  it("offers Anyone, Mine, and Theirs ownership filters", () => {
+    const onOwnershipFilterChange = vi.fn();
+    const menu = buildHomeListFilterMenu({
+      environments: [],
+      projects: [],
+      selectedEnvironmentIds: [],
+      selectedProjectKey: null,
+      ownershipFilter: "mine",
+      projectSortOrder: "updated_at",
+      threadSortOrder: "updated_at",
+      onClearEnvironments: vi.fn(),
+      onToggleEnvironment: vi.fn(),
+      onProjectChange: vi.fn(),
+      onOwnershipFilterChange,
+      onProjectSortOrderChange: vi.fn(),
+      onThreadSortOrderChange: vi.fn(),
+    });
+
+    const ownershipMenu = menu.items.find(
+      (item) => item.type === "submenu" && item.title === "Ownership",
+    );
+    expect(ownershipMenu).toMatchObject({
+      type: "submenu",
+      items: [
+        { title: "Anyone", state: "off" },
+        { title: "Mine", state: "on" },
+        { title: "Theirs", state: "off" },
+      ],
+    });
+    if (ownershipMenu?.type !== "submenu") throw new Error("Expected ownership submenu");
+    ownershipMenu.items[2]?.onPress();
+    expect(onOwnershipFilterChange).toHaveBeenCalledWith("theirs");
   });
 });
