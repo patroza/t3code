@@ -27,6 +27,7 @@ import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadIdentityLeading } from "../identity/ParticipantStack";
 import { resolveThreadStatus } from "./threadPresentation";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import {
@@ -693,6 +694,10 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                     marker={showUsageDot ? (threadUsage?.marker ?? null) : null}
                   />
                 ) : null}
+                <ThreadIdentityLeading
+                  originChannel={thread.originSource?.channel}
+                  participants={thread.participantSummaries}
+                />
                 <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
                   {thread.title}
                 </Text>
@@ -764,6 +769,10 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                   marker={showUsageDot ? (threadUsage?.marker ?? null) : null}
                 />
               ) : null}
+              <ThreadIdentityLeading
+                originChannel={thread.originSource?.channel}
+                participants={thread.participantSummaries}
+              />
               <Text
                 className={cn(
                   "flex-1 text-base font-t3-medium",
