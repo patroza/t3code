@@ -243,5 +243,51 @@ export function toIdentityPersonPublic(person: IdentityMapPerson) {
   };
 }
 
+/** Closed-set platform lookups (case-insensitive where appropriate). */
+export function findPersonByDiscordId(
+  people: ReadonlyArray<IdentityMapPerson>,
+  discordId: string,
+): IdentityMapPerson | null {
+  const id = discordId.trim();
+  if (id.length === 0) return null;
+  return people.find((person) => person.discord?.id === id) ?? null;
+}
+
+export function findPersonByGithubLogin(
+  people: ReadonlyArray<IdentityMapPerson>,
+  login: string,
+): IdentityMapPerson | null {
+  const normalized = login.trim().replace(/^@/u, "").toLowerCase();
+  if (normalized.length === 0) return null;
+  return people.find((person) => person.github?.login.toLowerCase() === normalized) ?? null;
+}
+
+export function findPersonByGithubId(
+  people: ReadonlyArray<IdentityMapPerson>,
+  githubId: string | number,
+): IdentityMapPerson | null {
+  const id = String(githubId).replace(/\D/gu, "");
+  if (id.length === 0) return null;
+  return people.find((person) => person.github?.id === id) ?? null;
+}
+
+export function findPersonByJiraAccountId(
+  people: ReadonlyArray<IdentityMapPerson>,
+  accountId: string,
+): IdentityMapPerson | null {
+  const id = accountId.trim();
+  if (id.length === 0) return null;
+  return people.find((person) => person.jira?.accountId === id) ?? null;
+}
+
+export function findPersonByJiraEmail(
+  people: ReadonlyArray<IdentityMapPerson>,
+  email: string,
+): IdentityMapPerson | null {
+  const normalized = email.trim().toLowerCase();
+  if (normalized.length === 0) return null;
+  return people.find((person) => person.jira?.email?.toLowerCase() === normalized) ?? null;
+}
+
 /** Schema re-export helper for tests that want branded contracts after parse. */
 export const IdentityMapPersonCount = Schema.Number;

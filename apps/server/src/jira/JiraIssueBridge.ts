@@ -22,6 +22,8 @@ import {
   githubFinalAnswerWithStats,
   resolveGitHubBridgeTurnOutcome,
 } from "../github/GitHubPrBridge.ts";
+import * as IdentityService from "../identity/IdentityService.ts";
+import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
@@ -89,6 +91,7 @@ const make = Effect.gen(function* () {
   const jira = yield* JiraAppClient;
   const engine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
+  const identity = yield* IdentityService.IdentityService;
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const createLock = yield* Semaphore.make(1);
@@ -524,6 +527,17 @@ const make = Effect.gen(function* () {
       userMessageId: messageId,
     });
 
+    const mapPeople = yield* identity.listMapPeople();
+    const source = buildIntegrationSourceRef({
+      people: mapPeople,
+      channel: "jira",
+      platformId: input.invocation.actorAccountId,
+      displayName: input.invocation.actorDisplayName,
+      location: {
+        ...(input.invocation.projectKey ? { projectKey: input.invocation.projectKey } : {}),
+        issueKey: input.invocation.issueKey,
+      },
+    });
     const dispatched = yield* engine
       .dispatch({
         type: "thread.turn.start",
@@ -539,6 +553,7 @@ const make = Effect.gen(function* () {
         titleSeed: input.invocation.prompt.slice(0, 80) || "Jira comment",
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
+        source,
         createdAt: DateTime.formatIso(yield* DateTime.now),
       })
       .pipe(

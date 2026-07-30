@@ -29,6 +29,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 
+import * as IdentityService from "../identity/IdentityService.ts";
+import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -492,6 +494,7 @@ export const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry;
+  const identity = yield* IdentityService.IdentityService;
   const crypto = yield* Crypto.Crypto;
   const provisionLock = yield* Semaphore.make(1);
 
@@ -1357,6 +1360,20 @@ export const make = Effect.gen(function* () {
     const turnModelSelection = hasExplicitModelSelection
       ? yield* resolveGitHubModelSelection(turnInvocation, thread.modelSelection)
       : thread.modelSelection;
+    const mapPeople = yield* identity.listMapPeople();
+    const [repoOwner, repoName] = turnInvocation.repository.split("/");
+    const source = buildIntegrationSourceRef({
+      people: mapPeople,
+      channel: "github",
+      platformId: String(turnInvocation.actorId),
+      displayName: turnInvocation.actorLogin,
+      location: {
+        owner: repoOwner ?? turnInvocation.repository,
+        repo: repoName ?? turnInvocation.repository,
+        number: turnInvocation.pullRequestNumber,
+        kind: "pr",
+      },
+    });
     const dispatched = yield* engine
       .dispatch({
         type: "thread.turn.start",
@@ -1376,6 +1393,7 @@ export const make = Effect.gen(function* () {
         titleSeed: turnInvocation.prompt.slice(0, 80) || "GitHub PR comment",
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
+        source,
         createdAt: DateTime.formatIso(yield* DateTime.now),
       })
       .pipe(

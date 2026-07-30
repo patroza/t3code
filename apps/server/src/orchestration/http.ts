@@ -125,12 +125,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 failEnvironmentInvalidRequest(identityErrorToHttpReason(error)),
               ),
             );
+          const mapPeople = yield* identity.listMapPeople();
           const normalizedCommand = stampOrchestrationCommandSource({
             command: yield* normalizeDispatchCommand(args.payload).pipe(
               Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
             ),
             claim: operateClaim,
             clientDeviceType,
+            people: mapPeople,
           });
           return yield* orchestrationEngine
             .dispatch(normalizedCommand)
