@@ -469,7 +469,6 @@ const RuntimeDependenciesLive = RuntimeCoreWithIntegrationsLive.pipe(
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
-  Layer.provideMerge(IdentityService.layer),
   Layer.provide(NetService.layer),
 );
 
@@ -493,6 +492,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(
+  // Identity must be on the routes layer so HTTP/WS yield* IdentityService
+  // is satisfied without leaking residual R into CLI typecheck graphs.
+  Layer.provide(IdentityService.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(browserApiCorsLayer),
