@@ -1,6 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
@@ -20,9 +21,9 @@ describe("ServerWorkItemJoin", () => {
   });
 
   it("joins unique server store hits and fails closed on ambiguity", () => {
-    const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "work-item-join-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "work-item-join-"));
     const filePath = NodePath.join(dir, "thread-work-items.json");
-    NodeFs.writeFileSync(
+    NodeFS.writeFileSync(
       filePath,
       JSON.stringify({
         version: 1,
