@@ -1,5 +1,6 @@
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
 import { IdentityAvatar } from "./IdentityAvatar";
+import { participantDisplayLabel } from "./ParticipantStack.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 
@@ -33,7 +34,7 @@ export function ParticipantStack(props: {
         username={lead.username}
         name={lead.name}
         size="micro"
-        title={lead.firstChannel ? `${lead.username}@${lead.firstChannel}` : lead.username}
+        title={null}
       />
       {extras.length > 0 ? (
         <span
@@ -45,8 +46,6 @@ export function ParticipantStack(props: {
       ) : null}
     </span>
   );
-
-  if (extras.length === 0) return stack;
 
   return (
     <Tooltip>
@@ -64,10 +63,9 @@ export function ParticipantStack(props: {
               username={person.username}
               name={person.name}
               size="micro"
+              title={null}
             />
-            <span className="truncate text-foreground">
-              {person.firstChannel ? `${person.username}@${person.firstChannel}` : person.username}
-            </span>
+            <span className="truncate text-foreground">{participantDisplayLabel(person)}</span>
           </span>
         ))}
       </TooltipPopup>

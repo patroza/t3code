@@ -144,9 +144,11 @@ describe("IdentitySnapshot + claim", () => {
       personId: "patroza",
       username: "patroza",
       firstChannel: "discord",
+      channels: ["discord", "desktop"],
       firstParticipatedAt: "2026-07-30T12:00:00.000Z",
     });
     expect(row.firstChannel).toBe("discord");
+    expect(row.channels).toEqual(["discord", "desktop"]);
   });
 
   it("constructs IdentityError codes", () => {

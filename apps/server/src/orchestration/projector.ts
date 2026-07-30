@@ -573,6 +573,7 @@ export function projectEvent(
                 username: entry.username as ThreadParticipantSummary["username"],
                 ...(entry.name !== undefined ? { name: entry.name } : {}),
                 ...(entry.firstChannel !== undefined ? { firstChannel: entry.firstChannel } : {}),
+                ...(entry.channels !== undefined ? { channels: [...entry.channels] } : {}),
                 firstParticipatedAt: entry.firstParticipatedAt,
               })) as ReadonlyArray<ThreadParticipantSummary>)
             : existingSummaries;
