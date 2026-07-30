@@ -13,6 +13,9 @@ Methods mirror the `NativeApi` interface defined in `@t3tools/contracts`:
 - `providers.respondToRequest`, `providers.stopSession`
 - `shell.openInEditor`, `server.getConfig`
 
+[Global T3 agent rules](./agent-rules.md) are injected on the first turn of each
+provider session and re-injected after context compaction (all harnesses).
+
 Codex is the only implemented provider. `claudeCode` is reserved in contracts/UI.
 
 ## Client transport
