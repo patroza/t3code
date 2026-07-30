@@ -572,10 +572,10 @@ const buildAppUnderTest = (options?: {
       disableLogger: true,
     }).pipe(
       // Identity gate is off when map is empty; still must be provided for WS/HTTP.
-      // Merged into one provide to stay under Layer.pipe arity limits.
+      // Merged with keybindings so Layer.pipe stays under the 20-arg limit.
       Layer.provide(
         Layer.mergeAll(
-          IdentityService.layerWithPeople([]).pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+          IdentityService.layerWithPeople([]),
           Layer.mock(Keybindings.Keybindings)({
             loadConfigState: Effect.succeed({
               keybindings: [],
@@ -584,19 +584,21 @@ const buildAppUnderTest = (options?: {
             streamChanges: Stream.empty,
             ...options?.layers?.keybindings,
           }),
-          Layer.mock(ProviderRegistry.ProviderRegistry)({
-            getProviders: Effect.succeed([]),
-            refresh: () => Effect.succeed([]),
-            refreshInstance: () => Effect.succeed([]),
-            getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
-              ),
-            setProviderMaintenanceActionState: () => Effect.succeed([]),
-            streamChanges: Stream.empty,
-            ...options?.layers?.providerRegistry,
-          }),
         ),
+      ),
+      Layer.provide(
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([]),
+          refresh: () => Effect.succeed([]),
+          refreshInstance: () => Effect.succeed([]),
+          getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+            Effect.succeed(
+              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+            ),
+          setProviderMaintenanceActionState: () => Effect.succeed([]),
+          streamChanges: Stream.empty,
+          ...options?.layers?.providerRegistry,
+        }),
       ),
       Layer.provide(
         Layer.mock(ServerSettings.ServerSettingsService)({
