@@ -30,13 +30,18 @@ import {
   type WorkItemLookupResult,
 } from "../workItems/ThreadWorkItemStore.ts";
 import { JiraAppClient } from "./JiraAppClient.ts";
-import { JiraAppConfig, isJiraProjectAllowed } from "./JiraAppConfig.ts";
+import {
+  JiraAppConfig,
+  isJiraProjectAllowed,
+  resolveMappedT3ProjectId,
+  resolveT3ProjectIdForJiraKey,
+} from "./JiraAppConfig.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
 import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayload.ts";
 
 const NOT_LINKED_RESPONSE =
-  "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
+  "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_PROJECT_MAP for this Jira key, T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
 const CREATE_DISABLED_RESPONSE =
   "not yet linked. Auto-create is disabled (T3CODE_JIRA_AUTO_CREATE_THREAD=false); link this issue from Discord/T3 or enable auto-create.";
 const AMBIGUOUS_RESPONSE =
@@ -98,15 +103,41 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const removeAcknowledgment = (delivery: StoredJiraDelivery) => {
+    const emojiId = delivery.acknowledgmentEmojiId;
+    if (emojiId === null || emojiId.length === 0 || delivery.sourceCommentId.length === 0) {
+      return Effect.void;
+    }
+    return jira
+      .removeCommentReaction({
+        issueKey: delivery.issueKey,
+        commentId: delivery.sourceCommentId,
+        emojiId,
+      })
+      .pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Failed to remove Jira acknowledgment reaction", {
+            issueKey: delivery.issueKey,
+            commentId: delivery.sourceCommentId,
+            emojiId,
+            cause,
+          }),
+        ),
+        Effect.ignore,
+      );
+  };
+
   const finishDelivery = Effect.fn("JiraIssueBridge.finishDelivery")(function* (
     delivery: StoredJiraDelivery,
     body: string,
     status: "completed" | "rejected",
   ) {
     const posted = yield* postComment(delivery.issueKey, body);
+    yield* removeAcknowledgment(delivery);
     yield* deliveries.put({
       ...delivery,
       responseCommentId: posted?.id ?? delivery.responseCommentId,
+      acknowledgmentEmojiId: null,
       status,
       updatedAt: DateTime.formatIso(yield* DateTime.now),
     });
@@ -144,14 +175,46 @@ const make = Effect.gen(function* () {
     return resolveThreadIdForJiraIssue({ issueKey, linksJson: raw });
   });
 
-  /** Pick a T3 project for auto-created Jira threads (join-or-create). */
-  const resolveCreateProjectId = Effect.fn("JiraIssueBridge.resolveCreateProjectId")(function* () {
+  /**
+   * Pick a T3 project for auto-created Jira threads (join-or-create).
+   * Order: projectMap[jiraKey] → defaultProjectId → sole shell project.
+   */
+  const resolveCreateProjectId = Effect.fn("JiraIssueBridge.resolveCreateProjectId")(function* (
+    invocation: JiraIssueInvocation,
+  ) {
     if (!config.enabled) return null as string | null;
-    if (config.defaultProjectId !== null && config.defaultProjectId.length > 0) {
-      return config.defaultProjectId;
-    }
     const shell = yield* projection.getShellSnapshot().pipe(Effect.orElseSucceed(() => null));
-    const projects = shell?.projects ?? [];
+    const projects = (shell?.projects ?? []).map((project) => ({
+      id: project.id,
+      title: project.title,
+      workspaceRoot: project.workspaceRoot,
+    }));
+
+    const fromMap = resolveT3ProjectIdForJiraKey(
+      config.projectMap,
+      invocation.projectKey,
+      projects,
+    );
+    if (fromMap !== null) {
+      yield* Effect.logInfo("Resolved Jira auto-create project from project map", {
+        jiraProjectKey: invocation.projectKey,
+        t3ProjectId: fromMap,
+        issueKey: invocation.issueKey,
+      });
+      return fromMap;
+    }
+
+    if (config.defaultProjectId !== null && config.defaultProjectId.length > 0) {
+      const fromDefault = resolveMappedT3ProjectId(config.defaultProjectId, projects);
+      if (fromDefault !== null) return fromDefault;
+      // Allow raw id even if shell snapshot is briefly empty (create path re-checks).
+      if (projects.length === 0) return config.defaultProjectId;
+      yield* Effect.logWarning("T3CODE_JIRA_DEFAULT_PROJECT_ID did not match any shell project", {
+        defaultProjectId: config.defaultProjectId,
+        issueKey: invocation.issueKey,
+      });
+    }
+
     if (projects.length === 1) return projects[0]!.id;
     return null;
   });
@@ -175,7 +238,7 @@ const make = Effect.gen(function* () {
         }
         if (again._tag === "ambiguous") return null;
 
-        const projectIdRaw = yield* resolveCreateProjectId();
+        const projectIdRaw = yield* resolveCreateProjectId(invocation);
         if (projectIdRaw === null) return null;
 
         const shell = yield* projection.getShellSnapshot().pipe(Effect.orElseSucceed(() => null));
@@ -308,6 +371,7 @@ const make = Effect.gen(function* () {
       replyToCommentId: input.invocation.replyToCommentId,
       commentSurface: input.invocation.commentSurface,
       responseCommentId: null,
+      acknowledgmentEmojiId: null,
       threadId: null,
       previousTurnId: null,
       userMessageId: null,
@@ -341,14 +405,45 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Best-effort 👀 on the triggering comment (like Discord/GitHub eyes). Cleared in finishDelivery.
+    const ackEmojiConfigured = config.ackEmojiId;
+    let acknowledged: StoredJiraDelivery = initial;
+    if (ackEmojiConfigured !== null && ackEmojiConfigured.length > 0) {
+      const appliedEmojiId = yield* jira
+        .addCommentReaction({
+          issueKey: input.invocation.issueKey,
+          commentId: input.invocation.commentId,
+          emojiId: ackEmojiConfigured,
+        })
+        .pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("Failed to add Jira acknowledgment reaction", {
+              deliveryId: input.deliveryId,
+              issueKey: input.invocation.issueKey,
+              commentId: input.invocation.commentId,
+              cause,
+            }),
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+      if (appliedEmojiId !== null) {
+        acknowledged = {
+          ...initial,
+          acknowledgmentEmojiId: appliedEmojiId,
+          updatedAt: DateTime.formatIso(yield* DateTime.now),
+        };
+        yield* deliveries.put(acknowledged);
+      }
+    }
+
     if (input.invocation.prompt.trim().length === 0) {
-      yield* finishDelivery(initial, EMPTY_PROMPT_RESPONSE, "rejected");
+      yield* finishDelivery(acknowledged, EMPTY_PROMPT_RESPONSE, "rejected");
       return;
     }
 
     const link = yield* resolveLinkedThreadId(input.invocation.issueKey);
     if (link._tag === "ambiguous") {
-      yield* finishDelivery(initial, AMBIGUOUS_RESPONSE, "rejected");
+      yield* finishDelivery(acknowledged, AMBIGUOUS_RESPONSE, "rejected");
       return;
     }
 
@@ -360,12 +455,12 @@ const make = Effect.gen(function* () {
       if (Option.isNone(snapshot)) {
         // Stale store entry — try create if enabled.
         if (!config.enabled || !config.autoCreateThread) {
-          yield* finishDelivery(initial, NOT_LINKED_RESPONSE, "rejected");
+          yield* finishDelivery(acknowledged, NOT_LINKED_RESPONSE, "rejected");
           return;
         }
         const created = yield* createThreadForIssue(input.invocation);
         if (created === null) {
-          yield* finishDelivery(initial, CREATE_FAILED_RESPONSE, "rejected");
+          yield* finishDelivery(acknowledged, CREATE_FAILED_RESPONSE, "rejected");
           return;
         }
         thread = created;
@@ -375,12 +470,12 @@ const make = Effect.gen(function* () {
     } else {
       // unlinked — join-or-create
       if (!config.enabled || !config.autoCreateThread) {
-        yield* finishDelivery(initial, CREATE_DISABLED_RESPONSE, "rejected");
+        yield* finishDelivery(acknowledged, CREATE_DISABLED_RESPONSE, "rejected");
         return;
       }
       const created = yield* createThreadForIssue(input.invocation);
       if (created === null) {
-        yield* finishDelivery(initial, NOT_LINKED_RESPONSE, "rejected");
+        yield* finishDelivery(acknowledged, NOT_LINKED_RESPONSE, "rejected");
         return;
       }
       thread = created;
@@ -396,14 +491,14 @@ const make = Effect.gen(function* () {
       .pipe(Effect.ignore);
 
     if (isThreadBusy(thread)) {
-      yield* finishDelivery({ ...initial, threadId: thread.id }, BUSY_RESPONSE, "completed");
+      yield* finishDelivery({ ...acknowledged, threadId: thread.id }, BUSY_RESPONSE, "completed");
       return;
     }
 
     const commandId = CommandId.make(yield* crypto.randomUUIDv4);
     const messageId = MessageId.make(yield* crypto.randomUUIDv4);
     const processing: StoredJiraDelivery = {
-      ...initial,
+      ...acknowledged,
       threadId: thread.id,
       previousTurnId: thread.latestTurn?.turnId ?? null,
       userMessageId: messageId,

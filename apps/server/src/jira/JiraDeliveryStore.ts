@@ -21,6 +21,8 @@ export const JiraDelivery = Schema.Struct({
   replyToCommentId: Schema.String,
   commentSurface: Schema.Literals(["issue", "reply"]),
   responseCommentId: Schema.NullOr(Schema.String),
+  /** Emoji id for ack reaction on the source comment (e.g. 1f440), when supported. */
+  acknowledgmentEmojiId: Schema.optional(Schema.NullOr(Schema.String)),
   threadId: Schema.NullOr(Schema.String),
   previousTurnId: Schema.NullOr(Schema.String),
   userMessageId: Schema.NullOr(Schema.String),
@@ -38,6 +40,7 @@ export type StoredJiraDelivery = {
   readonly replyToCommentId: string;
   readonly commentSurface: "issue" | "reply";
   readonly responseCommentId: string | null;
+  readonly acknowledgmentEmojiId: string | null;
   readonly threadId: ThreadId | null;
   readonly previousTurnId: TurnId | null;
   readonly userMessageId: string | null;
@@ -72,6 +75,7 @@ export const make = Effect.gen(function* () {
         return decodeDeliveries(raw).map(
           (delivery): StoredJiraDelivery => ({
             ...delivery,
+            acknowledgmentEmojiId: delivery.acknowledgmentEmojiId ?? null,
             threadId: delivery.threadId as ThreadId | null,
             previousTurnId: delivery.previousTurnId as TurnId | null,
             targetTurnId: delivery.targetTurnId as TurnId | null,
