@@ -1,6 +1,6 @@
-# Fast ship path: rebuild fork/integration from current fork/changes + every
-# registered overlay tip, then dispatch Fork CI.
-# Does not rewrite main / fork/tim / fork/candidates.
+# Fast ship path: rebase registered overlays onto current fork/changes when
+# needed, rebuild fork/integration from changes + every overlay tip, then
+# dispatch Fork CI. Does not rewrite main / fork/tim / fork/candidates.
 #
 # Runs when:
 # - something lands on fork/changes (merge or direct push via deploy key)
@@ -49,7 +49,8 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Overlay rebase + lock regenerate can exceed a short window after large merges.
+    timeout-minutes: 60
     steps:
       - name: Checkout fork/changes (compose scripts + manifest)
         uses: actions/checkout@v6
@@ -67,7 +68,7 @@ jobs:
           FORK_STACK_DEPLOY_KEY: ${{ secrets.FORK_STACK_DEPLOY_KEY }}
         run: |
           if [[ -z "${FORK_STACK_DEPLOY_KEY}" ]]; then
-            echo "error: FORK_STACK_DEPLOY_KEY secret is required to push fork/integration" >&2
+            echo "error: FORK_STACK_DEPLOY_KEY secret is required to push fork/integration and overlays" >&2
             exit 1
           fi
           key_path="${RUNNER_TEMP}/fork-stack-deploy-key"
@@ -77,13 +78,22 @@ jobs:
           echo "GIT_SSH_COMMAND=ssh -i ${key_path} -o IdentitiesOnly=yes -o UserKnownHostsFile=${RUNNER_TEMP}/github-known-hosts" >> "${GITHUB_ENV}"
           git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
 
+      - name: Rebase registered overlays onto current fork/changes
+        run: |
+          set -euo pipefail
+          # No-op when already based. Force-with-lease updates stale overlay tips so
+          # compose no longer fails after ordinary merges to fork/changes.
+          # Real conflicts hard-fail with the overlay branch + paths (fix that
+          # overlay locally, then re-run this workflow).
+          node scripts/rebase-integration-overlays.ts
+
       - name: Compose registered integration overlays
         env:
           COMPOSE_WORK_ROOT: ${{ runner.temp }}/compose-work
         run: |
           set -euo pipefail
-          # Fetches origin/fork/changes + every registered overlay tip, fails if
-          # an overlay is not based on current fork/changes (rebase overlays first).
+          # Fetches origin/fork/changes + every registered overlay tip after the
+          # auto-rebase step. Still fails if an overlay has no commits above changes.
           node scripts/compose-integration-overlays.ts
           tip="$(git ls-remote origin "refs/heads/fork/integration" | awk '{print $1}')"
           echo "integration_sha=${tip}" >> "${GITHUB_ENV}"
