@@ -123,6 +123,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(stack).toContain('data-testid="participant-stack-popup"');
     expect(stack).toContain("<TooltipPopup");
     expect(stack).toContain("participantDisplayLabel");
+    expect(stack).toContain("title={null}");
     const stackLogic = readSrc("components/identity/ParticipantStack.logic.ts");
     expect(stackLogic).toContain('channels.join(",")');
     expect(stack).toContain('data-testid="source-channel-glyph"');

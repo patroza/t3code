@@ -34,7 +34,7 @@ export function ParticipantStack(props: {
         username={lead.username}
         name={lead.name}
         size="micro"
-        title={participantDisplayLabel(lead)}
+        title={null}
       />
       {extras.length > 0 ? (
         <span
@@ -63,6 +63,7 @@ export function ParticipantStack(props: {
               username={person.username}
               name={person.name}
               size="micro"
+              title={null}
             />
             <span className="truncate text-foreground">{participantDisplayLabel(person)}</span>
           </span>
