@@ -3,9 +3,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 
 import {
-  formatT3AgentRulesPointer,
+  ensureT3AgentRulesInput,
   formatT3AgentRulesSessionPointer,
+  readT3AgentRulesInjected,
   resolveT3AgentRulesPath,
+  T3_AGENT_RULES_INJECTED_KEY,
+  withT3AgentRules,
 } from "./T3AgentRules.ts";
 
 describe("resolveT3AgentRulesPath", () => {
@@ -17,20 +20,33 @@ describe("resolveT3AgentRulesPath", () => {
   });
 });
 
-describe("formatT3AgentRulesPointer", () => {
-  it("formats a file pointer block without embedding the body", () => {
+describe("session inject helpers", () => {
+  it("prepends a file pointer, not the body", () => {
     const path = resolveT3AgentRulesPath();
-    const block = formatT3AgentRulesPointer(path);
-    assert.ok(block.includes(`rules: ${path}`));
-    assert.equal(block.includes("always markdown hyperlinks"), false);
+    const result = withT3AgentRules("do the thing");
+    assert.ok(result?.includes(`rules: ${path}`));
+    assert.ok(result?.includes("do the thing"));
+    assert.equal(result?.includes("always markdown hyperlinks"), false);
   });
-});
 
-describe("formatT3AgentRulesSessionPointer", () => {
-  it("is a single-line path instruction", () => {
-    const path = resolveT3AgentRulesPath();
-    const line = formatT3AgentRulesSessionPointer(path);
-    assert.ok(line.includes(path));
+  it("skips re-inject when already injected this session", () => {
+    assert.equal(ensureT3AgentRulesInput("hello", false, true), "hello");
+  });
+
+  it("injects when session needs rules", () => {
+    const result = ensureT3AgentRulesInput("hello", false, false);
+    assert.ok(result?.includes("## Agent rules"));
+    assert.ok(result?.includes("hello"));
+  });
+
+  it("reads the injected flag from runtime payload", () => {
+    assert.equal(readT3AgentRulesInjected(null), false);
+    assert.equal(readT3AgentRulesInjected({ [T3_AGENT_RULES_INJECTED_KEY]: true }), true);
+    assert.equal(readT3AgentRulesInjected({ [T3_AGENT_RULES_INJECTED_KEY]: false }), false);
+  });
+
+  it("session pointer is a single line", () => {
+    const line = formatT3AgentRulesSessionPointer(resolveT3AgentRulesPath());
     assert.equal(line.includes("\n"), false);
   });
 });

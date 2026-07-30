@@ -13,9 +13,9 @@ Methods mirror the `NativeApi` interface defined in `@t3tools/contracts`:
 - `providers.respondToRequest`, `providers.stopSession`
 - `shell.openInEditor`, `server.getConfig`
 
-[Global T3 agent rules](./agent-rules.md) install into harness homes
-(`$CODEX_HOME/AGENTS.md`, Claude `CLAUDE.md`) so they survive compaction — not
-re-injected on every `sendTurn`.
+[Global T3 agent rules](./agent-rules.md) install into every harness home
+(Codex/Claude/Grok/OpenCode/Kimi/Cursor) and are also injected on session start
+(and again after compaction) as a universal backup.
 
 Codex is the only implemented provider. `claudeCode` is reserved in contracts/UI.
 

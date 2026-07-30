@@ -1,16 +1,14 @@
 /**
  * Product-wide agent rules (source of truth + helpers).
  *
- * Delivery model (survives compaction):
- * - Install into **harness-global** instruction files via
- *   `HarnessGlobalAgentRules` (`$CODEX_HOME/AGENTS.md`, Claude user `CLAUDE.md`)
- *   so providers load them as system/user instructions — not chat history.
- * - Codex also gets a path pointer in developer_instructions.
- * - Do **not** mutate project AGENTS.md / CLAUDE.md.
- * - Do **not** re-paste rules into every user turn.
+ * Delivery (must survive compaction, all harnesses):
+ * 1. **Harness-global install** where possible
+ *    (Codex `$CODEX_HOME/AGENTS.md`, Claude `CLAUDE.md`, Grok/Kimi/OpenCode/Cursor homes)
+ * 2. **Session inject** on first provider turn + **re-inject after compaction**
+ *    so harnesses without durable global files still keep rules in context
+ * 3. Codex developer_instructions path pointer as backup
  *
- * Discord client overlay remains a separate surface file; dynamic Discord
- * fields (req/jira/cab/pr) still go on each Discord turn.
+ * Not project AGENTS.md. Discord overlay is surface-only.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -18,7 +16,11 @@ import { tmpdir } from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { formatAgentRulesPointers } from "@t3tools/shared/agentRulesPointer";
+import {
+  AGENT_RULES_HEADER,
+  ensureAgentRulesPaths,
+  formatAgentRulesPointers,
+} from "@t3tools/shared/agentRulesPointer";
 
 /** Fallback body when the package docs file is missing (bundled `dist/` binary). */
 const T3_AGENT_RULES_FALLBACK_MARKDOWN = `# T3 agent rules (all surfaces)
@@ -33,7 +35,10 @@ Jira API Markdown→ADF often leaves bare URLs as plain text; explicit link synt
 becomes a real hyperlink.
 `;
 
-export { AGENT_RULES_HEADER } from "@t3tools/shared/agentRulesPointer";
+/** runtimePayload key: rules pointer already sent for this provider session. */
+export const T3_AGENT_RULES_INJECTED_KEY = "t3AgentRulesInjected";
+
+export { AGENT_RULES_HEADER };
 
 function serverPackageRoot(): string {
   return NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../..");
@@ -74,17 +79,65 @@ export function resolveDiscordAgentRulesPath(): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
-/** Compact pointer block (tests / rare call sites). Prefer harness install. */
+export function isDiscordOriginatedTurnText(text: string | undefined): boolean {
+  if (text === undefined) return false;
+  return text.includes("## Discord conversation context");
+}
+
+/** Paths for this turn: global always; Discord overlay when Discord-originated. */
+export function resolveT3AgentRulesPathsForTurn(providerInput: string | undefined): string[] {
+  const paths = [resolveT3AgentRulesPath()];
+  if (isDiscordOriginatedTurnText(providerInput)) {
+    const overlay = resolveDiscordAgentRulesPath();
+    if (overlay !== null) paths.push(overlay);
+  }
+  return paths;
+}
+
 export function formatT3AgentRulesPointer(rulesPath: string = resolveT3AgentRulesPath()): string {
   return formatAgentRulesPointers([rulesPath]);
 }
 
-/**
- * One-line session instruction for Codex developer_instructions.
- * Points at the product file — does not embed the body.
- */
 export function formatT3AgentRulesSessionPointer(
   rulesPath: string = resolveT3AgentRulesPath(),
 ): string {
   return `T3 product rules (all surfaces): read and follow ${rulesPath}`;
+}
+
+export function readT3AgentRulesInjected(runtimePayload: unknown): boolean {
+  if (
+    runtimePayload === null ||
+    typeof runtimePayload !== "object" ||
+    Array.isArray(runtimePayload)
+  ) {
+    return false;
+  }
+  return (runtimePayload as Record<string, unknown>)[T3_AGENT_RULES_INJECTED_KEY] === true;
+}
+
+export function withT3AgentRules(providerInput: string | undefined): string | undefined {
+  if (providerInput === undefined) {
+    return undefined;
+  }
+  return ensureAgentRulesPaths(providerInput, resolveT3AgentRulesPathsForTurn(providerInput));
+}
+
+/**
+ * Ensure turn input includes rules pointers when this session still needs them.
+ * When `alreadyInjectedThisSession` is true, leave text unchanged until compaction
+ * clears the flag.
+ */
+export function ensureT3AgentRulesInput(
+  providerInput: string | undefined,
+  hasAttachments: boolean,
+  alreadyInjectedThisSession = false,
+): string | undefined {
+  if (alreadyInjectedThisSession) {
+    return providerInput ?? (hasAttachments ? "" : undefined);
+  }
+  const wrapped = withT3AgentRules(providerInput ?? (hasAttachments ? "" : undefined));
+  if (wrapped !== undefined && wrapped.trim().length > 0) {
+    return wrapped;
+  }
+  return providerInput;
 }

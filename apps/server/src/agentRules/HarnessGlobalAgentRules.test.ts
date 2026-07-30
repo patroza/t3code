@@ -13,7 +13,11 @@ import * as NodePath from "node:path";
 import { afterEach, describe, it } from "vitest";
 
 import {
+  ensureCursorHarnessGlobalAgentRules,
+  ensureGrokHarnessGlobalAgentRules,
   ensureHarnessGlobalAgentRules,
+  ensureKimiHarnessGlobalAgentRules,
+  ensureOpenCodeHarnessGlobalAgentRules,
   formatHarnessManagedRulesSection,
   HARNESS_RULES_BEGIN,
   HARNESS_RULES_END,
@@ -125,5 +129,42 @@ describe("ensureHarnessGlobalAgentRules", () => {
     });
     assert.equal(result.linkStatus, "skipped");
     assert.equal(readFileSync(linkPath, "utf8"), "user owned\n");
+  });
+});
+
+describe("per-harness install helpers", () => {
+  it("installs into isolated homes via env overrides", () => {
+    const root = makeTempDir();
+    const product = NodePath.join(root, "product.md");
+    writeFileSync(product, "# product\n", "utf8");
+
+    // Point product path via direct ensure; helpers resolve their own homes under tmp via env.
+    const grokHome = NodePath.join(root, "grok");
+    const kimiHome = NodePath.join(root, "kimi");
+    const openHome = NodePath.join(root, "opencode");
+    const cursorHome = NodePath.join(root, "cursor");
+
+    const env = {
+      HOME: root,
+      GROK_HOME: grokHome,
+      KIMI_CODE_HOME: kimiHome,
+      OPENCODE_CONFIG_DIR: openHome,
+      OPENCODE_HOME: NodePath.join(root, "opencode-alt"),
+      CURSOR_HOME: cursorHome,
+    };
+
+    // Helpers call resolveT3AgentRulesPath for product content — just ensure homes get AGENTS.md.
+    assert.ok(ensureGrokHarnessGlobalAgentRules(env));
+    assert.ok(existsSync(NodePath.join(grokHome, "AGENTS.md")));
+
+    assert.ok(ensureKimiHarnessGlobalAgentRules(env));
+    assert.ok(existsSync(NodePath.join(kimiHome, "AGENTS.md")));
+
+    const openResults = ensureOpenCodeHarnessGlobalAgentRules(env);
+    assert.ok(openResults.length >= 1);
+    assert.ok(existsSync(NodePath.join(openHome, "AGENTS.md")));
+
+    assert.ok(ensureCursorHarnessGlobalAgentRules(env));
+    assert.ok(existsSync(NodePath.join(cursorHome, "AGENTS.md")));
   });
 });

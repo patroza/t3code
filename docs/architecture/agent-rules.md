@@ -4,51 +4,49 @@ Product-wide behavioral rules for agents running **through T3 Code**, independen
 
 ## Goal
 
-Rules must:
-
 1. Apply on **every surface** (web, desktop, mobile, Discord, GitHub, Jira)
-2. **Survive context compaction** (not only early chat turns)
-3. Stay out of **project** `AGENTS.md` / `CLAUDE.md` (those remain repo-local)
+2. Work on **every harness** (Codex, Claude, Grok, OpenCode, Kimi, Cursor, …)
+3. **Survive context compaction**
+4. Stay out of **project** instruction files
 
-## Delivery: harness-global instruction files
+## Dual delivery
 
-T3 installs product rules into each **provider harness home** — the same place Codex/Claude already load **user-global** instructions (not project files):
+### A. Harness-global install (preferred durable path)
 
-| Harness | Home                                | Instruction file | Link                               |
-| ------- | ----------------------------------- | ---------------- | ---------------------------------- |
-| Codex   | `$CODEX_HOME`                       | `AGENTS.md`      | `t3-agent-rules.md` → product file |
-| Claude  | `$CLAUDE_CONFIG_DIR` or `~/.claude` | `CLAUDE.md`      | same                               |
+Installed when each provider driver starts:
 
-Mechanism: [`HarnessGlobalAgentRules.ts`](../../apps/server/src/agentRules/HarnessGlobalAgentRules.ts)
+| Harness  | Home                                | File                                      |
+| -------- | ----------------------------------- | ----------------------------------------- |
+| Codex    | `$CODEX_HOME`                       | `AGENTS.md` + `t3-agent-rules.md` symlink |
+| Claude   | `$CLAUDE_CONFIG_DIR` / `~/.claude`  | `CLAUDE.md` + symlink                     |
+| Grok     | `~/.grok` / `$GROK_HOME`            | `AGENTS.md` + symlink                     |
+| Kimi     | `$KIMI_CODE_HOME` / `~/.kimi`       | `AGENTS.md` + symlink                     |
+| OpenCode | `~/.config/opencode`, `~/.opencode` | `AGENTS.md` + symlink                     |
+| Cursor   | `~/.cursor` / `$CURSOR_HOME`        | `AGENTS.md` + symlink                     |
 
-1. Symlink `<home>/t3-agent-rules.md` → [`apps/server/docs/t3-agent-rules.md`](../../apps/server/docs/t3-agent-rules.md)
-2. Upsert a **managed marker section** in the harness instruction file (preserves the user’s other global prefs)
+Managed marker section preserves the user’s other global prefs. Source of truth:
+[`apps/server/docs/t3-agent-rules.md`](../../apps/server/docs/t3-agent-rules.md).
 
-Codex also gets a one-line path pointer in `developer_instructions` (session-level backup).
+### B. Session inject + re-inject after compaction (universal backup)
 
-**Not** a symlink of project `AGENTS.md`. Project files stay the project’s.
+`ProviderService.sendTurn`:
 
-## Why this survives compaction
+1. On first turn of a provider session → prepend `## Agent rules` file pointers
+2. Mark `t3AgentRulesInjected` on the session runtime payload
+3. On `thread.state.changed` with `compacted` → clear the flag
+4. Next turn re-injects so rules re-enter context after compaction
 
-Conversation compaction drops or summarizes old **chat turns**. Harness-global
-`AGENTS.md` / `CLAUDE.md` are loaded as **user/system instruction sources** by
-the provider, outside the compactable transcript — same class of durability as
-other harness-global agent prefs.
+This path covers harnesses that ignore global AGENTS.md, or when install fails.
 
-Per-turn paste of policy (or long pointer blocks) does **not** meet this bar.
+Codex also keeps a one-line path in `developer_instructions`.
 
-## Client overlays (Discord)
+## Discord
 
-| Layer               | File                                        | When                          |
-| ------------------- | ------------------------------------------- | ----------------------------- |
-| **Global**          | `apps/server/docs/t3-agent-rules.md`        | All surfaces via harness home |
-| **Discord overlay** | `apps/discord-bot/docs/agent-turn-rules.md` | Discord turns (`rules:` path) |
-
-Dynamic Discord fields (`req`, `jira`, `cab`, `pr`, `t3`) **must** still appear
-each turn — they are not static rules.
+- Global rules: harness + session inject (above)
+- Overlay: `apps/discord-bot/docs/agent-turn-rules.md` via turn `rules:` line
+- Dynamic fields (`req`, `cab`, `pr`, …) still every Discord turn
 
 ## Adding a rule
 
-1. **Shared across surfaces** → edit `apps/server/docs/t3-agent-rules.md`.
-2. **Discord-only** → edit `apps/discord-bot/docs/agent-turn-rules.md`.
-3. Do not put product policy in project AGENTS.md templates.
+1. Shared → `apps/server/docs/t3-agent-rules.md`
+2. Discord-only → `apps/discord-bot/docs/agent-turn-rules.md`

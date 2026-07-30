@@ -1,16 +1,25 @@
 /**
- * Install T3 product rules into **harness-global** instruction files
- * (Codex `$CODEX_HOME/AGENTS.md`, Claude `$CLAUDE_CONFIG_DIR/CLAUDE.md`).
+ * Install T3 product rules into **harness-global** instruction files for every
+ * provider we can identify a home directory for:
  *
- * These are loaded by the provider harness as user-level instructions — not as
- * chat turns — so they survive conversation compaction. This is intentionally
- * **not** project AGENTS.md / CLAUDE.md (repo-local conventions stay separate).
+ * | Harness  | Home                         | File        |
+ * |----------|------------------------------|-------------|
+ * | Codex    | `$CODEX_HOME`                | `AGENTS.md` |
+ * | Claude   | `$CLAUDE_CONFIG_DIR`/`~/.claude` | `CLAUDE.md` |
+ * | Grok     | `~/.grok`                    | `AGENTS.md` |
+ * | Kimi     | `$KIMI_CODE_HOME` / `~/.kimi`| `AGENTS.md` |
+ * | OpenCode | `~/.config/opencode` / `~/.opencode` | `AGENTS.md` |
+ * | Cursor   | `~/.cursor`                  | `AGENTS.md` |
+ *
+ * These are loaded by the harness as user-level instructions — not chat turns —
+ * so they survive conversation compaction. Not project AGENTS.md.
+ *
+ * Universal backup for all harnesses (including those without durable global
+ * files): session inject + re-inject after compaction in ProviderService.
  *
  * Strategy:
  * 1. Symlink `<home>/t3-agent-rules.md` → product rules file
- * 2. Upsert a managed marker section into the harness instruction file that
- *    tells the agent to read that symlink (preserves the rest of the user's
- *    global AGENTS.md / CLAUDE.md)
+ * 2. Upsert a managed marker section into the harness instruction file
  */
 
 import {
@@ -23,6 +32,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { resolveT3AgentRulesPath } from "./T3AgentRules.ts";
@@ -148,4 +158,83 @@ export function ensureHarnessGlobalAgentRules(input: {
     linkStatus,
     instructionUpdated,
   };
+}
+
+/** Best-effort install; never throws into provider startup. */
+export function tryEnsureHarnessGlobalAgentRules(input: {
+  readonly homeDir: string;
+  readonly instructionFileName: HarnessInstructionFile;
+  readonly productRulesPath?: string;
+}): EnsureHarnessGlobalAgentRulesResult | null {
+  try {
+    return ensureHarnessGlobalAgentRules(input);
+  } catch {
+    return null;
+  }
+}
+
+function homeFromEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  key: string,
+  fallbackRelative: string,
+): string {
+  const fromEnv = env?.[key]?.trim();
+  if (fromEnv && fromEnv.length > 0) {
+    return NodePath.resolve(fromEnv.replace(/^~(?=\/|$)/u, NodeOS.homedir()));
+  }
+  return NodePath.resolve(NodeOS.homedir(), fallbackRelative);
+}
+
+/** Grok agent global home (`~/.grok`). */
+export function ensureGrokHarnessGlobalAgentRules(
+  env?: NodeJS.ProcessEnv,
+): EnsureHarnessGlobalAgentRulesResult | null {
+  return tryEnsureHarnessGlobalAgentRules({
+    homeDir: homeFromEnv(env, "GROK_HOME", ".grok"),
+    instructionFileName: "AGENTS.md",
+  });
+}
+
+/** Kimi Code home (`$KIMI_CODE_HOME` or `~/.kimi`). */
+export function ensureKimiHarnessGlobalAgentRules(
+  env?: NodeJS.ProcessEnv,
+): EnsureHarnessGlobalAgentRulesResult | null {
+  const fromEnv = env?.KIMI_CODE_HOME?.trim();
+  const homeDir =
+    fromEnv && fromEnv.length > 0
+      ? NodePath.resolve(fromEnv.replace(/^~(?=\/|$)/u, NodeOS.homedir()))
+      : NodePath.resolve(NodeOS.homedir(), ".kimi");
+  return tryEnsureHarnessGlobalAgentRules({
+    homeDir,
+    instructionFileName: "AGENTS.md",
+  });
+}
+
+/** OpenCode config dirs (both common locations). */
+export function ensureOpenCodeHarnessGlobalAgentRules(
+  env?: NodeJS.ProcessEnv,
+): ReadonlyArray<EnsureHarnessGlobalAgentRulesResult> {
+  const homes = [
+    homeFromEnv(env, "OPENCODE_CONFIG_DIR", ".config/opencode"),
+    homeFromEnv(env, "OPENCODE_HOME", ".opencode"),
+  ];
+  const results: EnsureHarnessGlobalAgentRulesResult[] = [];
+  for (const homeDir of homes) {
+    const result = tryEnsureHarnessGlobalAgentRules({
+      homeDir,
+      instructionFileName: "AGENTS.md",
+    });
+    if (result) results.push(result);
+  }
+  return results;
+}
+
+/** Cursor agent home (`~/.cursor`). */
+export function ensureCursorHarnessGlobalAgentRules(
+  env?: NodeJS.ProcessEnv,
+): EnsureHarnessGlobalAgentRulesResult | null {
+  return tryEnsureHarnessGlobalAgentRules({
+    homeDir: homeFromEnv(env, "CURSOR_HOME", ".cursor"),
+    instructionFileName: "AGENTS.md",
+  });
 }
