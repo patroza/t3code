@@ -90,6 +90,7 @@ export type ParticipantSummaryLike = {
   readonly username: string;
   readonly name?: string | undefined;
   readonly firstChannel?: SourceChannel | undefined;
+  readonly channels?: ReadonlyArray<SourceChannel> | undefined;
   readonly firstParticipatedAt: string;
 };
 
@@ -118,9 +119,23 @@ export function mergeParticipantSummaries(input: {
     return input.existing;
   }
 
-  const already = input.existing.some((entry) => entry.personId === personId);
-  if (already) {
-    return input.existing;
+  const existingIndex = input.existing.findIndex((entry) => entry.personId === personId);
+  if (existingIndex !== -1) {
+    const existingEntry = input.existing[existingIndex]!;
+    const channels =
+      existingEntry.channels ??
+      (existingEntry.firstChannel === undefined ? [] : [existingEntry.firstChannel]);
+    if (channels.includes(input.source.channel)) {
+      return input.existing;
+    }
+    return input.existing.map((entry, index) =>
+      index === existingIndex
+        ? {
+            ...entry,
+            channels: [...channels, input.source.channel],
+          }
+        : entry,
+    );
   }
 
   const nextEntry: ParticipantSummaryLike = {
@@ -128,6 +143,7 @@ export function mergeParticipantSummaries(input: {
     username,
     ...(input.source.name !== undefined ? { name: input.source.name } : {}),
     firstChannel: input.source.channel,
+    channels: [input.source.channel],
     firstParticipatedAt: input.participatedAt,
   };
 

@@ -120,6 +120,7 @@ export const ThreadParticipantSummary = Schema.Struct({
   username: IdentityUsername,
   name: Schema.optionalKey(TrimmedNonEmptyString),
   firstChannel: Schema.optionalKey(SourceChannel),
+  channels: Schema.optionalKey(Schema.Array(SourceChannel)),
   firstParticipatedAt: IsoDateTime,
 });
 export type ThreadParticipantSummary = typeof ThreadParticipantSummary.Type;
