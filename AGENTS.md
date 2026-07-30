@@ -65,11 +65,12 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   - a commit is pushed to a **registered overlay branch** (including merges of child PRs into
     desktop / discord / vscode overlays), or
   - it is started with `workflow_dispatch`.
-    It composes `fork/changes` + every registered overlay tip into `fork/integration` (deploy key
-    force-with-lease) and dispatches **Fork CI** for that tip. It does **not** rewrite
-    main/tim/candidates. If an overlay is not based on current `fork/changes`, compose fails — rebase
-    that overlay tip first. When adding an overlay to `.github/pr-stack.json`, also add its branch to
-    the `on.push` / `on.pull_request` lists in `compose-integration.yml`.
+    It first **auto-rebases every registered overlay** onto current `fork/changes` (no-op when
+    already based; force-with-lease on clean rebases), then composes those tips into
+    `fork/integration` and dispatches **Fork CI**. It does **not** rewrite main/tim/candidates or
+    ordinary feature PRs. Real overlay rebase conflicts fail the job with branch + paths — fix that
+    overlay, then re-run compose. When adding an overlay to `.github/pr-stack.json`, also add its
+    branch to the `on.push` / `on.pull_request` lists in `compose-integration.yml`.
 - **Slow path (upstream / Tim / candidates):** run **locally** with
   `node scripts/rebase-pr-stack.ts sync --push` (or layer-by-layer hand restack). The Actions
   workflow **Rebase fork PR stack** stays **`disabled_manually`** — do **not** enable it, schedule
