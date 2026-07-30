@@ -81,7 +81,11 @@ export function threadMatchesMine(input: {
 }): boolean {
   if (input.mode === "any") return true;
   const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
-  if (claimId.length === 0) return input.mode === "theirs";
+  // No claim for this environment (map off, or user never signed up there):
+  // ownership is unclassifiable — hide from both Mine and Theirs. Multi-env
+  // clients with primary=smart (no map) previously used a single empty claim
+  // and treated every thread as Theirs, which made Mine look broken for t3vm.
+  if (claimId.length === 0) return false;
   const people = new Set<string>();
   if (input.originPersonId) people.add(input.originPersonId.trim().toLowerCase());
   for (const id of input.participantPersonIds ?? []) {
@@ -89,6 +93,17 @@ export function threadMatchesMine(input: {
   }
   const isMine = people.has(claimId);
   return input.mode === "mine" ? isMine : !isMine;
+}
+
+/** Look up the claim person for a thread's environment (multi-env clients). */
+export function claimPersonIdForEnvironment(
+  claimPersonIdByEnvironment: ReadonlyMap<string, string | null | undefined>,
+  environmentId: string,
+): string | null {
+  const value = claimPersonIdByEnvironment.get(environmentId);
+  if (value === undefined || value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export type { IdentityClaimInput, IdentitySnapshot, SessionIdentityClaim };

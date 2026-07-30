@@ -107,7 +107,6 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 import { stampOrchestrationCommandSource } from "./identity/stampSource.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";

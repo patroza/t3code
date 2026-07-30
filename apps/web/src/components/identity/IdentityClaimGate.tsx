@@ -20,64 +20,108 @@ import { Input } from "../ui/input";
 import { IdentityAvatar } from "./IdentityAvatar";
 
 /**
- * Force-open the claim modal (e.g. after a dispatch error). Cleared when claim succeeds.
+ * Force-open the claim modal (e.g. after a dispatch error). Optionally target
+ * the environment that rejected the operate (critical for multi-env: primary
+ * smart has no map while secondary t3vm requires claim).
  */
 let forceClaimOpen = false;
+let forceClaimEnvironmentId: EnvironmentId | null = null;
 const forceClaimListeners = new Set<() => void>();
 
-export function requestIdentityClaimGate(): void {
+export function requestIdentityClaimGate(environmentId?: EnvironmentId | null): void {
   forceClaimOpen = true;
+  forceClaimEnvironmentId = environmentId ?? null;
   for (const listener of forceClaimListeners) {
     listener();
   }
 }
 
-function useForceClaimOpen(): boolean {
-  const [open, setOpen] = useState(forceClaimOpen);
+function useForceClaimState(): {
+  readonly open: boolean;
+  readonly environmentId: EnvironmentId | null;
+} {
+  const [state, setState] = useState({
+    open: forceClaimOpen,
+    environmentId: forceClaimEnvironmentId,
+  });
   useEffect(() => {
-    const listener = () => setOpen(forceClaimOpen);
+    const listener = () =>
+      setState({ open: forceClaimOpen, environmentId: forceClaimEnvironmentId });
     forceClaimListeners.add(listener);
     return () => {
       forceClaimListeners.delete(listener);
     };
   }, []);
-  return open;
+  return state;
 }
 
 function clearForceClaimOpen(): void {
   forceClaimOpen = false;
+  forceClaimEnvironmentId = null;
   for (const listener of forceClaimListeners) {
     listener();
   }
 }
 
 /**
- * Full-screen "Who are you?" gate when the active environment has a closed
- * identity map and this auth session has not claimed yet.
+ * Full-screen "Who are you?" gate when *any* connected environment has a
+ * closed identity map and this auth session has not claimed there yet.
+ *
+ * Multi-env: primary may be smart (no map) while secondary is t3vm (map on).
+ * Gate every environment that requires a claim, not only primary/active.
  */
 export function IdentityClaimGate() {
   const activeEnvironmentId = useActiveEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();
-  const forceOpen = useForceClaimOpen();
+  const force = useForceClaimState();
 
-  const environmentId =
-    activeEnvironmentId ??
-    primaryEnvironmentId ??
-    environments.find((env) => env.entry.target._tag === "PrimaryConnectionTarget")
-      ?.environmentId ??
-    environments[0]?.environmentId ??
-    null;
+  const orderedEnvironmentIds = useMemo(() => {
+    const ids: EnvironmentId[] = [];
+    const add = (id: EnvironmentId | null | undefined) => {
+      if (id !== null && id !== undefined && !ids.includes(id)) {
+        ids.push(id);
+      }
+    };
+    // Forced env first so settle/send errors open the right dialog.
+    add(force.environmentId);
+    add(activeEnvironmentId);
+    add(primaryEnvironmentId);
+    for (const environment of environments) {
+      add(environment.environmentId);
+    }
+    return ids;
+  }, [activeEnvironmentId, environments, force.environmentId, primaryEnvironmentId]);
 
-  if (environmentId === null) {
+  if (orderedEnvironmentIds.length === 0) {
     return null;
   }
 
-  return <IdentityClaimGateForEnvironment environmentId={environmentId} forceOpen={forceOpen} />;
+  // One gate body per env (hooks). Only the first that needs claim / force
+  // renders a modal (others return null).
+  return (
+    <>
+      {orderedEnvironmentIds.map((environmentId) => {
+        const label =
+          environments.find((env) => env.environmentId === environmentId)?.label ?? null;
+        const forceOpen =
+          force.open && (force.environmentId === null || force.environmentId === environmentId);
+        return (
+          <IdentityClaimGateForEnvironment
+            key={environmentId}
+            environmentId={environmentId}
+            environmentLabel={label}
+            forceOpen={forceOpen}
+          />
+        );
+      })}
+    </>
+  );
 }
 
 function IdentityClaimGateForEnvironment(props: {
   readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string | null;
   readonly forceOpen: boolean;
 }) {
   const target = useMemo(
@@ -169,17 +213,19 @@ function IdentityClaimGateForEnvironment(props: {
   }
 
   if (!snapshotQuery.data?.enabled) {
-    // Map off but forceOpen from a stale error — clear.
-    if (props.forceOpen) clearForceClaimOpen();
+    // Map off on *this* env (e.g. smart). Do NOT clear forceOpen — a sibling
+    // env (t3vm) may still need the claim dialog.
     return null;
   }
 
   if (!needsClaim) {
+    // Already claimed on this env; clear force only when we targeted it.
     if (props.forceOpen) clearForceClaimOpen();
     return null;
   }
 
   const snapshot = snapshotQuery.data;
+  const envLabel = props.environmentLabel?.trim() || "this environment";
 
   const submitUsername = async (username: string) => {
     const normalized = username.trim().toLowerCase();
@@ -226,15 +272,15 @@ function IdentityClaimGateForEnvironment(props: {
     >
       <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl shadow-black/25">
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          Shared environment
+          Shared environment · {envLabel}
         </p>
         <h1 id="identity-claim-title" className="mt-2 text-xl font-semibold tracking-tight">
           Who are you?
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          This server uses a closed identity map. Type at least {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}{" "}
-          characters of your username (for example{" "}
-          <span className="font-medium text-foreground">pat</span>
+          <span className="font-medium text-foreground">{envLabel}</span> uses a closed identity
+          map. Type at least {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS} characters of your username (for
+          example <span className="font-medium text-foreground">pat</span>
           …), then choose a match. Free-form names are not allowed.
         </p>
 
