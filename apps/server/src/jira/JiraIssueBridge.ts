@@ -54,7 +54,11 @@ import {
   postDiscordChannelMessage,
   resolveDiscordBotToken,
 } from "./jiraDiscordContext.ts";
-import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayload.ts";
+import {
+  buildJiraContextOnlyPrompt,
+  buildJiraTurnPrompt,
+  type JiraIssueInvocation,
+} from "./JiraWebhookPayload.ts";
 
 const NOT_LINKED_RESPONSE =
   "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_PROJECT_MAP for this Jira key, T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
@@ -661,8 +665,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Untrusted actors: optional chat context note only (no agent). Never auto-creates.
-    // Requires a unique chat-linked issue in links.json when filing context.
+    // Untrusted actors: Discord context note (required) + optional T3 transcript note.
+    // Never starts an agent turn. Never auto-creates links.
     if (trust.mode === "context-only") {
       const linksPath = config.discordLinksPath;
       if (linksPath === null || linksPath.length === 0) {
@@ -715,12 +719,62 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* Effect.logInfo("Posted Jira context-only note to Discord (no agent run)", {
+      // Best-effort T3 transcript mirror when the Discord link carries a live T3 thread.
+      let t3MessageId: string | null = null;
+      if (discordLink.t3ThreadId !== null) {
+        const t3ThreadId = discordLink.t3ThreadId as ThreadId;
+        const snapshot = yield* projection
+          .getThreadDetailById(t3ThreadId)
+          .pipe(Effect.orElseSucceed(() => Option.none()));
+        if (Option.isSome(snapshot)) {
+          const commandId = CommandId.make(yield* crypto.randomUUIDv4);
+          const messageId = MessageId.make(yield* crypto.randomUUIDv4);
+          const mapPeople = yield* identity.listMapPeople();
+          const source = jiraSourceRef(input.invocation, mapPeople);
+          const mirrored = yield* engine
+            .dispatch({
+              type: "thread.message.append",
+              commandId,
+              threadId: t3ThreadId,
+              message: {
+                messageId,
+                role: "user",
+                text: buildJiraContextOnlyPrompt(input.invocation),
+                attachments: [],
+              },
+              source,
+              createdAt: DateTime.formatIso(yield* DateTime.now),
+            })
+            .pipe(
+              Effect.as(true),
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to mirror Jira context note into T3 transcript", {
+                  deliveryId: input.deliveryId,
+                  threadId: t3ThreadId,
+                  cause,
+                }).pipe(Effect.as(false)),
+              ),
+            );
+          if (mirrored) {
+            t3MessageId = messageId;
+            yield* workItems
+              .appendForThread({
+                threadId: t3ThreadId,
+                jiraIssueKeys: [input.invocation.issueKey],
+                source: "jira-webhook",
+              })
+              .pipe(Effect.ignore);
+          }
+        }
+      }
+
+      yield* Effect.logInfo("Posted Jira context-only note (no agent run)", {
         deliveryId: input.deliveryId,
         issueKey: input.invocation.issueKey,
         discordThreadId: discordLink.discordThreadId,
         t3ThreadId: discordLink.t3ThreadId,
         discordMessageId: posted.message.id,
+        t3MessageId,
       });
       const notedDelivery: StoredJiraDelivery = {
         ...acknowledged,
@@ -728,6 +782,7 @@ const make = Effect.gen(function* () {
           discordLink.t3ThreadId !== null
             ? (discordLink.t3ThreadId as ThreadId)
             : acknowledged.threadId,
+        userMessageId: t3MessageId,
       };
       yield* finishDelivery(notedDelivery, CONTEXT_NOTED_RESPONSE, "completed");
       return;

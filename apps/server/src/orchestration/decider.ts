@@ -1661,6 +1661,72 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.message.append": {
+      // Context-only transcript note: message-sent without turn-start-requested.
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const messageSentEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          role: command.message.role,
+          text: command.message.text,
+          ...(command.message.attachments !== undefined
+            ? { attachments: command.message.attachments }
+            : {}),
+          turnId: null,
+          streaming: false,
+          ...(command.source !== undefined ? { source: command.source } : {}),
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const lifecycleResetEvents: Array<PlannedOrchestrationEvent> = [];
+      if (thread.settledOverride !== null) {
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsettled",
+          payload: {
+            threadId: command.threadId,
+            reason: "activity",
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      if (thread.snoozedUntil != null) {
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsnoozed",
+          payload: {
+            threadId: command.threadId,
+            reason: "activity",
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      return [...lifecycleResetEvents, messageSentEvent];
+    }
+
     case "thread.activity.append": {
       const thread = yield* requireThread({
         readModel,
