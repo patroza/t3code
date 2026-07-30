@@ -52,6 +52,10 @@ describe("isProductConflictPath", () => {
   it("flags shared app and package sources", () => {
     assert.equal(isProductConflictPath("apps/server/src/vcs/GitVcsDriverCore.ts"), true);
     assert.equal(isProductConflictPath("packages/client-runtime/src/state/vcs.ts"), true);
+    assert.equal(isProductConflictPath("apps/future-client/src/App.tsx"), true);
+    assert.equal(isProductConflictPath("packages/future-runtime/src/index.ts"), true);
+    assert.equal(isProductConflictPath("infra/future-service/src/worker.ts"), true);
+    assert.equal(isProductConflictPath("scripts/rebase-pr-stack.ts"), true);
     assert.equal(isProductConflictPath("package.json"), true);
     assert.equal(isProductConflictPath("apps/web/package.json"), true);
     assert.equal(isProductConflictPath(".github/pr-stack.json"), false);

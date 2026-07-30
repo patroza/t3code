@@ -304,8 +304,8 @@ button**, so CI stayed green while the control vanished; restored in #154).
 
 **Never register automatic whole-file policies (durable `*` or exact SHA)** on:
 
-- `apps/server/src/**`, `apps/web/src/**`, `apps/mobile/src/**`, client overlays under `apps/*/`
-- `packages/client-runtime/src/**`, `packages/contracts/src/**`, `packages/shared/src/**`
+- source under any current or future `apps/*/src/**`, `packages/*/src/**`, or `infra/*/src/**`
+- `scripts/**`, `oxlint-plugin-t3code/**`, and root/workspace `package.json` manifests
 
 Especially VCS clusters (`GitVcsDriverCore*`, `vcs.ts` / `vcsAction*`, BranchToolbar, CommandPalette,
 `ws.ts`): taking main or Tim whole-file once produced tip-only `fix(stack)` patches (#165/#166).

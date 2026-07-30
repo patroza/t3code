@@ -144,27 +144,20 @@ export interface StackRunOptions {
   readonly beforePush?: (state: Readonly<PersistedState>) => void | Promise<void>;
 }
 
-/** Paths where whole-file ours/theirs is never an automatic product-safe policy. */
-const PRODUCT_CONFLICT_PATH_PREFIXES = [
-  "apps/server/src/",
-  "apps/web/src/",
-  "apps/mobile/src/",
-  "apps/desktop/src/",
-  "apps/discord-bot/src/",
-  "apps/vscode/src/",
-  "packages/client-runtime/src/",
-  "packages/contracts/src/",
-  "packages/shared/src/",
-] as const;
+/** Repository roots whose source files must always be merged, never replaced wholesale. */
+const PRODUCT_WORKSPACE_ROOTS = new Set(["apps", "packages", "infra"]);
 
 export function isProductConflictPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
+  const segments = normalized.split("/");
+  const isWorkspaceSource =
+    segments.length >= 4 && PRODUCT_WORKSPACE_ROOTS.has(segments[0] ?? "") && segments[2] === "src";
   return (
     normalized === "package.json" ||
     normalized.endsWith("/package.json") ||
-    PRODUCT_CONFLICT_PATH_PREFIXES.some(
-      (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix),
-    )
+    normalized.startsWith("scripts/") ||
+    normalized.startsWith("oxlint-plugin-t3code/") ||
+    isWorkspaceSource
   );
 }
 
