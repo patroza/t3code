@@ -21,7 +21,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
-    source: Schema.NullOr(Schema.fromJsonString(SourceRef)),
+    // JSON column may be SQL NULL or the string "null" from JSON.stringify(null).
+    source: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
   }),
 );
 
@@ -50,7 +51,8 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     execute: (row) => {
       const nextAttachmentsJson =
         row.attachments !== undefined ? JSON.stringify(row.attachments) : null;
-      const nextSourceJson = row.source !== undefined ? JSON.stringify(row.source) : null;
+      // Avoid JSON.stringify(null) → "null" which fails SourceRef decode.
+      const nextSourceJson = row.source != null ? JSON.stringify(row.source) : null;
       return sql`
         INSERT INTO projection_thread_messages (
           message_id,
