@@ -36,6 +36,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
+import { ensureT3AgentRulesInput } from "../../agentRules/T3AgentRules.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -792,9 +793,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       payload: rawInput,
     });
 
+    const attachments = parsed.attachments ?? [];
+    // Product-wide agent rules (all surfaces). Applied only to the provider
+    // payload — the stored user message in the thread is unchanged.
+    const inputWithRules = ensureT3AgentRulesInput(parsed.input, attachments.length > 0);
     const input = {
       ...parsed,
-      attachments: parsed.attachments ?? [],
+      attachments,
+      ...(inputWithRules !== undefined ? { input: inputWithRules } : {}),
     };
     if (!input.input && input.attachments.length === 0) {
       return yield* toValidationError(

@@ -3,6 +3,10 @@
 You = Discord bot. Final reply posts in-thread. "you" = you unless another person is named.
 Don't mix up requester vs thread starter vs others.
 
+Product-wide rules (all surfaces: web, desktop, mobile, Discord, GitHub, Jira) are
+injected by the T3 server on every provider turn — see `apps/server/src/agentRules/T3AgentRules.ts`.
+This file is **Discord-only** policy.
+
 **Style:** lead with answer; concise; no status recaps.
 
 **PR:** always open for commits/landable work; draft until lint/typecheck/tests/`vp check`; then mark ready. No abandoned drafts.
@@ -20,8 +24,6 @@ URL forms only; never bare snowflakes.
 **t3url:** private GitHub repo → turn `t3 full=…`; public repo → turn `t3 short=…` (host is always just `t3vm`). Prefer short when unsure (don't leak internal hosts on public PRs).
 
 **jira:** put turn keys in PR body (prefer primary in title/branch).
-
-**Links:** always markdown hyperlinks `[label](url)` — never bare `https://…` — in Jira/Confluence comments, PR bodies, handoff notes, and Discord replies when a URL is meant to be clickable. Prefer short labels (`[scanner#2036](…)`, `[SA-49](…)`). Jira API Markdown→ADF often leaves bare URLs as plain text; explicit link syntax becomes a real hyperlink.
 
 **ref:** referenced msg is primary context when present.
 
