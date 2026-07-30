@@ -8,8 +8,9 @@ import {
   type EnvironmentId,
   type IdentityPersonPublic,
 } from "@t3tools/contracts";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { useActiveEnvironmentId } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { identityEnvironment } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
@@ -19,13 +20,49 @@ import { Input } from "../ui/input";
 import { IdentityAvatar } from "./IdentityAvatar";
 
 /**
+ * Force-open the claim modal (e.g. after a dispatch error). Cleared when claim succeeds.
+ */
+let forceClaimOpen = false;
+const forceClaimListeners = new Set<() => void>();
+
+export function requestIdentityClaimGate(): void {
+  forceClaimOpen = true;
+  for (const listener of forceClaimListeners) {
+    listener();
+  }
+}
+
+function useForceClaimOpen(): boolean {
+  const [open, setOpen] = useState(forceClaimOpen);
+  useEffect(() => {
+    const listener = () => setOpen(forceClaimOpen);
+    forceClaimListeners.add(listener);
+    return () => {
+      forceClaimListeners.delete(listener);
+    };
+  }, []);
+  return open;
+}
+
+function clearForceClaimOpen(): void {
+  forceClaimOpen = false;
+  for (const listener of forceClaimListeners) {
+    listener();
+  }
+}
+
+/**
  * Full-screen "Who are you?" gate when the active environment has a closed
  * identity map and this auth session has not claimed yet.
  */
 export function IdentityClaimGate() {
+  const activeEnvironmentId = useActiveEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();
+  const forceOpen = useForceClaimOpen();
+
   const environmentId =
+    activeEnvironmentId ??
     primaryEnvironmentId ??
     environments.find((env) => env.entry.target._tag === "PrimaryConnectionTarget")
       ?.environmentId ??
@@ -36,10 +73,13 @@ export function IdentityClaimGate() {
     return null;
   }
 
-  return <IdentityClaimGateForEnvironment environmentId={environmentId} />;
+  return <IdentityClaimGateForEnvironment environmentId={environmentId} forceOpen={forceOpen} />;
 }
 
-function IdentityClaimGateForEnvironment(props: { readonly environmentId: EnvironmentId }) {
+function IdentityClaimGateForEnvironment(props: {
+  readonly environmentId: EnvironmentId;
+  readonly forceOpen: boolean;
+}) {
   const target = useMemo(
     () => ({ environmentId: props.environmentId, input: {} as const }),
     [props.environmentId],
@@ -65,7 +105,77 @@ function IdentityClaimGateForEnvironment(props: { readonly environmentId: Enviro
     );
   }, [query, snapshotQuery.data]);
 
-  if (!needsClaim || !snapshotQuery.data) {
+  // Show when: map requires claim, or user forced open after a dispatch error.
+  // Keep showing while loading if forceOpen (so the error path isn't silent).
+  const showGate =
+    needsClaim ||
+    (props.forceOpen && (needsClaim || snapshotQuery.isPending || snapshotQuery.data !== null)) ||
+    (props.forceOpen && snapshotQuery.error !== null);
+
+  if (!showGate) {
+    return null;
+  }
+
+  // Still loading map/claim — block operate with a clear panel, not a toast.
+  if (snapshotQuery.isPending && snapshotQuery.data === null) {
+    return (
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-background/92 px-4 backdrop-blur-sm"
+        data-testid="identity-claim-gate-loading"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="identity-claim-title"
+      >
+        <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl">
+          <h1 id="identity-claim-title" className="text-xl font-semibold tracking-tight">
+            Checking identity…
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Loading this server’s identity map before you can send turns.
+          </p>
+        </section>
+      </div>
+    );
+  }
+
+  if (snapshotQuery.error !== null && snapshotQuery.data === null) {
+    return (
+      <div
+        className="fixed inset-0 z-[80] flex items-center justify-center bg-background/92 px-4 backdrop-blur-sm"
+        data-testid="identity-claim-gate-error"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="identity-claim-title"
+      >
+        <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl">
+          <h1 id="identity-claim-title" className="text-xl font-semibold tracking-tight">
+            Could not load identity
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">{snapshotQuery.error}</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <Button
+              type="button"
+              onClick={() => {
+                snapshotQuery.refresh();
+                claimQuery.refresh();
+              }}
+            >
+              Retry
+            </Button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (!snapshotQuery.data?.enabled) {
+    // Map off but forceOpen from a stale error — clear.
+    if (props.forceOpen) clearForceClaimOpen();
+    return null;
+  }
+
+  if (!needsClaim) {
+    if (props.forceOpen) clearForceClaimOpen();
     return null;
   }
 
@@ -98,6 +208,7 @@ function IdentityClaimGateForEnvironment(props: { readonly environmentId: Enviro
       }
       claimQuery.refresh();
       snapshotQuery.refresh();
+      clearForceClaimOpen();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not claim identity.");
     } finally {
@@ -122,7 +233,9 @@ function IdentityClaimGateForEnvironment(props: { readonly environmentId: Enviro
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           This server uses a closed identity map. Type at least {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}{" "}
-          characters of your username, then choose a match. Free-form names are not allowed.
+          characters of your username (for example{" "}
+          <span className="font-medium text-foreground">pat</span>
+          …), then choose a match. Free-form names are not allowed.
         </p>
 
         <label
@@ -189,7 +302,8 @@ function IdentityClaimGateForEnvironment(props: { readonly environmentId: Enviro
           <p className="mt-2 text-xs text-muted-foreground">No map matches for that query.</p>
         ) : (
           <p className="mt-2 text-xs text-muted-foreground">
-            Type {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}+ characters to search the map.
+            Type {IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS}+ characters to search the map (
+            {snapshot.people.length} people listed).
           </p>
         )}
 
@@ -197,10 +311,21 @@ function IdentityClaimGateForEnvironment(props: { readonly environmentId: Enviro
 
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" disabled={submitting} onClick={() => void submitUsername(query)}>
-            {submitting ? "Claiming…" : "Continue"}
+            {submitting ? "Saving…" : "Save identity"}
           </Button>
         </div>
       </section>
     </div>
+  );
+}
+
+/** Detect dispatch / operate failures that mean the user must claim. */
+export function isIdentityClaimRequiredMessage(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("identity_claim_required") ||
+    lower.includes("choose who you are") ||
+    lower.includes("identity claim")
   );
 }
