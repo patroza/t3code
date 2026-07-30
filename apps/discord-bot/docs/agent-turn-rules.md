@@ -21,6 +21,8 @@ URL forms only; never bare snowflakes.
 
 **jira:** put turn keys in PR body (prefer primary in title/branch).
 
+**Links:** always markdown hyperlinks `[label](url)` — never bare `https://…` — in Jira/Confluence comments, PR bodies, handoff notes, and Discord replies when a URL is meant to be clickable. Prefer short labels (`[scanner#2036](…)`, `[SA-49](…)`). Jira API Markdown→ADF often leaves bare URLs as plain text; explicit link syntax becomes a real hyperlink.
+
 **ref:** referenced msg is primary context when present.
 
 **Sentry:** parse starter/ref → Sentry for trace id → Honeycomb link first (turn tpl) → then user ask. Don't invent data; report tool failures.
