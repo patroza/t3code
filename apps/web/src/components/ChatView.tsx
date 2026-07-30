@@ -6364,6 +6364,7 @@ function ChatViewContent(props: ChatViewProps) {
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
+                            sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
                             isPreparingWorktree={isPreparingWorktreeUi}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
