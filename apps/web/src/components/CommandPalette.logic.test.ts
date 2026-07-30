@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IdentityUsername,
+  PersonId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
   buildBrowseGroups,
@@ -151,14 +158,14 @@ describe("buildThreadActionItems", () => {
           branch: "pr/9001-claim-gate",
           originSource: {
             channel: "desktop",
-            personId: "patroza",
-            username: "patroza",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
             location: { issueKey: "SA-49", number: 9001, kind: "pr" },
           },
           participantSummaries: [
             {
-              personId: "patroza",
-              username: "patroza",
+              personId: PersonId.make("patroza"),
+              username: IdentityUsername.make("patroza"),
               firstChannel: "desktop",
               firstParticipatedAt: "2026-03-20T00:00:00.000Z",
             },
