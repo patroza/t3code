@@ -113,31 +113,30 @@ export function toT3PublicShortThreadUrl(fullUrl: string): string {
 }
 
 /**
- * t3vm thread URL with a message fragment for future client scroll-into-view.
- * Shape: `https://t3vm/?thread={threadId}#message-{messageId}`
+ * Same web UI base as the thread pin (`T3_WEB_UI_BASE_URL` → buildT3WebThreadUrl),
+ * plus `#message-{messageId}` for a later client scroll-into-view PR.
  *
- * Always uses the short `t3vm` host (no tailnet hostname leakage in Discord).
- * Falls back to `https://t3vm` when `webUiBaseUrl` is unset.
- * Client hash handling is a separate PR — this only prepares the fragment.
+ * Does **not** invent short `t3vm` hosts — that rewrite is only for public GitHub
+ * PR bodies (see {@link pickT3ThreadUrlForGithubRepo}). Returns null when the
+ * configured base URL or ids are missing (same as the pin's "Open in Omegent").
  */
 export function buildOmegentThreadMessageUrl(input: {
   readonly webUiBaseUrl?: string | null | undefined;
   readonly threadId: string | undefined | null;
   readonly messageId: string | undefined | null;
 }): string | null {
-  const threadId = input.threadId?.trim() ?? "";
   const messageId = input.messageId?.trim() ?? "";
-  if (threadId === "" || messageId === "") return null;
+  if (messageId === "") return null;
 
-  const full =
-    buildT3WebThreadUrl(input.webUiBaseUrl, threadId) ?? `https://t3vm/?thread=${threadId}`;
-  const short = toT3PublicShortThreadUrl(full);
+  const threadUrl = buildT3WebThreadUrl(input.webUiBaseUrl, input.threadId);
+  if (threadUrl === null) return null;
+
   try {
-    const url = new URL(short);
+    const url = new URL(threadUrl);
     url.hash = `message-${messageId}`;
     return url.toString();
   } catch {
-    const withoutHash = short.replace(/#.*$/u, "");
+    const withoutHash = threadUrl.replace(/#.*$/u, "");
     return `${withoutHash}#message-${messageId}`;
   }
 }

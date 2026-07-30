@@ -97,22 +97,23 @@ describe("T3 thread URL helpers", () => {
     ).toBe("https://t3vm/?thread=tid-1");
   });
 
-  it("builds Omegent message deep links on the short t3vm host", () => {
+  it("builds Omegent message deep links from the configured web UI base", () => {
+    // Same host as the pin's "Open in Omegent" line — no short-host rewrite.
     expect(
       buildOmegentThreadMessageUrl({
         webUiBaseUrl: "https://t3vm.tail86038f.ts.net/",
         threadId: "tid-1",
         messageId: "msg-1",
       }),
-    ).toBe("https://t3vm/?thread=tid-1#message-msg-1");
-    // No web UI base → still emit a usable short t3vm link.
+    ).toBe("https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1");
+    // Missing base or ids → no link (same as pin when T3_WEB_UI_BASE_URL is unset).
     expect(
       buildOmegentThreadMessageUrl({
         webUiBaseUrl: undefined,
         threadId: "tid-1",
         messageId: "msg-1",
       }),
-    ).toBe("https://t3vm/?thread=tid-1#message-msg-1");
+    ).toBeNull();
     expect(
       buildOmegentThreadMessageUrl({
         webUiBaseUrl: "https://t3vm.tail86038f.ts.net/",
