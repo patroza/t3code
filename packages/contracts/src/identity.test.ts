@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS,
+  IDENTITY_USERNAME_SOFT_MAX_LENGTH,
   IdentityClaimInput,
   IdentityPersonPublic,
   IdentitySnapshot,
@@ -20,25 +22,33 @@ const decodeClaim = Schema.decodeUnknownSync(SessionIdentityClaim);
 const decodePerson = Schema.decodeUnknownSync(IdentityPersonPublic);
 
 describe("IdentityUsername", () => {
-  it.each(["pat", "patroza", "a_b-c", "julius", "abcdefghijklmnop"])("accepts %s", (value) => {
-    expect(decodeUsername(value)).toBe(value.toLowerCase());
-  });
+  it.each(["ab", "pat", "patroza", "a_b-c", "julius", "abcdefghijklmnopq", "1pat", "x"])(
+    "accepts wire shape %s (map membership is server-side)",
+    (value) => {
+      expect(decodeUsername(value)).toBe(value.toLowerCase());
+    },
+  );
 
   it("normalizes case to lowercase", () => {
     expect(decodeUsername("PatRoza")).toBe("patroza");
   });
 
-  it.each([
-    ["too short", "ab"],
-    ["too long", "abcdefghijklmnopq"],
-    ["leading digit", "1pat"],
-    ["leading dash", "-pat"],
-    ["leading underscore", "_pat"],
-    ["space", "pa t"],
-    ["at-sign", "pat@roza"],
-    ["empty", ""],
-  ])("rejects %s", (_label, value) => {
-    expect(() => decodeUsername(value)).toThrow();
+  it("accepts usernames longer than the old 16-char product cap", () => {
+    const long = "a".repeat(40);
+    expect(decodeUsername(long)).toBe(long);
+  });
+
+  it("rejects empty", () => {
+    expect(() => decodeUsername("")).toThrow();
+    expect(() => decodeUsername("   ")).toThrow();
+  });
+
+  it("rejects past soft max", () => {
+    expect(() => decodeUsername("a".repeat(IDENTITY_USERNAME_SOFT_MAX_LENGTH + 1))).toThrow();
+  });
+
+  it("exports typeahead threshold of 3 characters", () => {
+    expect(IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS).toBe(3);
   });
 });
 
@@ -114,9 +124,9 @@ describe("IdentitySnapshot + claim", () => {
       personId: "patroza",
       username: "patroza",
       claimedAt: "2026-07-30T12:00:00.000Z",
-      method: "picker",
+      method: "typeahead",
     });
-    expect(claim.method).toBe("picker");
+    expect(claim.method).toBe("typeahead");
     expect(claim.username).toBe("patroza");
   });
 });
