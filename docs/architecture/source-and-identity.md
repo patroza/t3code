@@ -198,12 +198,12 @@ type SessionIdentityClaim = {
 
 ### Bootstrap / bots
 
-| Client                         | Claim path                                                                          |
-| ------------------------------ | ----------------------------------------------------------------------------------- |
-| Web / desktop / mobile         | After pairing: **typeahead claim** against map usernames; must claim before operate |
-| Discord bot                    | Auto-resolve sender snowflake → person; stamp on turn; no UI                        |
-| Jira bot                       | Auto-resolve accountId/email → person                                               |
-| Headless CLI / admin bootstrap | Optional claim; if identity-on and operate without claim → reject operate RPCs      |
+| Client                         | Claim path                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web / desktop / mobile         | After pairing: **typeahead claim** against map usernames; must claim before operate                                                         |
+| Discord bot                    | Auto-resolve sender snowflake → person; stamp on turn; no UI                                                                                |
+| Jira bot                       | Auto-resolve accountId → person; **mapped = full agent turn**, unmapped = Discord context-only note when issue is Discord-linked (no agent) |
+| Headless CLI / admin bootstrap | Optional claim; if identity-on and operate without claim → reject operate RPCs                                                              |
 
 ### Gate
 
@@ -225,6 +225,8 @@ On `thread.turn.start` / user `thread.message-sent`:
 2. Integrations attach platform `actor` + `location`; server resolves person via map; if unresolved → message still sent with `personId` omitted or `unknown` policy:
 
    **v1 policy:** unresolved external actor → stamp channel + actor only, `personId` null; does not count as mine for anyone. Log once per turn.
+
+   **Jira (when map enabled):** mapped `accountId` → `thread.turn.start` with SourceRef person fields. Unmapped/missing accountId → Discord context note only (no agent), and only if the issue is already linked to exactly one Discord thread in `links.json`.
 
 3. Projector copies `source` onto `OrchestrationMessage`.
 4. Shell projector maintains `originSource` and `participantPersonIds`.

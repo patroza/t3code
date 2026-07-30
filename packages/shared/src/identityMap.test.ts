@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseIdentityMapDocument, IdentityMapParseError } from "./identityMap.ts";
+import {
+  IdentityMapParseError,
+  normalizeJiraAccountId,
+  parseIdentityMapDocument,
+  resolvePersonByJiraAccountId,
+} from "./identityMap.ts";
 
 describe("parseIdentityMapDocument", () => {
   it("parses people map with usernames", () => {
@@ -46,5 +51,19 @@ describe("parseIdentityMapDocument", () => {
   it("returns empty for empty document", () => {
     expect(parseIdentityMapDocument({})).toEqual([]);
     expect(parseIdentityMapDocument({ people: [] })).toEqual([]);
+  });
+
+  it("resolves people by Jira accountId", () => {
+    const people = parseIdentityMapDocument({
+      people: {
+        patroza: {
+          username: "patroza",
+          jira: { accountId: "712020:abc" },
+        },
+      },
+    });
+    expect(normalizeJiraAccountId("accountid:712020:ABC")).toBe("712020:abc");
+    expect(resolvePersonByJiraAccountId(people, "712020:abc")?.username).toBe("patroza");
+    expect(resolvePersonByJiraAccountId(people, "nope")).toBeNull();
   });
 });
