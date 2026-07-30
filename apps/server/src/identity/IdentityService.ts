@@ -56,6 +56,8 @@ export class IdentityService extends Context.Service<
   IdentityService,
   {
     readonly getSnapshot: () => Effect.Effect<IdentitySnapshot>;
+    /** In-process map people for platform SourceRef resolution (GitHub/Jira/Discord). */
+    readonly listMapPeople: () => Effect.Effect<ReadonlyArray<IdentityMapPerson>>;
     readonly getSessionClaim: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<IdentitySessionClaimResult, IdentityError>;
@@ -174,6 +176,8 @@ function makeService(
         claimRequired: enabled,
         people: toPublicPeople(people),
       }),
+
+    listMapPeople: () => Effect.succeed(people),
 
     getSessionClaim: (sessionId) =>
       store.get(sessionId).pipe(
