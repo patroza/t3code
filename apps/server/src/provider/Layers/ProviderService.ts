@@ -37,6 +37,11 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
 import {
+  ensureT3AgentRulesInput,
+  readT3AgentRulesInjected,
+  T3_AGENT_RULES_INJECTED_KEY,
+} from "../../agentRules/T3AgentRules.ts";
+import {
   increment,
   providerMetricAttributes,
   providerRuntimeEventsTotal,
@@ -312,6 +317,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             case "running":
               return { status: "running" as const };
           }
+        case "thread.state.changed":
+          // After compaction, re-inject product rules on the next turn so they
+          // survive chat history rewrite for every harness.
+          if (event.payload.state === "compacted") {
+            return {
+              status: "running" as const,
+              clearAgentRulesInjected: true as const,
+            };
+          }
+          return undefined;
         default:
           return undefined;
       }
@@ -323,9 +338,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       provider: binding.provider,
       providerInstanceId: event.providerInstanceId,
       ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-      status: lifecycle.status,
+      ...("status" in lifecycle && lifecycle.status !== undefined
+        ? { status: lifecycle.status }
+        : {}),
       runtimePayload: {
-        ...(lifecycle.activeTurnId !== undefined ? { activeTurnId: lifecycle.activeTurnId } : {}),
+        ...("activeTurnId" in lifecycle && lifecycle.activeTurnId !== undefined
+          ? { activeTurnId: lifecycle.activeTurnId }
+          : {}),
+        ...("clearAgentRulesInjected" in lifecycle && lifecycle.clearAgentRulesInjected
+          ? { [T3_AGENT_RULES_INJECTED_KEY]: false }
+          : {}),
         lastRuntimeEvent: event.type,
         lastRuntimeEventAt: event.createdAt,
       },
@@ -792,11 +814,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       payload: rawInput,
     });
 
-    const input = {
-      ...parsed,
-      attachments: parsed.attachments ?? [],
-    };
-    if (!input.input && input.attachments.length === 0) {
+    const attachments = parsed.attachments ?? [];
+    if (!parsed.input && attachments.length === 0) {
       return yield* toValidationError(
         "ProviderService.sendTurn",
         "Either input text or at least one attachment is required",
@@ -804,24 +823,41 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     }
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "send-turn",
-      "provider.thread_id": input.threadId,
-      "provider.interaction_mode": input.interactionMode,
-      "provider.attachment_count": input.attachments.length,
+      "provider.thread_id": parsed.threadId,
+      "provider.interaction_mode": parsed.interactionMode,
+      "provider.attachment_count": attachments.length,
     });
     let metricProvider = "unknown";
-    let metricModel = input.modelSelection?.model;
+    let metricModel = parsed.modelSelection?.model;
     return yield* Effect.gen(function* () {
       const routed = yield* resolveRoutableSession({
-        threadId: input.threadId,
+        threadId: parsed.threadId,
         operation: "ProviderService.sendTurn",
         allowRecovery: true,
       });
       metricProvider = routed.adapter.provider;
-      metricModel = input.modelSelection?.model;
+      metricModel = parsed.modelSelection?.model;
       yield* Effect.annotateCurrentSpan({
         "provider.kind": routed.adapter.provider,
-        ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
+        ...(parsed.modelSelection?.model ? { "provider.model": parsed.modelSelection.model } : {}),
       });
+
+      // All harnesses: inject product rules on first turn of the session, and
+      // again after compaction (flag cleared on thread.state.changed compacted).
+      const bindingOption = yield* directory.getBinding(parsed.threadId);
+      const binding = Option.getOrUndefined(bindingOption);
+      const rulesAlreadyInjected = readT3AgentRulesInjected(binding?.runtimePayload ?? null);
+      const inputWithRules = ensureT3AgentRulesInput(
+        parsed.input,
+        attachments.length > 0,
+        rulesAlreadyInjected,
+      );
+      const input = {
+        ...parsed,
+        attachments,
+        ...(inputWithRules !== undefined ? { input: inputWithRules } : {}),
+      };
+
       // A turn is the clearest sign a session is still alive. The MCP
       // credential is minted once at session start and cannot be rotated into
       // an already-spawned agent process, so we keep the existing token valid
@@ -844,6 +880,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           restartRecovery: null,
           lastRuntimeEvent: "provider.sendTurn",
           lastRuntimeEventAt: yield* nowIso,
+          [T3_AGENT_RULES_INJECTED_KEY]: true,
         },
       });
       yield* analytics.record("provider.turn.sent", {
