@@ -1,6 +1,6 @@
 # Source attribution & session identity
 
-**Status:** draft design · **Area:** contracts, server auth/orchestration, web/desktop/mobile, integrations  
+**Status:** implemented on `fork/identity` · **Area:** contracts, server auth/orchestration, web/desktop/mobile, integrations  
 **Audience:** shared single-environment servers with multiple people and multiple clients
 
 ## Problem
@@ -372,6 +372,8 @@ apps/server/src/identity/
 ```
 
 Persistence: session claim columns on existing auth session table **or** `session_identity(session_id PK, person_id, username, claimed_at)`. Prefer side table to avoid heavy SessionStore churn.
+
+**Implemented:** SQLite table `session_identity_claims` (migration 036) with `IdentityService.layerPersisted` (memory cache + durable upsert). Survives server restarts.
 
 Gate helper used by orchestration command dispatch:
 

@@ -1256,10 +1256,12 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
+              const mapPeople = yield* identity.listMapPeople();
               const normalizedCommand = stampOrchestrationCommandSource({
                 command: yield* normalizeDispatchCommand(command),
                 claim: operateClaim,
                 clientDeviceType,
+                people: mapPeople,
               });
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"

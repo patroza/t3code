@@ -22,7 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { SourceRef, ThreadParticipantSummary } from "./identity.ts";
+import { ClientSourceHint, SourceRef, ThreadParticipantSummary } from "./identity.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -755,10 +755,16 @@ export const ThreadTurnStartCommand = Schema.Struct({
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   /**
-   * Server-authored only. Gate layer stamps from session claim + deviceType.
-   * Clients must not send trusted person fields (ClientOrchestrationCommand omits this).
+   * Server-authored only. Gate layer stamps from session claim + deviceType
+   * or resolves platform actors from `sourceHint` (bots / integrations).
+   * Clients must not send trusted person fields.
    */
   source: Schema.optional(SourceRef),
+  /**
+   * Non-person hints from trusted integrations (Discord bot, etc.).
+   * Server resolves personId via the identity map; never trusts client person fields.
+   */
+  sourceHint: Schema.optional(ClientSourceHint),
   createdAt: IsoDateTime,
 });
 
@@ -778,6 +784,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Platform actor/location only — server stamps person from the identity map. */
+  sourceHint: Schema.optional(ClientSourceHint),
   createdAt: IsoDateTime,
 });
 
