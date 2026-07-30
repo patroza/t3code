@@ -209,7 +209,8 @@ type SessionIdentityClaim = {
 
 When identity map is **enabled** (non-empty people):
 
-- RPCs that need `orchestration:operate` (and thread create/send) require a claimed session.
+- RPCs that need `orchestration:operate` (and thread create/send) require a claimed session **for interactive clients** (web / desktop / mobile / CLI).
+- **Bot / integration sessions** (`AuthClientMetadata.deviceType === "bot"`, e.g. Discord bot, Jira bot) **skip the session claim gate**. One shared bot auth session cannot hold a single person claim for every platform sender; those adapters resolve the actor via the identity map and stamp `SourceRef` per turn (PR6), not via `identity.claim`.
 - Allow without claim: auth/pairing, access admin, identity list + claim endpoints, health, shell **read** optional (prefer read allowed so UI can show claim gate over empty shell).
 - UI: full chrome locked behind claim screen (“Who are you?”). See typeahead below — **not** a full dropdown of everyone.
 

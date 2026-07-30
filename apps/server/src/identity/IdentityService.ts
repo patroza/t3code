@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import {
   AuthSessionId,
+  type AuthClientMetadataDeviceType,
   IdentityClaimInput,
   IdentityError,
   IdentitySessionClaimResult,
@@ -59,8 +60,21 @@ export class IdentityService extends Context.Service<
     readonly clearClaim: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<{ cleared: boolean }, IdentityError>;
+    /**
+     * When the identity map is enabled, interactive sessions must have claimed
+     * a person before orchestration operate. Returns the claim, or null when
+     * the map is off / the session is an integration bot.
+     *
+     * Bot sessions (`clientDeviceType: "bot"`) skip the claim gate: Discord/Jira
+     * share one long-lived auth session across many human senders, so a single
+     * session claim cannot impersonate each actor. Per-turn SourceRef stamping
+     * from the platform map is a separate path (not session claim).
+     */
     readonly requireOperateClaim: (
       sessionId: AuthSessionId,
+      options?: {
+        readonly clientDeviceType?: AuthClientMetadataDeviceType;
+      },
     ) => Effect.Effect<SessionIdentityClaim | null, IdentityError>;
   }
 >()("t3/identity/IdentityService") {}
@@ -210,9 +224,13 @@ function makeService(
         return { cleared: true };
       }),
 
-    requireOperateClaim: (sessionId) =>
+    requireOperateClaim: (sessionId, options) =>
       Effect.gen(function* () {
         if (!enabled) return null;
+        // Integration bots: one auth session, many platform actors — not interactive claim.
+        if (options?.clientDeviceType === "bot") {
+          return null;
+        }
         const claims = yield* Ref.get(claimsRef);
         const existing = claims.get(sessionId);
         if (existing === undefined) {

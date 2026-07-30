@@ -18,6 +18,7 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import * as SessionStore from "../auth/SessionStore.ts";
 import { GrokTranscriptResync } from "../externalSessions/GrokTranscriptResync.ts";
 import * as IdentityService from "../identity/IdentityService.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
@@ -43,6 +44,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const grokTranscriptResync = yield* GrokTranscriptResync;
     const identity = yield* IdentityService.IdentityService;
+    const sessions = yield* SessionStore.SessionStore;
 
     return handlers
       .handle(
@@ -105,8 +107,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const clientDeviceType = yield* sessions.listActive().pipe(
+            Effect.map(
+              (active) =>
+                active.find((entry) => entry.sessionId === session.sessionId)?.client.deviceType,
+            ),
+            Effect.orElseSucceed(() => undefined),
+          );
           yield* identity
-            .requireOperateClaim(session.sessionId)
+            .requireOperateClaim(session.sessionId, {
+              ...(clientDeviceType !== undefined ? { clientDeviceType } : {}),
+            })
             .pipe(
               Effect.catchTag("IdentityError", (error) =>
                 failEnvironmentInvalidRequest(identityErrorToHttpReason(error)),
