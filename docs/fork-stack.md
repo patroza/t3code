@@ -274,15 +274,17 @@ Each entry:
 | `path`     | Repo-relative conflicted file                                                                                  |
 | `strategy` | `theirs` = take the commit being replayed; `ours` = keep the new base (rebase semantics)                       |
 
-Prefer **`commit: "*"`** for known permanent policies (e.g. always take the mobile feed from the
-downstream commit). Use a full SHA only for a one-shot resume of the current replay.
+Prefer **`commit: "*"`** only for known permanent, non-product policies such as generated or
+stack-owned metadata. Use a full SHA only for a one-shot non-product resolution. Product paths
+cannot use either form: the tool rejects blind whole-file resolution and requires a 3-way merge.
 
 Required workflow when automation stops on a conflict:
 
 1. Note branch, `REBASE_HEAD` SHA, subject, and conflicted paths from the job summary / logs.
 2. Decide `ours` vs `theirs` (or a hand-merged tree) for each path.
-3. **Append** matching `conflictResolutions` entries to `.github/pr-stack.json` (durable `*` when
-   the same path will keep that side on future rebases).
+3. For non-product paths, **append** matching `conflictResolutions` entries to
+   `.github/pr-stack.json` (durable `*` when the same path will keep that side on future rebases).
+   For product paths, perform a 3-way merge in the preserved state; do not add a manifest entry.
 4. Open/merge a PR to `fork/changes` with that manifest update **before** calling the stack “done”.
 5. Resolve/stage files and `node scripts/rebase-pr-stack.ts resume --state <dir> --push`, **or**
    re-run `sync --push` after the manifest is on the tip the sync reads.
@@ -300,10 +302,10 @@ where both the new base and the replayed commit carry real behavior (classic exa
 `resolveRemoteVscodeOpenTarget` + unit tests and **dropped the remote Open in VS Code header
 button**, so CI stayed green while the control vanished; restored in #154).
 
-**Never register durable `*` whole-file policies** on:
+**Never register automatic whole-file policies (durable `*` or exact SHA)** on:
 
-- `apps/server/src/**`, `apps/web/src/**`, `apps/mobile/src/**`, client overlays under `apps/*/`
-- `packages/client-runtime/src/**`, `packages/contracts/src/**`, `packages/shared/src/**`
+- source under any current or future `apps/*/src/**`, `packages/*/src/**`, or `infra/*/src/**`
+- `scripts/**`, `oxlint-plugin-t3code/**`, and root/workspace `package.json` manifests
 
 Especially VCS clusters (`GitVcsDriverCore*`, `vcs.ts` / `vcsAction*`, BranchToolbar, CommandPalette,
 `ws.ts`): taking main or Tim whole-file once produced tip-only `fix(stack)` patches (#165/#166).
@@ -312,8 +314,9 @@ rewrite (see [stack-history-rewrite.md](./stack-history-rewrite.md)).
 
 When a conflict touches `apps/**` or `packages/**` product code:
 
-1. **Do not** apply a durable whole-file `*` policy unless the path is documented as always taking
-   one side for every rewrite (and is **not** product code above).
+1. **Do not** apply any manifest whole-file policy unless the path is documented as always taking
+   one side for every rewrite and is **not** product code above. The stack tool rejects both
+   wildcard and exact-SHA policies for product paths.
 2. **3-way merge or re-apply** the known-good feature commit after a clean base; do not invent a
    partial hand merge that keeps helpers/tests and drops JSX / wiring.
 3. **Parity check** before resume/push: `git diff` the pre-rewrite tip vs the resolved path; if a
