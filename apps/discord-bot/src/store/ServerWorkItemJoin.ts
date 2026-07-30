@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * Join an existing T3 thread by shared work-item identity (Jira key / GitHub PR)
  * before Discord creates a new session.
@@ -6,7 +7,7 @@
  * 1. Discord bot links.json (other channels already bound to a T3 thread)
  * 2. Server `thread-work-items.json` next to state.sqlite (Jira/GitHub bridges)
  */
-import * as NodeFs from "node:fs";
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import type { ThreadId } from "@t3tools/contracts";
@@ -47,7 +48,7 @@ type ServerWorkItemRecord = {
 
 function readServerWorkItemRecords(filePath: string): ReadonlyArray<ServerWorkItemRecord> {
   try {
-    const raw = NodeFs.readFileSync(filePath, "utf8");
+    const raw = NodeFS.readFileSync(filePath, "utf8");
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== "object") return [];
     const records = (parsed as { records?: unknown }).records;
