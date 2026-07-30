@@ -13,10 +13,15 @@ import { AuthSessionId, TrimmedNonEmptyString, IsoDateTime } from "./baseSchemas
 
 // ── Username / person ──────────────────────────────────────────
 
-/** 3–16 chars: leading letter, then alnum / _ / - (normalized lowercase). */
-export const IDENTITY_USERNAME_MIN_LENGTH = 3;
-export const IDENTITY_USERNAME_MAX_LENGTH = 16;
-export const IDENTITY_USERNAME_PATTERN = /^[a-z][a-z0-9_-]{2,15}$/;
+/**
+ * Wire form for a map username: trimmed, lowercased, non-empty.
+ * Length/charset are not product constraints — membership in the server
+ * identity map is the only accept/reject rule. Soft max guards abuse.
+ */
+export const IDENTITY_USERNAME_SOFT_MAX_LENGTH = 128;
+
+/** Minimum typed characters before the claim UI shows map suggestions. */
+export const IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS = 3;
 
 const IdentityUsernameString = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(
@@ -26,11 +31,7 @@ const IdentityUsernameString = TrimmedNonEmptyString.pipe(
       encode: (value) => Effect.succeed(value),
     }),
   ),
-).check(
-  Schema.isMinLength(IDENTITY_USERNAME_MIN_LENGTH),
-  Schema.isMaxLength(IDENTITY_USERNAME_MAX_LENGTH),
-  Schema.isPattern(IDENTITY_USERNAME_PATTERN),
-);
+).check(Schema.isMaxLength(IDENTITY_USERNAME_SOFT_MAX_LENGTH));
 
 export const IdentityUsername = IdentityUsernameString.pipe(Schema.brand("IdentityUsername"));
 export type IdentityUsername = typeof IdentityUsername.Type;
@@ -118,7 +119,7 @@ export const SessionIdentityClaim = Schema.Struct({
   personId: PersonId,
   username: IdentityUsername,
   claimedAt: IsoDateTime,
-  method: Schema.Literals(["picker", "auto-discord", "auto-jira", "bootstrap"]),
+  method: Schema.Literals(["typeahead", "auto-discord", "auto-jira", "bootstrap"]),
 });
 export type SessionIdentityClaim = typeof SessionIdentityClaim.Type;
 
