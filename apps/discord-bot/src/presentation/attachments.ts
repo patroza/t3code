@@ -5,9 +5,13 @@ export const DISCORD_MAX_FILES_PER_MESSAGE = 10;
 
 /**
  * Filename for the archived in-progress stream (hidden after finalize).
- * The final answer itself is posted as normal Discord message content.
+ * Short finals stay as normal Discord message content; long / table-heavy
+ * finals use {@link FINAL_RESPONSE_MARKDOWN_NAME} instead.
  */
 export const STREAM_HISTORY_MARKDOWN_NAME = "stream-history.md";
+
+/** Filename when the full final assistant answer is attached as markdown. */
+export const FINAL_RESPONSE_MARKDOWN_NAME = "response.md";
 
 export function imageAttachmentsOf(
   attachments: ReadonlyArray<ChatAttachment> | null | undefined,
@@ -41,7 +45,7 @@ export function streamHistoryHasAdditionalContent(historyText: string, finalText
 
 /**
  * Archive the in-progress stream as markdown text for a real Discord file attachment.
- * Final answer stays in Discord message content (chunked if needed).
+ * In-progress tips stay as live messages; this file is only the finalize archive.
  */
 export function buildStreamHistoryMarkdownText(streamText: string): string | null {
   const body = streamText.trimEnd();
@@ -63,4 +67,49 @@ export function buildStreamHistoryMarkdownFile(streamText: string): File | null 
   return new File([text], STREAM_HISTORY_MARKDOWN_NAME, {
     type: "text/markdown;charset=utf-8",
   });
+}
+
+/**
+ * Body for `response.md` when the full final answer is too long / table-heavy
+ * for readable Discord message content.
+ */
+export function buildFinalResponseMarkdownText(text: string): string | null {
+  const body = text.trimEnd();
+  if (body.trim() === "") return null;
+  return body.endsWith("\n") ? body : `${body}\n`;
+}
+
+/**
+ * Short channel caption while the full body lives on `response.md`.
+ * Prefer a short first heading/line when present; otherwise a neutral note.
+ */
+export function finalResponseCaption(text: string): string {
+  const firstMeaningful = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (firstMeaningful === undefined) {
+    return `Full response attached as \`${FINAL_RESPONSE_MARKDOWN_NAME}\`.`;
+  }
+
+  const stripped = firstMeaningful.replace(/^#{1,6}\s+/, "").trim();
+  if (stripped.length > 0 && stripped.length <= 180) {
+    return stripped;
+  }
+  return `Full response attached as \`${FINAL_RESPONSE_MARKDOWN_NAME}\`.`;
+}
+
+/**
+ * Long answers and any answer with GFM tables become `response.md`.
+ * Short single-message finals without tables stay inline.
+ */
+export function shouldAttachFinalResponseAsMarkdown(input: {
+  readonly text: string;
+  readonly hasMarkdownTables: boolean;
+  /** Chunk count after stats, if the full body were posted as message content. */
+  readonly messageChunkCount: number;
+}): boolean {
+  if (input.text.trim() === "") return false;
+  if (input.hasMarkdownTables) return true;
+  return input.messageChunkCount > 1;
 }
