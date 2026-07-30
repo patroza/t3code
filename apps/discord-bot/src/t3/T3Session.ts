@@ -26,6 +26,7 @@ import {
   type VcsResolveBranchChangeRequestResult,
   type VcsStatusStreamEvent,
 } from "@t3tools/contracts";
+import { type DiscordClientSourceHint, withTurnSourceHint } from "./sourceHint.ts";
 import {
   PrimaryConnectionTarget,
   type PreparedConnection,
@@ -162,6 +163,11 @@ export interface T3SessionService {
     readonly local: boolean;
     /** User images from Discord (same shape as web composer uploads). */
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
+    /**
+     * Discord human who triggered the turn. Server identity map resolves this
+     * into personId/username when the identity overlay is composed.
+     */
+    readonly sourceHint?: DiscordClientSourceHint;
   }) => Effect.Effect<{ readonly threadId: ThreadId; readonly messageId: string }, T3SessionError>;
   readonly startTurn: (input: {
     readonly threadId: ThreadId;
@@ -171,6 +177,7 @@ export interface T3SessionService {
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: ProviderInteractionMode;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
+    readonly sourceHint?: DiscordClientSourceHint;
   }) => Effect.Effect<{ readonly messageId: string }, T3SessionError>;
   /**
    * Inject a server-queued follow-up into the active turn (or start a turn if
@@ -793,13 +800,13 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
           const worktreeBranch = `t3-discord/${shortId()}`;
 
           yield* claimBrowserHost(threadId);
-          yield* dispatch({
-            type: "thread.turn.start",
+          const createTurn = {
+            type: "thread.turn.start" as const,
             commandId: newCommandId(),
             threadId,
             message: {
               messageId,
-              role: "user",
+              role: "user" as const,
               text: input.prompt,
               attachments: (input.attachments ?? []) as ReadonlyArray<UploadChatAttachment>,
             },
@@ -831,7 +838,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                   }),
             },
             createdAt,
-          });
+          };
+          yield* dispatch(withTurnSourceHint(createTurn, input.sourceHint));
 
           return { threadId, messageId };
         }),
@@ -860,13 +868,13 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               modelSelection,
             });
           }
-          yield* dispatch({
-            type: "thread.turn.start",
+          const continueTurn = {
+            type: "thread.turn.start" as const,
             commandId: newCommandId(),
             threadId: input.threadId,
             message: {
               messageId,
-              role: "user",
+              role: "user" as const,
               text: input.prompt,
               attachments: (input.attachments ?? []) as ReadonlyArray<UploadChatAttachment>,
             },
@@ -875,7 +883,8 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             runtimeMode: input.runtimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
             interactionMode: input.interactionMode ?? thread?.interactionMode ?? "default",
             createdAt: nowIso(),
-          });
+          };
+          yield* dispatch(withTurnSourceHint(continueTurn, input.sourceHint));
           return { messageId };
         }),
       steerQueuedMessage: (input) =>

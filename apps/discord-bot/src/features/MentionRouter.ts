@@ -90,6 +90,7 @@ import {
   type DiscordMessageLike,
 } from "../presentation/threadContext.ts";
 import { IdentityMapStore } from "../identityMap.ts";
+import { discordSourceHint } from "../t3/sourceHint.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { newMessageId } from "../t3/ids.ts";
@@ -1064,6 +1065,13 @@ const make = (botConfig: DiscordBotConfig) =>
               // Only --plan forces plan mode; bare mentions keep the thread's interaction mode.
               ...(input.flags.plan ? { interactionMode: "plan" as const } : {}),
               ...(attachments.length > 0 ? { attachments } : {}),
+              sourceHint: discordSourceHint({
+                authorId: input.mentionMessage?.author?.id,
+                authorUsername: input.mentionMessage?.author?.username,
+                guildId: input.guildId,
+                channelId: input.channelId,
+                discordThreadId: input.discordThreadId,
+              }),
             })
             .pipe(
               Effect.tap(({ messageId }) =>
@@ -1276,6 +1284,13 @@ const make = (botConfig: DiscordBotConfig) =>
           baseBranch: input.flags.base ?? botConfig.t3DefaultBaseBranch,
           local: input.flags.local,
           ...(attachments.length > 0 ? { attachments } : {}),
+          sourceHint: discordSourceHint({
+            authorId: input.mentionMessage?.author?.id,
+            authorUsername: input.mentionMessage?.author?.username,
+            guildId: input.guildId,
+            channelId: input.channelId,
+            discordThreadId: input.discordThreadId,
+          }),
         });
         yield* links.put({
           discordThreadId: input.discordThreadId,
