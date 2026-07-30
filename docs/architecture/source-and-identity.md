@@ -203,6 +203,7 @@ type SessionIdentityClaim = {
 | Web / desktop / mobile         | After pairing: **typeahead claim** against map usernames; must claim before operate                                                         |
 | Discord bot                    | Auto-resolve sender snowflake → person; stamp on turn; no UI                                                                                |
 | Jira bot                       | Auto-resolve accountId → person; **mapped = full agent turn**, unmapped = Discord context-only note when issue is Discord-linked (no agent) |
+| GitHub bot                     | Auto-resolve login/id → person; **mapped = full agent turn** (+ GH permission floor); unmapped when map on = reject (no agent)              |
 | Headless CLI / admin bootstrap | Optional claim; if identity-on and operate without claim → reject operate RPCs                                                              |
 
 ### Gate
