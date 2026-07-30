@@ -220,3 +220,19 @@ describe("ChatHeader remote Open in VS Code surface (anti stack-drop)", () => {
     expect(chatHeaderSource).toContain("VisualStudioCode");
   });
 });
+
+describe("ChatHeader AI usage + host resources surface (anti stack-drop)", () => {
+  it("still wires conversation-level usage status and host resource gauges", () => {
+    // Stack product rejoins have previously re-landed pure helpers + settings
+    // HostResourceStatus while dropping the thread-header surfaces. Keep the
+    // JSX markers co-located with the pure gates so that cannot pass silently.
+    expect(chatHeaderSource).toContain("useAiUsageSnapshot");
+    expect(chatHeaderSource).toContain("resolveDriverUsage");
+    expect(chatHeaderSource).toContain('aria-label="provider usage status"');
+    expect(chatHeaderSource).toContain("AiUsageStats");
+    expect(chatHeaderSource).toContain("HostResourceStatus");
+    expect(chatHeaderSource).toContain("isLocalConnectionTarget");
+    expect(chatHeaderSource).toContain("activeThreadDriverKind");
+    expect(chatHeaderSource).toContain("activeThreadModel");
+  });
+});
