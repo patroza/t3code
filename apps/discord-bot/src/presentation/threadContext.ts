@@ -3,8 +3,9 @@
  * Build initial T3 prompts when the bot is first pulled into a Discord thread.
  * Combines the thread starter (e.g. Sentry alert embed) with the user @mention.
  *
- * Static Discord policy lives in `apps/discord-bot/docs/agent-turn-rules.md`.
- * Per-turn prompts only inject dynamic data plus an absolute path to that doc.
+ * Global product rules are injected by the T3 server on session start (and again
+ * after compaction). This builder only emits **dynamic** Discord fields + a
+ * pointer to the Discord-only overlay (`docs/agent-turn-rules.md`).
  */
 
 import * as NodePath from "node:path";
@@ -24,11 +25,14 @@ import {
 } from "./discordPrAttribution.ts";
 import { mergeJiraIssueKeys } from "./jiraLinks.ts";
 
-/** Absolute path to the static Discord agent policy document. */
+function discordBotPackageRoot(): string {
+  // presentation/ → src/ → package root
+  return NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../..");
+}
+
+/** Absolute path to the Discord-only overlay policy document. */
 export function resolveAgentTurnRulesPath(): string {
-  // presentation/ → src/ → package root → docs/agent-turn-rules.md
-  const presentationDir = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
-  return NodePath.resolve(presentationDir, "../../docs/agent-turn-rules.md");
+  return NodePath.resolve(discordBotPackageRoot(), "docs/agent-turn-rules.md");
 }
 
 export interface DiscordEmbedLike {
@@ -100,12 +104,6 @@ export interface ThreadBootstrapContext {
   readonly t3ThreadId?: string | null | undefined;
   /** T3 web UI base (e.g. https://t3vm.tail….ts.net) for full private PR links. */
   readonly webUiBaseUrl?: string | null | undefined;
-}
-
-function formatDiscordStaticRulesPointer(rulesPath: string): string {
-  // Header kept for ResponseBridge echo-suppression (isDiscordOriginatedUserPrompt).
-  return `## Discord conversation context
-rules: ${rulesPath}`;
 }
 
 /** Collapse whitespace so one-line turn fields cannot inject extra markdown headers. */
@@ -280,10 +278,10 @@ export function buildDiscordTurnPrompt(input: {
   readonly discordThreadTitle?: string | null | undefined;
   readonly t3ThreadId?: string | null | undefined;
   readonly webUiBaseUrl?: string | null | undefined;
-  /** Override static rules path (tests). Defaults to package docs path. */
+  /** Override Discord overlay rules path (tests). Defaults to package docs path. */
   readonly agentTurnRulesPath?: string | undefined;
 }): string {
-  const rulesPath = input.agentTurnRulesPath ?? resolveAgentTurnRulesPath();
+  const overlayRulesPath = input.agentTurnRulesPath ?? resolveAgentTurnRulesPath();
 
   const referencedBlock =
     input.referencedMessage !== null && input.referencedMessage !== undefined
@@ -327,7 +325,11 @@ export function buildDiscordTurnPrompt(input: {
   });
   const t3Section = t3Block !== null ? `\n${t3Block}` : "";
 
-  return `${formatDiscordStaticRulesPointer(rulesPath)}
+  // Header kept for ResponseBridge echo-suppression (isDiscordOriginatedUserPrompt).
+  // Global product rules: server session inject + post-compaction re-inject.
+  // Discord overlay path is surface-specific static policy for this turn.
+  return `## Discord conversation context
+rules: ${overlayRulesPath}
 req: ${formatRequesterLine(input.requester)}${jiraSection}${identitySection}${prFooterSection}${t3Section}
 
 ## User request
