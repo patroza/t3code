@@ -764,12 +764,12 @@ function ThreadRouteContent(
   const renderThreadRouteBody = (showActionControls: boolean) => (
     // A real flex host (not a fragment) keeps the thread body filling the
     // screen so the absolute composer overlay anchors to the true bottom.
-    <View className="flex-1 bg-screen">
+    <View testID="thread-conversation-surface" className="flex-1 bg-screen" style={{ flex: 1 }}>
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
 
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
-      <View className="flex-1">
+      <View className="flex-1" style={{ flex: 1 }}>
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
