@@ -19,6 +19,13 @@ export interface EnabledJiraAppConfig {
   readonly discordLinksPath: string | null;
   readonly botAccountId: string | null;
   readonly turnTimeoutMs: number;
+  /**
+   * When set, unlinked Jira mentions create a new T3 thread on this project id
+   * (join-or-create). When null, auto-create only if the shell has exactly one project.
+   */
+  readonly defaultProjectId: string | null;
+  /** When false, unlinked issues still get "not yet linked." Default true. */
+  readonly autoCreateThread: boolean;
 }
 
 export interface DisabledJiraAppConfig {
@@ -61,6 +68,10 @@ const configEffect = Effect.gen(function* () {
     turnTimeoutMs: Config.number("T3CODE_JIRA_TURN_TIMEOUT_MS").pipe(
       Config.withDefault(30 * 60_000),
     ),
+    defaultProjectId: optionalString("T3CODE_JIRA_DEFAULT_PROJECT_ID"),
+    autoCreateThread: Config.boolean("T3CODE_JIRA_AUTO_CREATE_THREAD").pipe(
+      Config.withDefault(true),
+    ),
   });
 
   // Prefer T3CODE_* then fall back to shared MCP-style env names.
@@ -99,6 +110,8 @@ const configEffect = Effect.gen(function* () {
     discordLinksPath: values.discordLinksPath?.trim() || null,
     botAccountId: values.botAccountId?.trim() || null,
     turnTimeoutMs: Math.max(10_000, values.turnTimeoutMs),
+    defaultProjectId: values.defaultProjectId?.trim() || null,
+    autoCreateThread: values.autoCreateThread,
   });
 });
 

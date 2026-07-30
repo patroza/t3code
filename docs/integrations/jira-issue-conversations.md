@@ -9,15 +9,17 @@ An authorized Jira user can **@mention** the configured bot identity in an issue
 in a comment thread when Jira supplies a parent) and continue a T3 thread that is already linked to
 that issue key.
 
-The Jira entry point is **lookup-only** for worktrees/projects: it does **not** create projects,
-clone repositories, or invent checkouts. Thread resolution uses the **server-native work-item
-store** (`thread-work-items.json` under the server state dir) keyed by Jira issue. Discord is **not**
-required — Discord links are only an optional migration/import source. If no unique live match
-exists, the complete Jira reply is exactly:
+Thread resolution uses the **server-native work-item store** (`thread-work-items.json` under the
+server state dir) keyed by Jira issue (**join-or-create**):
 
-```text
-not yet linked.
-```
+1. **Exactly one** store hit → continue that thread (Discord import is a migration fallback only).
+2. **Multiple** hits → fail closed with an ambiguous message (never guess).
+3. **Zero** hits → **auto-create** a T3 thread on `T3CODE_JIRA_DEFAULT_PROJECT_ID` (or the sole
+   shell project when unset), attach the issue key, and run the turn. Disable with
+   `T3CODE_JIRA_AUTO_CREATE_THREAD=false`.
+
+Does **not** create projects, clone repositories, or invent checkouts (new threads start without a
+worktree; later GitHub/Discord surfaces can join via the same store).
 
 Agent-side Jira read/write for general tooling remains the shared Jira MCP (`mcp-atlassian`). This
 bridge only owns **inbound webhooks** and **outbound response comments** for mention turns.
@@ -118,17 +120,19 @@ webhook.
 
 ## Configuration
 
-| Variable                         | Required | Default | Purpose                                                          |
-| -------------------------------- | -------- | ------- | ---------------------------------------------------------------- |
-| `T3CODE_JIRA_WEBHOOK_SECRET`     | yes\*    | —       | Shared secret for inbound webhook auth                           |
-| `T3CODE_JIRA_MENTION`            | yes\*    | —       | Bot handle / display name / accountId to match                   |
-| `T3CODE_JIRA_URL`                | yes\*    | —       | Site or gateway base (`…atlassian.net` or `…/ex/jira/{cloudId}`) |
-| `T3CODE_JIRA_USERNAME`           | yes\*    | —       | Service account email for REST replies                           |
-| `T3CODE_JIRA_API_TOKEN`          | yes\*    | —       | API token (Basic or Bearer per deployment)                       |
-| `T3CODE_JIRA_ALLOWED_PROJECTS`   | no       | empty   | Comma-separated project keys; empty = all                        |
-| `T3CODE_JIRA_DISCORD_LINKS_PATH` | no       | —       | Path to Discord bot `links.json` for issue→thread                |
-| `T3CODE_JIRA_TURN_TIMEOUT_MS`    | no       | 30m     | Max wait for turn completion before timeout comment              |
-| `T3CODE_JIRA_AUTH_MODE`          | no       | `basic` | `basic` (email+token) or `bearer` (scoped token)                 |
+| Variable                         | Required | Default | Purpose                                                           |
+| -------------------------------- | -------- | ------- | ----------------------------------------------------------------- |
+| `T3CODE_JIRA_WEBHOOK_SECRET`     | yes\*    | —       | Shared secret for inbound webhook auth                            |
+| `T3CODE_JIRA_MENTION`            | yes\*    | —       | Bot handle / display name / accountId to match                    |
+| `T3CODE_JIRA_URL`                | yes\*    | —       | Site or gateway base (`…atlassian.net` or `…/ex/jira/{cloudId}`)  |
+| `T3CODE_JIRA_USERNAME`           | yes\*    | —       | Service account email for REST replies                            |
+| `T3CODE_JIRA_API_TOKEN`          | yes\*    | —       | API token (Basic or Bearer per deployment)                        |
+| `T3CODE_JIRA_ALLOWED_PROJECTS`   | no       | empty   | Comma-separated project keys; empty = all                         |
+| `T3CODE_JIRA_DISCORD_LINKS_PATH` | no       | —       | Path to Discord bot `links.json` for issue→thread                 |
+| `T3CODE_JIRA_TURN_TIMEOUT_MS`    | no       | 30m     | Max wait for turn completion before timeout comment               |
+| `T3CODE_JIRA_AUTH_MODE`          | no       | `basic` | `basic` (email+token) or `bearer` (scoped token)                  |
+| `T3CODE_JIRA_AUTO_CREATE_THREAD` | no       | `true`  | Create a T3 thread when the issue is unlinked                     |
+| `T3CODE_JIRA_DEFAULT_PROJECT_ID` | no\*     | —       | Project for auto-created threads (\*or exactly one shell project) |
 
 \*When any required value is missing, the integration is **disabled** (webhook returns 404).
 
