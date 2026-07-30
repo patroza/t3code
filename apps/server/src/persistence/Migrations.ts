@@ -50,6 +50,7 @@ import Migration0034 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0036 from "./Migrations/036_ProjectionQueuedMessages.ts";
 import Migration0037 from "./Migrations/037_SessionIdentityClaims.ts";
+import Migration0038 from "./Migrations/038_ProjectionThreadSourceAttribution.ts";
 import Migration0039 from "./Migrations/039_RepairProjectionThreadTitleRegeneration.ts";
 
 /**
@@ -100,6 +101,7 @@ export const migrationEntries = [
   [35, "ProjectionThreadTitleRegeneration", Migration0035],
   [36, "ProjectionQueuedMessages", Migration0036],
   [37, "SessionIdentityClaims", Migration0037],
+  [38, "ProjectionThreadSourceAttribution", Migration0038],
   [39, "RepairProjectionThreadTitleRegeneration", Migration0039],
 ] as const;
 

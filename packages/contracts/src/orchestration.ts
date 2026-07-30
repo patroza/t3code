@@ -364,6 +364,8 @@ export const OrchestrationQueuedMessage = Schema.Struct({
   attachments: Schema.Array(ChatAttachment),
   modelSelection: Schema.optional(ModelSelection),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Server-stamped at enqueue; preserved when the queue drains to message-sent. */
+  source: Schema.optional(SourceRef),
   queuedAt: IsoDateTime,
 });
 export type OrchestrationQueuedMessage = typeof OrchestrationQueuedMessage.Type;
@@ -752,6 +754,11 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /**
+   * Server-authored only. Gate layer stamps from session claim + deviceType.
+   * Clients must not send trusted person fields (ClientOrchestrationCommand omits this).
+   */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
 });
 
@@ -1210,6 +1217,8 @@ export const ThreadMessageQueuedPayload = Schema.Struct({
   attachments: Schema.Array(ChatAttachment),
   modelSelection: Schema.optional(ModelSelection),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Server-stamped provenance for the queued user message. */
+  source: Schema.optional(SourceRef),
   queuedAt: IsoDateTime,
 });
 

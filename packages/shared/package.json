@@ -111,6 +111,10 @@
       "types": "./src/identityMap.ts",
       "import": "./src/identityMap.ts"
     },
+    "./sourceAttribution": {
+      "types": "./src/sourceAttribution.ts",
+      "import": "./src/sourceAttribution.ts"
+    },
     "./threadAttributeSearch": {
       "types": "./src/threadAttributeSearch.ts",
       "import": "./src/threadAttributeSearch.ts"

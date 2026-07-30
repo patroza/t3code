@@ -566,6 +566,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       ]);
 
       let latestUserMessageAt: string | null = null;
+      // Rebuild origin + participants from projected user messages so shell stays
+      // consistent after resync/replay (not only first-write stamps).
+      type ParticipantRow = NonNullable<(typeof existingRow.value)["participantSummaries"]>[number];
+      const rebuiltParticipants: Array<ParticipantRow> = [];
+      let rebuiltOrigin = existingRow.value.originSource ?? null;
       for (const message of messages) {
         if (
           message.role === "user" &&
@@ -573,7 +578,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         ) {
           latestUserMessageAt = message.createdAt;
         }
+        if (message.role !== "user" || message.source === undefined) {
+          continue;
+        }
+        if (rebuiltOrigin === null || rebuiltOrigin === undefined) {
+          rebuiltOrigin = message.source;
+        }
+        if (message.source.personId !== undefined && message.source.username !== undefined) {
+          const personId = message.source.personId;
+          const already = rebuiltParticipants.some((entry) => entry.personId === personId);
+          if (!already) {
+            rebuiltParticipants.push({
+              personId,
+              username: message.source.username,
+              firstChannel: message.source.channel,
+              firstParticipatedAt: message.createdAt,
+            });
+          }
+        }
       }
+      // Origin person first when present.
+      if (rebuiltOrigin?.personId !== undefined) {
+        const originId = rebuiltOrigin.personId;
+        rebuiltParticipants.sort((left, right) => {
+          if (left.personId === originId) return -1;
+          if (right.personId === originId) return 1;
+          return left.firstParticipatedAt.localeCompare(right.firstParticipatedAt);
+        });
+      }
+      const originSource = rebuiltOrigin;
+      const participantSummaries = rebuiltParticipants;
 
       const pendingApprovalCount = pendingApprovals.filter(
         (approval) => approval.status === "pending",
@@ -590,6 +624,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         pendingApprovalCount,
         pendingUserInputCount,
         hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+        originSource: originSource ?? null,
+        participantSummaries,
       });
     });
 
@@ -937,6 +973,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             isStreaming: event.payload.streaming,
+            ...(event.payload.source !== undefined
+              ? { source: event.payload.source }
+              : previousMessage?.source !== undefined
+                ? { source: previousMessage.source }
+                : {}),
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
