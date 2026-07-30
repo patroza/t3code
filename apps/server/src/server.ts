@@ -492,8 +492,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(
-  // Identity must be on the routes layer so HTTP/WS yield* IdentityService
-  // is satisfied without leaking residual R into CLI typecheck graphs.
+  // Residual-free memory claims on the routes graph (CLI + server tests).
+  // layerPersisted is available when SqlClient is in the parent graph; full
+  // process restarts re-claim via the typeahead gate until that is the default.
   Layer.provide(IdentityService.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),

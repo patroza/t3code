@@ -17,6 +17,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import {
   AuthSessionId,
@@ -37,6 +38,11 @@ import {
   IdentityMapParseError,
 } from "@t3tools/shared/identityMap";
 import { parse as parseYamlString } from "yaml";
+
+import {
+  SessionIdentityClaimRepository,
+  layer as sessionIdentityClaimRepositoryLayer,
+} from "../persistence/SessionIdentityClaims.ts";
 
 type ClaimRecord = {
   readonly sessionId: AuthSessionId;
@@ -139,9 +145,15 @@ function toPublicPeople(people: ReadonlyArray<IdentityMapPerson>) {
   });
 }
 
+type ClaimStore = {
+  readonly get: (sessionId: AuthSessionId) => Effect.Effect<ClaimRecord | null>;
+  readonly put: (record: ClaimRecord) => Effect.Effect<void>;
+  readonly remove: (sessionId: AuthSessionId) => Effect.Effect<boolean>;
+};
+
 function makeService(
   people: ReadonlyArray<IdentityMapPerson>,
-  claimsRef: Ref.Ref<Map<string, ClaimRecord>>,
+  store: ClaimStore,
 ): IdentityService["Service"] {
   const byUsername = new Map(people.map((person) => [person.username, person] as const));
   const byPersonId = new Map(people.map((person) => [person.personId, person] as const));
@@ -164,11 +176,10 @@ function makeService(
       }),
 
     getSessionClaim: (sessionId) =>
-      Ref.get(claimsRef).pipe(
-        Effect.map((claims) => {
-          const record = claims.get(sessionId);
-          return { claim: record === undefined ? null : toPublicClaim(record) };
-        }),
+      store.get(sessionId).pipe(
+        Effect.map((record) => ({
+          claim: record === null ? null : toPublicClaim(record),
+        })),
       ),
 
     claim: (sessionId, input) =>
@@ -202,27 +213,11 @@ function makeService(
           claimedAt,
           method,
         };
-        yield* Ref.update(claimsRef, (claims) => {
-          const next = new Map(claims);
-          next.set(sessionId, record);
-          return next;
-        });
+        yield* store.put(record);
         return { claim: toPublicClaim(record) };
       }),
 
-    clearClaim: (sessionId) =>
-      Effect.gen(function* () {
-        const claims = yield* Ref.get(claimsRef);
-        if (!claims.has(sessionId)) {
-          return { cleared: false };
-        }
-        yield* Ref.update(claimsRef, (map) => {
-          const next = new Map(map);
-          next.delete(sessionId);
-          return next;
-        });
-        return { cleared: true };
-      }),
+    clearClaim: (sessionId) => store.remove(sessionId).pipe(Effect.map((cleared) => ({ cleared }))),
 
     requireOperateClaim: (sessionId, options) =>
       Effect.gen(function* () {
@@ -231,9 +226,8 @@ function makeService(
         if (options?.clientDeviceType === "bot") {
           return null;
         }
-        const claims = yield* Ref.get(claimsRef);
-        const existing = claims.get(sessionId);
-        if (existing === undefined) {
+        const existing = yield* store.get(sessionId);
+        if (existing === null) {
           return yield* new IdentityError({
             code: "identity_claim_required",
             message:
@@ -241,17 +235,34 @@ function makeService(
           });
         }
         if (!byPersonId.has(existing.personId) || !byUsername.has(existing.username)) {
-          yield* Ref.update(claimsRef, (map) => {
-            const next = new Map(map);
-            next.delete(sessionId);
-            return next;
-          });
+          yield* store.remove(sessionId);
           return yield* new IdentityError({
             code: "identity_unknown_person",
             message: "Your identity claim is no longer in the server map. Claim again.",
           });
         }
         return toPublicClaim(existing);
+      }),
+  };
+}
+
+function makeMemoryStore(claimsRef: Ref.Ref<Map<string, ClaimRecord>>): ClaimStore {
+  return {
+    get: (sessionId) =>
+      Ref.get(claimsRef).pipe(Effect.map((claims) => claims.get(sessionId) ?? null)),
+    put: (record) =>
+      Ref.update(claimsRef, (claims) => {
+        const next = new Map(claims);
+        next.set(record.sessionId, record);
+        return next;
+      }),
+    remove: (sessionId) =>
+      Ref.modify(claimsRef, (claims) => {
+        const had = claims.has(sessionId);
+        if (!had) return [false, claims] as const;
+        const next = new Map(claims);
+        next.delete(sessionId);
+        return [true, next] as const;
       }),
   };
 }
@@ -265,10 +276,65 @@ export const make: Effect.Effect<IdentityService["Service"]> = Effect.gen(functi
       people: people.length,
     });
   }
-  return makeService(people, claimsRef);
+  return makeService(people, makeMemoryStore(claimsRef));
 });
 
+/** Residual-free in-memory layer (CLI / tests without SQL). */
 export const layer = Layer.effect(IdentityService, make);
+
+/**
+ * Server layer: SQLite-backed claims with an in-memory cache.
+ * Requires SessionIdentityClaimRepository (SqlClient residual).
+ */
+export const layerPersisted = Layer.effect(
+  IdentityService,
+  Effect.gen(function* () {
+    const claimsRef = yield* Ref.make(new Map<string, ClaimRecord>());
+    const memory = makeMemoryStore(claimsRef);
+    const repository = yield* SessionIdentityClaimRepository;
+    const people = loadPeopleFromEnv();
+    if (people.length > 0) {
+      yield* Effect.logInfo("Identity map loaded", {
+        path: process.env.T3_IDENTITY_MAP_PATH ?? "",
+        people: people.length,
+      });
+    }
+
+    const store: ClaimStore = {
+      get: (sessionId) =>
+        Effect.gen(function* () {
+          const cached = yield* memory.get(sessionId);
+          if (cached !== null) return cached;
+          const row = yield* repository
+            .getBySessionId(sessionId)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isNone(row)) return null;
+          const record: ClaimRecord = {
+            sessionId: row.value.sessionId,
+            personId: row.value.personId,
+            username: row.value.username,
+            claimedAt: row.value.claimedAt,
+            method: row.value.method,
+          };
+          yield* memory.put(record);
+          return record;
+        }),
+      put: (record) =>
+        Effect.gen(function* () {
+          yield* memory.put(record);
+          yield* repository.upsert(record).pipe(Effect.catch(() => Effect.void));
+        }),
+      remove: (sessionId) =>
+        Effect.gen(function* () {
+          const cleared = yield* memory.remove(sessionId);
+          yield* repository.deleteBySessionId(sessionId).pipe(Effect.catch(() => Effect.void));
+          return cleared;
+        }),
+    };
+
+    return makeService(people, store);
+  }),
+).pipe(Layer.provide(sessionIdentityClaimRepositoryLayer));
 
 /** Test helper: fixed people list. */
 export const layerWithPeople = (people: ReadonlyArray<IdentityMapPerson>) =>
@@ -276,6 +342,6 @@ export const layerWithPeople = (people: ReadonlyArray<IdentityMapPerson>) =>
     IdentityService,
     Effect.gen(function* () {
       const claimsRef = yield* Ref.make(new Map<string, ClaimRecord>());
-      return makeService(people, claimsRef);
+      return makeService(people, makeMemoryStore(claimsRef));
     }),
   );
