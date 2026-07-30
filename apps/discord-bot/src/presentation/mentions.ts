@@ -35,11 +35,13 @@ export type ParsedMentionIntent =
   | { readonly kind: "interrupt" }
   | { readonly kind: "help" }
   | { readonly kind: "refresh-indicators" }
+  | { readonly kind: "compact" }
   | LinkThreadCommand
   | ({ readonly kind: "prompt" } & ParsedMentionFlags);
 
 const INTERRUPT_PROMPTS = new Set(["stop", "cancel", "abort", "interrupt"]);
 const HELP_PROMPTS = new Set(["help"]);
+const COMPACT_PROMPTS = new Set(["compact"]);
 const REFRESH_INDICATORS_PROMPTS = new Set([
   "refresh-indicators",
   "refresh indicators",
@@ -122,6 +124,10 @@ export function parseMentionIntent(raw: string): ParsedMentionIntent {
 
   if (HELP_PROMPTS.has(normalizedPrompt)) {
     return { kind: "help" };
+  }
+
+  if (COMPACT_PROMPTS.has(normalizedPrompt)) {
+    return { kind: "compact" };
   }
 
   if (REFRESH_INDICATORS_PROMPTS.has(normalizedPrompt)) {

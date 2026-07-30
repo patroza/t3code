@@ -659,6 +659,7 @@ export function applyThreadDetailEvent(
     case "thread.approval-response-requested":
     case "thread.user-input-response-requested":
     case "thread.checkpoint-revert-requested":
+    case "thread.context-compact-requested":
       return { kind: "unchanged" };
   }
 
