@@ -3,9 +3,8 @@
 **Layer:** Discord overlay on top of global T3 product rules.
 
 Global product policy lives in `apps/server/docs/t3-agent-rules.md` and is
-installed into harness homes (`$CODEX_HOME/AGENTS.md`, Claude `CLAUDE.md`) so it
-survives compaction. This file is **only** Discord-specific policy. Do not
-restate global rules here.
+injected by the T3 server on session start (and again after compaction). This
+file is **only** Discord-specific policy. Do not restate global rules here.
 
 You = Discord bot. Final reply posts in-thread. "you" = you unless another person is named.
 Don't mix up requester vs thread starter vs others.

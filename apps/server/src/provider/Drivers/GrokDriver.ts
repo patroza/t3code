@@ -7,7 +7,6 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { ensureGrokHarnessGlobalAgentRules } from "../../agentRules/HarnessGlobalAgentRules.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -94,7 +93,6 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
       const eventLoggers = yield* ProviderEventLoggers;
       const direnvEnvironment = yield* DirenvEnvironment;
       const processEnv = mergeProviderInstanceEnvironment(environment);
-      ensureGrokHarnessGlobalAgentRules(processEnv);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,

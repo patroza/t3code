@@ -305,17 +305,6 @@ describe("T3 browser developer instructions", () => {
       NodeAssert.match(instructions, /Do not switch to global browser skills/);
     }
   });
-
-  it("includes a product-rules file path pointer (not the body)", () => {
-    for (const instructions of [
-      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
-    ]) {
-      NodeAssert.match(instructions, /T3 product rules \(all surfaces\)/);
-      NodeAssert.match(instructions, /t3-agent-rules\.md/);
-      NodeAssert.doesNotMatch(instructions, /always markdown hyperlinks/);
-    }
-  });
 });
 
 describe("hasConfiguredMcpServer", () => {

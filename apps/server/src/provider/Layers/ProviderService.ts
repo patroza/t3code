@@ -844,8 +844,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       // All harnesses: inject product rules on first turn of the session, and
       // again after compaction (flag cleared on thread.state.changed compacted).
-      // Harness-global AGENTS.md/CLAUDE.md installs are the durable path; this
-      // is the universal backup so Grok/OpenCode/Kimi/Cursor keep rules too.
       const bindingOption = yield* directory.getBinding(parsed.threadId);
       const binding = Option.getOrUndefined(bindingOption);
       const rulesAlreadyInjected = readT3AgentRulesInjected(binding?.runtimePayload ?? null);

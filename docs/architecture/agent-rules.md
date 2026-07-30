@@ -1,52 +1,48 @@
-# Global T3 agent rules + client overlays
+# Global T3 agent rules
 
-Product-wide behavioral rules for agents running **through T3 Code**, independent of **project** `AGENTS.md`.
+Product-wide behavioral rules for agents running **through T3 Code**, independent of project `AGENTS.md`.
 
-## Goal
+## Single mechanism
 
-1. Apply on **every surface** (web, desktop, mobile, Discord, GitHub, Jira)
-2. Work on **every harness** (Codex, Claude, Grok, OpenCode, Kimi, Cursor, …)
-3. **Survive context compaction**
-4. Stay out of **project** instruction files
+**Session inject + re-inject after compaction** — one path for every harness (Codex, Claude, Grok, OpenCode, Kimi, Cursor, …) and every surface (web, desktop, mobile, Discord, GitHub, Jira).
 
-## Dual delivery
+```
+First turn of a provider session
+  → prepend ## Agent rules / rules: <path> to the provider input
+  → mark t3AgentRulesInjected on the session runtime payload
 
-### A. Harness-global install (preferred durable path)
+Later turns
+  → skip (flag set)
 
-Installed when each provider driver starts:
+thread.state.changed / compacted
+  → clear t3AgentRulesInjected
 
-| Harness  | Home                                | File                                      |
-| -------- | ----------------------------------- | ----------------------------------------- |
-| Codex    | `$CODEX_HOME`                       | `AGENTS.md` + `t3-agent-rules.md` symlink |
-| Claude   | `$CLAUDE_CONFIG_DIR` / `~/.claude`  | `CLAUDE.md` + symlink                     |
-| Grok     | `~/.grok` / `$GROK_HOME`            | `AGENTS.md` + symlink                     |
-| Kimi     | `$KIMI_CODE_HOME` / `~/.kimi`       | `AGENTS.md` + symlink                     |
-| OpenCode | `~/.config/opencode`, `~/.opencode` | `AGENTS.md` + symlink                     |
-| Cursor   | `~/.cursor` / `$CURSOR_HOME`        | `AGENTS.md` + symlink                     |
+Next turn after compaction
+  → inject again
+```
 
-Managed marker section preserves the user’s other global prefs. Source of truth:
-[`apps/server/docs/t3-agent-rules.md`](../../apps/server/docs/t3-agent-rules.md).
+- Source of truth: [`apps/server/docs/t3-agent-rules.md`](../../apps/server/docs/t3-agent-rules.md)
+- Helpers: [`T3AgentRules.ts`](../../apps/server/src/agentRules/T3AgentRules.ts)
+- Wiring: [`ProviderService.sendTurn`](../../apps/server/src/provider/Layers/ProviderService.ts) + compaction handling in `persistRuntimeEventState`
+- Bodies are **not** embedded; agents open the file path
+- Stored chat messages are not rewritten; only the provider payload is wrapped
 
-### B. Session inject + re-inject after compaction (universal backup)
+## Why this shape
 
-`ProviderService.sendTurn`:
+- Works the same for every harness (no special-casing home dirs)
+- Compaction drops transcript history → re-inject is how rules re-enter context
+- Avoids mutating harness-global or project `AGENTS.md` / `CLAUDE.md`
 
-1. On first turn of a provider session → prepend `## Agent rules` file pointers
-2. Mark `t3AgentRulesInjected` on the session runtime payload
-3. On `thread.state.changed` with `compacted` → clear the flag
-4. Next turn re-injects so rules re-enter context after compaction
+## Discord overlay
 
-This path covers harnesses that ignore global AGENTS.md, or when install fails.
+| Layer            | File                                        | When                          |
+| ---------------- | ------------------------------------------- | ----------------------------- |
+| **Global**       | `apps/server/docs/t3-agent-rules.md`        | Session inject (all surfaces) |
+| **Discord-only** | `apps/discord-bot/docs/agent-turn-rules.md` | Discord turn `rules:` line    |
 
-Codex also keeps a one-line path in `developer_instructions`.
-
-## Discord
-
-- Global rules: harness + session inject (above)
-- Overlay: `apps/discord-bot/docs/agent-turn-rules.md` via turn `rules:` line
-- Dynamic fields (`req`, `cab`, `pr`, …) still every Discord turn
+Dynamic Discord fields (`req`, `jira`, `cab`, `pr`, `t3`) still appear each turn.
 
 ## Adding a rule
 
-1. Shared → `apps/server/docs/t3-agent-rules.md`
-2. Discord-only → `apps/discord-bot/docs/agent-turn-rules.md`
+1. Shared → edit `apps/server/docs/t3-agent-rules.md`
+2. Discord-only → edit `apps/discord-bot/docs/agent-turn-rules.md`

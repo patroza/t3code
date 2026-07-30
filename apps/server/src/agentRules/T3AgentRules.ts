@@ -1,14 +1,14 @@
 /**
  * Product-wide agent rules (source of truth + helpers).
  *
- * Delivery (must survive compaction, all harnesses):
- * 1. **Harness-global install** where possible
- *    (Codex `$CODEX_HOME/AGENTS.md`, Claude `CLAUDE.md`, Grok/Kimi/OpenCode/Cursor homes)
- * 2. **Session inject** on first provider turn + **re-inject after compaction**
- *    so harnesses without durable global files still keep rules in context
- * 3. Codex developer_instructions path pointer as backup
+ * Single delivery mechanism (all harnesses, all surfaces):
+ * - Inject `## Agent rules` **file pointers** on the first provider turn of a session
+ * - Clear the inject flag on context compaction, re-inject on the next turn
  *
- * Not project AGENTS.md. Discord overlay is surface-only.
+ * Not project AGENTS.md. Not harness-home mutation. Bodies are never embedded;
+ * agents open the rules file path.
+ *
+ * Discord overlay is surface-only (`agent-turn-rules.md` via Discord turn context).
  */
 
 import * as NodeFS from "node:fs";
@@ -96,12 +96,6 @@ export function resolveT3AgentRulesPathsForTurn(providerInput: string | undefine
 
 export function formatT3AgentRulesPointer(rulesPath: string = resolveT3AgentRulesPath()): string {
   return formatAgentRulesPointers([rulesPath]);
-}
-
-export function formatT3AgentRulesSessionPointer(
-  rulesPath: string = resolveT3AgentRulesPath(),
-): string {
-  return `T3 product rules (all surfaces): read and follow ${rulesPath}`;
 }
 
 export function readT3AgentRulesInjected(runtimePayload: unknown): boolean {

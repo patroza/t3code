@@ -21,7 +21,6 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { ensureOpenCodeHarnessGlobalAgentRules } from "../../agentRules/HarnessGlobalAgentRules.ts";
 import { makeOpenCodeTextGeneration } from "../../textGeneration/OpenCodeTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
@@ -124,7 +123,6 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const eventLoggers = yield* ProviderEventLoggers;
       const direnvEnvironment = yield* DirenvEnvironment;
       const processEnv = mergeProviderInstanceEnvironment(environment);
-      ensureOpenCodeHarnessGlobalAgentRules(processEnv);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,

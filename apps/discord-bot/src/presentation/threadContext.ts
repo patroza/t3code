@@ -3,10 +3,9 @@
  * Build initial T3 prompts when the bot is first pulled into a Discord thread.
  * Combines the thread starter (e.g. Sentry alert embed) with the user @mention.
  *
- * Global product rules are installed into harness homes (Codex `$CODEX_HOME/AGENTS.md`,
- * Claude `CLAUDE.md`) so they survive compaction — not re-pasted every turn.
- * This builder only emits **dynamic** Discord fields + a pointer to the
- * Discord-only overlay (`docs/agent-turn-rules.md`).
+ * Global product rules are injected by the T3 server on session start (and again
+ * after compaction). This builder only emits **dynamic** Discord fields + a
+ * pointer to the Discord-only overlay (`docs/agent-turn-rules.md`).
  */
 
 import * as NodePath from "node:path";
@@ -327,7 +326,7 @@ export function buildDiscordTurnPrompt(input: {
   const t3Section = t3Block !== null ? `\n${t3Block}` : "";
 
   // Header kept for ResponseBridge echo-suppression (isDiscordOriginatedUserPrompt).
-  // Global product rules: harness-global AGENTS.md/CLAUDE.md (survives compaction).
+  // Global product rules: server session inject + post-compaction re-inject.
   // Discord overlay path is surface-specific static policy for this turn.
   return `## Discord conversation context
 rules: ${overlayRulesPath}

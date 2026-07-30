@@ -4,7 +4,6 @@ import { describe, it } from "vitest";
 
 import {
   ensureT3AgentRulesInput,
-  formatT3AgentRulesSessionPointer,
   readT3AgentRulesInjected,
   resolveT3AgentRulesPath,
   T3_AGENT_RULES_INJECTED_KEY,
@@ -43,10 +42,5 @@ describe("session inject helpers", () => {
     NodeAssert.equal(readT3AgentRulesInjected(null), false);
     NodeAssert.equal(readT3AgentRulesInjected({ [T3_AGENT_RULES_INJECTED_KEY]: true }), true);
     NodeAssert.equal(readT3AgentRulesInjected({ [T3_AGENT_RULES_INJECTED_KEY]: false }), false);
-  });
-
-  it("session pointer is a single line", () => {
-    const line = formatT3AgentRulesSessionPointer(resolveT3AgentRulesPath());
-    NodeAssert.equal(line.includes("\n"), false);
   });
 });
