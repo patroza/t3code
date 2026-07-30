@@ -2,6 +2,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
@@ -15,14 +16,50 @@ import {
   ProjectionThreadWorktreeReference,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection } from "@t3tools/contracts";
+import { ModelSelection, SourceRef, ThreadParticipantSummary } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    originSource: Schema.NullOr(Schema.fromJsonString(SourceRef)),
+    participantSummaries: Schema.NullOr(
+      Schema.fromJsonString(Schema.Array(ThreadParticipantSummary)),
+    ),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
+
+function toProjectionThread(row: ProjectionThreadDbRow): ProjectionThread {
+  return {
+    threadId: row.threadId,
+    projectId: row.projectId,
+    title: row.title,
+    modelSelection: row.modelSelection,
+    runtimeMode: row.runtimeMode,
+    interactionMode: row.interactionMode,
+    branch: row.branch,
+    worktreePath: row.worktreePath,
+    latestTurnId: row.latestTurnId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    archivedAt: row.archivedAt,
+    settledOverride: row.settledOverride,
+    settledAt: row.settledAt,
+    snoozedUntil: row.snoozedUntil,
+    snoozedAt: row.snoozedAt,
+    latestUserMessageAt: row.latestUserMessageAt,
+    pendingApprovalCount: row.pendingApprovalCount,
+    pendingUserInputCount: row.pendingUserInputCount,
+    hasActionableProposedPlan: row.hasActionableProposedPlan,
+    deletedAt: row.deletedAt,
+    ...(row.originSource !== null && row.originSource !== undefined
+      ? { originSource: row.originSource }
+      : {}),
+    ...(row.participantSummaries !== null && row.participantSummaries !== undefined
+      ? { participantSummaries: row.participantSummaries }
+      : {}),
+  };
+}
 
 const makeProjectionThreadRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -52,7 +89,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
-          deleted_at
+          deleted_at,
+          origin_source_json,
+          participant_summaries_json
         )
         VALUES (
           ${row.threadId},
@@ -75,7 +114,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
-          ${row.deletedAt}
+          ${row.deletedAt},
+          ${row.originSource !== undefined ? JSON.stringify(row.originSource) : null},
+          ${
+            row.participantSummaries !== undefined ? JSON.stringify(row.participantSummaries) : null
+          }
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
@@ -98,7 +141,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
-          deleted_at = excluded.deleted_at
+          deleted_at = excluded.deleted_at,
+          origin_source_json = COALESCE(
+            excluded.origin_source_json,
+            projection_threads.origin_source_json
+          ),
+          participant_summaries_json = COALESCE(
+            excluded.participant_summaries_json,
+            projection_threads.participant_summaries_json
+          )
       `,
   });
 
@@ -128,7 +179,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
         WHERE thread_id = ${threadId}
       `,
@@ -160,7 +213,9 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
         WHERE project_id = ${projectId}
         ORDER BY created_at ASC, thread_id ASC
@@ -201,11 +256,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
   const getById: ProjectionThreadRepositoryShape["getById"] = (input) =>
     getProjectionThreadRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.getById:query")),
+      Effect.map((row) =>
+        Option.isNone(row) ? Option.none() : Option.some(toProjectionThread(row.value)),
+      ),
     );
 
   const listByProjectId: ProjectionThreadRepositoryShape["listByProjectId"] = (input) =>
     listProjectionThreadRows(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.listByProjectId:query")),
+      Effect.map((rows) => rows.map(toProjectionThread)),
     );
 
   const deleteById: ProjectionThreadRepositoryShape["deleteById"] = (input) =>

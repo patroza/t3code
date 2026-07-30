@@ -110,6 +110,9 @@ import {
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
+import { ParticipantStack, SourceChannelGlyph } from "./identity/ParticipantStack";
+import { threadMatchesMine } from "@t3tools/client-runtime/state/identity";
+import { identityEnvironment } from "../state/identity";
 import {
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
@@ -804,8 +807,17 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       "opacity-70 transition-opacity hover:opacity-100",
   );
 
+  const participants = thread.participantSummaries ?? [];
+  const originChannel = thread.originSource?.channel ?? participants[0]?.firstChannel ?? null;
+
   const title = (
     <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      {!isRenaming ? (
+        <>
+          <SourceChannelGlyph channel={originChannel} />
+          <ParticipantStack participants={participants} />
+        </>
+      ) : null}
       {isRenaming ? (
         <input
           autoFocus
@@ -1306,11 +1318,30 @@ export default function SidebarV2() {
       ),
     [availableEnvironmentIds, storedEnvironmentFilter],
   );
+  const [ownershipFilter, setOwnershipFilter] = useState<"any" | "mine" | "theirs">(() => {
+    try {
+      const raw = window.localStorage.getItem("t3.sidebar.ownershipFilter");
+      if (raw === "mine" || raw === "theirs" || raw === "any") return raw;
+    } catch {
+      // ignore
+    }
+    return "any";
+  });
+  const identityTarget = useMemo(() => {
+    const environmentId = primaryEnvironmentId ?? selectedEnvironmentIds[0] ?? null;
+    return environmentId === null ? null : { environmentId, input: {} as const };
+  }, [primaryEnvironmentId, selectedEnvironmentIds]);
+  const identityClaimQuery = useEnvironmentQuery(
+    identityTarget === null ? null : identityEnvironment.sessionClaim(identityTarget),
+  );
+  const claimPersonId = identityClaimQuery.data?.claim?.personId ?? null;
+
   const listOptionsActive =
     !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
     storedThreadGrouping !== DEFAULT_WEB_THREAD_GROUPING ||
     settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS ||
-    settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED;
+    settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED ||
+    ownershipFilter !== "any";
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1610,7 +1641,15 @@ export default function SidebarV2() {
         thread.archivedAt === null &&
         matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
         (scopedProjectKeys === null ||
-          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
+        threadMatchesMine({
+          claimPersonId,
+          originPersonId: thread.originSource?.personId ?? null,
+          participantPersonIds: (thread.participantSummaries ?? []).map(
+            (participant) => participant.personId,
+          ),
+          mode: ownershipFilter,
+        }),
     );
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -1660,7 +1699,9 @@ export default function SidebarV2() {
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
+    claimPersonId,
     nowMinute,
+    ownershipFilter,
     scopedProjectKeys,
     selectedEnvironmentIds,
     serverConfigs,
@@ -2692,6 +2733,42 @@ export default function SidebarV2() {
                           data-testid={`sidebar-v2-thread-grouping-${grouping}`}
                         >
                           {WEB_THREAD_GROUPING_LABELS[grouping]}
+                        </MenuRadioItem>
+                      ))}
+                    </MenuRadioGroup>
+                  </MenuGroup>
+                  <MenuSeparator />
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      Ownership
+                    </div>
+                    <MenuRadioGroup
+                      value={ownershipFilter}
+                      onValueChange={(value) => {
+                        if (value !== "any" && value !== "mine" && value !== "theirs") return;
+                        setOwnershipFilter(value);
+                        try {
+                          window.localStorage.setItem("t3.sidebar.ownershipFilter", value);
+                        } catch {
+                          // ignore
+                        }
+                      }}
+                    >
+                      {(
+                        [
+                          ["any", "Anyone"],
+                          ["mine", "Mine"],
+                          ["theirs", "Theirs"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <MenuRadioItem
+                          key={value}
+                          value={value}
+                          closeOnClick={false}
+                          className="min-h-7 py-1 sm:text-xs"
+                          data-testid={`sidebar-v2-ownership-filter-${value}`}
+                        >
+                          {label}
                         </MenuRadioItem>
                       ))}
                     </MenuRadioGroup>

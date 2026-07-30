@@ -4,7 +4,10 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  type SourceRef,
+  type ThreadParticipantSummary,
 } from "@t3tools/contracts";
+import { mergeParticipantSummaries, nextOriginSource } from "@t3tools/shared/sourceAttribution";
 import * as Effect from "effect/Effect";
 import * as HashMap from "effect/HashMap";
 import * as HashSet from "effect/HashSet";
@@ -483,6 +486,7 @@ export function projectEvent(
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
+            ...(payload.source !== undefined ? { source: payload.source } : {}),
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
           },
@@ -519,17 +523,63 @@ export function projectEvent(
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
+                    // Preserve source on first write; streaming deltas don't re-stamp.
+                    ...(entry.source === undefined && message.source !== undefined
+                      ? { source: message.source }
+                      : {}),
                   }
                 : entry,
             )
           : [...thread.messages, message];
         const cappedMessages = messages.slice(-MAX_THREAD_MESSAGES);
 
+        const messageSource: SourceRef | undefined =
+          existingMessage === undefined
+            ? message.source
+            : (existingMessage.source ?? message.source);
+        const nextOrigin = nextOriginSource({
+          current: thread.originSource ?? null,
+          messageSource,
+          role: message.role,
+        });
+        // Preserve branded SourceRef from the event when setting origin.
+        const originSource: SourceRef | null | undefined =
+          nextOrigin === null || nextOrigin === undefined
+            ? nextOrigin
+            : messageSource !== undefined &&
+                (thread.originSource === undefined || thread.originSource === null)
+              ? messageSource
+              : (thread.originSource ?? null);
+        const existingSummaries = thread.participantSummaries ?? [];
+        const participantSummaries: ReadonlyArray<ThreadParticipantSummary> =
+          message.role === "user" &&
+          messageSource?.personId !== undefined &&
+          messageSource.username !== undefined
+            ? (mergeParticipantSummaries({
+                existing: existingSummaries,
+                source: {
+                  personId: messageSource.personId,
+                  username: messageSource.username,
+                  channel: messageSource.channel,
+                },
+                participatedAt: message.createdAt,
+                originPersonId: originSource?.personId ?? null,
+              }).map((entry) => ({
+                personId: entry.personId as ThreadParticipantSummary["personId"],
+                username: entry.username as ThreadParticipantSummary["username"],
+                ...(entry.name !== undefined ? { name: entry.name } : {}),
+                ...(entry.firstChannel !== undefined ? { firstChannel: entry.firstChannel } : {}),
+                firstParticipatedAt: entry.firstParticipatedAt,
+              })) as ReadonlyArray<ThreadParticipantSummary>)
+            : existingSummaries;
+
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
             updatedAt: event.occurredAt,
+            ...(originSource !== undefined ? { originSource } : {}),
+            ...(participantSummaries.length > 0 ? { participantSummaries } : {}),
           }),
         };
       });
@@ -557,6 +607,7 @@ export function projectEvent(
               ...(payload.sourceProposedPlan !== undefined
                 ? { sourceProposedPlan: payload.sourceProposedPlan }
                 : {}),
+              ...(payload.source !== undefined ? { source: payload.source } : {}),
               queuedAt: payload.queuedAt,
             },
           ];

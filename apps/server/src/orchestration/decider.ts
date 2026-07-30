@@ -4,6 +4,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationQueuedMessage,
   type OrchestrationThread,
+  type SourceRef,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -239,6 +240,8 @@ interface TurnStartMessageInput {
   readonly modelSelection?: OrchestrationQueuedMessage["modelSelection"];
   readonly titleSeed?: string;
   readonly sourceProposedPlan?: OrchestrationQueuedMessage["sourceProposedPlan"];
+  /** Server-stamped SourceRef for this user message (absent when identity off). */
+  readonly source?: SourceRef;
 }
 
 /**
@@ -276,6 +279,7 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       attachments: message.attachments,
       turnId: null,
       streaming: false,
+      ...(message.source !== undefined ? { source: message.source } : {}),
       createdAt: occurredAt,
       updatedAt: occurredAt,
     },
@@ -402,6 +406,7 @@ const planQueuedMessageDispatch = Effect.fn("planQueuedMessageDispatch")(functio
         ? { modelSelection: queuedMessage.modelSelection }
         : {}),
       ...(sourcePlanStillValid ? { sourceProposedPlan } : {}),
+      ...(queuedMessage.source !== undefined ? { source: queuedMessage.source } : {}),
     },
     occurredAt,
   });
@@ -1009,6 +1014,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               ? { modelSelection: command.modelSelection }
               : {}),
             ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+            ...(command.source !== undefined ? { source: command.source } : {}),
             queuedAt: command.createdAt,
           },
         };
@@ -1026,6 +1032,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.source !== undefined ? { source: command.source } : {}),
         },
         occurredAt: command.createdAt,
       });
