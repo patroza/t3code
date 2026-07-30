@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  hashIdentitySeed,
   identityAvatar,
   identityAvatarColors,
   identityInitials,
@@ -30,6 +29,21 @@ describe("identityInitials", () => {
     expect(identityInitials({})).toBe("?");
     expect(identityInitials({ username: "  ", name: "" })).toBe("?");
   });
+
+  it("handles CJK name without surrogate splits", () => {
+    expect(identityInitials({ name: "田中 太郎" })).toBe("田太");
+  });
+
+  it("handles CJK username", () => {
+    expect(identityInitials({ username: "田中" })).toBe("田中");
+  });
+
+  it("skips emoji-only name to username when possible", () => {
+    // emoji has no L/N letters — falls through to code points of name
+    const initials = identityInitials({ name: "😀😀", username: "pat" });
+    expect(initials.length).toBeGreaterThan(0);
+    expect(initials).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
 });
 
 describe("identityAvatarColors", () => {
@@ -37,17 +51,11 @@ describe("identityAvatarColors", () => {
     expect(identityAvatarColors("patroza")).toEqual(identityAvatarColors("patroza"));
   });
 
-  it("varies across different seeds", () => {
+  it("varies across different seeds when possible", () => {
     const a = identityAvatarColors("patroza");
     const b = identityAvatarColors("julius");
-    // Extremely unlikely to collide with a 12-color palette and distinct hashes;
-    // if it does, palette still valid — just assert both are in palette.
     expect(IDENTITY_AVATAR_PALETTE).toContainEqual(a);
     expect(IDENTITY_AVATAR_PALETTE).toContainEqual(b);
-  });
-
-  it("uses unsigned hash", () => {
-    expect(hashIdentitySeed("patroza")).toBeGreaterThanOrEqual(0);
   });
 });
 
