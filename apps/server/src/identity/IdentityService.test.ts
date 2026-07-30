@@ -1,4 +1,4 @@
-import { AuthSessionId, IdentityError } from "@t3tools/contracts";
+import { AuthSessionId, IdentityError, IdentityUsername } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -42,7 +42,9 @@ describe("IdentityService", () => {
     Effect.gen(function* () {
       const identity = yield* IdentityService.IdentityService;
       const sessionId = AuthSessionId.make("00000000-0000-4000-8000-0000000000aa");
-      const result = yield* identity.claim(sessionId, { username: "nobody" }).pipe(Effect.exit);
+      const result = yield* identity
+        .claim(sessionId, { username: IdentityUsername.make("nobody") })
+        .pipe(Effect.exit);
       expect(Exit.isFailure(result)).toBe(true);
       if (Exit.isFailure(result)) {
         const error = result.cause;
@@ -53,10 +55,12 @@ describe("IdentityService", () => {
         // Prefer direct fail extraction via Cause.squash if available
         void first;
       }
-      const failed = yield* identity.claim(sessionId, { username: "nobody" }).pipe(
-        Effect.map(() => null as string | null),
-        Effect.catch((error) => Effect.succeed(isIdentityError(error) ? error.code : "other")),
-      );
+      const failed = yield* identity
+        .claim(sessionId, { username: IdentityUsername.make("nobody") })
+        .pipe(
+          Effect.map(() => null as string | null),
+          Effect.catch((error) => Effect.succeed(isIdentityError(error) ? error.code : "other")),
+        );
       expect(failed).toBe("identity_unknown_person");
     }).pipe(Effect.provide(TestLayer)),
   );
@@ -73,7 +77,7 @@ describe("IdentityService", () => {
       expect(before).toBe("identity_claim_required");
 
       const claimed = yield* identity.claim(sessionId, {
-        username: "patroza",
+        username: IdentityUsername.make("patroza"),
         method: "typeahead",
       });
       expect(claimed.claim.username).toBe("patroza");
@@ -97,9 +101,9 @@ describe("IdentityService", () => {
     Effect.gen(function* () {
       const identity = yield* IdentityService.IdentityService;
       const sessionId = AuthSessionId.make("00000000-0000-4000-8000-0000000000cc");
-      yield* identity.claim(sessionId, { username: "patroza" });
+      yield* identity.claim(sessionId, { username: IdentityUsername.make("patroza") });
       const next = yield* identity.claim(sessionId, {
-        username: "julius",
+        username: IdentityUsername.make("julius"),
         method: "settings",
       });
       expect(next.claim.username).toBe("julius");
