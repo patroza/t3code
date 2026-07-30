@@ -99,6 +99,10 @@
       "types": "./src/String.ts",
       "import": "./src/String.ts"
     },
+    "./identityAvatar": {
+      "types": "./src/identityAvatar.ts",
+      "import": "./src/identityAvatar.ts"
+    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
