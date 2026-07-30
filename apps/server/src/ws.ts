@@ -1238,6 +1238,7 @@ const makeWsRpcLayer = (
                   (error) =>
                     new OrchestrationDispatchCommandError({
                       message: error.message,
+                      code: error.code,
                     }),
                 ),
               );
