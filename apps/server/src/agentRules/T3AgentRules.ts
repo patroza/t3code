@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * Product-wide agent rules (source of truth + helpers).
  *

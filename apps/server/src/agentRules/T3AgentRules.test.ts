@@ -1,6 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFS from "node:fs";
-import { describe, it } from "vitest";
+import { describe, it } from "vite-plus/test";
 
 import {
   ensureT3AgentRulesInput,
