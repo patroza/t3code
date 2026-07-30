@@ -7623,7 +7623,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const threadId = ThreadId.make("thread-bootstrap-replay-worktree");
-      const existingWorktreePath = "/tmp/replayed-bootstrap-worktree";
+      const fs = yield* FileSystem.FileSystem;
+      // Path must exist: bootstrap reuses only when the recorded worktree is still on disk.
+      const existingWorktreePath = yield* fs.makeTempDirectoryScoped();
       const createWorktree = vi.fn(
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.die(new Error("fatal: a branch named 't3code/replay' already exists")),
@@ -7690,6 +7692,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 Option.some(
                   makeDefaultOrchestrationThreadShell({
                     id: threadId,
+                    branch: "t3code/replay",
                     worktreePath: existingWorktreePath,
                   }),
                 ),
@@ -7751,6 +7754,165 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(runForThread.mock.calls.length, 0);
       assert.deepEqual(refreshStatus.mock.calls[0]?.[0], existingWorktreePath);
       assertTrue(dispatchedCommands.every((command) => command.type !== "thread.delete"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("recreates a missing worktree path for a replayed bootstrap with a branch", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const threadId = ThreadId.make("thread-bootstrap-recreate-worktree");
+      const missingWorktreePath = "/tmp/does-not-exist-bootstrap-worktree";
+      const createWorktree = vi.fn(
+        (input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: {
+              refName: input.newRefName ?? input.refName,
+              path: input.path ?? missingWorktreePath,
+            },
+          }),
+      );
+      const refreshStatus = vi.fn((_: string) =>
+        Effect.succeed({
+          isRepo: true,
+          hasPrimaryRemote: true,
+          isDefaultRef: false,
+          refName: "t3code/recreate",
+          hasWorkingTreeChanges: false,
+          workingTree: {
+            files: [],
+            insertions: 0,
+            deletions: 0,
+          },
+          hasUpstream: true,
+          aheadCount: 0,
+          behindCount: 0,
+          pr: null,
+        }),
+      );
+      const runForThread = vi.fn(
+        (
+          _: Parameters<
+            ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
+          >[0],
+        ) =>
+          Effect.succeed({
+            status: "started" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+            terminalId: "setup-setup",
+            cwd: missingWorktreePath,
+          }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: {
+            createWorktree,
+          },
+          vcsStatusBroadcaster: {
+            refreshStatus,
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.suspend(() => {
+                dispatchedCommands.push(command);
+                return command.type === "thread.create"
+                  ? Effect.fail(
+                      new OrchestrationCommandInvariantError({
+                        commandType: "thread.create",
+                        detail: `Thread '${threadId}' already exists and cannot be created twice.`,
+                      }),
+                    )
+                  : Effect.succeed({ sequence: dispatchedCommands.length });
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    branch: "t3code/recreate",
+                    worktreePath: missingWorktreePath,
+                  }),
+                ),
+              ),
+          },
+          projectSetupScriptRunner: {
+            runForThread,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-recreate-worktree"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-bootstrap-recreate-worktree"),
+              role: "user",
+              text: "hello after gc",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Recreate Worktree",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/recreate",
+                startFromOrigin: true,
+              },
+              runSetupScript: true,
+            },
+            createdAt,
+          }),
+        ),
+      );
+
+      // create (failed duplicate) + meta.update + setup-script.requested/started + turn.start
+      assert.equal(response.sequence, 5);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        [
+          "thread.create",
+          "thread.meta.update",
+          "thread.activity.append",
+          "thread.activity.append",
+          "thread.turn.start",
+        ],
+      );
+      // Re-add at the same path for the existing branch; no origin fetch / new branch.
+      assert.equal(createWorktree.mock.calls.length, 1);
+      assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
+        cwd: "/tmp/project",
+        refName: "t3code/recreate",
+        path: missingWorktreePath,
+      });
+      assert.equal(runForThread.mock.calls.length, 1);
+      assert.deepEqual(refreshStatus.mock.calls[0]?.[0], missingWorktreePath);
+      const metaUpdate = dispatchedCommands[1];
+      assertTrue(metaUpdate?.type === "thread.meta.update");
+      if (metaUpdate?.type === "thread.meta.update") {
+        assert.equal(metaUpdate.branch, "t3code/recreate");
+        assert.equal(metaUpdate.worktreePath, missingWorktreePath);
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
