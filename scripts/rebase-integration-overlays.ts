@@ -12,10 +12,10 @@
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { mkdtempDiskBacked } from "./lib/disk-backed-tmp.ts";
 import {
   isSuccessfulFeatureRebaseSkip,
   readManifest,
@@ -144,9 +144,10 @@ export function rebaseIntegrationOverlays(
   const root = NodePath.resolve(sourceRoot);
   const manifest = options.manifest ?? readManifest(root);
   const originUrl = git(root, ["remote", "get-url", "origin"]);
-  const workDir = NodeFS.mkdtempSync(
-    NodePath.join(NodeOS.tmpdir(), "rebase-integration-overlays-"),
-  );
+  const workDir = mkdtempDiskBacked("rebase-integration-overlays-", {
+    subdir: "rebase-work",
+    envVar: "T3_REBASE_WORK_ROOT",
+  });
   const repoDir = NodePath.join(workDir, "repo");
   NodeFS.mkdirSync(repoDir);
 
