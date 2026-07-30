@@ -3,9 +3,11 @@
  * Join an existing T3 thread by shared work-item identity (Jira key / GitHub PR)
  * before Discord creates a new session.
  *
- * Sources (in order):
- * 1. Discord bot links.json (other channels already bound to a T3 thread)
- * 2. Server `thread-work-items.json` next to state.sqlite (Jira/GitHub bridges)
+ * Sources:
+ * - Server `thread-work-items.json` next to state.sqlite (Jira/GitHub bridges)
+ *
+ * Active Discord links are exclusions: one T3 thread must never be implicitly
+ * joined from more than one Discord thread.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -91,30 +93,27 @@ export function resolveUniqueT3ThreadIdForWorkItems(input: {
   if (jiraKeys.length === 0 && prRefs.length === 0) return null;
 
   const threadIds = new Set<string>();
-
-  for (const link of input.discordLinks) {
-    if (link.status !== undefined && link.status !== "active") continue;
-    const linkKeys = (link.jiraIssueKeys ?? [])
-      .map((key) => normalizeJiraIssueKey(key))
-      .filter((key): key is string => key !== null);
-    const linkPrs = (link.prUrls ?? [])
-      .map((url) => normalizeGitHubPullRequestRef(url))
-      .filter((ref): ref is string => ref !== null);
-    const jiraHit = jiraKeys.some((key) => linkKeys.includes(key));
-    const prHit = prRefs.some((ref) => linkPrs.includes(ref));
-    if (jiraHit || prHit) threadIds.add(link.t3ThreadId);
-  }
+  const discordLinkedThreadIds = new Set<string>(
+    input.discordLinks
+      .filter((link) => link.status === "active" && (link.sourceKind ?? "discord") === "discord")
+      .map((link) => link.t3ThreadId),
+  );
 
   const serverRecords = readServerWorkItemRecords(input.serverWorkItemsPath);
   for (const record of serverRecords) {
-    const recordKeys = (record.jiraIssueKeys ?? [])
-      .map((key) => normalizeJiraIssueKey(key))
-      .filter((key): key is string => key !== null);
-    const recordPrs = (record.githubPullRequests ?? [])
-      .map((url) => normalizeGitHubPullRequestRef(url))
-      .filter((ref): ref is string => ref !== null);
-    const jiraHit = jiraKeys.some((key) => recordKeys.includes(key));
-    const prHit = prRefs.some((ref) => recordPrs.includes(ref));
+    if (discordLinkedThreadIds.has(record.threadId)) continue;
+    const recordKeys = new Set(
+      (record.jiraIssueKeys ?? [])
+        .map((key) => normalizeJiraIssueKey(key))
+        .filter((key): key is string => key !== null),
+    );
+    const recordPrs = new Set(
+      (record.githubPullRequests ?? [])
+        .map((url) => normalizeGitHubPullRequestRef(url))
+        .filter((ref): ref is string => ref !== null),
+    );
+    const jiraHit = jiraKeys.some((key) => recordKeys.has(key));
+    const prHit = prRefs.some((ref) => recordPrs.has(ref));
     if (jiraHit || prHit) threadIds.add(record.threadId);
   }
 
