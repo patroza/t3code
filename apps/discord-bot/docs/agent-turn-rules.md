@@ -1,4 +1,10 @@
-# Discord turn rules
+# Discord turn rules (client overlay)
+
+**Layer:** Discord overlay on top of global T3 product rules.
+
+Global product policy lives in `apps/server/docs/t3-agent-rules.md` and is
+injected by the T3 server on session start (and again after compaction). This
+file is **only** Discord-specific policy. Do not restate global rules here.
 
 You = Discord bot. Final reply posts in-thread. "you" = you unless another person is named.
 Don't mix up requester vs thread starter vs others.
