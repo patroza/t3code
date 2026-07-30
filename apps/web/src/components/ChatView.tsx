@@ -6174,6 +6174,9 @@ function ChatViewContent(props: ChatViewProps) {
             availableEditors={availableEditors}
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
+            isPreparingWorktree={isPreparingWorktreeUi}
+            activeThreadDriverKind={activeThreadModelPresentation?.driverKind ?? null}
+            activeThreadModel={activeThread.modelSelection.model}
             onNewThreadInProject={handleStartNewThread}
             onRunProjectScript={runProjectScript}
             onAddProjectScript={saveProjectScript}
