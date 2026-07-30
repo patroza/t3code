@@ -1,7 +1,12 @@
 import * as NodeCrypto from "node:crypto";
 import { describe, expect, it } from "@effect/vitest";
 
-import { isJiraProjectAllowed } from "./JiraAppConfig.ts";
+import {
+  isJiraProjectAllowed,
+  parseJiraProjectMap,
+  resolveMappedT3ProjectId,
+  resolveT3ProjectIdForJiraKey,
+} from "./JiraAppConfig.ts";
 import { formatJiraComment } from "./JiraIssueBridge.ts";
 import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
@@ -350,6 +355,60 @@ describe("Jira helpers", () => {
     expect(isJiraProjectAllowed(new Set(), "ANY")).toBe(true);
     expect(plainTextToAdf("hello\n\nworld").content).toHaveLength(2);
     expect(formatJiraComment("  ok  ")).toBe("ok");
+  });
+
+  it("parses Jira project → T3 project maps", () => {
+    const map = parseJiraProjectMap(
+      "SA:scanner, CFG=/var/lib/t3/src/macs/configurator , t3:89a7b0dd-cf9c-46da-b2f0-79e19832ac42",
+    );
+    expect(map.get("SA")).toBe("scanner");
+    expect(map.get("CFG")).toBe("/var/lib/t3/src/macs/configurator");
+    expect(map.get("T3")).toBe("89a7b0dd-cf9c-46da-b2f0-79e19832ac42");
+    expect(parseJiraProjectMap("").size).toBe(0);
+    expect(parseJiraProjectMap("nocolon").size).toBe(0);
+  });
+
+  it("resolves mapped T3 projects by id, title, basename, and absolute root", () => {
+    const projects = [
+      {
+        id: "5353a657-877e-434b-bc6e-b79e0d003848",
+        title: "scanner",
+        workspaceRoot: "/var/lib/t3/src/macs/scanner",
+      },
+      {
+        id: "4691a389-ecd7-4495-9dde-b8da07ce229f",
+        title: "configurator",
+        workspaceRoot: "/var/lib/t3/src/macs/configurator/",
+      },
+    ] as const;
+
+    expect(resolveMappedT3ProjectId("5353a657-877e-434b-bc6e-b79e0d003848", projects)).toBe(
+      "5353a657-877e-434b-bc6e-b79e0d003848",
+    );
+    expect(resolveMappedT3ProjectId("Scanner", projects)).toBe(
+      "5353a657-877e-434b-bc6e-b79e0d003848",
+    );
+    expect(resolveMappedT3ProjectId("scanner", projects)).toBe(
+      "5353a657-877e-434b-bc6e-b79e0d003848",
+    );
+    expect(resolveMappedT3ProjectId("/var/lib/t3/src/macs/scanner", projects)).toBe(
+      "5353a657-877e-434b-bc6e-b79e0d003848",
+    );
+    expect(resolveMappedT3ProjectId("/var/lib/t3/src/macs/configurator", projects)).toBe(
+      "4691a389-ecd7-4495-9dde-b8da07ce229f",
+    );
+    // Full path that is not an exact workspace root must not basename-fall-through.
+    expect(resolveMappedT3ProjectId("/other/src/scanner", projects)).toBeNull();
+    expect(resolveMappedT3ProjectId("missing", projects)).toBeNull();
+
+    const map = parseJiraProjectMap("SA:/var/lib/t3/src/macs/scanner,CFG:configurator");
+    expect(resolveT3ProjectIdForJiraKey(map, "sa", projects)).toBe(
+      "5353a657-877e-434b-bc6e-b79e0d003848",
+    );
+    expect(resolveT3ProjectIdForJiraKey(map, "CFG", projects)).toBe(
+      "4691a389-ecd7-4495-9dde-b8da07ce229f",
+    );
+    expect(resolveT3ProjectIdForJiraKey(map, "OTHER", projects)).toBeNull();
   });
 
   it("bodyMentionsIdentity distinguishes misses", () => {
