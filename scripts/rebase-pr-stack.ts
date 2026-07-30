@@ -144,24 +144,35 @@ export interface StackRunOptions {
   readonly beforePush?: (state: Readonly<PersistedState>) => void | Promise<void>;
 }
 
-/** Paths where whole-file ours/theirs is never a durable product-safe policy. */
-const PRODUCT_CONFLICT_PATH_PREFIXES = [
-  "apps/server/src/",
-  "apps/web/src/",
-  "apps/mobile/src/",
-  "apps/desktop/src/",
-  "apps/discord-bot/src/",
-  "apps/vscode/src/",
-  "packages/client-runtime/src/",
-  "packages/contracts/src/",
-  "packages/shared/src/",
-] as const;
+/** Repository roots whose source files must always be merged, never replaced wholesale. */
+const PRODUCT_WORKSPACE_ROOTS = new Set(["apps", "packages", "infra"]);
 
 export function isProductConflictPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
-  return PRODUCT_CONFLICT_PATH_PREFIXES.some(
-    (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix),
+  const segments = normalized.split("/");
+  const isWorkspaceSource =
+    segments.length >= 4 && PRODUCT_WORKSPACE_ROOTS.has(segments[0] ?? "") && segments[2] === "src";
+  return (
+    normalized === "package.json" ||
+    normalized.endsWith("/package.json") ||
+    normalized.startsWith("scripts/") ||
+    normalized.startsWith("oxlint-plugin-t3code/") ||
+    isWorkspaceSource
   );
+}
+
+function unsafeAutomaticResolutionMessage(path: string): string {
+  return (
+    `Automatic whole-file conflict resolution is forbidden for product path ${path}. ` +
+    "Resolve it with a 3-way merge, preserve both product surfaces, run the focused behavior " +
+    "tests, and resume the preserved stack state."
+  );
+}
+
+export function assertSafeAutomaticConflictResolution(path: string): void {
+  if (isProductConflictPath(path)) {
+    throw new StackError(unsafeAutomaticResolutionMessage(path));
+  }
 }
 
 /**
@@ -485,6 +496,12 @@ export function parseManifest(source: string): StackManifest {
     }
     // commitValue narrowed by commitOk (string + shape check).
     const commit = commitValue as string;
+    try {
+      assertSafeAutomaticConflictResolution(path);
+    } catch (error) {
+      if (!(error instanceof StackError)) throw error;
+      throw new StackError(`conflictResolutions[${index}] is unsafe. ${error.message}`);
+    }
     return {
       branch,
       commit: commit === "*" ? "*" : commit.toLowerCase(),
@@ -1042,11 +1059,13 @@ function applyConfiguredConflictResolutions(
 
   for (const resolution of resolutions) {
     if (!resolution) continue;
-    if (isProductConflictPath(resolution.path)) {
-      console.warn(
-        `WARNING: whole-file ${resolution.strategy} on product path ${resolution.path} ` +
-          `(${operation.branch}). Prefer a 3-way merge; durable * policies on shared app/package ` +
-          `sources cause silent feature loss and tip-only fix(stack) patches.`,
+    try {
+      assertSafeAutomaticConflictResolution(resolution.path);
+    } catch (error) {
+      if (!(error instanceof StackError)) throw error;
+      throw new StackError(
+        `Refusing unsafe persisted conflict resolution for ${operation.branch}. ${error.message}`,
+        { stateDir },
       );
     }
     git(state.repoDir, ["checkout", `--${resolution.strategy}`, "--", resolution.path], {
@@ -1966,13 +1985,15 @@ export async function checkStack(
   validateRemoteTopology(sourceRoot, manifest);
 }
 
-function conflictResolutionManifestSnippet(
+export function conflictResolutionManifestSnippet(
   branch: string,
   commit: string,
   paths: ReadonlyArray<string>,
   strategy: "ours" | "theirs" = "theirs",
 ): string {
-  const entries = paths.map(
+  const automaticPaths = paths.filter((path) => !isProductConflictPath(path));
+  const manualPaths = paths.filter(isProductConflictPath);
+  const entries = automaticPaths.map(
     (path) => `    {
       "branch": ${JSON.stringify(branch)},
       "commit": "*",
@@ -1980,7 +2001,7 @@ function conflictResolutionManifestSnippet(
       "strategy": ${JSON.stringify(strategy)}
     }`,
   );
-  const exact = paths.map(
+  const exact = automaticPaths.map(
     (path) => `    {
       "branch": ${JSON.stringify(branch)},
       "commit": ${JSON.stringify(commit)},
@@ -1988,10 +2009,13 @@ function conflictResolutionManifestSnippet(
       "strategy": ${JSON.stringify(strategy)}
     }`,
   );
-  return `### Record in \`.github/pr-stack.json\` (required before the next stack sync)
+  const automatic =
+    automaticPaths.length === 0
+      ? ""
+      : `### Record non-product resolutions in \`.github/pr-stack.json\`
 
 Do **not** only resume once. Exact SHAs go stale after every successful layer rewrite.
-Prefer durable \`commit: "*"\` path policies when the same file always takes the same side:
+Durable \`commit: "*"\` policies are allowed only for non-product paths that always take one side:
 
 \`\`\`json
   "conflictResolutions": [
@@ -2010,6 +2034,20 @@ ${exact.join(",\n")}
 During rebase: \`theirs\` = commit being replayed, \`ours\` = new base. After editing the
 manifest, merge that change to \`fork/changes\` so the next scheduled sync can auto-resolve.
 `;
+  const manual =
+    manualPaths.length === 0
+      ? ""
+      : `### Manual product resolution required
+
+Automatic whole-file \`ours\`/\`theirs\` is forbidden for:
+
+${manualPaths.map((path) => `- \`${path}\``).join("\n")}
+
+3-way merge each path in the preserved state, verify that both sides' product behavior remains,
+run the focused behavior/existence tests and the layer gate, then stage the result and resume.
+Do not add these paths to \`conflictResolutions\`.
+`;
+  return [manual, automatic].filter(Boolean).join("\n");
 }
 
 function appendConflictSummary(error: RebaseConflictError): void {

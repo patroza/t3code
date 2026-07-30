@@ -37,54 +37,6 @@
   ],
   "conflictResolutions": [
     {
-      "branch": "fork/changes",
-      "commit": "10de598e790218c772ada3d908bc7b1eb1e54f0e",
-      "path": "apps/mobile/src/lib/threadActivity.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
-      "path": "apps/mobile/src/lib/threadActivity.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
-      "path": "packages/contracts/src/settings.test.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "ce3318775d74c566b4eef309c3f374e6d220891d",
-      "path": "packages/contracts/src/settings.test.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
-      "path": "apps/web/src/components/ChatMarkdown.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "1f8a2c58ae115df840d98d5854825123c502d54c",
-      "path": "apps/web/src/components/ChatMarkdown.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
-      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "4d97aafb8e216dd27b6835b13ad20fca2884691e",
-      "path": "apps/mobile/src/features/home/HomeScreen.tsx",
-      "strategy": "theirs"
-    },
-    {
       "branch": "fork/integration",
       "commit": "*",
       "path": "pnpm-lock.yaml",
@@ -124,72 +76,6 @@
       "branch": "fork/changes",
       "commit": "206981716ef30b5fb58338e32653339ed958a7f7",
       "path": "AGENTS.md",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/candidates",
-      "commit": "*",
-      "path": "apps/web/src/components/SidebarV2.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/candidates",
-      "commit": "0cf437e7681face0550d5f9620b58f7b6327e57f",
-      "path": "apps/web/src/components/SidebarV2.tsx",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "*",
-      "path": "package.json",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/changes",
-      "commit": "d21149c3666035d6afd61fbc87b4e6ceac2314e8",
-      "path": "package.json",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/web/src/localApi.test.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "packages/contracts/src/ipc.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/server/src/server.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/server/src/provider/Layers/ProviderRegistry.test.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "packages/client-runtime/src/rpc/client.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/candidates",
-      "commit": "*",
-      "path": "apps/server/src/vcs/VcsStatusBroadcaster.ts",
-      "strategy": "theirs"
-    },
-    {
-      "branch": "fork/candidates",
-      "commit": "*",
-      "path": "apps/web/src/components/ChatView.tsx",
       "strategy": "theirs"
     },
     {
