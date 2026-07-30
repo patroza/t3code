@@ -353,7 +353,6 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 // Authorization scopes for every RPC live only in
 // `auth/RpcAuthorization.ts` (`RPC_REQUIRED_SCOPES` / `requiredScopeForRpcMethod`).
 // Do not reintroduce a parallel Map here.
-
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,
