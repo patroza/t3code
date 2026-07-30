@@ -1322,15 +1322,28 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
-              yield* identity.requireOperateClaim(currentSessionId).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new OrchestrationDispatchCommandError({
-                      message: error.message,
-                      code: error.code,
-                    }),
+              // Resolve deviceType so bot/integration sessions skip the interactive claim gate.
+              // Discord/Jira share one bot session across many humans; session claim cannot impersonate.
+              const clientDeviceType = yield* sessions.listActive().pipe(
+                Effect.map(
+                  (active) =>
+                    active.find((entry) => entry.sessionId === currentSessionId)?.client.deviceType,
                 ),
+                Effect.orElseSucceed(() => undefined),
               );
+              yield* identity
+                .requireOperateClaim(currentSessionId, {
+                  ...(clientDeviceType !== undefined ? { clientDeviceType } : {}),
+                })
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new OrchestrationDispatchCommandError({
+                        message: error.message,
+                        code: error.code,
+                      }),
+                  ),
+                );
               const normalizedCommand = yield* normalizeDispatchCommand(command);
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"
