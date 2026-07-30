@@ -30,6 +30,21 @@ export function normalizeJiraIssueKey(raw: string): string | null {
   return key;
 }
 
+/** Scan free text (PR title/body, Discord messages) for Jira issue keys. */
+export function extractJiraIssueKeysFromText(text: string): ReadonlyArray<string> {
+  if (text.trim().length === 0) return [];
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const matcher = /\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/giu;
+  for (const match of text.matchAll(matcher)) {
+    const key = normalizeJiraIssueKey(match[1] ?? "");
+    if (key === null || seen.has(key)) continue;
+    seen.add(key);
+    found.push(key);
+  }
+  return found;
+}
+
 /** Normalize a GitHub PR URL or `owner/repo#n` form to a stable key. */
 export function normalizeGitHubPullRequestRef(raw: string): string | null {
   const trimmed = raw.trim();

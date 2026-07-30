@@ -236,9 +236,7 @@ export function buildSidebarV2ThreadContextMenuItems(input: {
     { id: "rename", label: "Rename thread" },
     { id: "mark-unread", label: "Mark unread" },
     { id: "copy-path", label: "Copy path", icon: "copy" },
-    ...(input.branch
-      ? ([{ id: "copy-branch", label: "Copy branch", icon: "copy" }] as const)
-      : []),
+    ...(input.branch ? ([{ id: "copy-branch", label: "Copy branch", icon: "copy" }] as const) : []),
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }

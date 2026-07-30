@@ -35,7 +35,10 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
-import { ThreadWorkItemStore } from "../workItems/ThreadWorkItemStore.ts";
+import {
+  extractJiraIssueKeysFromText,
+  ThreadWorkItemStore,
+} from "../workItems/ThreadWorkItemStore.ts";
 import { GitHubAppClient } from "./GitHubAppClient.ts";
 import { GitHubAppConfig, type GitHubRepositoryPermission } from "./GitHubAppConfig.ts";
 import { GitHubDeliveryStore, type StoredGitHubDelivery } from "./GitHubDeliveryStore.ts";
@@ -83,6 +86,13 @@ export function hasRequiredGitHubPermission(
 
 function normalizePullRequestUrl(value: string): string {
   return value.trim().replace(/\/+$/u, "").toLowerCase();
+}
+
+/** Jira keys from PR title and the mention comment body (after @bot is stripped). */
+export function extractJiraIssueKeysFromGitHubInvocation(
+  invocation: Pick<GitHubPrInvocation, "pullRequestTitle" | "prompt">,
+): ReadonlyArray<string> {
+  return extractJiraIssueKeysFromText(`${invocation.pullRequestTitle}\n${invocation.prompt}`);
 }
 
 export function isGitHubRepositoryAllowed(
@@ -904,8 +914,53 @@ export const make = Effect.gen(function* () {
   );
 
   /**
+   * Join a thread already associated via ThreadWorkItemStore (PR URL or Jira keys from
+   * PR title / mention comment). Prefer store join so Jira-first / Discord-first sessions continue.
+   */
+  const resolveThreadFromWorkItemStore = Effect.fn("GitHubPrBridge.resolveThreadFromWorkItemStore")(
+    function* (invocation: GitHubPrInvocation) {
+      const loadShell = (threadId: ThreadId) =>
+        projection.getThreadShellById(threadId).pipe(Effect.orElseSucceed(() => Option.none()));
+
+      const byPr = yield* workItems.resolveGitHubPullRequest(invocation.pullRequestUrl);
+      if (byPr._tag === "linked") {
+        const shell = yield* loadShell(byPr.threadId);
+        if (Option.isSome(shell) && shell.value.archivedAt === null) {
+          yield* Effect.logInfo("Joined T3 thread via work-item store PR association", {
+            repository: invocation.repository,
+            pullRequestNumber: invocation.pullRequestNumber,
+            threadId: byPr.threadId,
+          });
+          return shell.value;
+        }
+      }
+
+      const jiraKeys = extractJiraIssueKeysFromGitHubInvocation(invocation);
+      const threadIds = new Set<string>();
+      for (const key of jiraKeys) {
+        const hit = yield* workItems.resolveJiraIssue(key);
+        if (hit._tag === "linked") threadIds.add(hit.threadId);
+      }
+      if (threadIds.size === 1) {
+        const [only] = threadIds;
+        const shell = yield* loadShell(only as ThreadId);
+        if (Option.isSome(shell) && shell.value.archivedAt === null) {
+          yield* Effect.logInfo("Joined T3 thread via work-item store Jira key from PR/comment", {
+            repository: invocation.repository,
+            pullRequestNumber: invocation.pullRequestNumber,
+            threadId: only,
+            jiraKeys,
+          });
+          return shell.value;
+        }
+      }
+      return null;
+    },
+  );
+
+  /**
    * Resolve where the GitHub turn runs:
-   * - `main`: reuse the unique live PR/Discord work thread (full history), or provision one
+   * - `main`: reuse store-linked or unique live PR/Discord work thread, or provision one
    * - `sibling`: for inline review, reuse the T3 thread already bound to that GH discussion
    *   (first mention creates it); create a new thread when forced or unbound
    *
@@ -918,6 +973,11 @@ export const make = Effect.gen(function* () {
     threadMode: GitHubThreadMode,
     forceNewSibling: boolean,
   ) {
+    const fromStore = yield* resolveThreadFromWorkItemStore(invocation);
+    if (fromStore !== null && threadMode === "main") {
+      return provisioned(fromStore);
+    }
+
     const linked = yield* resolveLinkedThread(invocation, stackContext);
 
     if (threadMode === "main") {
@@ -1247,11 +1307,13 @@ export const make = Effect.gen(function* () {
     }
     const thread = outcome.thread;
 
-    // Durable server-native PR ↔ thread association (not Discord-only).
+    // Durable PR ↔ thread association (+ Jira keys from title and mention comment).
+    const jiraIssueKeys = extractJiraIssueKeysFromGitHubInvocation(input.invocation);
     yield* workItems
       .appendForThread({
         threadId: thread.id,
         githubPullRequests: [input.invocation.pullRequestUrl],
+        ...(jiraIssueKeys.length > 0 ? { jiraIssueKeys } : {}),
         source: "github-webhook",
       })
       .pipe(Effect.ignore);

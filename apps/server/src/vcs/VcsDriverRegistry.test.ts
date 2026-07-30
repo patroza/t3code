@@ -2,6 +2,7 @@ import { assert, it, describe } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as VcsProcess from "./VcsProcess.ts";
@@ -133,8 +134,10 @@ describe("VcsDriverRegistry", () => {
       const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
 
       assert.equal(yield* registry.detect({ cwd: "/repo" }), null);
+      // Negative detects are TTL-cached (15s); advance so a later repo creation is noticed.
+      yield* TestClock.adjust("16 seconds");
       assert.equal((yield* registry.detect({ cwd: "/repo" }))?.repository.rootPath, "/repo");
       assert.equal(insideWorkTreeChecks, 2);
-    }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(Layer.mergeAll(layer, TestClock.layer())));
   });
 });
