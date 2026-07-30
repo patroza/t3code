@@ -108,21 +108,30 @@ reuse it. Prefer per-layer green gates even when using the script; stop the line
 Repository rulesets gate **long-lived stack branches**. Ordinary feature branches (`feat/**`,
 `import/**`, …) are not covered, so agents and humans can still force-push them freely.
 
-| Ruleset                                   | Branches                                          | Enforced                                                                                                                                                  | Bypass (always)                                                                                |
-| ----------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Protect upstream main                     | `main`                                            | No delete, no force-push, linear history, **PR required**, **Fork CI checks**                                                                             | `patroza`, `omegabot`, deploy key (`FORK_STACK_DEPLOY_KEY`); Admin role may bypass via PR only |
-| Protect fork/changes (PR + CI)            | `fork/changes`                                    | No delete, no force-push, linear history, **PR required** (squash/rebase), **strict Fork CI** (Check, Test, Mobile Native Static Analysis, Release Smoke) | `patroza`, `omegabot`, deploy key                                                              |
-| Protect fork/tim, candidates, integration | `fork/tim`, `fork/candidates`, `fork/integration` | No delete, no force-push, linear history (no PR requirement — stack rebuilds these tips)                                                                  | `patroza`, `omegabot`, deploy key                                                              |
+| Ruleset                                   | Branches                                                                                     | Enforced                                                                                                                                                  | Bypass (always)                                                                                |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Protect upstream main                     | `main`                                                                                       | No delete, no force-push, linear history, **PR required**, **Fork CI checks**                                                                             | `patroza`, `omegabot`, deploy key (`FORK_STACK_DEPLOY_KEY`); Admin role may bypass via PR only |
+| Protect fork/changes (PR + CI)            | `fork/changes`                                                                               | No delete, no force-push, linear history, **PR required** (squash/rebase), **strict Fork CI** (Check, Test, Mobile Native Static Analysis, Release Smoke) | `patroza`, `omegabot`, deploy key                                                              |
+| Protect integration overlays (PR + CI)    | `fork/discord`, `fork/vscode`, `t3-discord/f7d37879-desktop-deeplinks` (registered overlays) | Same as `fork/changes`: **PR required** (squash/rebase), **strict Fork CI** (Check, Test, Mobile Native Static Analysis, Release Smoke)                   | `patroza`, `omegabot`, deploy key (overlay auto-rebase / stack rewrites)                       |
+| Protect fork/tim, candidates, integration | `fork/tim`, `fork/candidates`, `fork/integration`                                            | No delete, no force-push, linear history (no PR requirement — stack rebuilds these tips)                                                                  | `patroza`, `omegabot`, deploy key                                                              |
+
+**Overlay child PRs are not a free pass.** A PR whose base is a registered overlay (for example
+`feat/…` → `fork/discord`) is subject to the same required checks as a PR into `fork/changes`.
+Fork CI’s `pull_request.branches` list includes those overlay bases so Check/Test actually run
+before merge. Compose does **not** re-lint; if a red overlay tip is ever force-pushed with bypass,
+integration fails next — treat that as a process failure, not “CI will catch it later.”
 
 **CI path:** compose / stack workflows authenticate with the deploy key for protected branch
 pushes, not `GITHUB_TOKEN` alone (default workflow token is read-only and cannot be added as an
 Integration bypass on this personal fork).
 
 **Who cannot force-push protected branches:** write collaborators without a User bypass entry.
-They can still open PRs into `fork/changes` and merge only when required checks are green.
+They can still open PRs into `fork/changes` or an overlay base and merge only when required checks
+are green. **Bots and agents without a User bypass cannot merge red child PRs into overlays.**
 
 **Who can force-push:** `patroza`, `omegabot` (must accept the collaborator invite), and the stack
-deploy key. Feature-branch force-pushes do not need bypass.
+deploy key. Feature-branch force-pushes do not need bypass. Bypass is for intentional stack rewrites
+and overlay auto-rebase — **not** a license to skip local `vp check` / typecheck before push.
 
 Upstream's `.github/workflows/ci.yml` and `.github/workflows/deploy-relay.yml` remain present on the
 exact `main` mirror but are disabled in this repository. Fork PR and integration checks use

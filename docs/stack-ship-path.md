@@ -272,9 +272,15 @@ Tip-only lock fixes on **product** layers are process failures. Generated integr
 
 ### Overlay-only change
 
-1. Work on the overlay branch (or child PR targeting the overlay).
+1. Work on the overlay branch via a **child PR targeting the overlay** (preferred), or on the
+   overlay tip only when using an intentional bypass actor for stack maintenance.
 2. Do **not** duplicate the change into `fork/changes`.
-3. Rebase onto latest `fork/changes` if needed; push; compose **full** integration (all overlays); CI.
+3. **Same local gate as any feature PR** before ready/merge (root `vp check` + full monorepo
+   typecheck + focused tests). Overlay-child bases are protected with the same required Fork CI
+   checks as `fork/changes`. “Compose only ran” or “draft permanent overlay PR is green” does
+   **not** mean the child tip was checked.
+4. Rebase onto latest `fork/changes` if needed; merge only when Check/Test are green; compose
+   **full** integration (all overlays); confirm integration CI.
 
 ### Taking new upstream / Tim / candidates
 

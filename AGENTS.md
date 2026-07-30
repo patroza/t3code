@@ -145,26 +145,35 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
 When implementation work for a user request is done (code, docs, config — not pure Q&A):
 
 1. **Commit** the changes on a feature branch created with `pnpm fork:stack start <branch>` (from
-   `fork/changes`).
-2. **Open or update a PR against `fork/changes`** before handing off. Do not target `main` unless
-   the change is intentionally an upstream-mirror / promote projection.
+   `fork/changes`), or `pnpm fork:stack overlay-start <pr> <branch>` for overlay-owned work.
+2. **Open or update a PR** against the correct base before handing off:
+   - Ordinary features → **`fork/changes`** (never `main`, never `fork/integration`).
+   - Client overlay work → the **registered overlay branch** (`fork/discord`, `fork/vscode`, or
+     `t3-discord/f7d37879-desktop-deeplinks`), not a duplicate of that work in `fork/changes`.
 3. **Keep the PR mergeable** before saying “updated the PR” or finishing:
-   - **Mandatory pre-push gate** (see Task Completion Requirements): run **`vp check`** and the
-     **full monorepo typecheck** locally, fix every failure (including pre-existing breakage your
-     tip inherits from the base), then push. Do not use Fork CI as the first formatter, linter, or
-     typechecker. Scoped package typecheck alone is **not** enough.
+   - **Mandatory pre-push gate** (see Task Completion Requirements): run **locally every job Fork
+     CI will run on this tip** — at minimum **`vp check`** and the **full monorepo typecheck** —
+     fix every failure (including pre-existing breakage your tip inherits from the base), then
+     push. Do not use Fork CI as the first formatter, linter, or typechecker. Scoped package
+     typecheck alone is **not** enough.
+   - **Same bar for overlay-child PRs.** Base = overlay does **not** relax the gate. Compose
+     success, draft-lock green, or “the permanent overlay PR was green last week” is **not** a
+     substitute for running Check on **this** tip.
    - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>`
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
-   - `baseRefName` must be `fork/changes` for ordinary features or the intended parent branch for a
-     dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be `UNSTABLE`
-     while checks run).
+   - `baseRefName` must be `fork/changes` for ordinary features or the intended overlay/parent
+     branch for a dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be
+     `UNSTABLE` while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
    - If the PR is **open** → re-run the mandatory pre-push gate, update that branch (prefer
      `fork:stack update --push`), and push.
    - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
-     `pnpm fork:stack start <new-branch>`, re-apply unmerged work, and open a **new PR** against
-     `fork/changes`.
+     Start a new branch, re-apply unmerged work, and open a **new PR** against the same intended
+     base (`fork/changes` or the overlay).
 5. Never assume an earlier PR in the session is still open.
+6. **Never merge or request merge** (and never tell a bot to merge) while local `vp check` /
+   full typecheck are red or were skipped. GitHub required checks on `fork/changes` and every
+   registered overlay base are a backstop — **local green first** is still mandatory.
 
 ## Discord-originated commits (REQUIRED)
 
@@ -181,7 +190,7 @@ GitHub multi-author avatars (`bot & human`) come from commit trailers, not from 
 
 When Discord work produces commits (or is clearly intended to land):
 
-0. **Always open a PR — do not wait for perfect green.** Create the PR as soon as there is something to review or track. If full lint / typecheck / focused tests / `vp check` are not finished yet, open it as a **draft**. Convert to ready for review only after those gates. A missing PR while work sits only on a remote branch is incomplete handoff.
+0. **Always open a PR — do not wait for perfect green.** Create the PR as soon as there is something to review or track. If full lint / typecheck / focused tests / `vp check` are not finished yet, open it as a **draft**. Convert to ready for review / merge **only** after those gates pass locally. A missing PR while work sits only on a remote branch is incomplete handoff. **Draft is for tracking, not for merging:** do not squash-merge, rebase-merge, or instruct a bot to merge a draft or any tip that has not passed the local gate.
 
 When opening or updating a PR from a Discord thread:
 
@@ -201,21 +210,43 @@ Prefer the thread starter’s Discord id/display name from turn context. Do not 
 
 ### Mandatory pre-push / PR handoff gate (no exceptions)
 
-**Before every `git push`, `fork:stack update --push`, non-draft PR open, ready-for-review
-conversion, or “handoff / done” claim**, the agent **must** run the local gates that mirror Fork
-CI’s **Check** job (format/lint/typecheck/desktop build pieces you can run on the host), fix all
-failures, then push. Fork CI is a safety net, not the first typechecker.
+**Whatever Fork CI runs for this tip, the agent must run locally first.** Fork CI is a safety net,
+not the first formatter, linter, or typechecker. This applies to **every** implementation base:
+
+| PR base                                                               | Local gate required before ready / merge? | GitHub required checks                                    |
+| --------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------- |
+| `fork/changes`                                                        | **Yes** — full gate below                 | Check, Test, Mobile Native Static Analysis, Release Smoke |
+| Registered overlay (`fork/discord`, `fork/vscode`, desktop deeplinks) | **Yes — identical**                       | Same as `fork/changes`                                    |
+| Dependent feature based on another feature branch                     | **Yes** on the child tip after rebase     | Same when retargeted to a protected base                  |
+
+**Before every `git push` that is intended as ready work, `fork:stack update --push`, non-draft PR
+open, ready-for-review conversion, merge / merge-request, or “handoff / done” claim**, the agent
+**must** run the local gates that mirror Fork CI’s **Check** job (and Test pieces you changed),
+fix all failures, then push.
 
 **Always open a PR for Discord/agent work that produces commits** (see _Discord-originated pull
 requests_). **Draft PR exception:** you may open/update a **draft** PR earlier for tracking once
 commits exist, co-author trailers are correct, and focused tests for the changed behavior have been
 run — even if full monorepo typecheck / root `vp check` are still in progress. Do not claim the work
-is ready or mark the PR non-draft until the full gate below passes.
+is ready, mark the PR non-draft, or merge until the full gate below passes.
 
-Run from the repository root, in order:
+#### Why integration keeps failing on “obvious” lint
 
-1. **`vp check`** — exact formatter/linter gate used by Fork CI **Check**. A focused format/lint
-   while iterating is fine; it is **not** a substitute for this root command before ready handoff.
+These are process failures, not surprises:
+
+1. Child PR base was an overlay and agents treated Compose / permanent-overlay PR green as enough.
+2. Local `vp check` was skipped (“CI will catch it” / only scoped package checks).
+3. Compose rebuilds `fork/integration` **without** re-running lint — the first hard fail is
+   integration Fork CI.
+
+If a PR’s checks panel shows only Compose / draft-lock and **no** Check job, that is **not** a
+clean PR — fix tooling or still run the local gate; do not merge.
+
+Run from the repository root, in order (mirror of `.github/workflows/fork-ci.yml`):
+
+1. **`vp check`** — exact formatter/linter gate used by Fork CI **Check** (includes
+   `t3code/namespace-node-imports` and friends). A focused format/lint while iterating is fine; it
+   is **not** a substitute for this root command before ready handoff.
 2. **Full monorepo typecheck** (matches Fork CI):
 
    ```bash
@@ -242,21 +273,24 @@ Run from the repository root, in order:
 5. **Do not push a ready (non-draft) handoff** if steps 1–2 fail, or if required steps 3–4 fail.
    Fix first.
 
-**Ordinary feature PRs (based on `fork/changes`):** full-workspace `vp run test` is optional unless
-the user asks or the change clearly needs the whole suite. **Do not** skip steps 1–2 to save time
-on ready handoff.
+**Ordinary feature PRs (based on `fork/changes` or an overlay):** full-workspace `vp run test` is
+optional unless the user asks or the change clearly needs the whole suite. **Do not** skip steps
+1–2 to save time on ready handoff. **Stack layer rewrites** still require full Test (below).
 
-**Explicitly forbidden before ready handoff:**
+**Explicitly forbidden before ready handoff / merge:**
 
 - Ready/non-draft push after only unit tests, only scoped package typecheck, or only a partial lint.
 - Marking a PR ready for review knowing typecheck or `vp check` was skipped or red.
-- Treating “CI will catch it” as a substitute for local gates.
+- Treating “CI will catch it”, “compose will catch it”, or “integration CI will catch it” as a
+  substitute for local gates.
+- Merging an overlay-child PR because Compose or Managed PR draft lock is green while Check never
+  ran or is red.
 - Advancing a stack rewrite to the next layer while the current layer is red (see below).
 - Leaving Discord/agent work with commits but **no** PR (use draft until gates finish).
 
 While iterating mid-task (not yet ready), keep feedback loops small: format/lint the files you
 touch, typecheck the packages you edit, run the smallest relevant tests. **The bar rises to the
-full pre-push gate the moment you mark ready or claim done.**
+full pre-push gate the moment you mark ready, merge, or claim done.**
 
 ### Per-layer stack CI (stop the line — no exceptions)
 

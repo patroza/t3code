@@ -7,12 +7,21 @@ env:
 
 on:
   workflow_dispatch:
-  # Full PR CI is for our implementation layer. Candidate and Tim imports are
-  # verified after they are folded into fork/integration; including their
-  # permanent stack PRs here creates duplicate runs on every stack rewrite.
+  # Full PR CI for the product layer and every registered integration-overlay
+  # base. Child PRs that target an overlay (desktop / discord / vscode) must get
+  # the same Check/Test gates as PRs into fork/changes — otherwise lint/typecheck
+  # only fails after compose on fork/integration.
+  # Candidate and Tim permanent stack PRs stay excluded: they are verified after
+  # they fold into fork/integration (including them here duplicates every restack).
+  # Keep the overlay branch list in sync with integrationOverlays in pr-stack.json
+  # and with compose-integration.yml `on.push` / `on.pull_request` lists.
   pull_request:
     branches:
       - fork/changes
+      # Registered integration overlays (same names as .github/pr-stack.json)
+      - t3-discord/f7d37879-desktop-deeplinks
+      - fork/discord
+      - fork/vscode
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
