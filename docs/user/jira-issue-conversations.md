@@ -14,8 +14,9 @@ server state dir) keyed by Jira issue (**join-or-create**):
 
 1. **Exactly one** store hit → continue that thread (Discord import is a migration fallback only).
 2. **Multiple** hits → fail closed with an ambiguous message (never guess).
-3. **Zero** hits → **auto-create** a T3 thread on `T3CODE_JIRA_DEFAULT_PROJECT_ID` (or the sole
-   shell project when unset), attach the issue key, and run the turn. Disable with
+3. **Zero** hits → **auto-create** a T3 thread, attach the issue key, and run the turn. Project
+   pick order: `T3CODE_JIRA_PROJECT_MAP` for the Jira project key (e.g. `SA`) →
+   `T3CODE_JIRA_DEFAULT_PROJECT_ID` → sole shell project when exactly one exists. Disable with
    `T3CODE_JIRA_AUTO_CREATE_THREAD=false`.
 
 Does **not** create projects, clone repositories, or invent checkouts (new threads start without a
@@ -83,14 +84,17 @@ POST /api/jira/webhook
         v
 JiraIssueBridge
   project allowlist
+  best-effort 👀 reaction on trigger comment (cleared when done)
   parse mention + prompt (+ optional parent comment id)
   resolve unique T3 thread via ThreadWorkItemStore
     (optional Discord links.json import if still unlinked)
+  join-or-create via PROJECT_MAP / DEFAULT_PROJECT_ID / sole project
   dispatch orchestration turn
   poll projection snapshot
         |
         v
 Jira REST comment create (markdown → ADF or wiki)
++ remove ack reaction
 ```
 
 Work-item associations live in:
@@ -132,9 +136,36 @@ webhook.
 | `T3CODE_JIRA_TURN_TIMEOUT_MS`    | no       | 30m     | Max wait for turn completion before timeout comment               |
 | `T3CODE_JIRA_AUTH_MODE`          | no       | `basic` | `basic` (email+token) or `bearer` (scoped token)                  |
 | `T3CODE_JIRA_AUTO_CREATE_THREAD` | no       | `true`  | Create a T3 thread when the issue is unlinked                     |
-| `T3CODE_JIRA_DEFAULT_PROJECT_ID` | no\*     | —       | Project for auto-created threads (\*or exactly one shell project) |
+| `T3CODE_JIRA_PROJECT_MAP`        | no       | empty   | Jira key → T3 project map (see below)                             |
+| `T3CODE_JIRA_DEFAULT_PROJECT_ID` | no\*     | —       | Fallback project for auto-create (\*or exactly one shell project) |
+| `T3CODE_JIRA_ACK_EMOJI_ID`       | no       | `1f440` | Reaction on the trigger comment (`👀`); empty string disables     |
+| `T3CODE_JIRA_BOT_ACCOUNT_ID`     | no       | —       | Alias for wiki/ADF `[~accountId:…]` mention matching              |
 
 \*When any required value is missing, the integration is **disabled** (webhook returns 404).
+
+### Project map values
+
+Each map value (and `T3CODE_JIRA_DEFAULT_PROJECT_ID`) may be any of:
+
+1. **T3 project id** (UUID from the shell / `links.json` `projectId`)
+2. **Project title** (case-insensitive), e.g. `scanner`
+3. **Workspace basename**, e.g. `scanner` for `/var/lib/t3/src/macs/scanner`
+4. **Absolute workspace root**, e.g. `/var/lib/t3/src/macs/scanner` (Discord-style paths)
+
+```bash
+# Prefer prefix map for multi-project hosts
+T3CODE_JIRA_PROJECT_MAP=SA:scanner,CFG:/var/lib/t3/src/macs/configurator
+
+# Optional global fallback (id, title, basename, or full path)
+T3CODE_JIRA_DEFAULT_PROJECT_ID=/var/lib/t3/src/macs/scanner
+```
+
+### Acknowledgment reactions
+
+On accept, the bridge best-effort adds an eyes reaction (`1f440` / 👀 by default) to the
+triggering comment, then removes it when the turn finishes or is rejected — same idea as Discord
+and GitHub eyes. Jira Cloud’s public REST surface for comment reactions varies by site; failures
+are logged and never block the turn.
 
 ## Security
 
