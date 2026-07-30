@@ -1722,6 +1722,8 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   "OrchestrationDispatchCommandError",
   {
     message: TrimmedNonEmptyString,
+    /** Optional machine code (e.g. identity_claim_required) for client branching. */
+    code: Schema.optionalKey(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
