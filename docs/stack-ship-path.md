@@ -106,46 +106,47 @@ Unblocks “I just want to ship.” Still ends with **full** integration (all re
 pnpm fork:stack start my-fix     # from fork/changes
   → implement + local gates (vp check, typecheck, focused tests)
   → PR → fork/changes → merge
-  → ensure every registered overlay is based on current fork/changes
-  → compose overlays onto current fork/changes
-  → push fork/integration
-  → Fork CI green on that exact SHA
+  → Compose fork integration workflow (automatic):
+       1. auto-rebase every registered overlay onto current fork/changes
+       2. compose overlays onto fork/changes → push fork/integration
+       3. dispatch Fork CI on that SHA
   → smart poller deploys (if enabled)
 ```
 
 **Does not** rebuild `main`, `fork/tim`, or `fork/candidates`.  
-**Does not** auto-rebase the entire open _feature_ PR forest.  
+**Does not** auto-rebase the entire open _feature_ PR forest (only **registered overlays**).  
 **Does not** wait for a mega restack job.  
-**Does** require overlays current + compose — that is still the ship gate.
+**Does** require clean overlay rebases — real product conflicts still fail the job (fix that overlay, re-run compose).
 
 #### Compose (integration)
 
-After `fork/changes` moves (or an overlay tip moves):
+After `fork/changes` moves (or an overlay tip moves), **Compose fork integration** runs. Locally:
 
 ```sh
-# From a clean checkout of fork/changes
+# From a clean checkout of fork/changes (with push credentials for stack branches)
+node scripts/rebase-integration-overlays.ts          # no-op when already based
 node scripts/compose-integration-overlays.ts --push
 gh workflow run "Fork CI" --repo patroza/t3code --ref fork/integration
 ```
 
-Compose:
-
-- takes current `fork/changes` + **every** registered overlay **branch** tip (manifest order);
-- fails if an overlay is not based on current `fork/changes` (rebase that overlay, then retry);
-- skips lockfile-only overlay commits and regenerates one integration `pnpm-lock.yaml`;
-- force-updates `fork/integration` only.
-
-If an overlay is **behind** `fork/changes`, rebase **that overlay only** (required before compose):
+Or one shot:
 
 ```sh
-# Example: desktop overlay
-git fetch origin fork/changes t3-discord/f7d37879-desktop-deeplinks
-git checkout -B tmp-overlay origin/t3-discord/f7d37879-desktop-deeplinks
-old_base=$(git merge-base HEAD origin/fork/changes)
-git rebase --onto origin/fork/changes "$old_base"
-git push --force-with-lease origin HEAD:t3-discord/f7d37879-desktop-deeplinks
-# then compose again
+gh workflow run compose-integration.yml --repo patroza/t3code --ref fork/changes
 ```
+
+Compose pipeline:
+
+1. **Auto-rebase overlays** (`scripts/rebase-integration-overlays.ts`): for each registered
+   overlay not based on current `fork/changes`, `git rebase --onto` using the merge-base with the
+   new tip, then force-with-lease push. Skips when already based.
+2. **Compose** (`scripts/compose-integration-overlays.ts`): current `fork/changes` + every
+   overlay tip (manifest order) → `fork/integration` (lockfile regen as needed).
+3. **Dispatch Fork CI** on the composed tip.
+
+If an overlay **conflicts** during auto-rebase, the job fails with the branch + paths. Fix that
+overlay tip (or add a durable product merge), push it based on current `fork/changes`, then re-run
+compose — do not leave the overlay stale and expect a partial ship.
 
 Do **not** rebuild Tim/candidates to fix one overlay. Do **not** ship integration with a missing
 or stale registered overlay.
