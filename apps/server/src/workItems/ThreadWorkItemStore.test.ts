@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  extractJiraIssueKeysFromText,
   mergeOrderedUnique,
   normalizeGitHubPullRequestRef,
   normalizeJiraIssueKey,
@@ -12,6 +13,12 @@ describe("ThreadWorkItemStore helpers", () => {
     expect(normalizeJiraIssueKey("sa-402")).toBe("SA-402");
     expect(normalizeJiraIssueKey("UTF-8")).toBeNull();
     expect(normalizeJiraIssueKey("not-a-key")).toBeNull();
+  });
+
+  it("extracts Jira keys from free text", () => {
+    expect(extractJiraIssueKeysFromText("Fixes SA-401 and cfg-12")).toEqual(["SA-401", "CFG-12"]);
+    expect(extractJiraIssueKeysFromText("UTF-8 encoding")).toEqual([]);
+    expect(extractJiraIssueKeysFromText("SA-401 then SA-401 again")).toEqual(["SA-401"]);
   });
 
   it("normalizes GitHub PR URLs and short refs", () => {
