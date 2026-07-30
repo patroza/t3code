@@ -69,6 +69,19 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chatView).toContain("isPreparingWorktree=");
   });
 
+  it("thread detail loading keeps every composer send path disabled", () => {
+    const chatView = readSrc("components/ChatView.tsx");
+    expect(chatView).toContain(
+      'sendDisabledReason={threadDetailLoading ? "Messages loading" : null}',
+    );
+
+    const composer = readSrc("components/chat/ChatComposer.tsx");
+    expect(composer).toContain("const isSendDisabled = sendDisabledReason !== null");
+    expect(composer).toContain("if (noProviderAvailable || isSendDisabled)");
+    expect(composer.match(/sendDisabledReason=\{sendDisabledReason\}/g)).toHaveLength(3);
+    expect(composer).not.toContain("sendDisabledReason={null}");
+  });
+
   it("model picker keeps provider usage dots and selection-box stats", () => {
     const providerPicker = readSrc("components/chat/ProviderModelPicker.tsx");
     expect(providerPicker).toContain("usageSnapshot");
