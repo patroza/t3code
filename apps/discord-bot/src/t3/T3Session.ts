@@ -221,6 +221,7 @@ export interface T3SessionService {
     answers: ProviderUserInputAnswers,
   ) => Effect.Effect<void, T3SessionError>;
   readonly interrupt: (threadId: ThreadId) => Effect.Effect<void, T3SessionError>;
+  readonly compact: (threadId: ThreadId) => Effect.Effect<void, T3SessionError>;
   readonly resolveModelSelection: (input: {
     readonly project?: OrchestrationProjectShell | null;
     readonly stickyModelSelection?: ModelSelection | null;
@@ -999,6 +1000,13 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
               : { turnId: threadShell.latestTurn.turnId }),
             createdAt: nowIso(),
           });
+        }),
+      compact: (threadId) =>
+        dispatch({
+          type: "thread.context.compact",
+          commandId: newCommandId(),
+          threadId,
+          createdAt: nowIso(),
         }),
       createAttachmentUrl: (attachmentId) =>
         Effect.tryPromise({

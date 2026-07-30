@@ -770,6 +770,17 @@ const ThreadTurnInterruptCommand = Schema.Struct({
 });
 
 /**
+ * Request provider context compaction for a thread session.
+ * Adapters that support manual compact run it; others surface an unsupported error.
+ */
+const ThreadContextCompactCommand = Schema.Struct({
+  type: Schema.Literal("thread.context.compact"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
  * Send a queued message immediately, steering the active turn. Degrades to
  * a normal turn start when the thread is idle by the time it is processed.
  */
@@ -848,6 +859,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
   ThreadQueueUpdateCommand,
@@ -876,6 +888,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
   ThreadQueueUpdateCommand,
@@ -1029,6 +1042,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.queued-message-removed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  "thread.context-compact-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
@@ -1210,6 +1224,11 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadContextCompactRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
   createdAt: IsoDateTime,
 });
 
@@ -1407,6 +1426,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.turn-interrupt-requested"),
     payload: ThreadTurnInterruptRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.context-compact-requested"),
+    payload: ThreadContextCompactRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

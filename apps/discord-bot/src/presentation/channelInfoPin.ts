@@ -134,6 +134,7 @@ function buildChannelInfoPinBody(input: {
     "/omegent steernow               Inject the whole parked queue",
     "/omegent help                   This pin",
     "/omegent stop                   Stop active turn",
+    "/omegent compact                Compact context (posts token stats)",
     "/omegent thread-talk action:on|off|status",
     "/omegent link ref:<id|url>",
     "/omegent refresh-indicators",
