@@ -62,10 +62,19 @@ export class IdentityService extends Context.Service<
 
 const loadPeopleFromPath = Effect.fn("IdentityService.loadPeopleFromPath")(function* (
   path: string,
+  options: { readonly required: boolean },
 ) {
   const fs = yield* FileSystem.FileSystem;
   const exists = yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false));
   if (!exists) {
+    if (options.required) {
+      return yield* Effect.fail(
+        new IdentityError({
+          code: "identity_map_invalid",
+          message: `Configured identity map not found: ${path}`,
+        }),
+      );
+    }
     return [] as ReadonlyArray<IdentityMapPerson>;
   }
   const raw = yield* fs.readFileString(path).pipe(
@@ -78,7 +87,17 @@ const loadPeopleFromPath = Effect.fn("IdentityService.loadPeopleFromPath")(funct
     ),
   );
   const trimmed = raw.trim();
-  if (trimmed.length === 0) return [];
+  if (trimmed.length === 0) {
+    if (options.required) {
+      return yield* Effect.fail(
+        new IdentityError({
+          code: "identity_map_invalid",
+          message: `Configured identity map is empty: ${path}`,
+        }),
+      );
+    }
+    return [];
+  }
 
   let document: unknown;
   try {
@@ -121,37 +140,44 @@ const loadPeopleFromPath = Effect.fn("IdentityService.loadPeopleFromPath")(funct
 const resolveMapPath = Effect.fn("IdentityService.resolveMapPath")(function* () {
   const configured = yield* Config.string("T3_IDENTITY_MAP_PATH").pipe(Config.option);
   if (Option.isSome(configured) && configured.value.trim().length > 0) {
-    return configured.value.trim();
+    return { path: configured.value.trim(), required: true as const };
   }
   const { stateDir } = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const pathApi = yield* Path.Path;
   const yamlPath = pathApi.join(stateDir, "identity-map.yaml");
   const jsonPath = pathApi.join(stateDir, "identity-map.json");
-  if (yield* fs.exists(yamlPath).pipe(Effect.orElseSucceed(() => false))) return yamlPath;
-  if (yield* fs.exists(jsonPath).pipe(Effect.orElseSucceed(() => false))) return jsonPath;
+  if (yield* fs.exists(yamlPath).pipe(Effect.orElseSucceed(() => false))) {
+    return { path: yamlPath, required: false as const };
+  }
+  if (yield* fs.exists(jsonPath).pipe(Effect.orElseSucceed(() => false))) {
+    return { path: jsonPath, required: false as const };
+  }
   return null;
 });
 
 export const make = Effect.gen(function* () {
   const claims = yield* SessionIdentityClaims.SessionIdentityClaimRepository;
-  const mapPath = yield* resolveMapPath;
+  const resolved = yield* resolveMapPath;
 
   let people: ReadonlyArray<IdentityMapPerson> = [];
-  if (mapPath !== null) {
-    const loaded = yield* loadPeopleFromPath(mapPath).pipe(
-      Effect.catchTag("IdentityError", (error) =>
-        Effect.logError("Identity map failed to load; identity feature disabled", {
-          path: mapPath,
+  if (resolved !== null) {
+    // Explicit T3_IDENTITY_MAP_PATH is fail-closed (boot fails). Default path is soft.
+    people = yield* loadPeopleFromPath(resolved.path, { required: resolved.required }).pipe(
+      Effect.catchTag("IdentityError", (error) => {
+        if (resolved.required) {
+          return Effect.fail(error);
+        }
+        return Effect.logError("Identity map failed to load; identity feature disabled", {
+          path: resolved.path,
           code: error.code,
           message: error.message,
-        }).pipe(Effect.as([] as ReadonlyArray<IdentityMapPerson>)),
-      ),
+        }).pipe(Effect.as([] as ReadonlyArray<IdentityMapPerson>));
+      }),
     );
-    people = loaded;
     if (people.length > 0) {
       yield* Effect.logInfo("Identity map loaded", {
-        path: mapPath,
+        path: resolved.path,
         people: people.length,
       });
     }
@@ -263,6 +289,16 @@ export const make = Effect.gen(function* () {
             code: "identity_claim_required",
             message:
               "Choose who you are (identity claim) before operating on this environment. Map membership only — trusted-team ops.",
+          }),
+        );
+      }
+      // Revalidate against the live map so removed people cannot keep operating.
+      if (!byPersonId.has(existing.personId) || !byUsername.has(existing.username)) {
+        yield* claims.deleteBySessionId(sessionId).pipe(Effect.ignore);
+        return yield* Effect.fail(
+          new IdentityError({
+            code: "identity_unknown_person",
+            message: "Your identity claim is no longer in the server map. Claim again.",
           }),
         );
       }
@@ -400,7 +436,17 @@ export const layerWithPeople = (people: ReadonlyArray<IdentityMapPerson>) =>
                 }),
               );
             }
-            return toPublicClaim(option.value);
+            const existing = toPublicClaim(option.value);
+            if (!byPersonId.has(existing.personId) || !byUsername.has(existing.username)) {
+              yield* claims.deleteBySessionId(sessionId).pipe(Effect.ignore);
+              return yield* Effect.fail(
+                new IdentityError({
+                  code: "identity_unknown_person",
+                  message: "stale claim",
+                }),
+              );
+            }
+            return existing;
           }),
       } satisfies IdentityService["Service"];
     }),

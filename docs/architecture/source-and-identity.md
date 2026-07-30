@@ -42,7 +42,7 @@ Threads and messages have no durable notion of **who** started or participated, 
 | Claim UI             | **Typeahead after 3 chars**, not a full dropdown                  | Fewer wrong-person misclicks on large maps   |
 | Avatars              | **Generated initials + stable color** first; photos later         | Zero deps, works offline, distinct enough    |
 | Claim mutability     | Overwrite via claim (settings method) or clearClaim               | One claim row per sessionId                  |
-| Operate gate         | **orchestration:operate** (dispatch) when map enabled             | Attribution gate, not full ACL               |
+| Operate gate         | **orchestration dispatch only** (WS + HTTP) when map enabled      | Attribution for turns; not full ACL          |
 | Map location         | Server file path (env), not client settings                       | Same host of truth as secrets/aliases        |
 | Stamp site           | User-originated orchestration events (`message-sent`, turn start) | Source of truth is event log                 |
 | Thread origin        | First user message’s `SourceRef`                                  | Simple; no separate origin command for v1    |
