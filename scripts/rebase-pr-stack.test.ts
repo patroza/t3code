@@ -7,10 +7,13 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  assertSafeAutomaticConflictResolution,
   baseHistoryPushArgs,
+  conflictResolutionManifestSnippet,
   isProductConflictPath,
   isSuccessfulFeatureRebaseSkip,
   packagesForChangedPaths,
+  parseManifest,
   rebaseOpenFeaturePullRequests,
   RebaseConflictError,
   resumeStack,
@@ -49,9 +52,95 @@ describe("isProductConflictPath", () => {
   it("flags shared app and package sources", () => {
     assert.equal(isProductConflictPath("apps/server/src/vcs/GitVcsDriverCore.ts"), true);
     assert.equal(isProductConflictPath("packages/client-runtime/src/state/vcs.ts"), true);
+    assert.equal(isProductConflictPath("package.json"), true);
+    assert.equal(isProductConflictPath("apps/web/package.json"), true);
     assert.equal(isProductConflictPath(".github/pr-stack.json"), false);
     assert.equal(isProductConflictPath("pnpm-lock.yaml"), false);
     assert.equal(isProductConflictPath("docs/fork-stack.md"), false);
+  });
+});
+
+describe("automatic conflict resolution safety", () => {
+  const manifest = {
+    upstreamRemote: "upstream",
+    upstreamBranch: "main",
+    forkChangesBranch: "fork/changes",
+    integrationBranch: "fork/integration",
+    pullRequests: [
+      { number: 1, branch: "fork/tim" },
+      { number: 2, branch: "fork/changes" },
+    ],
+    integrationOverlays: [],
+  };
+
+  for (const commit of ["*", "a".repeat(40)]) {
+    it(`rejects ${commit === "*" ? "durable" : "exact"} whole-file product policies`, () => {
+      assert.throws(
+        () =>
+          parseManifest(
+            JSON.stringify({
+              ...manifest,
+              conflictResolutions: [
+                {
+                  branch: "fork/changes",
+                  commit,
+                  path: "apps/web/src/components/ChatView.tsx",
+                  strategy: "theirs",
+                },
+              ],
+            }),
+          ),
+        /unsafe.*Automatic whole-file conflict resolution is forbidden/i,
+      );
+    });
+  }
+
+  it("allows automatic resolution for non-product stack metadata", () => {
+    assert.doesNotThrow(() =>
+      parseManifest(
+        JSON.stringify({
+          ...manifest,
+          conflictResolutions: [
+            {
+              branch: "fork/integration",
+              commit: "*",
+              path: "pnpm-lock.yaml",
+              strategy: "theirs",
+            },
+          ],
+        }),
+      ),
+    );
+  });
+
+  it("defends application time against unsafe persisted product policies", () => {
+    assert.throws(
+      () => assertSafeAutomaticConflictResolution("apps/server/src/server.ts"),
+      /3-way merge/,
+    );
+  });
+
+  it("never suggests manifest entries for product conflicts", () => {
+    const guidance = conflictResolutionManifestSnippet(
+      "fork/changes",
+      "a".repeat(40),
+      ["apps/web/src/components/ChatView.tsx"],
+      "theirs",
+    );
+    assert.match(guidance, /Manual product resolution required/);
+    assert.match(guidance, /3-way merge/);
+    assert.notMatch(guidance, /"commit": "\*"/);
+  });
+
+  it("suggests durable entries only for non-product conflicts", () => {
+    const guidance = conflictResolutionManifestSnippet(
+      "fork/integration",
+      "a".repeat(40),
+      ["pnpm-lock.yaml"],
+      "theirs",
+    );
+    assert.match(guidance, /"commit": "\*"/);
+    assert.notMatch(guidance, /Manual product resolution required/);
   });
 });
 
