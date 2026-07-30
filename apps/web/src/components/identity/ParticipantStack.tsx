@@ -87,7 +87,9 @@ export function SourceChannelGlyph(props: {
             ? "Δ"
             : props.channel === "jira"
               ? "J"
-              : props.channel.slice(0, 1).toUpperCase();
+              : props.channel === "github"
+                ? "G"
+                : props.channel.slice(0, 1).toUpperCase();
   return (
     <span
       className={cn(
