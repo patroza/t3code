@@ -19,7 +19,7 @@ Check: `git log -1 --format=%B`. PR co-author list: `[@login](https://github.com
 URL forms only; never bare snowflakes.
 **t3url:** private GitHub repo → turn `t3 full=…`; public repo → turn `t3 short=…` (host is always just `t3vm`). Prefer short when unsure (don't leak internal hosts on public PRs).
 
-**jira:** put turn keys in PR body (prefer primary in title/branch).
+**jira:** when turn has `jira: KEY` (primary first), **branch name MUST start with that key**: `KEY-short-slug` (e.g. `SA-49-cart-management`). Do **not** put type prefixes before the key (`docs/KEY-…`, `docs-KEY-…`, `fix/KEY-…`). Also put keys in PR **title** and **body** (prefer primary in commit subjects). That is how GitHub-for-Jira auto-links the Development panel / builds — a Jira comment with the PR URL alone does **not** count.
 
 **ref:** referenced msg is primary context when present.
 
