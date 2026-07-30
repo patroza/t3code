@@ -193,3 +193,35 @@ it.effect("drops unknown fields in resolved keybinding rules", () =>
     }),
   ),
 );
+
+const shortcutFor = (key: string) => ({
+  key,
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  modKey: true,
+});
+
+it.effect("drops resolved rules whose command is unknown (forward compat)", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(ResolvedKeybindingsConfig, [
+      { command: "terminal.toggle", shortcut: shortcutFor("j") },
+      { command: "filePicker.toggle", shortcut: shortcutFor("p") },
+      { command: "projectSearch.toggle", shortcut: shortcutFor("s") },
+      { command: "thread.jump.3", shortcut: shortcutFor("3") },
+    ]);
+    assert.lengthOf(parsed, 2);
+    assert.strictEqual(parsed[0].command, "terminal.toggle");
+    assert.strictEqual(parsed[1].command, "thread.jump.3");
+  }),
+);
+
+it.effect("decodes an all-unknown resolved keybindings array as empty", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(ResolvedKeybindingsConfig, [
+      { command: "filePicker.toggle", shortcut: shortcutFor("p") },
+    ]);
+    assert.lengthOf(parsed, 0);
+  }),
+);

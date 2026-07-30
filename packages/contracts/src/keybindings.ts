@@ -1,4 +1,7 @@
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedString } from "./baseSchemas.ts";
 
 export const MAX_KEYBINDING_VALUE_LENGTH = 64;
@@ -154,9 +157,41 @@ export const ResolvedKeybindingRule = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: "ignore" } });
 export type ResolvedKeybindingRule = typeof ResolvedKeybindingRule.Type;
 
-export const ResolvedKeybindingsConfig = Schema.Array(ResolvedKeybindingRule).check(
-  Schema.isMaxLength(MAX_KEYBINDINGS_COUNT),
-);
+const decodeResolvedKeybindingRuleOption = Schema.decodeUnknownOption(ResolvedKeybindingRule);
+
+/**
+ * Forward-compatible decoder for the resolved keybindings the server returns.
+ *
+ * The server's keybinding command set grows over time (e.g. `filePicker.toggle`,
+ * `projectSearch.toggle`), and a client built against an older contracts build
+ * must not fail to decode the whole `server.getConfig` response just because one
+ * rule references a command it does not know about. Unknown rules are dropped on
+ * decode; known rules round-trip unchanged. Encoding is unaffected, so the server
+ * (which only ever emits known commands) and the strict authoring path
+ * (`KeybindingRule` / `KeybindingsConfig`) keep their exact behavior.
+ */
+function filterKnownResolvedKeybindingRules(
+  items: ReadonlyArray<unknown>,
+): Array<ResolvedKeybindingRule> {
+  const known: Array<ResolvedKeybindingRule> = [];
+  for (const item of items) {
+    const decoded = decodeResolvedKeybindingRuleOption(item);
+    if (Option.isSome(decoded)) known.push(decoded.value);
+  }
+  return known;
+}
+
+export const ResolvedKeybindingsConfig = Schema.Array(Schema.Unknown)
+  .pipe(
+    Schema.decodeTo(
+      Schema.Array(ResolvedKeybindingRule),
+      SchemaTransformation.transformOrFail({
+        decode: (items) => Effect.succeed(filterKnownResolvedKeybindingRules(items)),
+        encode: (rules) => Effect.succeed(rules as ReadonlyArray<unknown>),
+      }),
+    ),
+  )
+  .check(Schema.isMaxLength(MAX_KEYBINDINGS_COUNT));
 export type ResolvedKeybindingsConfig = typeof ResolvedKeybindingsConfig.Type;
 
 export class KeybindingsConfigError extends Schema.TaggedErrorClass<KeybindingsConfigError>()(
