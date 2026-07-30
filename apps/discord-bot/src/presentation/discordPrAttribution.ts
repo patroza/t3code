@@ -113,6 +113,35 @@ export function toT3PublicShortThreadUrl(fullUrl: string): string {
 }
 
 /**
+ * Same web UI base as the thread pin (`T3_WEB_UI_BASE_URL` → buildT3WebThreadUrl),
+ * plus `#message-{messageId}` for a later client scroll-into-view PR.
+ *
+ * Does **not** invent short `t3vm` hosts — that rewrite is only for public GitHub
+ * PR bodies (see {@link pickT3ThreadUrlForGithubRepo}). Returns null when the
+ * configured base URL or ids are missing (same as the pin's "Open in Omegent").
+ */
+export function buildOmegentThreadMessageUrl(input: {
+  readonly webUiBaseUrl?: string | null | undefined;
+  readonly threadId: string | undefined | null;
+  readonly messageId: string | undefined | null;
+}): string | null {
+  const messageId = input.messageId?.trim() ?? "";
+  if (messageId === "") return null;
+
+  const threadUrl = buildT3WebThreadUrl(input.webUiBaseUrl, input.threadId);
+  if (threadUrl === null) return null;
+
+  try {
+    const url = new URL(threadUrl);
+    url.hash = `message-${messageId}`;
+    return url.toString();
+  } catch {
+    const withoutHash = threadUrl.replace(/#.*$/u, "");
+    return `${withoutHash}#message-${messageId}`;
+  }
+}
+
+/**
  * Private GitHub repo → full t3vm host URL. Public/unknown → short `t3vm` host only
  * (avoids leaking tailnet hostnames on public PR bodies).
  */
