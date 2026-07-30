@@ -11,6 +11,7 @@ import {
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
+  withOmegentMessageLink,
 } from "./attachments.ts";
 
 describe("imageAttachmentsOf", () => {
@@ -136,5 +137,16 @@ describe("final response markdown attachment", () => {
         messageChunkCount: 3,
       }),
     ).toBe(false);
+  });
+
+  it("appends a short T3 deep link on the response.md caption", () => {
+    expect(
+      withOmegentMessageLink(
+        "Summary",
+        "https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1",
+      ),
+    ).toBe("Summary · [T3](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)");
+    expect(withOmegentMessageLink("Summary", null)).toBe("Summary");
+    expect(withOmegentMessageLink("Summary", "  ")).toBe("Summary");
   });
 });
