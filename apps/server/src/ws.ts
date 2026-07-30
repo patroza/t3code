@@ -97,6 +97,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -397,6 +398,7 @@ const makeWsRpcLayer = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
+      const identity = yield* IdentityService.IdentityService;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
@@ -1007,10 +1009,29 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.identityGetSnapshot]: () =>
+          observeRpcEffect(WS_METHODS.identityGetSnapshot, identity.getSnapshot()),
+        [WS_METHODS.identityGetSessionClaim]: () =>
+          observeRpcEffect(
+            WS_METHODS.identityGetSessionClaim,
+            identity.getSessionClaim(currentSessionId),
+          ),
+        [WS_METHODS.identityClaim]: (payload) =>
+          observeRpcEffect(WS_METHODS.identityClaim, identity.claim(currentSessionId, payload)),
+        [WS_METHODS.identityClearClaim]: () =>
+          observeRpcEffect(WS_METHODS.identityClearClaim, identity.clearClaim(currentSessionId)),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
+              yield* identity.requireOperateClaim(currentSessionId).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new OrchestrationDispatchCommandError({
+                      message: error.message,
+                    }),
+                ),
+              );
               const normalizedCommand = yield* normalizeDispatchCommand(command);
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"
