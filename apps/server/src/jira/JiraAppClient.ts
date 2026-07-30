@@ -13,6 +13,12 @@ export class JiraAppClient extends Context.Service<
     readonly addIssueComment: (input: {
       readonly issueKey: string;
       readonly body: string;
+      /**
+       * When set, create a threaded **reply** under this comment (Jira `parentId`).
+       * Only top-level comments accept children; nest under the thread root when the
+       * user wrote inside an existing reply thread.
+       */
+      readonly parentCommentId?: string | null;
     }) => Effect.Effect<{ readonly id: string } | null, never>;
     /**
      * Best-effort reaction on a comment (👀). Jira Cloud support varies; returns the emoji id
@@ -51,46 +57,100 @@ export const make = Effect.gen(function* () {
   const addIssueComment = Effect.fn("JiraAppClient.addIssueComment")(function* (input: {
     readonly issueKey: string;
     readonly body: string;
+    readonly parentCommentId?: string | null;
   }) {
     if (!config.enabled) return null;
 
     const url = `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`;
-    const request = authorize(
-      HttpClientRequest.post(url).pipe(
-        HttpClientRequest.acceptJson,
-        HttpClientRequest.setHeader("user-agent", "t3-code-jira-bridge"),
-        HttpClientRequest.bodyJsonUnsafe({ body: plainTextToAdf(input.body) }),
-      ),
-    );
+    const parentCommentId = input.parentCommentId?.trim() || null;
+    const payload: Record<string, unknown> = { body: plainTextToAdf(input.body) };
+    // Undocumented but supported on Jira Cloud: parentId threads the comment under a root.
+    if (parentCommentId !== null) {
+      payload.parentId = parentCommentId;
+    }
 
-    const response = yield* httpClient.execute(request).pipe(
-      Effect.tapError((cause) =>
-        Effect.logWarning("Jira comment create request failed", {
-          issueKey: input.issueKey,
-          cause,
-        }),
-      ),
-      Effect.orElseSucceed(() => null),
-    );
+    const postOnce = (body: Record<string, unknown>) => {
+      const request = authorize(
+        HttpClientRequest.post(url).pipe(
+          HttpClientRequest.acceptJson,
+          HttpClientRequest.setHeader("user-agent", "t3-code-jira-bridge"),
+          HttpClientRequest.bodyJsonUnsafe(body),
+        ),
+      );
+      return httpClient.execute(request).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Jira comment create request failed", {
+            issueKey: input.issueKey,
+            parentCommentId,
+            cause,
+          }),
+        ),
+        Effect.orElseSucceed(() => null),
+      );
+    };
+
+    const decodeSuccess = (success: HttpClientResponse.HttpClientResponse) =>
+      HttpClientResponse.schemaBodyJson(CommentResponse)(success).pipe(
+        Effect.map((parsed) => ({ id: String(parsed.id) })),
+        Effect.tapError((cause) =>
+          Effect.logWarning("Jira comment create response decode failed", {
+            issueKey: input.issueKey,
+            parentCommentId,
+            cause,
+          }),
+        ),
+        Effect.orElseSucceed(() => null),
+      );
+
+    let response = yield* postOnce(payload);
     if (response === null) return null;
 
-    return yield* HttpClientResponse.matchStatus(response, {
+    const first = yield* HttpClientResponse.matchStatus(response, {
       "2xx": (success) =>
-        HttpClientResponse.schemaBodyJson(CommentResponse)(success).pipe(
-          Effect.map((parsed) => ({ id: String(parsed.id) })),
-          Effect.tapError((cause) =>
-            Effect.logWarning("Jira comment create response decode failed", {
-              issueKey: input.issueKey,
-              cause,
-            }),
+        decodeSuccess(success).pipe(
+          Effect.map((parsed) =>
+            parsed === null ? { _tag: "failed" as const } : { _tag: "ok" as const, id: parsed.id },
           ),
-          Effect.orElseSucceed(() => null),
         ),
+      orElse: (failed) =>
+        Effect.gen(function* () {
+          const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
+          // Threading can fail if parentId is invalid / not a root; fall back to top-level once.
+          if (parentCommentId !== null && (failed.status === 400 || failed.status === 404)) {
+            yield* Effect.logWarning(
+              "Jira threaded comment rejected; retrying as top-level comment",
+              {
+                issueKey: input.issueKey,
+                parentCommentId,
+                status: failed.status,
+                detail: detail.slice(0, 500),
+              },
+            );
+            return { _tag: "retry_flat" as const };
+          }
+          yield* Effect.logWarning("Jira comment create rejected", {
+            issueKey: input.issueKey,
+            parentCommentId,
+            status: failed.status,
+            detail: detail.slice(0, 500),
+          });
+          return { _tag: "failed" as const };
+        }),
+    });
+
+    if (first._tag === "ok") return { id: first.id };
+    if (first._tag !== "retry_flat") return null;
+
+    response = yield* postOnce({ body: plainTextToAdf(input.body) });
+    if (response === null) return null;
+    return yield* HttpClientResponse.matchStatus(response, {
+      "2xx": (success) => decodeSuccess(success),
       orElse: (failed) =>
         Effect.gen(function* () {
           const detail = yield* failed.text.pipe(Effect.orElseSucceed(() => ""));
           yield* Effect.logWarning("Jira comment create rejected", {
             issueKey: input.issueKey,
+            parentCommentId: null,
             status: failed.status,
             detail: detail.slice(0, 500),
           });
