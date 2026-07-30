@@ -4,6 +4,7 @@
 - Architecture
   - [Overview](./architecture/overview.md)
   - [Connection runtime](./architecture/connection-runtime.md)
+  - [Cross-client feature parity](./architecture/client-feature-parity.md)
   - [Remote environments](./architecture/remote.md)
   - [Server updates](./architecture/server-updates.md)
 - User guides
