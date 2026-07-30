@@ -112,8 +112,15 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat"
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { ParticipantStack, SourceChannelGlyph } from "./identity/ParticipantStack";
-import { threadMatchesMine } from "@t3tools/client-runtime/state/identity";
-import { identityEnvironment } from "../state/identity";
+import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "./identity/IdentityClaimGate";
+import {
+  claimPersonIdForEnvironment,
+  threadMatchesMine,
+} from "@t3tools/client-runtime/state/identity";
+import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
 import {
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
@@ -1329,14 +1336,8 @@ export default function SidebarV2() {
     }
     return "any";
   });
-  const identityTarget = useMemo(() => {
-    const environmentId = primaryEnvironmentId ?? selectedEnvironmentIds[0] ?? null;
-    return environmentId === null ? null : { environmentId, input: {} as const };
-  }, [primaryEnvironmentId, selectedEnvironmentIds]);
-  const identityClaimQuery = useEnvironmentQuery(
-    identityTarget === null ? null : identityEnvironment.sessionClaim(identityTarget),
-  );
-  const claimPersonId = identityClaimQuery.data?.claim?.personId ?? null;
+  // Per-environment claims (not primary-only): smart has no map while t3vm does.
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
 
   const listOptionsActive =
     !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
@@ -1659,7 +1660,10 @@ export default function SidebarV2() {
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
         threadMatchesMine({
-          claimPersonId,
+          claimPersonId: claimPersonIdForEnvironment(
+            claimPersonIdByEnvironment,
+            thread.environmentId,
+          ),
           originPersonId: thread.originSource?.personId ?? null,
           participantPersonIds: (thread.participantSummaries ?? []).map(
             (participant) => participant.personId,
@@ -1715,7 +1719,7 @@ export default function SidebarV2() {
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
-    claimPersonId,
+    claimPersonIdByEnvironment,
     nowMinute,
     ownershipFilter,
     scopedProjectKeys,
@@ -2033,11 +2037,15 @@ export default function SidebarV2() {
             // Never navigate away from a thread that did not settle.
             if (!isAtomCommandInterrupted(result)) {
               const error = squashAtomCommandFailure(result);
+              const message = error instanceof Error ? error.message : "An error occurred.";
+              if (isIdentityClaimRequiredMessage(message)) {
+                requestIdentityClaimGate(threadRef.environmentId);
+              }
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
                   title: "Failed to settle thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
+                  description: message,
                 }),
               );
             }
