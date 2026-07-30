@@ -20,12 +20,25 @@ export interface EnabledJiraAppConfig {
   readonly botAccountId: string | null;
   readonly turnTimeoutMs: number;
   /**
-   * When set, unlinked Jira mentions create a new T3 thread on this project id
-   * (join-or-create). When null, auto-create only if the shell has exactly one project.
+   * When set, unlinked Jira mentions create a new T3 thread on this project
+   * (join-or-create) when the Jira project key is not in projectMap.
+   * Accepts T3 project id, title, workspace basename, or absolute workspace root.
+   * When null and no map hit, auto-create only if the shell has exactly one project.
    */
   readonly defaultProjectId: string | null;
+  /**
+   * Map Jira project keys (e.g. SA) → T3 project id, title, workspace basename, or
+   * absolute workspace root.
+   * From `T3CODE_JIRA_PROJECT_MAP=SA:scanner,CFG:/var/lib/t3/src/macs/configurator`.
+   */
+  readonly projectMap: ReadonlyMap<string, string>;
   /** When false, unlinked issues still get "not yet linked." Default true. */
   readonly autoCreateThread: boolean;
+  /**
+   * Emoji id for the acknowledgment reaction on the triggering comment (👀 = 1f440).
+   * Empty disables reactions. Best-effort — site/API support varies.
+   */
+  readonly ackEmojiId: string | null;
 }
 
 export interface DisabledJiraAppConfig {
@@ -69,9 +82,11 @@ const configEffect = Effect.gen(function* () {
       Config.withDefault(30 * 60_000),
     ),
     defaultProjectId: optionalString("T3CODE_JIRA_DEFAULT_PROJECT_ID"),
+    projectMap: Config.string("T3CODE_JIRA_PROJECT_MAP").pipe(Config.withDefault("")),
     autoCreateThread: Config.boolean("T3CODE_JIRA_AUTO_CREATE_THREAD").pipe(
       Config.withDefault(true),
     ),
+    ackEmojiId: optionalString("T3CODE_JIRA_ACK_EMOJI_ID"),
   });
 
   // Prefer T3CODE_* then fall back to shared MCP-style env names.
@@ -98,6 +113,10 @@ const configEffect = Effect.gen(function* () {
       .filter(Boolean),
   );
   const mention = values.mention!.trim().replace(/^@/u, "");
+  const ackEmojiRaw = values.ackEmojiId?.trim();
+  // Default 👀 (eyes). Set empty string to disable.
+  const ackEmojiId =
+    ackEmojiRaw === undefined ? "1f440" : ackEmojiRaw.length === 0 ? null : ackEmojiRaw;
   return JiraAppConfig.of({
     enabled: true,
     webhookSecret: values.webhookSecret!,
@@ -111,7 +130,9 @@ const configEffect = Effect.gen(function* () {
     botAccountId: values.botAccountId?.trim() || null,
     turnTimeoutMs: Math.max(10_000, values.turnTimeoutMs),
     defaultProjectId: values.defaultProjectId?.trim() || null,
+    projectMap: parseJiraProjectMap(values.projectMap),
     autoCreateThread: values.autoCreateThread,
+    ackEmojiId,
   });
 });
 
@@ -122,4 +143,89 @@ export function isJiraProjectAllowed(
   projectKey: string,
 ): boolean {
   return allowedProjects.size === 0 || allowedProjects.has(projectKey.trim().toUpperCase());
+}
+
+/**
+ * Parse `SA:project-id-or-name,CFG:other` (also accepts `=` separators).
+ * Keys are uppercased Jira project keys; values are T3 project ids, titles,
+ * workspace basenames, or absolute workspace roots (paths after the first `:` / `=`).
+ */
+export function parseJiraProjectMap(raw: string): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0) continue;
+    // Prefer first : or = (whichever appears first). Paths keep later colons (rare) intact.
+    const colon = trimmed.indexOf(":");
+    const eq = trimmed.indexOf("=");
+    const idx = colon === -1 ? eq : eq === -1 ? colon : Math.min(colon, eq);
+    if (idx <= 0) continue;
+    const key = trimmed.slice(0, idx).trim().toUpperCase();
+    const value = trimmed.slice(idx + 1).trim();
+    if (key.length === 0 || value.length === 0) continue;
+    map.set(key, value);
+  }
+  return map;
+}
+
+export type ShellProjectRef = {
+  readonly id: string;
+  readonly title: string;
+  readonly workspaceRoot: string;
+};
+
+function normalizeWorkspacePath(path: string): string {
+  return path.trim().replace(/\/+$/u, "").toLowerCase();
+}
+
+function workspaceBasename(path: string): string | undefined {
+  const normalized = path.replace(/\/+$/u, "");
+  if (normalized.length === 0) return undefined;
+  return normalized.split("/").pop()?.toLowerCase();
+}
+
+/**
+ * Resolve a T3 project id from a configured value:
+ * exact project id, project title, absolute workspace root, or workspace basename.
+ */
+export function resolveMappedT3ProjectId(
+  mapped: string,
+  shellProjects: ReadonlyArray<ShellProjectRef>,
+): string | null {
+  const trimmed = mapped.trim();
+  if (trimmed.length === 0) return null;
+  if (shellProjects.some((project) => project.id === trimmed)) return trimmed;
+
+  const lower = trimmed.toLowerCase();
+  const byTitle = shellProjects.find((project) => project.title.trim().toLowerCase() === lower);
+  if (byTitle) return byTitle.id;
+
+  const normalizedMapped = normalizeWorkspacePath(trimmed);
+  const byRoot = shellProjects.find(
+    (project) => normalizeWorkspacePath(project.workspaceRoot) === normalizedMapped,
+  );
+  if (byRoot) return byRoot.id;
+
+  // Basename-only when the configured value has no path separators (avoid `…/scanner`
+  // partially matching a different project whose root ends in `scanner`).
+  const looksLikePath = trimmed.includes("/") || trimmed.includes("\\");
+  if (!looksLikePath) {
+    const byBasename = shellProjects.find(
+      (project) => workspaceBasename(project.workspaceRoot) === lower,
+    );
+    if (byBasename) return byBasename.id;
+  }
+
+  return null;
+}
+
+/** Look up T3 project for a Jira project key via the configured map. */
+export function resolveT3ProjectIdForJiraKey(
+  projectMap: ReadonlyMap<string, string>,
+  jiraProjectKey: string,
+  shellProjects: ReadonlyArray<ShellProjectRef>,
+): string | null {
+  const mapped = projectMap.get(jiraProjectKey.trim().toUpperCase());
+  if (mapped === undefined) return null;
+  return resolveMappedT3ProjectId(mapped, shellProjects);
 }
