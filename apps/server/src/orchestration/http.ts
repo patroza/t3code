@@ -2,6 +2,8 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  type EnvironmentRequestInvalidReason,
+  IdentityError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -16,8 +18,21 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import * as IdentityService from "../identity/IdentityService.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+
+const identityErrorToHttpReason = (error: IdentityError): EnvironmentRequestInvalidReason => {
+  switch (error.code) {
+    case "identity_claim_required":
+    case "identity_claim_missing":
+      return "identity_claim_required";
+    case "identity_unknown_person":
+      return "identity_unknown_person";
+    default:
+      return "identity_map_invalid";
+  }
+};
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -25,6 +40,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const identity = yield* IdentityService.IdentityService;
 
     return handlers
       .handle(
@@ -77,7 +93,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         "dispatch",
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          yield* identity
+            .requireOperateClaim(session.sessionId)
+            .pipe(
+              Effect.catchTag("IdentityError", (error) =>
+                failEnvironmentInvalidRequest(identityErrorToHttpReason(error)),
+              ),
+            );
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
