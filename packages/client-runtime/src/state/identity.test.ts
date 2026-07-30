@@ -1,9 +1,11 @@
+import { IdentityUsername, PersonId, type ThreadParticipantSummary } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   claimPersonIdForEnvironment,
   filterPeopleForTypeahead,
   identityClaimRequired,
+  isClaimedNonStarterParticipant,
   threadMatchesMine,
 } from "./identity.ts";
 
@@ -119,5 +121,55 @@ describe("claimPersonIdForEnvironment", () => {
     expect(claimPersonIdForEnvironment(map, "t3vm")).toBe("patroza");
     expect(claimPersonIdForEnvironment(map, "smart")).toBeNull();
     expect(claimPersonIdForEnvironment(map, "missing")).toBeNull();
+  });
+});
+
+describe("isClaimedNonStarterParticipant", () => {
+  const participants = [
+    {
+      personId: PersonId.make("joshua"),
+      username: IdentityUsername.make("joshuadima"),
+      firstChannel: "discord",
+      firstParticipatedAt: "2026-07-30T12:00:00.000Z",
+    },
+    {
+      personId: PersonId.make("patroza"),
+      username: IdentityUsername.make("patroza"),
+      firstChannel: "desktop",
+      firstParticipatedAt: "2026-07-30T12:01:00.000Z",
+    },
+  ] satisfies ReadonlyArray<ThreadParticipantSummary>;
+
+  it("marks a claimed person hidden among later participants", () => {
+    expect(
+      isClaimedNonStarterParticipant({
+        claimPersonId: "PATROZA",
+        participants,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not redundantly mark the visible starter", () => {
+    expect(
+      isClaimedNonStarterParticipant({
+        claimPersonId: "joshua",
+        participants,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not mark an unclaimed or absent person", () => {
+    expect(
+      isClaimedNonStarterParticipant({
+        claimPersonId: null,
+        participants,
+      }),
+    ).toBe(false);
+    expect(
+      isClaimedNonStarterParticipant({
+        claimPersonId: "someone-else",
+        participants,
+      }),
+    ).toBe(false);
   });
 });

@@ -373,6 +373,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       </View>
       <View className="mt-1 flex-row items-center gap-1.5">
         <ThreadIdentityLeading
+          environmentId={thread.environmentId}
           originChannel={thread.originSource?.channel}
           participants={thread.participantSummaries}
         />
@@ -558,6 +559,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           <View className="min-w-0 flex-1">
             <View className="flex-row items-center gap-1.5">
               <ThreadIdentityLeading
+                environmentId={thread.environmentId}
                 originChannel={thread.originSource?.channel}
                 participants={thread.participantSummaries}
               />

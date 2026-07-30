@@ -823,7 +823,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       {!isRenaming ? (
         <>
           <SourceChannelGlyph channel={originChannel} />
-          <ParticipantStack participants={participants} />
+          <ParticipantStack environmentId={thread.environmentId} participants={participants} />
         </>
       ) : null}
       {isRenaming ? (

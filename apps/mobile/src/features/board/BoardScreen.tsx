@@ -176,6 +176,7 @@ function BoardCard(props: {
           <View className="min-w-0 flex-1 gap-1">
             <View className="flex-row items-center gap-1.5">
               <ThreadIdentityLeading
+                environmentId={props.thread.environmentId}
                 originChannel={props.thread.originSource?.channel}
                 participants={props.thread.participantSummaries}
               />
