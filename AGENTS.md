@@ -148,7 +148,7 @@ When implementation work for a user request is done (code, docs, config — not 
    `fork/changes`), or `pnpm fork:stack overlay-start <pr> <branch>` for overlay-owned work.
 2. **Open or update a PR** against the correct base before handing off:
    - Ordinary features → **`fork/changes`** (never `main`, never `fork/integration`).
-   - Client overlay work → the **registered overlay branch** (`fork/discord`, `fork/vscode`, or
+   - Client overlay work → the **registered overlay branch** (`fork/discord`, `fork/vscode`, `fork/identity`, or
      `t3-discord/f7d37879-desktop-deeplinks`), not a duplicate of that work in `fork/changes`.
 3. **Keep the PR mergeable** before saying “updated the PR” or finishing:
    - **Mandatory pre-push gate** (see Task Completion Requirements): run **locally every job Fork
@@ -213,11 +213,11 @@ Prefer the thread starter’s Discord id/display name from turn context. Do not 
 **Whatever Fork CI runs for this tip, the agent must run locally first.** Fork CI is a safety net,
 not the first formatter, linter, or typechecker. This applies to **every** implementation base:
 
-| PR base                                                               | Local gate required before ready / merge? | GitHub required checks                                    |
-| --------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------- |
-| `fork/changes`                                                        | **Yes** — full gate below                 | Check, Test, Mobile Native Static Analysis, Release Smoke |
-| Registered overlay (`fork/discord`, `fork/vscode`, desktop deeplinks) | **Yes — identical**                       | Same as `fork/changes`                                    |
-| Dependent feature based on another feature branch                     | **Yes** on the child tip after rebase     | Same when retargeted to a protected base                  |
+| PR base                                                                                | Local gate required before ready / merge? | GitHub required checks                                    |
+| -------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------- |
+| `fork/changes`                                                                         | **Yes** — full gate below                 | Check, Test, Mobile Native Static Analysis, Release Smoke |
+| Registered overlay (`fork/discord`, `fork/vscode`, `fork/identity`, desktop deeplinks) | **Yes — identical**                       | Same as `fork/changes`                                    |
+| Dependent feature based on another feature branch                                      | **Yes** on the child tip after rebase     | Same when retargeted to a protected base                  |
 
 **Before every `git push` that is intended as ready work, `fork:stack update --push`, non-draft PR
 open, ready-for-review conversion, merge / merge-request, or “handoff / done” claim**, the agent

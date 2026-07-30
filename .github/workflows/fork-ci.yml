@@ -22,6 +22,7 @@ on:
       - t3-discord/f7d37879-desktop-deeplinks
       - fork/discord
       - fork/vscode
+      - fork/identity
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
