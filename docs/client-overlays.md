@@ -15,6 +15,10 @@ pnpm fork:overlay-owner <changed-path> [changed-path...]
 - `fork/changes` means no extracted client owns the path.
 - A PR number means start a child with
   `pnpm fork:stack overlay-start <pr-number> <branch>` and merge that child into the overlay.
+- Overlay **child** PRs (base = the overlay branch) require the **same** local pre-push gate and
+  GitHub required checks (Check, Test, Mobile Native Static Analysis, Release Smoke) as PRs into
+  `fork/changes`. Do not merge on Compose / draft-lock green alone. Fork CI runs for those bases;
+  agents must still run `vp check` + full monorepo typecheck locally before ready handoff.
 - `extraction pending` is used only during the reviewed cutover. Do not add new implementation to
   `fork/changes`; finish or update the extraction first.
 
