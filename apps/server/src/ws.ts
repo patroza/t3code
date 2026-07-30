@@ -13,12 +13,7 @@ import * as Stream from "effect/Stream";
 import {
   RpcClientId,
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
-  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthReviewWriteScope,
-  AuthRelayWriteScope,
-  AuthTerminalOperateScope,
-  AuthAccessReadScope,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AiUsageSnapshot,
@@ -110,6 +105,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -355,94 +351,11 @@ const BOOTSTRAP_WORKTREE_PROJECTION_ATTEMPTS = Math.ceil(
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 
-const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
-  [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
-  [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.getThreadActivities, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.getFullThreadDiff, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.searchThreads, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
-  [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
-  [WS_METHODS.serverProbe, AuthOrchestrationReadScope],
-  [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
-  [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverUpdateServer, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverUpdateServerWithProgress, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverUpsertKeybinding, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
-  [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
-  [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
-  [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
-  [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
-  [WS_METHODS.serverGetHostResourceSnapshot, AuthOrchestrationReadScope],
-  [WS_METHODS.serverGetResourceTelemetryHistory, AuthOrchestrationReadScope],
-  [WS_METHODS.serverRetryResourceTelemetry, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverReportClientActivity, AuthOrchestrationReadScope],
-  [WS_METHODS.serverReportHostPowerState, AuthOrchestrationOperateScope],
-  [WS_METHODS.serverGetBackgroundPolicy, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeResourceTelemetry, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeBackgroundPolicy, AuthOrchestrationReadScope],
-  [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
-  [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
-  [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
-  [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
-  [WS_METHODS.sourceControlCloneRepository, AuthOrchestrationOperateScope],
-  [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
-  [WS_METHODS.projectsListEntries, AuthOrchestrationReadScope],
-  [WS_METHODS.projectsReadFile, AuthOrchestrationReadScope],
-  [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
-  [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
-  [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
-  [WS_METHODS.filesystemBrowse, AuthOrchestrationReadScope],
-  [WS_METHODS.assetsCreateUrl, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeVcsStatus, AuthOrchestrationReadScope],
-  [WS_METHODS.vcsRefreshStatus, AuthOrchestrationReadScope],
-  [WS_METHODS.vcsPull, AuthOrchestrationOperateScope],
-  [WS_METHODS.gitRunStackedAction, AuthOrchestrationOperateScope],
-  [WS_METHODS.gitResolvePullRequest, AuthOrchestrationOperateScope],
-  [WS_METHODS.gitPreparePullRequestThread, AuthOrchestrationOperateScope],
-  [WS_METHODS.vcsListRefs, AuthOrchestrationReadScope],
-  [WS_METHODS.vcsResolveBranchChangeRequest, AuthOrchestrationReadScope],
-  [WS_METHODS.vcsCreateWorktree, AuthOrchestrationOperateScope],
-  [WS_METHODS.vcsRemoveWorktree, AuthOrchestrationOperateScope],
-  [WS_METHODS.vcsPreviewWorktreeCleanup, AuthOrchestrationReadScope],
-  [WS_METHODS.vcsCleanupThreadWorktree, AuthOrchestrationOperateScope],
-  [WS_METHODS.vcsCreateRef, AuthOrchestrationOperateScope],
-  [WS_METHODS.vcsSwitchRef, AuthOrchestrationOperateScope],
-  [WS_METHODS.vcsInit, AuthOrchestrationOperateScope],
-  [WS_METHODS.reviewGetDiffPreview, AuthReviewWriteScope],
-  [WS_METHODS.terminalOpen, AuthTerminalOperateScope],
-  [WS_METHODS.terminalAttach, AuthTerminalOperateScope],
-  [WS_METHODS.terminalWrite, AuthTerminalOperateScope],
-  [WS_METHODS.terminalResize, AuthTerminalOperateScope],
-  [WS_METHODS.terminalClear, AuthTerminalOperateScope],
-  [WS_METHODS.terminalRestart, AuthTerminalOperateScope],
-  [WS_METHODS.terminalClose, AuthTerminalOperateScope],
-  [WS_METHODS.subscribeTerminalEvents, AuthTerminalOperateScope],
-  [WS_METHODS.subscribeTerminalMetadata, AuthTerminalOperateScope],
-  [WS_METHODS.previewOpen, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewNavigate, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewResize, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewRefresh, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewClose, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewList, AuthOrchestrationReadScope],
-  // Operate, not read: resolving may publish the port on the tailnet.
-  [WS_METHODS.previewResolvePort, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewReportStatus, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewAutomationConnect, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewAutomationRespond, AuthOrchestrationOperateScope],
-  [WS_METHODS.previewAutomationFocusHost, AuthOrchestrationOperateScope],
-  [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeAiUsage, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
-  [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
-]);
+// Authorization scopes for every RPC live only in
+// `auth/RpcAuthorization.ts` (`RPC_REQUIRED_SCOPES` / `requiredScopeForRpcMethod`).
+// Do not reintroduce a parallel Map here — it drifts (identity.* methods were
+// registered in the typed table but missing from the runtime Map, so clients
+// failed with "has no declared authorization scope").
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -585,13 +498,6 @@ const makeWsRpcLayer = (
           ? stream
           : Stream.fail(authorizationError(requiredScope));
       };
-      const requiredScopeForMethod = (method: string): AuthEnvironmentScope => {
-        const requiredScope = RPC_REQUIRED_SCOPE.get(method);
-        if (requiredScope === undefined) {
-          throw new Error(`RPC method ${method} has no declared authorization scope.`);
-        }
-        return requiredScope;
-      };
       const observeRpcEffect = <A, E, R>(
         method: string,
         effect: Effect.Effect<A, E, R>,
@@ -599,7 +505,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcEffect(
           method,
-          authorizeEffect(requiredScopeForMethod(method), effect),
+          authorizeEffect(requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const observeRpcStream = <A, E, R>(
@@ -609,7 +515,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStream(
           method,
-          authorizeStream(requiredScopeForMethod(method), stream),
+          authorizeStream(requiredScopeForRpcMethod(method), stream),
           traceAttributes,
         );
       const observeRpcStreamEffect = <A, StreamError, StreamContext, EffectError, EffectContext>(
@@ -623,7 +529,7 @@ const makeWsRpcLayer = (
       ) =>
         instrumentRpcStreamEffect(
           method,
-          authorizeEffect(requiredScopeForMethod(method), effect),
+          authorizeEffect(requiredScopeForRpcMethod(method), effect),
           traceAttributes,
         );
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
