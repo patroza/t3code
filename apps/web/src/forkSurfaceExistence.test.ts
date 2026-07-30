@@ -128,6 +128,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(gate).toContain("Save identity");
     expect(gate).toContain("requestIdentityClaimGate");
     expect(gate).toContain("isIdentityClaimRequiredMessage");
+    // Multi-env: claim gate must not only target primary (smart-without-map + t3vm).
+    expect(gate).toContain("forceClaimEnvironmentId");
+    expect(gate).toContain("orderedEnvironmentIds");
     const stack = readSrc("components/identity/ParticipantStack.tsx");
     expect(stack).toContain('data-testid="participant-stack"');
     expect(stack).toContain('data-testid="source-channel-glyph"');

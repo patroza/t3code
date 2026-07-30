@@ -34,6 +34,10 @@ import {
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
 import { ParticipantStack, SourceChannelGlyph } from "./identity/ParticipantStack";
+import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "./identity/IdentityClaimGate";
 import { hasComposerDraftMessage, useComposerDraftStore } from "../composerDraftStore";
 import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -2328,12 +2332,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           clicked === "settle" ? await settleThread(threadRef) : await unsettleThread(threadRef);
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
+          const message = error instanceof Error ? error.message : "An error occurred.";
+          if (isIdentityClaimRequiredMessage(message)) {
+            requestIdentityClaimGate(threadRef.environmentId);
+          }
           toastManager.add(
             stackedThreadToast({
               type: "error",
               title:
                 clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
+              description: message,
             }),
           );
         }
@@ -3278,12 +3286,16 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               : await props.unsettleThread(threadRef);
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
             const error = squashAtomCommandFailure(result);
+            const message = error instanceof Error ? error.message : "An error occurred.";
+            if (isIdentityClaimRequiredMessage(message)) {
+              requestIdentityClaimGate(threadRef.environmentId);
+            }
             toastManager.add(
               stackedThreadToast({
                 type: "error",
                 title:
                   clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
+                description: message,
               }),
             );
           }

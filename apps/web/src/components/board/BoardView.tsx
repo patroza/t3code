@@ -28,6 +28,10 @@ import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "../identity/IdentityClaimGate";
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { isElectron } from "../../env";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
@@ -119,16 +123,24 @@ interface BoardThreadGitContext {
 }
 
 /** Error toast for a failed thread action; interruptions and successes are silent. */
-function reportThreadActionFailure(result: AtomCommandResult<unknown, unknown>, title: string) {
+function reportThreadActionFailure(
+  result: AtomCommandResult<unknown, unknown>,
+  title: string,
+  environmentId?: EnvironmentId | null,
+) {
   if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) {
     return;
   }
   const error = squashAtomCommandFailure(result);
+  const message = error instanceof Error ? error.message : "An error occurred.";
+  if (isIdentityClaimRequiredMessage(message)) {
+    requestIdentityClaimGate(environmentId);
+  }
   toastManager.add(
     stackedThreadToast({
       type: "error",
       title,
-      description: error instanceof Error ? error.message : "An error occurred.",
+      description: message,
     }),
   );
 }
@@ -763,6 +775,7 @@ function BoardContent() {
         reportThreadActionFailure(
           result,
           clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
+          threadRef.environmentId,
         );
         return;
       }
