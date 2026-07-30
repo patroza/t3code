@@ -139,9 +139,9 @@ describe("final response markdown attachment", () => {
     ).toBe(false);
   });
 
-  it("appends Omegent link under the response.md caption", () => {
+  it("appends a short T3 deep link on the response.md caption", () => {
     expect(withOmegentMessageLink("Summary", "https://t3vm/?thread=tid-1#message-msg-1")).toBe(
-      "Summary\n\n[Omegent link](https://t3vm/?thread=tid-1#message-msg-1)",
+      "Summary · [T3](https://t3vm/?thread=tid-1#message-msg-1)",
     );
     expect(withOmegentMessageLink("Summary", null)).toBe("Summary");
     expect(withOmegentMessageLink("Summary", "  ")).toBe("Summary");

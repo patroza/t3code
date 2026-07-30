@@ -100,7 +100,8 @@ export function finalResponseCaption(text: string): string {
 }
 
 /**
- * Append a Discord masked [Omegent link](url) under the response.md caption.
+ * Append a short Discord masked T3 deep link on the response.md caption.
+ * Same-line ` · [T3](url)` — compact, matches PR footer style.
  * No-op when the URL is missing (e.g. empty thread/message ids).
  */
 export function withOmegentMessageLink(
@@ -109,10 +110,10 @@ export function withOmegentMessageLink(
 ): string {
   const url = omegentUrl?.trim() ?? "";
   if (url === "") return caption;
-  const link = `[Omegent link](${url})`;
+  const link = `[T3](${url})`;
   const body = caption.trimEnd();
   if (body === "") return link;
-  return `${body}\n\n${link}`;
+  return `${body} · ${link}`;
 }
 
 /**
