@@ -256,6 +256,11 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
+/** Durable identity claims — residual-free once Persistence/SqlClient is in the graph. */
+const IdentityLayerLive = IdentityService.layerPersisted.pipe(
+  Layer.provideMerge(PersistenceLayerLive),
+);
+
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
 );
@@ -306,6 +311,7 @@ const GitHubAppDependenciesLive = Layer.mergeAll(
 const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(
   Layer.provideMerge(GitHubAppDependenciesLive),
   Layer.provideMerge(ThreadWorkItemStoreLive),
+  Layer.provideMerge(IdentityLayerLive),
 );
 
 const JiraAppDependenciesLive = Layer.mergeAll(JiraAppClient.layer, JiraDeliveryStore.layer).pipe(
@@ -316,6 +322,7 @@ const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
   Layer.provideMerge(JiraAppDependenciesLive),
   // Prefer the instance already provided by GitHubPrBridgeLive when merged below.
   Layer.provideMerge(ThreadWorkItemStoreLive),
+  Layer.provideMerge(IdentityLayerLive),
 );
 
 const VcsLayerLive = Layer.empty.pipe(
@@ -492,10 +499,8 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
 ).pipe(
-  // Residual-free memory claims on the routes graph (CLI + server tests).
-  // layerPersisted is available when SqlClient is in the parent graph; full
-  // process restarts re-claim via the typeahead gate until that is the default.
-  Layer.provide(IdentityService.layer),
+  // IdentityService is residual here — tests provide layerWithPeople / memory;
+  // makeServerLayer provides layerPersisted (SQLite claims) once SqlClient is live.
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(browserApiCorsLayer),
@@ -647,6 +652,8 @@ export const makeServerLayer = Layer.unwrap(
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
+      // Durable claims for HTTP/WS routes (residual-free; SQL from Persistence).
+      Layer.provideMerge(IdentityLayerLive),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpResponseCompressionLive),
       Layer.provideMerge(HttpServerLive),
