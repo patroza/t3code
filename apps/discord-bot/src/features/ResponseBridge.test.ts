@@ -25,6 +25,7 @@ import {
   DISCORD_EXTERNAL_ECHO_SURFACES,
   discordBridgeOwnedMessageIds,
   externalUserMessagesToEcho,
+  formatEchoedUserMessage,
   isDiscordOriginatedUserPrompt,
   isDiscordTasksSidePostContent,
   isGitHubOriginatedUserPrompt,
@@ -1672,6 +1673,27 @@ hi from discord`;
       sentDiscordUserMessageIds: [],
     });
     expect(messages).toEqual([]);
+  });
+});
+
+describe("formatEchoedUserMessage", () => {
+  it("labels cross-client input with its person identity and client channel", () => {
+    expect(
+      formatEchoedUserMessage({
+        ...userMessage("user-mobile"),
+        text: "please check the latest build",
+        source: {
+          channel: "mobile",
+          username: "patroza",
+        },
+      }),
+    ).toBe("from patroza@mobile: please check the latest build");
+  });
+
+  it("uses an explicit fallback for legacy messages without provenance", () => {
+    expect(formatEchoedUserMessage(userMessage("user-legacy"))).toBe(
+      "from unknown@unknown: follow-up",
+    );
   });
 });
 
