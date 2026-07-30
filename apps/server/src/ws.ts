@@ -13,6 +13,7 @@ import * as Stream from "effect/Stream";
 import {
   RpcClientId,
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  AuthOrchestrationReadScope,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AiUsageSnapshot,
@@ -353,7 +354,9 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 
 // Authorization scopes for every RPC live only in
 // `auth/RpcAuthorization.ts` (`RPC_REQUIRED_SCOPES` / `requiredScopeForRpcMethod`).
-// Do not reintroduce a parallel Map here.
+// Do not reintroduce a parallel Map here — stack whole-file `theirs` on this path
+// and Tim imports previously regressed main's typed auth (#2679), and identity.*
+// methods drifted out of the runtime Map.
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
   revision: number,
