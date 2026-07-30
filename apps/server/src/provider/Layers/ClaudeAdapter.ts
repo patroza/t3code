@@ -3868,6 +3868,27 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  /**
+   * Manual compact: enqueue the `/compact` local command on the live SDK
+   * session. Claude emits `compact_boundary` + token-usage updates when done.
+   */
+  const compactSession: ClaudeAdapterShape["compactSession"] = Effect.fn("compactSession")(
+    function* (threadId) {
+      const context = yield* requireSession(threadId);
+      // Close a stale synthetic turn so compact is not blocked behind one.
+      if (context.turnState?.synthetic === true) {
+        yield* completeTurn(context, "completed");
+      }
+      const message = buildUserMessage({
+        sdkContent: [{ type: "text", text: "/compact" }],
+      });
+      yield* Queue.offer(context.promptQueue, {
+        type: "message",
+        message,
+      }).pipe(Effect.mapError((cause) => toRequestError(threadId, "compact/start", cause)));
+    },
+  );
+
   const readThread: ClaudeAdapterShape["readThread"] = Effect.fn("readThread")(
     function* (threadId) {
       const context = yield* requireSession(threadId);
@@ -3972,6 +3993,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactSession,
     readThread,
     rollbackThread,
     respondToRequest,

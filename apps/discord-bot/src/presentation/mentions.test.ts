@@ -152,6 +152,11 @@ describe("parseMentionIntent", () => {
     expect(parseMentionIntent(" help! ")).toEqual({ kind: "help" });
   });
 
+  it("recognizes compact as a control command", () => {
+    expect(parseMentionIntent("compact")).toEqual({ kind: "compact" });
+    expect(parseMentionIntent(" Compact! ")).toEqual({ kind: "compact" });
+  });
+
   it("recognizes refresh-indicators as a control command", () => {
     expect(parseMentionIntent("refresh-indicators")).toEqual({ kind: "refresh-indicators" });
     expect(parseMentionIntent("refresh indicators")).toEqual({ kind: "refresh-indicators" });
