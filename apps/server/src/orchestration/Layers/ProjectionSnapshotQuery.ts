@@ -79,7 +79,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
-    source: Schema.NullOr(Schema.fromJsonString(SourceRef)),
+    source: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -92,9 +92,10 @@ const ProjectionQueuedMessageDbRowSchema = ProjectionQueuedMessage.mapFields(
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
-    originSource: Schema.NullOr(Schema.fromJsonString(SourceRef)),
+    // JSON columns may be SQL NULL or the string "null" from JSON.stringify(null).
+    originSource: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
     participantSummaries: Schema.NullOr(
-      Schema.fromJsonString(Schema.Array(ThreadParticipantSummary)),
+      Schema.fromJsonString(Schema.NullOr(Schema.Array(ThreadParticipantSummary))),
     ),
   }),
 );
