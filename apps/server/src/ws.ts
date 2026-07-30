@@ -109,6 +109,7 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
+import { stampOrchestrationCommandSource } from "./identity/stampSource.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
@@ -1242,10 +1243,11 @@ const makeWsRpcLayer = (
                 ),
                 Effect.orElseSucceed(() => undefined),
               );
-              yield* identity
-                .requireOperateClaim(currentSessionId, {
-                  ...(clientDeviceType !== undefined ? { clientDeviceType } : {}),
-                })
+              const operateClaim = yield* identity
+                .requireOperateClaim(
+                  currentSessionId,
+                  clientDeviceType !== undefined ? { clientDeviceType } : {},
+                )
                 .pipe(
                   Effect.mapError(
                     (error) =>
@@ -1255,7 +1257,11 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
+              const normalizedCommand = stampOrchestrationCommandSource({
+                command: yield* normalizeDispatchCommand(command),
+                claim: operateClaim,
+                clientDeviceType,
+              });
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"
                   ? yield* projectionSnapshotQuery
