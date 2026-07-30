@@ -107,4 +107,29 @@ describe("IdentityService", () => {
       expect(next.claim.method).toBe("settings");
     }).pipe(Effect.provide(TestLayer)),
   );
+
+  it.effect("bot sessions skip the interactive operate claim gate", () =>
+    Effect.gen(function* () {
+      const identity = yield* IdentityService.IdentityService;
+      const sessionId = AuthSessionId.make("00000000-0000-4000-8000-0000000000dd");
+      const allowed = yield* identity.requireOperateClaim(sessionId, {
+        clientDeviceType: "bot",
+      });
+      expect(allowed).toBeNull();
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("non-bot sessions still require a claim when map is enabled", () =>
+    Effect.gen(function* () {
+      const identity = yield* IdentityService.IdentityService;
+      const sessionId = AuthSessionId.make("00000000-0000-4000-8000-0000000000ee");
+      const code = yield* identity
+        .requireOperateClaim(sessionId, { clientDeviceType: "desktop" })
+        .pipe(
+          Effect.map(() => null as string | null),
+          Effect.catch((error) => Effect.succeed(isIdentityError(error) ? error.code : "other")),
+        );
+      expect(code).toBe("identity_claim_required");
+    }).pipe(Effect.provide(TestLayer)),
+  );
 });
