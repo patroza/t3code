@@ -5,6 +5,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   buildGitHubTurnPrompt,
   discoverGitHubTargetTurnId,
+  extractJiraIssueKeysFromGitHubInvocation,
   githubFinalAnswerText,
   githubFinalAnswerWithStats,
   hasRequiredGitHubPermission,
@@ -90,6 +91,21 @@ describe("GitHub PR webhook", () => {
     expect(verifyGitHubWebhookSignature({ secret, body, signature })).toBe(true);
     expect(verifyGitHubWebhookSignature({ secret, body: `${body} `, signature })).toBe(false);
     expect(verifyGitHubWebhookSignature({ secret, body, signature: "sha256=bad" })).toBe(false);
+  });
+
+  it("extracts Jira keys from PR title and mention comment", () => {
+    expect(
+      extractJiraIssueKeysFromGitHubInvocation({
+        pullRequestTitle: "Fix widgets for SA-401",
+        prompt: "also see CFG-12 please",
+      }),
+    ).toEqual(["SA-401", "CFG-12"]);
+    expect(
+      extractJiraIssueKeysFromGitHubInvocation({
+        pullRequestTitle: "no keys here",
+        prompt: "look at SA-414",
+      }),
+    ).toEqual(["SA-414"]);
   });
 
   it("parses an explicit PR invocation and preserves requester provenance", () => {

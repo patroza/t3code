@@ -8,13 +8,16 @@
 An authorized GitHub user can mention the T3 GitHub App in a pull-request conversation and continue
 the T3 thread whose checked-out worktree branch resolves to that PR.
 
-The GitHub entry point is lookup-only. It never creates a project, clones a repository, checks out a
-branch, creates or repairs a worktree, or creates a T3 thread. If no unique live match exists, the
-complete response is exactly:
+The GitHub entry point **joins or provisions**:
 
-```text
-not yet linked/checked out.
-```
+1. **Work-item store** — unique thread for this PR URL, or unique thread for a Jira key in the PR
+   title **or mention comment** (Jira/Discord-first sessions continue).
+2. **Live worktree match** — unique checked-out PR worktree on a matching T3 project.
+3. **Provision** — prepare a PR worktree and create a T3 thread when nothing unique matches.
+
+On accept, the bridge appends the PR URL and Jira keys extracted from the PR title and the mention
+comment body to `ThreadWorkItemStore`. It never creates a **project**. See
+[work-item thread linking](./work-item-thread-linking.md).
 
 Setup and development webhook instructions are in
 [GitHub App setup](./github-app-setup.md). For agent `gh`/`git` auth without a machine user, see
