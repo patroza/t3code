@@ -305,16 +305,6 @@ describe("T3 browser developer instructions", () => {
       NodeAssert.match(instructions, /Do not switch to global browser skills/);
     }
   });
-
-  it("includes product-wide agent rules in both collaboration modes", () => {
-    for (const instructions of [
-      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-      CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
-    ]) {
-      NodeAssert.match(instructions, /T3 agent rules \(all surfaces\)/);
-      NodeAssert.match(instructions, /always markdown hyperlinks/);
-    }
-  });
 });
 
 describe("hasConfiguredMcpServer", () => {

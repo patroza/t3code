@@ -10,6 +10,7 @@
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { formatAgentRulesPointer } from "@t3tools/shared/agentRulesPointer";
 import {
   formatIdentityAttributionBlock,
   resolveParticipantIdentity,
@@ -104,8 +105,8 @@ export interface ThreadBootstrapContext {
 
 function formatDiscordStaticRulesPointer(rulesPath: string): string {
   // Header kept for ResponseBridge echo-suppression (isDiscordOriginatedUserPrompt).
-  return `## Discord conversation context
-rules: ${rulesPath}`;
+  // Same `rules: <path>` shape as server-wide T3 agent rules (formatAgentRulesPointer).
+  return formatAgentRulesPointer(rulesPath, "## Discord conversation context");
 }
 
 /** Collapse whitespace so one-line turn fields cannot inject extra markdown headers. */
