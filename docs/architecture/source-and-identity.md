@@ -38,6 +38,7 @@ Threads and messages have no durable notion of **who** started or participated, 
 | Free-form entry    | **Rejected**                                                      | Only map members; no invent-a-handle         |
 | Username length    | **No product min/max** (soft wire max only)                       | Map membership is the constraint             |
 | Claim UI           | **Typeahead after 3 chars**, not a full dropdown                  | Fewer wrong-person misclicks on large maps   |
+| Avatars            | **Generated initials + stable color** first; photos later         | Zero deps, works offline, distinct enough    |
 | Map location       | Server file path (env), not client settings                       | Same host of truth as secrets/aliases        |
 | Stamp site         | User-originated orchestration events (`message-sent`, turn start) | Source of truth is event log                 |
 | Thread origin      | First user message’s `SourceRef`                                  | Simple; no separate origin command for v1    |
@@ -241,9 +242,20 @@ Filters (client-side over shell):
 
 ### Compact display
 
-- Thread row: channel **icon** for origin; tooltip `username@channel` + location one-liner.
-- Message: small channel icon; tooltip full handle.
+- Thread row: channel **icon** for origin + optional **micro avatar** for origin person; tooltip `username@channel` + location one-liner.
+- Message: micro avatar (person) + tiny channel glyph; tooltip full handle.
 - Icons only; no continuous animation.
+
+### Micro avatars (generated first)
+
+v1 does **not** load GitHub/Discord profile photos. Generate chips on the fly:
+
+- Pure helper: `@t3tools/shared/identityAvatar` → `{ initials, backgroundColor, color, label }`.
+- **Initials**: display `name` when present (`Patrick Roza` → `PR`), else first two letters of `username` (`patroza` → `PA`).
+- **Color**: stable hash of `personId` (fallback username) into a fixed muted palette — same person ⇒ same chip on every client.
+- **Sizes**: micro ~14–16px in thread lists / message rows; ~24–28px in typeahead suggestions and settings.
+- **Later**: optional real image URL from map/platform, falling back to the generated chip.
+- No new dependency (avoids pulling in full avatar libs); logic matches the usual initials+hue pattern.
 
 ### Identity claim UI (typeahead, not a full dropdown)
 
@@ -254,7 +266,7 @@ Goal: reduce mis-clicks on the wrong person when the map is large; still **close
 - **No full-list dropdown** of all people by default.
 - After **`IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS` (3)** characters, show matching suggestions from the map (prefix/substring on `username` and `name`, case-insensitive).
 - User must **select a suggestion** or submit an **exact** map username match. Free-form values that are not in the map are rejected (client validation + server `identity_unknown_person`).
-- Suggestion rows: `username` primary, `name` secondary, optional platform badges.
+- Suggestion rows: **micro avatar** + `username` primary, `name` secondary, optional platform badges.
 - Selecting / exact confirm calls `identity.claim` with `personId` or `username`.
 - Change identity: Settings → rare; clears claim and re-runs typeahead (or admin-only).
 
@@ -340,6 +352,7 @@ Until server owns the map, bots keep co-author resolution as today; **P2** unifi
 
 - Claim gate UI (all entry points: first paint after pair, not only settings).
 - Typeahead after 3 chars; no full-people dropdown; reject non-map values.
+- Micro avatars via `@t3tools/shared/identityAvatar` (initials + palette); thin React/RN chip wrappers.
 - Thread/message source icons + tooltips.
 - Client settings may cache last username for prefill only if still in map.
 
