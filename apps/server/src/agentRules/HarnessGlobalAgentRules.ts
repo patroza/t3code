@@ -22,16 +22,7 @@
  * 2. Upsert a managed marker section into the harness instruction file
  */
 
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readlinkSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -87,16 +78,16 @@ export function ensureSymlinkTo(
   linkPath: string,
 ): "created" | "ok" | "skipped" {
   const absoluteTarget = NodePath.resolve(targetPath);
-  if (existsSync(linkPath) || isSymlink(linkPath)) {
+  if (NodeFS.existsSync(linkPath) || isSymlink(linkPath)) {
     try {
-      const stat = lstatSync(linkPath);
+      const stat = NodeFS.lstatSync(linkPath);
       if (stat.isSymbolicLink()) {
-        const current = readlinkSync(linkPath);
+        const current = NodeFS.readlinkSync(linkPath);
         const resolved = NodePath.resolve(NodePath.dirname(linkPath), current);
         if (resolved === absoluteTarget) {
           return "ok";
         }
-        unlinkSync(linkPath);
+        NodeFS.unlinkSync(linkPath);
       } else {
         return "skipped";
       }
@@ -104,14 +95,14 @@ export function ensureSymlinkTo(
       return "skipped";
     }
   }
-  mkdirSync(NodePath.dirname(linkPath), { recursive: true });
-  symlinkSync(absoluteTarget, linkPath);
+  NodeFS.mkdirSync(NodePath.dirname(linkPath), { recursive: true });
+  NodeFS.symlinkSync(absoluteTarget, linkPath);
   return "created";
 }
 
 function isSymlink(path: string): boolean {
   try {
-    return lstatSync(path).isSymbolicLink();
+    return NodeFS.lstatSync(path).isSymbolicLink();
   } catch {
     return false;
   }
@@ -140,14 +131,16 @@ export function ensureHarnessGlobalAgentRules(input: {
   const rulesLinkPath = NodePath.join(homeDir, HARNESS_RULES_LINK_NAME);
   const instructionFile = NodePath.join(homeDir, input.instructionFileName);
 
-  mkdirSync(homeDir, { recursive: true });
+  NodeFS.mkdirSync(homeDir, { recursive: true });
   const linkStatus = ensureSymlinkTo(productRulesPath, rulesLinkPath);
 
-  const existing = existsSync(instructionFile) ? readFileSync(instructionFile, "utf8") : "";
+  const existing = NodeFS.existsSync(instructionFile)
+    ? NodeFS.readFileSync(instructionFile, "utf8")
+    : "";
   const next = upsertHarnessManagedRulesSection(existing, rulesLinkPath);
   const instructionUpdated = next !== existing;
   if (instructionUpdated) {
-    writeFileSync(instructionFile, next, "utf8");
+    NodeFS.writeFileSync(instructionFile, next, "utf8");
   }
 
   return {

@@ -11,8 +11,8 @@
  * Not project AGENTS.md. Discord overlay is surface-only.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
@@ -56,16 +56,16 @@ export function resolveT3AgentRulesPath(): string {
     NodePath.resolve(root, "t3-agent-rules.md"),
   ];
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
+    if (NodeFS.existsSync(candidate)) {
       return candidate;
     }
   }
 
-  const materializeDir = NodePath.join(tmpdir(), "t3-code");
+  const materializeDir = NodePath.join(NodeOS.tmpdir(), "t3-code");
   const materialized = NodePath.join(materializeDir, "t3-agent-rules.md");
-  if (!existsSync(materialized)) {
-    mkdirSync(materializeDir, { recursive: true });
-    writeFileSync(materialized, T3_AGENT_RULES_FALLBACK_MARKDOWN, "utf8");
+  if (!NodeFS.existsSync(materialized)) {
+    NodeFS.mkdirSync(materializeDir, { recursive: true });
+    NodeFS.writeFileSync(materialized, T3_AGENT_RULES_FALLBACK_MARKDOWN, "utf8");
   }
   return materialized;
 }
@@ -76,7 +76,7 @@ export function resolveDiscordAgentRulesPath(): string | null {
     serverPackageRoot(),
     "../discord-bot/docs/agent-turn-rules.md",
   );
-  return existsSync(candidate) ? candidate : null;
+  return NodeFS.existsSync(candidate) ? candidate : null;
 }
 
 export function isDiscordOriginatedTurnText(text: string | undefined): boolean {
