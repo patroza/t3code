@@ -27,11 +27,11 @@ bridge only owns **inbound webhooks** and **outbound response comments** for men
 
 ## User experience
 
-| Surface       | Webhook event     | Trigger                                        | Where T3 replies  |
-| ------------- | ----------------- | ---------------------------------------------- | ----------------- |
-| Issue comment | `comment_created` | Explicit configured mention + prompt           | New issue comment |
-| Comment reply | `comment_created` | Mention in a comment with `parent` (when set)  | New issue comment |
-| Comment edit  | `comment_updated` | Edited comment still contains mention + prompt | New issue comment |
+| Surface       | Webhook event     | Trigger                                        | Where T3 replies                                     |
+| ------------- | ----------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| Issue comment | `comment_created` | Explicit configured mention + prompt           | Threaded **reply** under the mention (`parentId`)    |
+| Comment reply | `comment_created` | Mention in a comment with `parent` (when set)  | Threaded **reply** under the same thread root        |
+| Comment edit  | `comment_updated` | Edited comment still contains mention + prompt | Threaded **reply** under the edited comment’s thread |
 
 A turn starts only when a non-bot author writes an explicit configured mention followed by a prompt:
 
@@ -93,7 +93,7 @@ JiraIssueBridge
   poll projection snapshot
         |
         v
-Jira REST comment create (markdown → ADF or wiki)
+Jira REST comment create (markdown → ADF, parentId reply when possible)
 + remove ack reaction
 ```
 
@@ -179,9 +179,14 @@ are logged and never block the turn.
 
 ## Outbound comments
 
-Responses are posted as issue comments authored by the service account. Prefer Markdown converted
-to a minimal ADF document for API v3. Do not @-spam watchers unless the agent explicitly mentions
-users.
+Responses are posted as issue comments authored by the service account, preferably as a
+**threaded reply** under the triggering mention (REST body field `parentId` — supported on Jira
+Cloud even though it is lightly documented). When the user mentioned the bot inside an existing
+reply thread, the bridge parents under that thread’s **root** (Jira rejects nesting under a child).
+If threading is rejected (invalid parent), the bridge falls back once to a top-level comment.
+
+Prefer Markdown converted to a minimal ADF document for API v3. Do not @-spam watchers unless the
+agent explicitly mentions users.
 
 ## Testing checklist
 
