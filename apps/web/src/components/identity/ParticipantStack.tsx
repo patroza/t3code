@@ -1,5 +1,6 @@
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
 import { IdentityAvatar } from "./IdentityAvatar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 
 /**
@@ -20,12 +21,9 @@ export function ParticipantStack(props: {
       ? `Started by ${lead.username}`
       : `Started by ${lead.username}, ${extras.length} other participant${extras.length === 1 ? "" : "s"}`;
 
-  return (
+  const stack = (
     <span
-      className={cn(
-        "group/stack relative inline-flex shrink-0 items-center gap-0.5",
-        props.className,
-      )}
+      className={cn("inline-flex shrink-0 items-center gap-0.5", props.className)}
       data-testid="participant-stack"
       aria-label={label}
       tabIndex={0}
@@ -45,29 +43,35 @@ export function ParticipantStack(props: {
           +{extras.length}
         </span>
       ) : null}
-      {extras.length > 0 ? (
-        <span
-          role="tooltip"
-          className="pointer-events-none absolute top-full left-0 z-50 mt-1 hidden min-w-36 flex-col gap-1 rounded-md border border-border/80 bg-popover p-1.5 text-xs shadow-md group-focus-within/stack:flex group-hover/stack:flex"
-        >
-          {people.map((person) => (
-            <span key={person.personId} className="flex items-center gap-1.5 px-0.5 py-0.5">
-              <IdentityAvatar
-                personId={person.personId}
-                username={person.username}
-                name={person.name}
-                size="micro"
-              />
-              <span className="truncate text-foreground">
-                {person.firstChannel
-                  ? `${person.username}@${person.firstChannel}`
-                  : person.username}
-              </span>
-            </span>
-          ))}
-        </span>
-      ) : null}
     </span>
+  );
+
+  if (extras.length === 0) return stack;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={stack} />
+      <TooltipPopup
+        side="bottom"
+        align="start"
+        className="min-w-36 flex-col gap-1 p-1.5 text-xs"
+        data-testid="participant-stack-popup"
+      >
+        {people.map((person) => (
+          <span key={person.personId} className="flex items-center gap-1.5 px-0.5 py-0.5">
+            <IdentityAvatar
+              personId={person.personId}
+              username={person.username}
+              name={person.name}
+              size="micro"
+            />
+            <span className="truncate text-foreground">
+              {person.firstChannel ? `${person.username}@${person.firstChannel}` : person.username}
+            </span>
+          </span>
+        ))}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 

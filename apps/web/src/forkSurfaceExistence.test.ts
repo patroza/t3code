@@ -133,6 +133,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(gate).toContain("orderedEnvironmentIds");
     const stack = readSrc("components/identity/ParticipantStack.tsx");
     expect(stack).toContain('data-testid="participant-stack"');
+    expect(stack).toContain('data-testid="participant-stack-popup"');
+    expect(stack).toContain("<TooltipPopup");
     expect(stack).toContain('data-testid="source-channel-glyph"');
     const root = readSrc("routes/__root.tsx");
     expect(root).toContain("IdentityClaimGate");
