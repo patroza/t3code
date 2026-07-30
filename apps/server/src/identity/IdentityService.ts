@@ -33,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import {
   parseIdentityMapDocument,
+  resolvePersonByJiraAccountId,
   toIdentityPersonPublic,
   type IdentityMapPerson,
   IdentityMapParseError,
@@ -84,6 +85,15 @@ export class IdentityService extends Context.Service<
         readonly clientDeviceType?: AuthClientMetadataDeviceType;
       },
     ) => Effect.Effect<SessionIdentityClaim | null, IdentityError>;
+    /**
+     * Resolve a closed-set person from a Jira actor accountId.
+     * Returns null when the map is off, accountId is missing, or unmapped.
+     */
+    readonly resolveByJiraAccountId: (
+      accountId: string | null | undefined,
+    ) => Effect.Effect<IdentityMapPerson | null>;
+    /** True when T3_IDENTITY_MAP_PATH loaded at least one person. */
+    readonly isMapEnabled: () => Effect.Effect<boolean>;
   }
 >()("t3/identity/IdentityService") {}
 
@@ -247,6 +257,11 @@ function makeService(
         }
         return toPublicClaim(existing);
       }),
+
+    resolveByJiraAccountId: (accountId) =>
+      Effect.succeed(enabled ? resolvePersonByJiraAccountId(people, accountId) : null),
+
+    isMapEnabled: () => Effect.succeed(enabled),
   };
 }
 

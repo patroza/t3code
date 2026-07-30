@@ -171,11 +171,28 @@ are logged and never block the turn.
 
 - Require a shared secret on every delivery (`Authorization: Bearer …` or `X-T3-Webhook-Secret`).
 - Cap body size at 1 MiB.
-- Ignore events that are not `comment_created`.
-- Allowlist projects when configured.
+- Ignore events that are not `comment_created` / `comment_updated`.
+- Allowlist projects when configured (`T3CODE_JIRA_ALLOWED_PROJECTS`).
+- **Identity map trust gate** (when `T3_IDENTITY_MAP_PATH` has people):
+  - **Trusted** — Jira `accountId` appears on a map person (`jira.accountId` / `jiraAccountId`) → full agent turn (same as today, including auto-create when enabled).
+  - **Untrusted** — map on but actor missing/unmapped → **Discord context only** (no agent, no T3 transcript write). Posts a note into the unique Discord thread linked to the issue in `links.json` (`T3CODE_JIRA_DISCORD_LINKS_PATH` + `DISCORD_BOT_TOKEN`). Requires exactly one active Discord link with that issue key; never auto-creates. Jira reply explains the note was filed.
+  - Map **off** / empty → legacy full access for all mentioners (backward compatible).
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see
   [atlassian-service-accounts](./atlassian-service-accounts.md) when present on the branch).
+
+Map people with Jira links, for example:
+
+```yaml
+people:
+  patroza:
+    username: patroza
+    name: Patrick Roza
+    jira:
+      accountId: "712020:your-atlassian-account-id"
+    discord:
+      id: "95218063095377920"
+```
 
 ## Outbound comments
 
@@ -194,9 +211,13 @@ agent explicitly mentions users.
 2. Unit: webhook secret acceptance / rejection; project allowlist.
 3. Unit: delivery dedupe on redelivery of the same comment id.
 4. Unit: webhook debug retention prune (24h) and body failure classification.
-5. Integration (manual): register a Jira webhook or Automation rule → `POST /api/jira/webhook`
+5. Unit: identity map trust — mapped accountId → full; unmapped/missing → context-only; map off → full.
+6. Unit: Discord links.json resolve by Jira issue key (unique / unlinked / ambiguous).
+7. Integration (manual): register a Jira webhook or Automation rule → `POST /api/jira/webhook`
    with the shared secret; mention the bot on a linked issue; confirm a reply comment and a
    matching `accepted_202` (or `invalid_400` with preview) line in `jira-webhook-debug.ndjson`.
+8. Integration (manual, map on): unmapped Jira user mention on a Discord-linked issue → note in the
+   Discord thread + “context only” Jira reply; unmapped on unlinked issue → refuse without agent run.
 
 ## Non-goals (this foundation)
 

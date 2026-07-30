@@ -11,6 +11,7 @@ const people = [
     personId: "patroza",
     username: "patroza",
     name: "Patrick Roza",
+    jira: { accountId: "712020:pat-account" },
   },
   {
     personId: "julius",
@@ -116,6 +117,17 @@ describe("IdentityService", () => {
         clientDeviceType: "bot",
       });
       expect(allowed).toBeNull();
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("resolves mapped Jira account ids and reports map enabled", () =>
+    Effect.gen(function* () {
+      const identity = yield* IdentityService.IdentityService;
+      expect(yield* identity.isMapEnabled()).toBe(true);
+      const hit = yield* identity.resolveByJiraAccountId("accountid:712020:PAT-ACCOUNT");
+      expect(hit?.username).toBe("patroza");
+      const miss = yield* identity.resolveByJiraAccountId("712020:stranger");
+      expect(miss).toBeNull();
     }).pipe(Effect.provide(TestLayer)),
   );
 
