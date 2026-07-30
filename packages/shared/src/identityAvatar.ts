@@ -39,8 +39,8 @@ export const IDENTITY_AVATAR_PALETTE: ReadonlyArray<IdentityAvatarColors> = [
   { backgroundColor: "#A61E4D", color: "#FFFFFF" },
 ] as const;
 
-/** FNV-1a 32-bit — fast, stable, no deps. */
-export function hashIdentitySeed(seed: string): number {
+/** FNV-1a 32-bit — fast, stable, no deps. Not part of the public chip API. */
+function hashIdentitySeed(seed: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < seed.length; i++) {
     hash ^= seed.charCodeAt(i);
@@ -54,11 +54,23 @@ export function identityAvatarColors(seed: string): IdentityAvatarColors {
   return IDENTITY_AVATAR_PALETTE[index]!;
 }
 
+/** First up to `count` Unicode code points (not UTF-16 units). */
+function takeCodePoints(value: string, count: number): string {
+  const points: Array<string> = [];
+  for (const point of value) {
+    if (point.trim().length === 0) continue;
+    points.push(point);
+    if (points.length >= count) break;
+  }
+  return points.join("");
+}
+
 /**
  * Initials from display name when present, otherwise username.
+ * Uses code points so non-BMP / CJK handles do not split surrogates.
  * - "Patrick Roza" → "PR"
  * - "patroza" → "PA"
- * - "a" → "A"
+ * - "田中" → "田中"
  * - empty → "?"
  */
 export function identityInitials(input: {
@@ -69,21 +81,24 @@ export function identityInitials(input: {
   if (name.length > 0) {
     const words = name.replace(/[_-]+/gu, " ").split(/\s+/u).filter(Boolean);
     if (words.length >= 2) {
-      const a = words[0]![0] ?? "";
-      const b = words[1]![0] ?? "";
-      const pair = `${a}${b}`.toUpperCase();
-      if (pair.length > 0) return pair;
+      const a = takeCodePoints(words[0]!, 1);
+      const b = takeCodePoints(words[1]!, 1);
+      const pair = `${a}${b}`;
+      if (pair.length > 0) return pair.toLocaleUpperCase();
     }
     if (words.length === 1) {
-      return words[0]!.slice(0, 2).toUpperCase();
+      const two = takeCodePoints(words[0]!, 2);
+      if (two.length > 0) return two.toLocaleUpperCase();
     }
   }
 
   const username = input.username?.trim() ?? "";
   if (username.length === 0) return "?";
-  const cleaned = username.replace(/[^a-zA-Z0-9]+/gu, "");
-  if (cleaned.length === 0) return username.slice(0, 2).toUpperCase();
-  return cleaned.slice(0, 2).toUpperCase();
+  // Prefer letter/number-like code points; fall back to raw username points.
+  const alnumLike = [...username].filter((ch) => /[\p{L}\p{N}]/u.test(ch)).join("");
+  const source = alnumLike.length > 0 ? alnumLike : username;
+  const two = takeCodePoints(source, 2);
+  return two.length > 0 ? two.toLocaleUpperCase() : "?";
 }
 
 /**

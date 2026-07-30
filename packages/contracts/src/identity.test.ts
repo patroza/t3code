@@ -3,48 +3,61 @@ import * as Schema from "effect/Schema";
 
 import {
   IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS,
-  IDENTITY_USERNAME_SOFT_MAX_LENGTH,
+  IDENTITY_HANDLE_SOFT_MAX_LENGTH,
+  ClientSourceHint,
   IdentityClaimInput,
+  IdentityError,
   IdentityPersonPublic,
   IdentitySnapshot,
   IdentityUsername,
   PersonId,
   SessionIdentityClaim,
   SourceRef,
+  ThreadParticipantSummary,
 } from "./identity.ts";
 import { AuthSessionId } from "./baseSchemas.ts";
 
 const decodeUsername = Schema.decodeUnknownSync(IdentityUsername);
+const decodePersonId = Schema.decodeUnknownSync(PersonId);
 const decodeSourceRef = Schema.decodeUnknownSync(SourceRef);
+const decodeClientHint = Schema.decodeUnknownSync(ClientSourceHint);
 const decodeSnapshot = Schema.decodeUnknownSync(IdentitySnapshot);
 const decodeClaimInput = Schema.decodeUnknownSync(IdentityClaimInput);
 const decodeClaim = Schema.decodeUnknownSync(SessionIdentityClaim);
 const decodePerson = Schema.decodeUnknownSync(IdentityPersonPublic);
+const decodeParticipant = Schema.decodeUnknownSync(ThreadParticipantSummary);
 
-describe("IdentityUsername", () => {
-  it.each(["ab", "pat", "patroza", "a_b-c", "julius", "abcdefghijklmnopq", "1pat", "x"])(
-    "accepts wire shape %s (map membership is server-side)",
-    (value) => {
-      expect(decodeUsername(value)).toBe(value.toLowerCase());
-    },
-  );
+describe("IdentityUsername / PersonId handles", () => {
+  it.each(["a", "pat", "patroza", "a_b-c", "julius", "user.name", "x1"])("accepts %s", (value) => {
+    expect(decodeUsername(value)).toBe(value.toLowerCase());
+    expect(decodePersonId(value)).toBe(value.toLowerCase());
+  });
 
   it("normalizes case to lowercase", () => {
     expect(decodeUsername("PatRoza")).toBe("patroza");
+    expect(decodePersonId("PatRoza")).toBe("patroza");
   });
 
-  it("accepts usernames longer than the old 16-char product cap", () => {
-    const long = "a".repeat(40);
+  it("accepts usernames longer than 16 chars within soft max", () => {
+    const long = `a${"b".repeat(40)}`;
     expect(decodeUsername(long)).toBe(long);
   });
 
-  it("rejects empty", () => {
-    expect(() => decodeUsername("")).toThrow();
-    expect(() => decodeUsername("   ")).toThrow();
+  it.each([
+    ["empty", ""],
+    ["spaces", "pat roza"],
+    ["control char", "foo\nbar"],
+    ["leading dash", "-pat"],
+    ["leading underscore", "_pat"],
+    ["at-sign", "pat@roza"],
+    ["leading dot", ".pat"],
+  ])("rejects %s", (_label, value) => {
+    expect(() => decodeUsername(value)).toThrow();
+    expect(() => decodePersonId(value)).toThrow();
   });
 
   it("rejects past soft max", () => {
-    expect(() => decodeUsername("a".repeat(IDENTITY_USERNAME_SOFT_MAX_LENGTH + 1))).toThrow();
+    expect(() => decodeUsername("a".repeat(IDENTITY_HANDLE_SOFT_MAX_LENGTH + 1))).toThrow();
   });
 
   it("exports typeahead threshold of 3 characters", () => {
@@ -52,8 +65,8 @@ describe("IdentityUsername", () => {
   });
 });
 
-describe("SourceRef", () => {
-  it("decodes a desktop claim stamp", () => {
+describe("SourceRef vs ClientSourceHint", () => {
+  it("decodes a server stamp with person", () => {
     const parsed = decodeSourceRef({
       channel: "desktop",
       personId: "patroza",
@@ -61,25 +74,20 @@ describe("SourceRef", () => {
     });
     expect(parsed.channel).toBe("desktop");
     expect(parsed.personId).toBe("patroza");
-    expect(parsed.username).toBe("patroza");
   });
 
-  it("decodes discord location without resolved person", () => {
-    const parsed = decodeSourceRef({
+  it("client hint has no person fields", () => {
+    const hint = decodeClientHint({
       channel: "discord",
-      location: {
-        guildId: "1083767712431480922",
-        channelId: "1532311945326235829",
-        threadId: "1532311945326235829",
-      },
-      actor: {
-        platformId: "95218063095377920",
-        displayName: "Patrick Roza",
-      },
+      location: { guildId: "1", channelId: "2" },
+      actor: { platformId: "9", displayName: "Patrick" },
     });
-    expect(parsed.personId).toBeUndefined();
-    expect(parsed.location?.guildId).toBe("1083767712431480922");
-    expect(parsed.actor?.platformId).toBe("95218063095377920");
+    expect(hint.channel).toBe("discord");
+    expect("personId" in hint).toBe(false);
+  });
+
+  it("rejects unknown channel", () => {
+    expect(() => decodeSourceRef({ channel: "irc" })).toThrow();
   });
 });
 
@@ -102,7 +110,6 @@ describe("IdentitySnapshot + claim", () => {
     });
     expect(parsed.enabled).toBe(true);
     expect(parsed.people[0]?.username).toBe("patroza");
-    expect(parsed.people[0]?.links.githubLogin).toBe("patroza");
   });
 
   it("defaults empty links on person", () => {
@@ -113,9 +120,12 @@ describe("IdentitySnapshot + claim", () => {
     expect(person.links).toEqual({});
   });
 
-  it("accepts claim by username or personId", () => {
+  it("accepts claim by username or personId with optional method", () => {
     expect(decodeClaimInput({ username: "patroza" })).toEqual({ username: "patroza" });
-    expect(decodeClaimInput({ personId: "patroza" })).toEqual({ personId: "patroza" });
+    expect(decodeClaimInput({ personId: "patroza", method: "settings" })).toEqual({
+      personId: "patroza",
+      method: "settings",
+    });
   });
 
   it("decodes a session claim", () => {
@@ -127,6 +137,23 @@ describe("IdentitySnapshot + claim", () => {
       method: "typeahead",
     });
     expect(claim.method).toBe("typeahead");
-    expect(claim.username).toBe("patroza");
+  });
+
+  it("decodes participant summary", () => {
+    const row = decodeParticipant({
+      personId: "patroza",
+      username: "patroza",
+      firstChannel: "discord",
+      firstParticipatedAt: "2026-07-30T12:00:00.000Z",
+    });
+    expect(row.firstChannel).toBe("discord");
+  });
+
+  it("constructs IdentityError codes", () => {
+    const err = new IdentityError({
+      code: "identity_unknown_person",
+      message: "not in map",
+    });
+    expect(err.code).toBe("identity_unknown_person");
   });
 });
