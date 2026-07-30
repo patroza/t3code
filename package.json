@@ -51,7 +51,8 @@
     "fork:overlay-owner": "node scripts/client-overlay-owner.ts",
     "fork:stack:sync": "node scripts/rebase-pr-stack.ts sync --dry-run",
     "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
-    "sync:repos": "node scripts/sync-reference-repos.ts"
+    "sync:repos": "node scripts/sync-reference-repos.ts",
+    "fork:rebase-overlays": "node scripts/rebase-integration-overlays.ts"
   },
   "devDependencies": {
     "@babel/plugin-transform-react-jsx": "7.28.6",

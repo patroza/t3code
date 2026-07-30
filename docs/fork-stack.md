@@ -78,9 +78,11 @@ when:
 gh workflow run compose-integration.yml --repo patroza/t3code --ref fork/changes
 ```
 
-Compose requires every registered overlay tip to be based on current `fork/changes`. Overlay branch
-names are listed in the workflow `on:` block and must stay aligned with
-`.github/pr-stack.json` → `integrationOverlays`.
+Before compose, the workflow runs `node scripts/rebase-integration-overlays.ts` so registered
+overlay tips are force-with-lease rebased onto current `fork/changes` when they lag (no-op when
+already based). Clean merges to `fork/changes` should no longer require a human to rebase every
+overlay first. Conflicts still fail the job with the overlay branch and paths. Overlay branch names
+in the workflow `on:` block must stay aligned with `.github/pr-stack.json` → `integrationOverlays`.
 
 ### Slow path — full provenance restack (local only)
 
