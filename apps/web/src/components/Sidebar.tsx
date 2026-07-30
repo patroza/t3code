@@ -826,7 +826,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                   null
                 }
               />
-              <ParticipantStack participants={thread.participantSummaries ?? []} />
+              <ParticipantStack
+                environmentId={thread.environmentId}
+                participants={thread.participantSummaries ?? []}
+              />
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -3493,7 +3496,10 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                       null
                     }
                   />
-                  <ParticipantStack participants={thread.participantSummaries ?? []} />
+                  <ParticipantStack
+                    environmentId={thread.environmentId}
+                    participants={thread.participantSummaries ?? []}
+                  />
                   <span
                     className={cn(
                       "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
@@ -3623,7 +3629,10 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                       null
                     }
                   />
-                  <ParticipantStack participants={thread.participantSummaries ?? []} />
+                  <ParticipantStack
+                    environmentId={thread.environmentId}
+                    participants={thread.participantSummaries ?? []}
+                  />
                   <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
                 </>
               )}

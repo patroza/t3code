@@ -1,4 +1,11 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  claimPersonIdForEnvironment,
+  isClaimedNonStarterParticipant,
+} from "@t3tools/client-runtime/state/identity";
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
+import { CheckIcon } from "lucide-react";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { IdentityAvatar } from "./IdentityAvatar";
 import { participantDisplayLabel } from "./ParticipantStack.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -9,10 +16,20 @@ import { cn } from "~/lib/utils";
  * Hover/focus expands remaining participants (design: participant stack).
  */
 export function ParticipantStack(props: {
+  readonly environmentId: string;
   readonly participants: ReadonlyArray<ThreadParticipantSummary>;
   readonly className?: string;
 }) {
   const people = props.participants;
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const claimPersonId = claimPersonIdForEnvironment(
+    claimPersonIdByEnvironment,
+    props.environmentId,
+  );
+  const youParticipated = isClaimedNonStarterParticipant({
+    claimPersonId,
+    participants: people,
+  });
   if (people.length === 0) return null;
 
   const lead = people[0]!;
@@ -21,12 +38,13 @@ export function ParticipantStack(props: {
     extras.length === 0
       ? `Started by ${lead.username}`
       : `Started by ${lead.username}, ${extras.length} other participant${extras.length === 1 ? "" : "s"}`;
+  const accessibleLabel = youParticipated ? `${label}. You participated` : label;
 
   const stack = (
     <span
       className={cn("inline-flex shrink-0 items-center gap-0.5", props.className)}
       data-testid="participant-stack"
-      aria-label={label}
+      aria-label={accessibleLabel}
       tabIndex={0}
     >
       <IdentityAvatar
@@ -42,6 +60,15 @@ export function ParticipantStack(props: {
           aria-hidden
         >
           +{extras.length}
+        </span>
+      ) : null}
+      {youParticipated ? (
+        <span
+          className="inline-flex size-3.5 items-center justify-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/35"
+          aria-label="You participated"
+          data-testid="you-participated-indicator"
+        >
+          <CheckIcon className="size-2.5" aria-hidden />
         </span>
       ) : null}
     </span>
@@ -65,7 +92,12 @@ export function ParticipantStack(props: {
               size="micro"
               title={null}
             />
-            <span className="truncate text-foreground">{participantDisplayLabel(person)}</span>
+            <span className="truncate text-foreground">
+              {participantDisplayLabel(person)}
+              {person.personId === claimPersonId ? (
+                <span className="text-primary"> · You</span>
+              ) : null}
+            </span>
           </span>
         ))}
       </TooltipPopup>
