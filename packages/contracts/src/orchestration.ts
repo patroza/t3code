@@ -22,6 +22,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { SourceRef, ThreadParticipantSummary } from "./identity.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -234,6 +235,8 @@ export const OrchestrationMessage = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  /** Server-authored provenance; absent on legacy / assistant messages. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -420,6 +423,10 @@ export const OrchestrationThread = Schema.Struct({
   hasMoreActivities: Schema.optional(Schema.Boolean),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -470,6 +477,15 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  /** First user message SourceRef; null/absent on legacy threads. */
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  /**
+   * Distinct people on user messages: origin person first, then first-participation order.
+   * Used for creator + +N participant stack.
+   */
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
@@ -1184,6 +1200,8 @@ export const ThreadMessageSentPayload = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  /** Server-authored only; clients must not invent person fields. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

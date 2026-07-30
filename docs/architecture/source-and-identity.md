@@ -31,19 +31,23 @@ Threads and messages have no durable notion of **who** started or participated, 
 
 ## Key decisions
 
-| Decision           | Choice                                                            | Rationale                                    |
-| ------------------ | ----------------------------------------------------------------- | -------------------------------------------- |
-| Scope of username  | **Per auth session** (claim), not one env-global string           | Shared server; multiple humans               |
-| Allowed identities | **Closed set** from server identity map file                      | Operator-controlled; matches Discord bot map |
-| Free-form entry    | **Rejected**                                                      | Only map members; no invent-a-handle         |
-| Username length    | **No product min/max** (soft wire max only)                       | Map membership is the constraint             |
-| Claim UI           | **Typeahead after 3 chars**, not a full dropdown                  | Fewer wrong-person misclicks on large maps   |
-| Avatars            | **Generated initials + stable color** first; photos later         | Zero deps, works offline, distinct enough    |
-| Map location       | Server file path (env), not client settings                       | Same host of truth as secrets/aliases        |
-| Stamp site         | User-originated orchestration events (`message-sent`, turn start) | Source of truth is event log                 |
-| Thread origin      | First user message’s `SourceRef`                                  | Simple; no separate origin command for v1    |
-| Display            | Channel icon + creator avatar; `+N` expands extras on hover       | Compact list; multi-person without noise     |
-| Mine               | Session’s claimed `personId` equals message/thread person         | Cross-surface via map links                  |
+| Decision             | Choice                                                            | Rationale                                    |
+| -------------------- | ----------------------------------------------------------------- | -------------------------------------------- |
+| Scope of username    | **Per auth session** (claim), not one env-global string           | Shared server; multiple humans               |
+| Allowed identities   | **Closed set** from server identity map file                      | Operator-controlled; matches Discord bot map |
+| Free-form entry      | **Rejected**                                                      | Only map members; no invent-a-handle         |
+| Username charset     | Handle pattern `^[a-z0-9][a-z0-9._-]*$` (no min length product)   | Safe `user@channel`; membership still rules  |
+| Claim trust (v1)     | **Map membership only** — any paired peer can claim any person    | Trusted-team shared server; not anti-spoof   |
+| Client person fields | **Never trusted** — `ClientSourceHint` only; server stamps claim  | Blocks naive SourceRef spoof on wire         |
+| Claim UI             | **Typeahead after 3 chars**, not a full dropdown                  | Fewer wrong-person misclicks on large maps   |
+| Avatars              | **Generated initials + stable color** first; photos later         | Zero deps, works offline, distinct enough    |
+| Claim mutability     | Overwrite via claim (settings method) or clearClaim               | One claim row per sessionId                  |
+| Operate gate         | **orchestration:operate** (dispatch) when map enabled             | Attribution gate, not full ACL               |
+| Map location         | Server file path (env), not client settings                       | Same host of truth as secrets/aliases        |
+| Stamp site           | User-originated orchestration events (`message-sent`, turn start) | Source of truth is event log                 |
+| Thread origin        | First user message’s `SourceRef`                                  | Simple; no separate origin command for v1    |
+| Display              | Channel icon + creator avatar; `+N` expands extras on hover       | Compact list; multi-person without noise     |
+| Mine                 | Session’s claimed `personId` equals message/thread person         | Cross-surface via map links                  |
 
 ## Concepts
 
