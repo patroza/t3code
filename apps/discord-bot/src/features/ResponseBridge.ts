@@ -1768,8 +1768,22 @@ export function resolveThreadChangeRequestLookupCwds(
   ];
 }
 
-function formatEchoedUserMessage(message: OrchestrationThread["messages"][number]): string {
+type SourceAwareOrchestrationMessage = OrchestrationThread["messages"][number] & {
+  readonly source?: {
+    readonly channel?: string;
+    readonly username?: string;
+  };
+};
+
+function echoedUserSourceLabel(message: SourceAwareOrchestrationMessage): string {
+  const username = message.source?.username?.trim() || "unknown";
+  const channel = message.source?.channel?.trim() || "unknown";
+  return `from ${username}@${channel}:`;
+}
+
+export function formatEchoedUserMessage(message: SourceAwareOrchestrationMessage): string {
   const body = summarizeExternalUserInput(message.text);
+  const sourceLabel = echoedUserSourceLabel(message);
   const attachmentCount = message.attachments?.length ?? 0;
   const attachmentNote =
     attachmentCount === 0
@@ -1779,10 +1793,10 @@ function formatEchoedUserMessage(message: OrchestrationThread["messages"][number
         : `\n\n_(${attachmentCount} attachments included in the external input)_`;
   if (body === "") {
     return attachmentCount === 0
-      ? "_External User Input:_ _(empty message)_"
-      : attachmentNote.trim();
+      ? `${sourceLabel} _(empty message)_`
+      : `${sourceLabel}\n\n${attachmentNote.trim()}`;
   }
-  return `_External User Input:_ ${body}${attachmentNote}`;
+  return `${sourceLabel} ${body}${attachmentNote}`;
 }
 
 /**
