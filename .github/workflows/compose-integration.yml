@@ -19,6 +19,7 @@ on:
       - t3-discord/f7d37879-desktop-deeplinks
       - fork/discord
       - fork/vscode
+      - fork/identity
   # Explicit merge path: child PR merged into fork/changes or an overlay base.
   # Redundant with `push` for normal GitHub merges; still useful if a merge
   # path does not emit the expected branch push, and makes intent obvious.
@@ -29,6 +30,7 @@ on:
       - t3-discord/f7d37879-desktop-deeplinks
       - fork/discord
       - fork/vscode
+      - fork/identity
   workflow_dispatch:
 
 concurrency:
