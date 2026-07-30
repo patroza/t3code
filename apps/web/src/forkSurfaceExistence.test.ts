@@ -57,6 +57,31 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(header).toContain("shell.openExternal");
   });
 
+  it("chat header keeps AI usage status and host resource gauges", () => {
+    const header = readSrc("components/chat/ChatHeader.tsx");
+    expect(header).toContain("HostResourceStatus");
+    expect(header).toContain('aria-label="provider usage status"');
+    expect(header).toContain("AiUsageStats");
+    expect(header).toContain("useAiUsageSnapshot");
+    const chatView = readSrc("components/ChatView.tsx");
+    expect(chatView).toContain("activeThreadDriverKind=");
+    expect(chatView).toContain("activeThreadModel=");
+    expect(chatView).toContain("isPreparingWorktree=");
+  });
+
+  it("model picker keeps provider usage dots and selection-box stats", () => {
+    const providerPicker = readSrc("components/chat/ProviderModelPicker.tsx");
+    expect(providerPicker).toContain("usageSnapshot");
+    expect(providerPicker).toContain("statusDotClassName");
+    expect(providerPicker).toContain("AiUsageStats");
+    const modelPickerContent = readSrc("components/chat/ModelPickerContent.tsx");
+    expect(modelPickerContent).toContain("resolveDriverUsages");
+    expect(modelPickerContent).toContain("AiUsageStats");
+    const modelPickerSidebar = readSrc("components/chat/ModelPickerSidebar.tsx");
+    expect(modelPickerSidebar).toContain("statusDotClassName");
+    expect(modelPickerSidebar).toContain("usageDotFillClass");
+  });
+
   it("queued message chips keep edit + steer labels", () => {
     const chips = readSrc("components/chat/QueuedMessageChips.tsx");
     expect(chips).toContain('aria-label="Edit queued message"');
