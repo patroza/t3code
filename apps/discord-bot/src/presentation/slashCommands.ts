@@ -151,6 +151,11 @@ export const OMEGENT_SLASH_COMMAND = {
     },
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "compact",
+      description: "Compact provider context for this linked thread (posts token stats)",
+    },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "thread-talk",
       description: "Mention-free replies in this linked thread",
       options: [

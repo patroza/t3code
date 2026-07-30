@@ -10,6 +10,7 @@ import {
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
 import { Discord, DiscordREST, Ix } from "dfx";
 import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -64,6 +65,13 @@ import {
   turnStopCustomId,
   workingMessageFields,
 } from "../presentation/messages.ts";
+import {
+  COMPACT_POLL_INTERVAL_MS,
+  COMPACT_WAIT_TIMEOUT_MS,
+  extractLatestContextWindowStats,
+  formatCompactionStatsReply,
+  hasNewContextCompaction,
+} from "../presentation/compactContext.ts";
 import {
   formatAskSlashAck,
   isThreadTalkSlashAction,
@@ -702,6 +710,58 @@ const make = (botConfig: DiscordBotConfig) =>
           pin,
         };
       });
+
+    /**
+     * Request provider context compact and wait briefly for token stats.
+     * Always returns a user-facing public reply (stats or error).
+     */
+    const runContextCompact = (t3ThreadId: ThreadId) =>
+      Effect.gen(function* () {
+        const beforeDetail = yield* t3.fetchThreadDetail(t3ThreadId);
+        const beforeActivities = beforeDetail?.thread.activities ?? [];
+        const before = extractLatestContextWindowStats(beforeActivities);
+        const beforeMarkerId =
+          before?.activityId ??
+          (beforeActivities.length > 0
+            ? (beforeActivities[beforeActivities.length - 1]?.id ?? null)
+            : null);
+
+        yield* t3.compact(t3ThreadId);
+
+        const startedAt = yield* Clock.currentTimeMillis;
+        let after = before;
+        let compacted = false;
+        while ((yield* Clock.currentTimeMillis) - startedAt < COMPACT_WAIT_TIMEOUT_MS) {
+          yield* Effect.sleep(`${COMPACT_POLL_INTERVAL_MS} millis`);
+          const detail = yield* t3.fetchThreadDetail(t3ThreadId);
+          const activities = detail?.thread.activities ?? [];
+          after = extractLatestContextWindowStats(activities) ?? after;
+          if (
+            hasNewContextCompaction(activities, beforeMarkerId) ||
+            (before !== null && after !== null && after.usedTokens < before.usedTokens)
+          ) {
+            compacted = true;
+            break;
+          }
+        }
+
+        return formatCompactionStatsReply({
+          before,
+          after,
+          compacted,
+        });
+      }).pipe(
+        Effect.catch((error: unknown) =>
+          Effect.succeed(
+            formatCompactionStatsReply({
+              before: null,
+              after: null,
+              compacted: false,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          ),
+        ),
+      );
 
     /**
      * For public threads created from a message, Discord uses the starter message id
@@ -2259,6 +2319,25 @@ const make = (botConfig: DiscordBotConfig) =>
             return;
           }
 
+          if (intent.kind === "compact") {
+            const existing = yield* links.getByDiscordThreadId(event.channel_id);
+            if (existing === null) {
+              yield* rest.createMessage(event.channel_id, {
+                content:
+                  "This Discord thread is not linked to a T3 thread, so there is nothing to compact.",
+                message_reference: { message_id: event.id },
+              });
+              return;
+            }
+
+            const content = yield* runContextCompact(existing.t3ThreadId);
+            yield* rest.createMessage(event.channel_id, {
+              content,
+              message_reference: { message_id: event.id },
+            });
+            return;
+          }
+
           if (intent.kind === "refresh-indicators") {
             const existing = yield* links.getByDiscordThreadId(event.channel_id);
             if (existing === null) {
@@ -2360,6 +2439,14 @@ const make = (botConfig: DiscordBotConfig) =>
         if (intent.kind === "interrupt") {
           yield* rest.createMessage(event.channel_id, {
             content: "Stop is only supported inside a linked Discord thread.",
+            message_reference: { message_id: event.id },
+          });
+          return;
+        }
+
+        if (intent.kind === "compact") {
+          yield* rest.createMessage(event.channel_id, {
+            content: "Compact is only supported inside a linked Discord thread.",
             message_reference: { message_id: event.id },
           });
           return;
@@ -3135,6 +3222,75 @@ const make = (botConfig: DiscordBotConfig) =>
                     {
                       ephemeral: true,
                     },
+                  ),
+                ),
+              ),
+            ),
+
+            compact: Effect.gen(function* () {
+              const interaction = yield* Ix.Interaction;
+              const channelId = interaction.channel_id;
+              if (channelId === undefined || channelId.length === 0) {
+                return slashReply("Compact only works inside a linked Discord thread.", {
+                  ephemeral: true,
+                });
+              }
+
+              const channel = yield* rest.getChannel(channelId);
+              if (!isThreadChannel(channel.type)) {
+                return slashReply("Compact is only supported inside a linked Discord thread.", {
+                  ephemeral: true,
+                });
+              }
+
+              const existing = yield* links.getByDiscordThreadId(channelId);
+              if (existing === null) {
+                return slashReply(
+                  "This Discord thread is not linked to a T3 thread, so there is nothing to compact.",
+                  { ephemeral: true },
+                );
+              }
+
+              // Compact can take longer than Discord's ~3s interaction window.
+              // Public deferred reply → edit with compaction stats for the channel.
+              const applicationId = interaction.application_id;
+              const token = interaction.token;
+              yield* forkSlashBackground(
+                Effect.gen(function* () {
+                  yield* Effect.sleep("250 millis");
+                  const content = yield* runContextCompact(existing.t3ThreadId);
+                  yield* rest
+                    .updateOriginalWebhookMessage(applicationId, token, {
+                      payload: { content },
+                    })
+                    .pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning("Failed to edit deferred compact response", {
+                          channelId,
+                          error: String(error),
+                        }),
+                      ),
+                    );
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    rest
+                      .updateOriginalWebhookMessage(applicationId, token, {
+                        payload: {
+                          content: `Context compact failed: ${formatAlertCause(cause, 300)}`,
+                        },
+                      })
+                      .pipe(Effect.ignore),
+                  ),
+                ),
+              );
+
+              return slashDefer();
+            }).pipe(
+              Effect.catch((error: unknown) =>
+                Effect.succeed(
+                  slashReply(
+                    `Compact failed: ${error instanceof Error ? error.message : String(error)}`,
+                    { ephemeral: true },
                   ),
                 ),
               ),

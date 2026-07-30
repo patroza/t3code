@@ -90,6 +90,11 @@ export const ProviderInterruptTurnInput = Schema.Struct({
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
 
+export const ProviderCompactSessionInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderCompactSessionInput = typeof ProviderCompactSessionInput.Type;
+
 export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
 });

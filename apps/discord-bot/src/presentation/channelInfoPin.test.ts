@@ -78,6 +78,7 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("/omegent ask prompt:…");
     expect(rendered).toContain("/omegent help");
     expect(rendered).toContain("/omegent stop");
+    expect(rendered).toContain("/omegent compact");
     expect(rendered).toContain("/omegent thread-talk action:on|off|status");
     expect(rendered).toContain("/omegent link ref:<id|url>");
     expect(rendered).toContain("/omegent refresh-indicators");
