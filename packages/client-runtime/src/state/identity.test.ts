@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { filterPeopleForTypeahead, identityClaimRequired, threadMatchesMine } from "./identity.ts";
+import {
+  claimPersonIdForEnvironment,
+  filterPeopleForTypeahead,
+  identityClaimRequired,
+  threadMatchesMine,
+} from "./identity.ts";
 
 describe("identityClaimRequired", () => {
   it("is false when identity is off", () => {
@@ -78,5 +83,41 @@ describe("threadMatchesMine", () => {
         mode: "theirs",
       }),
     ).toBe(true);
+  });
+
+  it("excludes both mine and theirs when there is no claim for the env", () => {
+    expect(
+      threadMatchesMine({
+        claimPersonId: null,
+        originPersonId: "patroza",
+        mode: "mine",
+      }),
+    ).toBe(false);
+    expect(
+      threadMatchesMine({
+        claimPersonId: null,
+        originPersonId: "patroza",
+        mode: "theirs",
+      }),
+    ).toBe(false);
+    expect(
+      threadMatchesMine({
+        claimPersonId: null,
+        originPersonId: "patroza",
+        mode: "any",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("claimPersonIdForEnvironment", () => {
+  it("returns the claim for the thread environment only", () => {
+    const map = new Map<string, string | null>([
+      ["smart", null],
+      ["t3vm", "patroza"],
+    ]);
+    expect(claimPersonIdForEnvironment(map, "t3vm")).toBe("patroza");
+    expect(claimPersonIdForEnvironment(map, "smart")).toBeNull();
+    expect(claimPersonIdForEnvironment(map, "missing")).toBeNull();
   });
 });
