@@ -11,6 +11,7 @@ import { createStaticNavigation, DarkTheme, DefaultTheme } from "@react-navigati
 import { RegistryContext } from "@effect/atom-react";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { IdentityClaimGate } from "./features/identity/IdentityClaimGate";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -88,6 +89,7 @@ export default function App() {
                     />
                   </IncomingShareProvider>
                   <ConfirmDialogHost />
+                  <IdentityClaimGate />
                 </BlurTargetView>
                 {/* Anchored-menu overlays render here — in-window, so the
                     keyboard stays up while a dropdown is open. */}

@@ -119,4 +119,19 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chips).toContain('aria-label="Edit queued message"');
     expect(chips).toContain("Steer: send now, interrupting the current step");
   });
+
+  it("identity claim gate and participant stack surfaces exist", () => {
+    const gate = readSrc("components/identity/IdentityClaimGate.tsx");
+    expect(gate).toContain('data-testid="identity-claim-gate"');
+    expect(gate).toContain("Who are you?");
+    expect(gate).toContain("identity-claim-suggestions");
+    const stack = readSrc("components/identity/ParticipantStack.tsx");
+    expect(stack).toContain('data-testid="participant-stack"');
+    expect(stack).toContain('data-testid="source-channel-glyph"');
+    const root = readSrc("routes/__root.tsx");
+    expect(root).toContain("IdentityClaimGate");
+    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    expect(sidebarV2).toContain("ParticipantStack");
+    expect(sidebarV2).toContain("sidebar-v2-ownership-filter-");
+  });
 });
