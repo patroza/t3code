@@ -271,13 +271,34 @@ export function findPersonByGithubId(
   return people.find((person) => person.github?.id === id) ?? null;
 }
 
+/** Normalize Atlassian account ids for map lookup (`accountid:` prefix, case). */
+export function normalizeJiraAccountId(accountId: string | null | undefined): string | null {
+  if (accountId === null || accountId === undefined) return null;
+  const trimmed = accountId.trim();
+  if (trimmed.length === 0) return null;
+  const withoutPrefix = trimmed.replace(/^accountid:/iu, "");
+  return withoutPrefix.length > 0 ? withoutPrefix.toLowerCase() : null;
+}
+
+/** Resolve a closed-set person by Jira Cloud accountId (prefix/case-insensitive). */
+export function resolvePersonByJiraAccountId(
+  people: ReadonlyArray<IdentityMapPerson>,
+  accountId: string | null | undefined,
+): IdentityMapPerson | null {
+  const normalized = normalizeJiraAccountId(accountId);
+  if (normalized === null) return null;
+  for (const person of people) {
+    const mapped = normalizeJiraAccountId(person.jira?.accountId);
+    if (mapped !== null && mapped === normalized) return person;
+  }
+  return null;
+}
+
 export function findPersonByJiraAccountId(
   people: ReadonlyArray<IdentityMapPerson>,
   accountId: string,
 ): IdentityMapPerson | null {
-  const id = accountId.trim();
-  if (id.length === 0) return null;
-  return people.find((person) => person.jira?.accountId === id) ?? null;
+  return resolvePersonByJiraAccountId(people, accountId);
 }
 
 export function findPersonByJiraEmail(
