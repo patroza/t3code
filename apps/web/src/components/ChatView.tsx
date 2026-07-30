@@ -72,6 +72,10 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
+import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "./identity/IdentityClaimGate";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
@@ -5229,17 +5233,19 @@ function ChatViewContent(props: ChatViewProps) {
         }
         if (!isAtomCommandInterrupted(failure)) {
           const error = squashAtomCommandFailure(failure);
-          setThreadError(
-            threadIdForSend,
-            error instanceof Error ? error.message : "Failed to send message.",
-          );
+          const message = error instanceof Error ? error.message : "Failed to send message.";
+          if (isIdentityClaimRequiredMessage(message)) {
+            requestIdentityClaimGate();
+          }
+          setThreadError(threadIdForSend, message);
         }
       }
     } catch (error) {
-      setThreadError(
-        threadIdForSend,
-        error instanceof Error ? error.message : "Failed to send message.",
-      );
+      const message = error instanceof Error ? error.message : "Failed to send message.";
+      if (isIdentityClaimRequiredMessage(message)) {
+        requestIdentityClaimGate();
+      }
+      setThreadError(threadIdForSend, message);
     } finally {
       sendInFlightRef.current = false;
       if (!turnStartSucceeded && baseBranchForWorktree) {

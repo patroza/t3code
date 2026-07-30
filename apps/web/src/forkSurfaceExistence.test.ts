@@ -125,11 +125,16 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(gate).toContain('data-testid="identity-claim-gate"');
     expect(gate).toContain("Who are you?");
     expect(gate).toContain("identity-claim-suggestions");
+    expect(gate).toContain("Save identity");
+    expect(gate).toContain("requestIdentityClaimGate");
+    expect(gate).toContain("isIdentityClaimRequiredMessage");
     const stack = readSrc("components/identity/ParticipantStack.tsx");
     expect(stack).toContain('data-testid="participant-stack"');
     expect(stack).toContain('data-testid="source-channel-glyph"');
     const root = readSrc("routes/__root.tsx");
     expect(root).toContain("IdentityClaimGate");
+    const chat = readSrc("components/ChatView.tsx");
+    expect(chat).toContain("requestIdentityClaimGate");
     const sidebarV2 = readSrc("components/SidebarV2.tsx");
     expect(sidebarV2).toContain("ParticipantStack");
     expect(sidebarV2).toContain("sidebar-v2-ownership-filter-");
