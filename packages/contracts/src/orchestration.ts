@@ -424,9 +424,8 @@ export const OrchestrationThread = Schema.Struct({
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
   originSource: Schema.optional(Schema.NullOr(SourceRef)),
-  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  // Optional without default so legacy fixtures omit the field; clients use ?? [].
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -481,11 +480,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   originSource: Schema.optional(Schema.NullOr(SourceRef)),
   /**
    * Distinct people on user messages: origin person first, then first-participation order.
-   * Used for creator + +N participant stack.
+   * Used for creator + +N participant stack. Absent on legacy shells (clients use ?? []).
    */
-  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
