@@ -35,7 +35,9 @@ import {
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
+  withOmegentMessageLink,
 } from "../presentation/attachments.ts";
+import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
 import {
   createMessageWithAttachments,
   DiscordUploadError,
@@ -3737,20 +3739,34 @@ export const runBridge = (
         // Avoid posting a lone "…" placeholder (what you saw in Discord when an image-only
         // turn failed to attach and had no remaining text). Prefer empty content + files,
         // or a short failure note if we expected images but loaded none.
-        const baseFinalChunks: string[] =
-          responseMarkdownBody !== null
-            ? [finalResponseCaption(renderedFinalText)]
-            : renderedFinalText !== ""
-              ? chunkDiscordContent(renderedFinalText, DISCORD_LIMIT)
-              : files.length > 0
-                ? [""]
-                : pendingMarkdown.length > 0 ||
-                    pendingImages.length > 0 ||
-                    pendingMarkdownFiles.length > 0
-                  ? ["_(Could not attach file.)_"]
-                  : text.trim() !== ""
-                    ? ["_(done)_"]
-                    : [];
+        // response.md finals get a short caption + Omegent deep link (hash prepared for
+        // a later client scroll-into-view PR).
+        let baseFinalChunks: string[];
+        if (responseMarkdownBody !== null) {
+          const botConfig = yield* DiscordBotConfig;
+          const omegentUrl = buildOmegentThreadMessageUrl({
+            webUiBaseUrl: botConfig.webUiBaseUrl,
+            threadId: input.t3ThreadId,
+            messageId: t3MessageId,
+          });
+          baseFinalChunks = [
+            withOmegentMessageLink(finalResponseCaption(renderedFinalText), omegentUrl),
+          ];
+        } else if (renderedFinalText !== "") {
+          baseFinalChunks = chunkDiscordContent(renderedFinalText, DISCORD_LIMIT);
+        } else if (files.length > 0) {
+          baseFinalChunks = [""];
+        } else if (
+          pendingMarkdown.length > 0 ||
+          pendingImages.length > 0 ||
+          pendingMarkdownFiles.length > 0
+        ) {
+          baseFinalChunks = ["_(Could not attach file.)_"];
+        } else if (text.trim() !== "") {
+          baseFinalChunks = ["_(done)_"];
+        } else {
+          baseFinalChunks = [];
+        }
 
         const finalChunks = appendStatsToMessageChunks(baseFinalChunks, statsLine, DISCORD_LIMIT);
 
