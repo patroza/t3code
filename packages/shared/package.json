@@ -103,6 +103,10 @@
       "types": "./src/identityAvatar.ts",
       "import": "./src/identityAvatar.ts"
     },
+    "./identityMap": {
+      "types": "./src/identityMap.ts",
+      "import": "./src/identityMap.ts"
+    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"

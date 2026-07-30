@@ -9,6 +9,13 @@ import {
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import {
+  IdentityClaimInput,
+  IdentityClaimResult,
+  IdentityError,
+  IdentitySessionClaimResult,
+  IdentitySnapshot,
+} from "./identity.ts";
+import {
   BackgroundPolicySnapshot,
   ClientActivityReportInput,
   HostPowerSnapshot,
@@ -251,6 +258,12 @@ export const WS_METHODS = {
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
 
+  // Session identity (closed-set map claim)
+  identityGetSnapshot: "identity.getSnapshot",
+  identityGetSessionClaim: "identity.getSessionClaim",
+  identityClaim: "identity.claim",
+  identityClearClaim: "identity.clearClaim",
+
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
@@ -406,6 +419,30 @@ export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRela
   success: RelayClientInstallProgressEventSchema,
   error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+export const WsIdentityGetSnapshotRpc = Rpc.make(WS_METHODS.identityGetSnapshot, {
+  payload: Schema.Struct({}),
+  success: IdentitySnapshot,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityGetSessionClaimRpc = Rpc.make(WS_METHODS.identityGetSessionClaim, {
+  payload: Schema.Struct({}),
+  success: IdentitySessionClaimResult,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityClaimRpc = Rpc.make(WS_METHODS.identityClaim, {
+  payload: IdentityClaimInput,
+  success: IdentityClaimResult,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityClearClaimRpc = Rpc.make(WS_METHODS.identityClearClaim, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ cleared: Schema.Boolean }),
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
@@ -849,6 +886,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetBackgroundPolicyRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsIdentityGetSnapshotRpc,
+  WsIdentityGetSessionClaimRpc,
+  WsIdentityClaimRpc,
+  WsIdentityClearClaimRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
