@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as IdentityService from "./IdentityService.ts";
 
 const people = [
@@ -20,9 +19,7 @@ const people = [
   },
 ] as const;
 
-const TestLayer = IdentityService.layerWithPeople([...people]).pipe(
-  Layer.provideMerge(SqlitePersistenceMemory),
-);
+const TestLayer = IdentityService.layerWithPeople([...people]);
 
 const isIdentityError = (error: unknown): error is IdentityError =>
   typeof error === "object" && error !== null && "_tag" in error && error._tag === "IdentityError";
