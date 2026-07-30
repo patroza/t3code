@@ -26,6 +26,7 @@ import {
 } from "./home-list-filter-menu";
 import {
   hasCustomHomeListOptions,
+  type OwnershipFilter,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
@@ -54,6 +55,7 @@ export function HomeHeader(props: {
   readonly threadGrouping: HomeThreadGrouping;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  readonly ownershipFilter: OwnershipFilter;
   /**
    * Hide settled from the main Threads inbox. Recency/none default on;
    * project grouping defaults off at the call site.
@@ -67,6 +69,7 @@ export function HomeHeader(props: {
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
   readonly onHideSettledThreadsChange: (hide: boolean) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
@@ -103,6 +106,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
+    props.ownershipFilter !== "any" ||
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&
       props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
@@ -110,6 +114,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
+        ownershipFilter: props.ownershipFilter,
         listMode: props.listMode,
         threadGrouping: props.threadGrouping,
         projectSortOrder: props.projectSortOrder,
@@ -135,6 +140,18 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
             ),
           })),
         ],
+      },
+      {
+        id: "ownership",
+        title: "Ownership",
+        subactions: [
+          { id: "ownership:any", title: "Anyone" },
+          { id: "ownership:mine", title: "Mine" },
+          { id: "ownership:theirs", title: "Theirs" },
+        ].map((action) => ({
+          ...action,
+          state: checkedMenuState(action.id === `ownership:${props.ownershipFilter}`),
+        })),
       },
       ...(props.projects.length === 0 || props.listMode === "board"
         ? []
@@ -202,6 +219,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       props.environments,
       props.hideSettledThreads,
       props.listMode,
+      props.ownershipFilter,
       props.projectSortOrder,
       props.projects,
       props.selectedEnvironmentIds,
@@ -226,6 +244,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 
       if (id === "project:all") {
         props.onProjectChange(null);
+        return;
+      }
+
+      if (id.startsWith("ownership:")) {
+        const ownership = id.slice("ownership:".length);
+        if (ownership === "any" || ownership === "mine" || ownership === "theirs") {
+          props.onOwnershipFilterChange(ownership);
+        }
         return;
       }
 
@@ -391,6 +417,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const useSolidBoardHeader = isBoardMode && NATIVE_LIQUID_GLASS_SUPPORTED;
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
+    props.ownershipFilter !== "any" ||
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&
       props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
@@ -398,6 +425,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
+        ownershipFilter: props.ownershipFilter,
         listMode: props.listMode,
         threadGrouping: props.threadGrouping,
         projectSortOrder: props.projectSortOrder,
@@ -414,11 +442,13 @@ function IosHomeHeader(props: HomeHeaderProps) {
     projects: props.projects,
     selectedEnvironmentIds: props.selectedEnvironmentIds,
     selectedProjectKey: props.selectedProjectKey,
+    ownershipFilter: props.ownershipFilter,
     projectSortOrder: props.projectSortOrder,
     threadSortOrder: props.threadSortOrder,
     onClearEnvironments: props.onClearEnvironments,
     onToggleEnvironment: props.onToggleEnvironment,
     onProjectChange: props.onProjectChange,
+    onOwnershipFilterChange: props.onOwnershipFilterChange,
     onProjectSortOrderChange: props.onProjectSortOrderChange,
     onThreadSortOrderChange: props.onThreadSortOrderChange,
     listOrganization,
