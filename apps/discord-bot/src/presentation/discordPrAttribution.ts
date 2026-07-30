@@ -113,6 +113,36 @@ export function toT3PublicShortThreadUrl(fullUrl: string): string {
 }
 
 /**
+ * t3vm thread URL with a message fragment for future client scroll-into-view.
+ * Shape: `https://t3vm/?thread={threadId}#message-{messageId}`
+ *
+ * Always uses the short `t3vm` host (no tailnet hostname leakage in Discord).
+ * Falls back to `https://t3vm` when `webUiBaseUrl` is unset.
+ * Client hash handling is a separate PR — this only prepares the fragment.
+ */
+export function buildOmegentThreadMessageUrl(input: {
+  readonly webUiBaseUrl?: string | null | undefined;
+  readonly threadId: string | undefined | null;
+  readonly messageId: string | undefined | null;
+}): string | null {
+  const threadId = input.threadId?.trim() ?? "";
+  const messageId = input.messageId?.trim() ?? "";
+  if (threadId === "" || messageId === "") return null;
+
+  const full =
+    buildT3WebThreadUrl(input.webUiBaseUrl, threadId) ?? `https://t3vm/?thread=${threadId}`;
+  const short = toT3PublicShortThreadUrl(full);
+  try {
+    const url = new URL(short);
+    url.hash = `message-${messageId}`;
+    return url.toString();
+  } catch {
+    const withoutHash = short.replace(/#.*$/u, "");
+    return `${withoutHash}#message-${messageId}`;
+  }
+}
+
+/**
  * Private GitHub repo → full t3vm host URL. Public/unknown → short `t3vm` host only
  * (avoids leaking tailnet hostnames on public PR bodies).
  */

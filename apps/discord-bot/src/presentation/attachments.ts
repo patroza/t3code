@@ -100,6 +100,22 @@ export function finalResponseCaption(text: string): string {
 }
 
 /**
+ * Append a Discord masked [Omegent link](url) under the response.md caption.
+ * No-op when the URL is missing (e.g. empty thread/message ids).
+ */
+export function withOmegentMessageLink(
+  caption: string,
+  omegentUrl: string | null | undefined,
+): string {
+  const url = omegentUrl?.trim() ?? "";
+  if (url === "") return caption;
+  const link = `[Omegent link](${url})`;
+  const body = caption.trimEnd();
+  if (body === "") return link;
+  return `${body}\n\n${link}`;
+}
+
+/**
  * Long answers and any answer with GFM tables become `response.md`.
  * Short single-message finals without tables stay inline.
  */

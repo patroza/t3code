@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appendDiscordPrAttributionFooter,
   buildDiscordThreadJumpUrl,
+  buildOmegentThreadMessageUrl,
   buildT3WebThreadUrl,
   DISCORD_PR_ATTRIBUTION_MARKER,
   ensureDiscordPrAttributionFooters,
@@ -94,6 +95,31 @@ describe("T3 thread URL helpers", () => {
         repoIsPrivate: null,
       }),
     ).toBe("https://t3vm/?thread=tid-1");
+  });
+
+  it("builds Omegent message deep links on the short t3vm host", () => {
+    expect(
+      buildOmegentThreadMessageUrl({
+        webUiBaseUrl: "https://t3vm.tail86038f.ts.net/",
+        threadId: "tid-1",
+        messageId: "msg-1",
+      }),
+    ).toBe("https://t3vm/?thread=tid-1#message-msg-1");
+    // No web UI base → still emit a usable short t3vm link.
+    expect(
+      buildOmegentThreadMessageUrl({
+        webUiBaseUrl: undefined,
+        threadId: "tid-1",
+        messageId: "msg-1",
+      }),
+    ).toBe("https://t3vm/?thread=tid-1#message-msg-1");
+    expect(
+      buildOmegentThreadMessageUrl({
+        webUiBaseUrl: "https://t3vm.tail86038f.ts.net/",
+        threadId: "tid-1",
+        messageId: "",
+      }),
+    ).toBeNull();
   });
 
   it("withT3ThreadLink is idempotent", () => {

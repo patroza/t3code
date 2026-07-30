@@ -11,6 +11,7 @@ import {
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
+  withOmegentMessageLink,
 } from "./attachments.ts";
 
 describe("imageAttachmentsOf", () => {
@@ -136,5 +137,13 @@ describe("final response markdown attachment", () => {
         messageChunkCount: 3,
       }),
     ).toBe(false);
+  });
+
+  it("appends Omegent link under the response.md caption", () => {
+    expect(withOmegentMessageLink("Summary", "https://t3vm/?thread=tid-1#message-msg-1")).toBe(
+      "Summary\n\n[Omegent link](https://t3vm/?thread=tid-1#message-msg-1)",
+    );
+    expect(withOmegentMessageLink("Summary", null)).toBe("Summary");
+    expect(withOmegentMessageLink("Summary", "  ")).toBe("Summary");
   });
 });
