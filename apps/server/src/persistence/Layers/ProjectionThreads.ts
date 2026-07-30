@@ -18,12 +18,14 @@ import {
 } from "../Services/ProjectionThreads.ts";
 import { ModelSelection, SourceRef, ThreadParticipantSummary } from "@t3tools/contracts";
 
+// JSON columns may be SQL NULL or the string "null" (from JSON.stringify(null)).
+// Decode with NullOr inside fromJsonString so both forms become null.
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
-    originSource: Schema.NullOr(Schema.fromJsonString(SourceRef)),
+    originSource: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
     participantSummaries: Schema.NullOr(
-      Schema.fromJsonString(Schema.Array(ThreadParticipantSummary)),
+      Schema.fromJsonString(Schema.NullOr(Schema.Array(ThreadParticipantSummary))),
     ),
   }),
 );
@@ -119,10 +121,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
           ${row.deletedAt},
-          ${row.originSource !== undefined ? JSON.stringify(row.originSource) : null},
-          ${
-            row.participantSummaries !== undefined ? JSON.stringify(row.participantSummaries) : null
-          }
+          ${row.originSource != null ? JSON.stringify(row.originSource) : null},
+          ${row.participantSummaries != null ? JSON.stringify(row.participantSummaries) : null}
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
