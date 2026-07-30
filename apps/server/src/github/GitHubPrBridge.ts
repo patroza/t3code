@@ -54,6 +54,7 @@ import {
   type GitHubPullRequestStackContext,
   stackBranchesForMatching,
 } from "./GitHubPullRequestStack.ts";
+import { classifyGitHubActorTrust } from "./githubActorTrust.ts";
 
 const BUSY_RESPONSE =
   "This T3 thread is already working. Try again after the current turn finishes.";
@@ -69,6 +70,8 @@ const PROVISION_FAILED_RESPONSE =
   "T3 could not open a thread for this pull request. Check the server logs for details.";
 const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention. Conversation comments use the PR work thread; inline review reuses that discussion's session (first tag creates it). Override with `main-thread` or `sibling-thread`.";
+const IDENTITY_DENIED_RESPONSE =
+  "Not authorized to run agent turns from this GitHub account. When the T3 identity map is enabled, only mapped operators (`github.login` / `github.id`) can invoke the bot — repository write access alone is not enough (including on public repos).";
 const MAX_GITHUB_COMMENT_LENGTH = 65_536;
 
 const PERMISSION_RANK: Readonly<Record<GitHubRepositoryPermission, number>> = {
@@ -1215,6 +1218,38 @@ export const make = Effect.gen(function* () {
       return;
     }
 
+    // When the closed-set identity map is on, map membership is required in
+    // addition to the GitHub permission floor. Public-repo write / outside
+    // collaborators cannot drive the host unless listed.
+    const mapEnabled = yield* identity.isMapEnabled();
+    const mapPeople = yield* identity.listMapPeople();
+    const trust = classifyGitHubActorTrust({
+      identityMapEnabled: mapEnabled,
+      actorId: input.invocation.actorId,
+      actorLogin: input.invocation.actorLogin,
+      people: mapPeople,
+    });
+    if (trust.mode === "denied") {
+      yield* Effect.logWarning("Rejected GitHub PR invocation from unmapped identity", {
+        deliveryId: input.deliveryId,
+        repository: input.invocation.repository,
+        pullRequestNumber: input.invocation.pullRequestNumber,
+        actorId: input.invocation.actorId,
+        actorLogin: input.invocation.actorLogin,
+        reason: trust.reason,
+      });
+      yield* finishDelivery(initial, IDENTITY_DENIED_RESPONSE, "rejected");
+      return;
+    }
+    yield* Effect.logInfo("Classified GitHub actor trust", {
+      deliveryId: input.deliveryId,
+      actorLogin: input.invocation.actorLogin,
+      actorId: input.invocation.actorId,
+      mode: trust.mode,
+      reason: trust.reason,
+      personId: trust.person?.personId ?? null,
+    });
+
     const addAckReaction =
       input.invocation.commentSurface === "review"
         ? github.addReviewCommentReaction({
@@ -1360,10 +1395,10 @@ export const make = Effect.gen(function* () {
     const turnModelSelection = hasExplicitModelSelection
       ? yield* resolveGitHubModelSelection(turnInvocation, thread.modelSelection)
       : thread.modelSelection;
-    const mapPeople = yield* identity.listMapPeople();
+    const sourcePeople = yield* identity.listMapPeople();
     const [repoOwner, repoName] = turnInvocation.repository.split("/");
     const source = buildIntegrationSourceRef({
-      people: mapPeople,
+      people: sourcePeople,
       channel: "github",
       platformId: String(turnInvocation.actorId),
       displayName: turnInvocation.actorLogin,
