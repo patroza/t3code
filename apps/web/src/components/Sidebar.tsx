@@ -33,6 +33,7 @@ import {
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
+import { ParticipantStack, SourceChannelGlyph } from "./identity/ParticipantStack";
 import { hasComposerDraftMessage, useComposerDraftStore } from "../composerDraftStore";
 import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -813,21 +814,31 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               onDoubleClick={handleRenameInputClick}
             />
           ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className="min-w-0 flex-1 truncate text-sm"
-                    data-testid={`thread-title-${thread.id}`}
-                  >
-                    {thread.title}
-                  </span>
+            <>
+              <SourceChannelGlyph
+                channel={
+                  thread.originSource?.channel ??
+                  thread.participantSummaries?.[0]?.firstChannel ??
+                  null
                 }
               />
-              <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
-                {thread.title}
-              </TooltipPopup>
-            </Tooltip>
+              <ParticipantStack participants={thread.participantSummaries ?? []} />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="min-w-0 flex-1 truncate text-sm"
+                      data-testid={`thread-title-${thread.id}`}
+                    >
+                      {thread.title}
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
+                  {thread.title}
+                </TooltipPopup>
+              </Tooltip>
+            </>
           )}
           {hasDraft ? <ComposerDraftDot /> : null}
           {prStatus && pr ? (
@@ -3462,14 +3473,24 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                   onBlur={() => void commitRename()}
                 />
               ) : (
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
-                    props.isActive ? "text-foreground" : "text-muted-foreground/70",
-                  )}
-                >
-                  {thread.title}
-                </span>
+                <>
+                  <SourceChannelGlyph
+                    channel={
+                      thread.originSource?.channel ??
+                      thread.participantSummaries?.[0]?.firstChannel ??
+                      null
+                    }
+                  />
+                  <ParticipantStack participants={thread.participantSummaries ?? []} />
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
+                      props.isActive ? "text-foreground" : "text-muted-foreground/70",
+                    )}
+                  >
+                    {thread.title}
+                  </span>
+                </>
               )}
               {hasDraft ? <ComposerDraftDot /> : null}
             </div>
@@ -3582,7 +3603,17 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                   onBlur={() => void commitRename()}
                 />
               ) : (
-                <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+                <>
+                  <SourceChannelGlyph
+                    channel={
+                      thread.originSource?.channel ??
+                      thread.participantSummaries?.[0]?.firstChannel ??
+                      null
+                    }
+                  />
+                  <ParticipantStack participants={thread.participantSummaries ?? []} />
+                  <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+                </>
               )}
               {hasDraft ? <ComposerDraftDot /> : null}
               {prStatus && pr ? (
