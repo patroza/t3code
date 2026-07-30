@@ -93,8 +93,17 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const createLock = yield* Semaphore.make(1);
 
-  const postComment = (issueKey: string, body: string) =>
-    jira.addIssueComment({ issueKey, body: formatJiraComment(body) });
+  /**
+   * Post a bridge response as a **threaded reply** when possible.
+   * Uses delivery.replyToCommentId (thread root, or the mention itself when top-level).
+   * Jira only allows children under top-level comments — not under existing replies.
+   */
+  const postComment = (delivery: StoredJiraDelivery, body: string) =>
+    jira.addIssueComment({
+      issueKey: delivery.issueKey,
+      body: formatJiraComment(body),
+      parentCommentId: delivery.replyToCommentId || delivery.sourceCommentId || null,
+    });
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
     DateTime.now.pipe(
@@ -132,7 +141,7 @@ const make = Effect.gen(function* () {
     body: string,
     status: "completed" | "rejected",
   ) {
-    const posted = yield* postComment(delivery.issueKey, body);
+    const posted = yield* postComment(delivery, body);
     yield* removeAcknowledgment(delivery);
     yield* deliveries.put({
       ...delivery,
