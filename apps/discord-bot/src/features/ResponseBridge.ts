@@ -1768,11 +1768,22 @@ export function resolveThreadChangeRequestLookupCwds(
   ];
 }
 
-type SourceAwareOrchestrationMessage = OrchestrationThread["messages"][number] & {
-  readonly source?: {
-    readonly channel?: string;
-    readonly username?: string;
-  };
+/**
+ * Structural view of a transcript message for Discord echo labels.
+ *
+ * Accepts both plain orchestration messages and identity-overlay `SourceRef`
+ * provenance without `exactOptionalPropertyTypes` friction on `source`.
+ */
+type SourceAwareOrchestrationMessage = {
+  readonly text: string;
+  readonly attachments?: ReadonlyArray<unknown> | null | undefined;
+  readonly source?:
+    | {
+        readonly channel?: string | null | undefined;
+        readonly username?: string | null | undefined;
+      }
+    | null
+    | undefined;
 };
 
 function echoedUserSourceLabel(message: SourceAwareOrchestrationMessage): string {
