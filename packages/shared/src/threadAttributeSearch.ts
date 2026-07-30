@@ -41,7 +41,7 @@ export type ThreadAttributeSearchInput = {
 const JIRA_KEY_PATTERN = /\b([A-Za-z][A-Za-z0-9]+-\d+)\b/g;
 /** Explicit PR markers in free text / branch names. */
 const PR_HASH_PATTERN = /#(\d+)\b/g;
-const PR_SLUG_PATTERN = /\b(?:pr|pull)[-_\/]?(\d+)\b/gi;
+const PR_SLUG_PATTERN = /\b(?:pr|pull)[-_/]?(\d+)\b/gi;
 
 function addTerm(into: Set<string>, raw: string | null | undefined): void {
   if (raw === null || raw === undefined) return;
