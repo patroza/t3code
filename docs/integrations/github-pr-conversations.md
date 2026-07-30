@@ -143,7 +143,13 @@ orchestration projection and command engine as the web application.
   `X-GitHub-Delivery` id.
 - Ignore bot actors and require an explicit configured mention.
 - Require the repository to be enabled and the actor to meet the configured permission floor
-  (`write` by default).
+  (`write` by default). Collaborator write alone is **not** enough when the identity map is on.
+- **Identity map trust gate** (when `T3_IDENTITY_MAP_PATH` has people):
+  - **Trusted** — actor resolves via `github.id` or `github.login` on a map person → full agent turn
+    (still subject to repo allowlist + permission floor).
+  - **Untrusted** — map on but actor unmapped → reject with a short authorization reply; **no** agent
+    turn. Closes the public-repo hole where outside collaborators with write could drive the host.
+  - Map **off** / empty → legacy behaviour (permission floor only).
 - Treat all GitHub fields and comment text as untrusted user input in the generated T3 prompt.
 - Use a GitHub App installation token for permission checks and PR comment writes.
 - Keep the webhook secret and private key out of prompts, logs, persisted deliveries, and git config.
@@ -197,18 +203,19 @@ The route returns 404 unless all four required variables are configured.
 
 ## Failure semantics
 
-| Condition                                      | Result                                                   |
-| ---------------------------------------------- | -------------------------------------------------------- |
-| No unique live PR/branch/worktree/thread match | Exactly `not yet linked/checked out.`                    |
-| Missing/deleted worktree or T3 thread          | Exactly `not yet linked/checked out.`                    |
-| Repository or PR mismatch                      | Exactly `not yet linked/checked out.`                    |
-| Unauthorized repository                        | Silently ignored; no response, no turn                   |
-| Unauthorized actor                             | Neutral authorization response; no link-state disclosure |
-| Thread already running                         | Busy response; no queue and no turn                      |
-| Duplicate delivery                             | Reuse persisted classification; no new comment or turn   |
-| Turn completes                                 | Replace working/progress comment with final answer       |
-| Turn errors or is interrupted                  | Replace comment with a stable failure response           |
-| Server restarts during turn                    | Resume the persisted response bridge                     |
+| Condition                                      | Result                                                 |
+| ---------------------------------------------- | ------------------------------------------------------ |
+| No unique live PR/branch/worktree/thread match | Exactly `not yet linked/checked out.`                  |
+| Missing/deleted worktree or T3 thread          | Exactly `not yet linked/checked out.`                  |
+| Repository or PR mismatch                      | Exactly `not yet linked/checked out.`                  |
+| Unauthorized repository                        | Silently ignored; no response, no turn                 |
+| Unauthorized actor (GH permission)             | Silently ignored; no response, no turn                 |
+| Unmapped actor (identity map on)               | Short authorization reply; no agent turn               |
+| Thread already running                         | Busy response; no queue and no turn                    |
+| Duplicate delivery                             | Reuse persisted classification; no new comment or turn |
+| Turn completes                                 | Replace working/progress comment with final answer     |
+| Turn errors or is interrupted                  | Replace comment with a stable failure response         |
+| Server restarts during turn                    | Resume the persisted response bridge                   |
 
 ## Tests and acceptance criteria
 
