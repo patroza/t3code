@@ -7,6 +7,7 @@ import {
   type IdentitySnapshot,
   type IdentitySessionClaimResult,
   type SessionIdentityClaim,
+  type ThreadParticipantSummary,
 } from "@t3tools/contracts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { Atom } from "effect/unstable/reactivity";
@@ -93,6 +94,18 @@ export function threadMatchesMine(input: {
   }
   const isMine = people.has(claimId);
   return input.mode === "mine" ? isMine : !isMine;
+}
+
+/** Whether the claimed person participated after someone else started the thread. */
+export function isClaimedNonStarterParticipant(input: {
+  readonly claimPersonId: string | null | undefined;
+  readonly participants: ReadonlyArray<ThreadParticipantSummary>;
+}): boolean {
+  const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
+  if (claimId.length === 0) return false;
+  return input.participants
+    .slice(1)
+    .some((participant) => participant.personId.trim().toLowerCase() === claimId);
 }
 
 /** Look up the claim person for a thread's environment (multi-env clients). */

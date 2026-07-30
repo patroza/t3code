@@ -695,6 +695,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                   />
                 ) : null}
                 <ThreadIdentityLeading
+                  environmentId={thread.environmentId}
                   originChannel={thread.originSource?.channel}
                   participants={thread.participantSummaries}
                 />
@@ -770,6 +771,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 />
               ) : null}
               <ThreadIdentityLeading
+                environmentId={thread.environmentId}
                 originChannel={thread.originSource?.channel}
                 participants={thread.participantSummaries}
               />

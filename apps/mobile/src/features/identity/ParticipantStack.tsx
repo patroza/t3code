@@ -1,8 +1,14 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  claimPersonIdForEnvironment,
+  isClaimedNonStarterParticipant,
+} from "@t3tools/client-runtime/state/identity";
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { IdentityAvatar } from "./IdentityAvatar";
 
 /**
@@ -11,10 +17,20 @@ import { IdentityAvatar } from "./IdentityAvatar";
  * skip hover popovers.
  */
 export function ParticipantStack(props: {
+  readonly environmentId: string;
   readonly participants: ReadonlyArray<ThreadParticipantSummary>;
   readonly className?: string;
 }) {
   const people = props.participants;
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const claimPersonId = claimPersonIdForEnvironment(
+    claimPersonIdByEnvironment,
+    props.environmentId,
+  );
+  const youParticipated = isClaimedNonStarterParticipant({
+    claimPersonId,
+    participants: people,
+  });
   if (people.length === 0) return null;
 
   const lead = people[0]!;
@@ -23,10 +39,11 @@ export function ParticipantStack(props: {
     extras.length === 0
       ? `Started by ${lead.username}`
       : `Started by ${lead.username}, ${extras.length} other participant${extras.length === 1 ? "" : "s"}`;
+  const accessibleLabel = youParticipated ? `${label}. You participated` : label;
 
   return (
     <View
-      accessibilityLabel={label}
+      accessibilityLabel={accessibleLabel}
       accessibilityRole="text"
       className={cn("flex-row items-center gap-0.5 shrink-0", props.className)}
       testID="participant-stack"
@@ -46,6 +63,16 @@ export function ParticipantStack(props: {
           <Text className="text-[8px] font-t3-medium text-foreground-tertiary">
             +{extras.length}
           </Text>
+        </View>
+      ) : null}
+      {youParticipated ? (
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          className="size-3.5 items-center justify-center rounded-full border border-primary bg-primary/15"
+          testID="you-participated-indicator"
+        >
+          <Text className="text-[9px] font-t3-bold text-primary">✓</Text>
         </View>
       ) : null}
     </View>
@@ -88,6 +115,7 @@ export function SourceChannelGlyph(props: {
 
 /** Leading channel glyph + participant stack for a thread shell row. */
 export function ThreadIdentityLeading(props: {
+  readonly environmentId: string;
   readonly originChannel?: string | null | undefined;
   readonly participants?: ReadonlyArray<ThreadParticipantSummary> | null | undefined;
   readonly className?: string;
@@ -98,7 +126,7 @@ export function ThreadIdentityLeading(props: {
   return (
     <View className={cn("flex-row items-center gap-1 shrink-0", props.className)}>
       <SourceChannelGlyph channel={channel} />
-      <ParticipantStack participants={participants} />
+      <ParticipantStack environmentId={props.environmentId} participants={participants} />
     </View>
   );
 }
