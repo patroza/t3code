@@ -11,12 +11,12 @@ the T3 thread whose checked-out worktree branch resolves to that PR.
 The GitHub entry point **joins or provisions**:
 
 1. **Work-item store** — unique thread for this PR URL, or unique thread for a Jira key in the PR
-   title (Jira/Discord-first sessions continue).
+   title **or mention comment** (Jira/Discord-first sessions continue).
 2. **Live worktree match** — unique checked-out PR worktree on a matching T3 project.
 3. **Provision** — prepare a PR worktree and create a T3 thread when nothing unique matches.
 
-On accept, the bridge appends the PR URL and Jira keys extracted from the PR title to
-`ThreadWorkItemStore`. It never creates a **project**. See
+On accept, the bridge appends the PR URL and Jira keys extracted from the PR title and the mention
+comment body to `ThreadWorkItemStore`. It never creates a **project**. See
 [work-item thread linking](./work-item-thread-linking.md).
 
 Setup and development webhook instructions are in

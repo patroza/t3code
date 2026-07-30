@@ -88,6 +88,13 @@ function normalizePullRequestUrl(value: string): string {
   return value.trim().replace(/\/+$/u, "").toLowerCase();
 }
 
+/** Jira keys from PR title and the mention comment body (after @bot is stripped). */
+export function extractJiraIssueKeysFromGitHubInvocation(
+  invocation: Pick<GitHubPrInvocation, "pullRequestTitle" | "prompt">,
+): ReadonlyArray<string> {
+  return extractJiraIssueKeysFromText(`${invocation.pullRequestTitle}\n${invocation.prompt}`);
+}
+
 export function isGitHubRepositoryAllowed(
   allowedRepositories: ReadonlySet<string>,
   repository: string,
@@ -907,8 +914,8 @@ export const make = Effect.gen(function* () {
   );
 
   /**
-   * Join a thread already associated via ThreadWorkItemStore (PR URL or Jira keys from PR title).
-   * Prefer store join so Jira-first / Discord-first sessions continue on GitHub.
+   * Join a thread already associated via ThreadWorkItemStore (PR URL or Jira keys from
+   * PR title / mention comment). Prefer store join so Jira-first / Discord-first sessions continue.
    */
   const resolveThreadFromWorkItemStore = Effect.fn("GitHubPrBridge.resolveThreadFromWorkItemStore")(
     function* (invocation: GitHubPrInvocation) {
@@ -928,7 +935,7 @@ export const make = Effect.gen(function* () {
         }
       }
 
-      const jiraKeys = extractJiraIssueKeysFromText(invocation.pullRequestTitle);
+      const jiraKeys = extractJiraIssueKeysFromGitHubInvocation(invocation);
       const threadIds = new Set<string>();
       for (const key of jiraKeys) {
         const hit = yield* workItems.resolveJiraIssue(key);
@@ -938,7 +945,7 @@ export const make = Effect.gen(function* () {
         const [only] = threadIds;
         const shell = yield* loadShell(only as ThreadId);
         if (Option.isSome(shell) && shell.value.archivedAt === null) {
-          yield* Effect.logInfo("Joined T3 thread via work-item store Jira key from PR title", {
+          yield* Effect.logInfo("Joined T3 thread via work-item store Jira key from PR/comment", {
             repository: invocation.repository,
             pullRequestNumber: invocation.pullRequestNumber,
             threadId: only,
@@ -1300,8 +1307,8 @@ export const make = Effect.gen(function* () {
     }
     const thread = outcome.thread;
 
-    // Durable server-native PR ↔ thread association (+ Jira keys from title for reverse join).
-    const jiraIssueKeys = extractJiraIssueKeysFromText(input.invocation.pullRequestTitle);
+    // Durable PR ↔ thread association (+ Jira keys from title and mention comment).
+    const jiraIssueKeys = extractJiraIssueKeysFromGitHubInvocation(input.invocation);
     yield* workItems
       .appendForThread({
         threadId: thread.id,
