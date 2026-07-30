@@ -137,7 +137,10 @@ function RootRouteView() {
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        {primaryEnvironmentAuthenticated ? <IdentityClaimGate /> : null}
+        {/* Claim gate: primary auth OR hosted-static (paired remotes still need identity). */}
+        {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
+          <IdentityClaimGate />
+        ) : null}
         {appShell}
       </AnchoredToastProvider>
     </ToastProvider>

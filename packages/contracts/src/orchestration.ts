@@ -1010,6 +1010,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   requestId: CommandId,
   title: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
 });
 
 /**
