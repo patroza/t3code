@@ -586,14 +586,31 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
         if (message.source.personId !== undefined && message.source.username !== undefined) {
           const personId = message.source.personId;
-          const already = rebuiltParticipants.some((entry) => entry.personId === personId);
-          if (!already) {
+          const existingParticipantIndex = rebuiltParticipants.findIndex(
+            (entry) => entry.personId === personId,
+          );
+          if (existingParticipantIndex === -1) {
             rebuiltParticipants.push({
               personId,
               username: message.source.username,
               firstChannel: message.source.channel,
+              channels: [message.source.channel],
               firstParticipatedAt: message.createdAt,
             });
+          } else {
+            const existingParticipant = rebuiltParticipants[existingParticipantIndex]!;
+            if (!existingParticipant.channels?.includes(message.source.channel)) {
+              rebuiltParticipants[existingParticipantIndex] = {
+                ...existingParticipant,
+                channels: [
+                  ...(existingParticipant.channels ??
+                    (existingParticipant.firstChannel === undefined
+                      ? []
+                      : [existingParticipant.firstChannel])),
+                  message.source.channel,
+                ],
+              };
+            }
           }
         }
       }
