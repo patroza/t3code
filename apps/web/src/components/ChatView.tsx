@@ -5235,7 +5235,7 @@ function ChatViewContent(props: ChatViewProps) {
           const error = squashAtomCommandFailure(failure);
           const message = error instanceof Error ? error.message : "Failed to send message.";
           if (isIdentityClaimRequiredMessage(message)) {
-            requestIdentityClaimGate();
+            requestIdentityClaimGate(activeThread.environmentId);
           }
           setThreadError(threadIdForSend, message);
         }
@@ -5243,7 +5243,7 @@ function ChatViewContent(props: ChatViewProps) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to send message.";
       if (isIdentityClaimRequiredMessage(message)) {
-        requestIdentityClaimGate();
+        requestIdentityClaimGate(activeThread.environmentId);
       }
       setThreadError(threadIdForSend, message);
     } finally {
