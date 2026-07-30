@@ -107,6 +107,10 @@
       "types": "./src/identityMap.ts",
       "import": "./src/identityMap.ts"
     },
+    "./threadAttributeSearch": {
+      "types": "./src/threadAttributeSearch.ts",
+      "import": "./src/threadAttributeSearch.ts"
+    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
