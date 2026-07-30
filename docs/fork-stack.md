@@ -388,6 +388,12 @@ Do not treat overlay lockfile commits as product truth for integration. Do not l
 compose tip pushed after a lockfile conflict — finish compose (or re-run the script) so the
 regenerated lock is on `fork/integration`.
 
+#### Disk-backed stack temp (`~/.t3/rebase-work`)
+
+Stack rebase helpers (`rebase-pr-stack`, `rebase-integration-overlays`) place full git clones
+under **`~/.t3/rebase-work/`** (or `T3_REBASE_WORK_ROOT` / `T3CODE_HOME/rebase-work` on t3vm),
+never tmpfs `/tmp`. Same rationale as compose-work.
+
 #### Warm `node_modules` seed (`cp --reflink=auto`)
 
 Cold `pnpm install` in a temp compose clone is multi‑minute (or hung if the agent session still

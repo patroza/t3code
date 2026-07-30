@@ -5,9 +5,10 @@
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+
+import { diskBackedWorkRoot, mkdtempDiskBacked } from "./lib/disk-backed-tmp.ts";
 
 const EXPECTED_REPOSITORY = process.env.T3CODE_FORK_REPOSITORY ?? "patroza/t3code";
 const STATE_FILE = "rebase-pr-stack-state.json";
@@ -793,7 +794,11 @@ function initializeState(
   manifest: StackManifest,
   initialBaseForAll: boolean,
 ): { readonly stateDir: string; readonly state: PersistedState } {
-  const stateDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "rebase-pr-stack-"));
+  // Disk-backed: full git clones must not land on tmpfs /tmp (host) or RAM root (t3vm).
+  const stateDir = mkdtempDiskBacked("rebase-pr-stack-", {
+    subdir: "rebase-work",
+    envVar: "T3_REBASE_WORK_ROOT",
+  });
   const repoDir = NodePath.join(stateDir, "repo");
   NodeFS.mkdirSync(repoDir);
   const originUrl = resolveRemoteUrl(sourceRoot, "origin");
@@ -1415,7 +1420,10 @@ export async function rebaseOpenFeaturePullRequests(options: {
     return { updated, conflicts, skipped };
   }
 
-  const workDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "rebase-feature-prs-"));
+  const workDir = mkdtempDiskBacked("rebase-feature-prs-", {
+    subdir: "rebase-work",
+    envVar: "T3_REBASE_WORK_ROOT",
+  });
   const repoDir = NodePath.join(workDir, "repo");
   NodeFS.mkdirSync(repoDir, { recursive: true });
   const originUrl = resolveRemoteUrl(sourceRoot, "origin");
@@ -1815,7 +1823,10 @@ function pushForkChangesBaseHistory(
   const existing = existingBlob ? parseBaseHistory(existingBlob) : [];
   const next = appendBaseHistory(existing, tipsNewestFirst);
   const body = `${next.join("\n")}\n`;
-  const tmp = NodePath.join(NodeOS.tmpdir(), `fork-changes-base-history-${process.pid}.txt`);
+  const tmp = NodePath.join(
+    diskBackedWorkRoot({ subdir: "rebase-work", envVar: "T3_REBASE_WORK_ROOT" }),
+    `fork-changes-base-history-${process.pid}.txt`,
+  );
   NodeFS.writeFileSync(tmp, body, "utf8");
   try {
     const blobOid = git(repoDir, ["hash-object", "-w", tmp]);
