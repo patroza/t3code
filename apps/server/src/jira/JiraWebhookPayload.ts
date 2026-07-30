@@ -384,10 +384,9 @@ export function parseJiraCommentInvocation(
   };
 }
 
-export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
+function jiraPromptHeaderLines(invocation: JiraIssueInvocation): Array<string | null> {
   const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
-  const isUpdate = invocation.webhookEvent === "comment_updated";
-  const lines = [
+  return [
     "<!--",
     "## Jira issue context",
     `- Issue: ${invocation.issueKey}${invocation.issueSummary ? ` — ${invocation.issueSummary}` : ""}`,
@@ -399,6 +398,14 @@ export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
     invocation.commentUpdatedAt ? `- Comment updated at: ${invocation.commentUpdatedAt}` : null,
     `- Jira requester: ${requester}${invocation.actorAccountId ? ` (accountId ${invocation.actorAccountId})` : ""}`,
     invocation.commentUrl ? `- Comment: ${invocation.commentUrl}` : null,
+  ];
+}
+
+export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
+  const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
+  const isUpdate = invocation.webhookEvent === "comment_updated";
+  const lines = [
+    ...jiraPromptHeaderLines(invocation),
     "-->",
     "",
     isUpdate
