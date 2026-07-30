@@ -48,6 +48,10 @@ import {
 } from "../presentation/jiraLinks.ts";
 import { extractPullRequestUrlsFromDiscordMessage } from "../presentation/prLinks.ts";
 import {
+  resolveUniqueT3ThreadIdForWorkItems,
+  serverWorkItemsPathFromStateSqlite,
+} from "../store/ServerWorkItemJoin.ts";
+import {
   assignPullRequestAssignees,
   formatAssignSlashReply,
   resolveAssignGithubLogin,
@@ -740,7 +744,62 @@ const make = (botConfig: DiscordBotConfig) =>
         const attachments = input.attachments ?? [];
         const parentUnavailable = input.parentUnavailable === true;
 
-        const existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+        let existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+
+        // First-time Discord channel: if Jira/PR work items already map to a unique T3 thread
+        // (Jira webhook create, GitHub bridge, or another Discord link), join that session
+        // instead of forking a second agent world.
+        if (existing === null) {
+          const joinStarter = yield* loadThreadStarter({
+            discordThreadId: input.discordThreadId,
+            parentChannelId: input.parentChannelId,
+            ...(input.mentionMessage === undefined ? {} : { mentionMessage: input.mentionMessage }),
+          });
+          const joinJiraKeys = jiraKeysFromMessages(
+            joinStarter,
+            input.mentionMessage,
+            input.referencedMessage,
+            { content: input.prompt },
+          );
+          const joinPrUrls = prUrlsFromMessages(
+            joinStarter,
+            input.mentionMessage,
+            input.referencedMessage,
+            { content: input.prompt },
+          );
+          if (joinJiraKeys.length > 0 || joinPrUrls.length > 0) {
+            const allLinks = yield* links.list();
+            const joinThreadId = resolveUniqueT3ThreadIdForWorkItems({
+              jiraIssueKeys: joinJiraKeys,
+              prUrls: joinPrUrls,
+              discordLinks: allLinks,
+              serverWorkItemsPath: serverWorkItemsPathFromStateSqlite(botConfig.stateSqlitePath),
+            });
+            if (joinThreadId !== null) {
+              const joinShell = yield* t3.getThreadShell(joinThreadId);
+              if (joinShell !== null) {
+                yield* Effect.logInfo("Joining existing T3 thread via work-item identity", {
+                  discordThreadId: input.discordThreadId,
+                  t3ThreadId: joinThreadId,
+                  jiraIssueKeys: joinJiraKeys,
+                  prUrls: joinPrUrls,
+                });
+                yield* links.put({
+                  discordThreadId: input.discordThreadId,
+                  t3ThreadId: joinThreadId,
+                  projectId: joinShell.projectId,
+                  channelId: input.channelId,
+                  guildId: input.guildId,
+                  createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+                  sentDiscordUserMessageIds: [],
+                  jiraIssueKeys: joinJiraKeys,
+                  prUrls: joinPrUrls,
+                });
+                existing = yield* links.getByDiscordThreadId(input.discordThreadId);
+              }
+            }
+          }
+        }
 
         // Topic is preferred; during Discord outages fall back to the project already on the
         // Discord↔T3 link so continue turns still work instead of "no t3-<shortName> tag".
