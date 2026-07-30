@@ -4,6 +4,7 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import { buildThreadAttributeSearchTerms } from "@t3tools/shared/threadAttributeSearch";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
@@ -130,7 +131,15 @@ export function buildProjectActionItems(input: {
 
 export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
-  "archivedAt" | "branch" | "createdAt" | "environmentId" | "id" | "projectId" | "title"
+  | "archivedAt"
+  | "branch"
+  | "createdAt"
+  | "environmentId"
+  | "id"
+  | "projectId"
+  | "title"
+  | "originSource"
+  | "participantSummaries"
 > & {
   updatedAt: string;
   latestUserMessageAt?: string | null;
@@ -181,11 +190,20 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     const leadingContent = input.renderLeadingContent?.(thread);
     const trailingContent = input.renderTrailingContent?.(thread);
 
+    const attributeTerms = buildThreadAttributeSearchTerms({
+      title: thread.title,
+      branch: thread.branch,
+      originSource: thread.originSource ?? null,
+      participantSummaries: thread.participantSummaries ?? [],
+      extraTerms: [projectTitle],
+    });
+
     return Object.assign(
       {
         kind: "action" as const,
         value: `thread:${thread.id}`,
-        searchTerms: [thread.title, projectTitle ?? ``, thread.branch ?? ``],
+        // Title/project first so rankCommandPaletteItemMatch still prefers title hits.
+        searchTerms: [thread.title, projectTitle ?? ``, thread.branch ?? ``, ...attributeTerms],
         title: thread.title,
         description: descriptionParts.join(` · `),
         timestamp: formatRelativeTimeLabel(

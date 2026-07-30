@@ -1,6 +1,7 @@
 import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { threadMatchesAttributeQuery } from "@t3tools/shared/threadAttributeSearch";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
@@ -240,7 +241,20 @@ export function buildThreadListV2Items(input: {
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }
-    if (query.length > 0 && !thread.title.toLocaleLowerCase().includes(query)) continue;
+    if (
+      query.length > 0 &&
+      !threadMatchesAttributeQuery(
+        {
+          title: thread.title,
+          branch: thread.branch,
+          originSource: thread.originSource ?? null,
+          participantSummaries: thread.participantSummaries ?? [],
+        },
+        query,
+      )
+    ) {
+      continue;
+    }
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
     const changeRequestState =
