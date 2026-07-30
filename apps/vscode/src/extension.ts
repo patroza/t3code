@@ -7,6 +7,7 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
+import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import * as vscode from "vscode";
 
 import { composePrompt, type TextContext } from "./editorContext.ts";
@@ -15,6 +16,7 @@ import {
   readDesktopBootstrapCredential,
   readDesktopServerUrl,
 } from "./desktopFavorites.ts";
+import { classifyPairingInput, describeTokenExpiry } from "./pairing.ts";
 import { serverCandidates } from "./serverResolution.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
@@ -467,6 +469,42 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showInformationMessage(
           "T3 Code bearer token stored in VS Code secret storage.",
         );
+      }
+    }),
+    vscode.commands.registerCommand("t3Code.pair", async () => {
+      const input = await vscode.window.showInputBox({
+        password: true,
+        ignoreFocusOut: true,
+        prompt: "Paste the T3 Code pairing URL or pairing token",
+        placeHolder: "http://127.0.0.1:3773/pair#token=… or the bare token",
+      });
+      if (input === undefined || input.trim() === "") return;
+      try {
+        const desktopServerUrl = await readDesktopServerUrl();
+        const fallbackUrl =
+          serverCandidates(desktopServerUrl, configuration().serverUrl)[0]?.url ??
+          configuration().serverUrl;
+        const classified = classifyPairingInput(input, fallbackUrl);
+        const { credential, httpBaseUrl } =
+          classified.kind === "url"
+            ? resolveRemotePairingTarget({ pairingUrl: classified.pairingUrl })
+            : resolveRemotePairingTarget({
+                host: classified.host,
+                pairingCode: classified.pairingCode,
+              });
+        const { accessToken, expiresInSeconds } = await client.exchangePairingCredential(
+          httpBaseUrl,
+          credential,
+        );
+        await context.secrets.store(BEARER_TOKEN_SECRET, accessToken);
+        await ensureConnected();
+        void vscode.window.showInformationMessage(
+          `T3 Code paired with ${httpBaseUrl}, valid ${describeTokenExpiry(expiresInSeconds)}.`,
+        );
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        log(`pairing failed error=${message}`);
+        void vscode.window.showErrorMessage(`T3 Code pairing failed: ${message}`);
       }
     }),
     vscode.commands.registerCommand("t3Code.clearBearerToken", async () => {

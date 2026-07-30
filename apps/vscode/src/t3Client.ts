@@ -307,6 +307,28 @@ export class T3Client {
     await this.connect(httpBaseUrl, session.access_token);
   }
 
+  /**
+   * Exchanges a pairing credential for a bearer access token without
+   * connecting, so callers can persist the token before establishing a
+   * session.
+   */
+  async exchangePairingCredential(
+    httpBaseUrl: string,
+    credential: string,
+  ): Promise<{ accessToken: string; expiresInSeconds: number }> {
+    const startedAt = Date.now();
+    this.#log(`pairing exchange start endpoint=${httpBaseUrl}`);
+    const session = await this.#runtime.runPromise(
+      bootstrapRemoteBearerSession({
+        httpBaseUrl,
+        credential,
+        clientMetadata: { label: "T3 Code for VS Code", deviceType: "desktop" },
+      }),
+    );
+    this.#log(`pairing exchange complete in ${Date.now() - startedAt}ms endpoint=${httpBaseUrl}`);
+    return { accessToken: session.access_token, expiresInSeconds: session.expires_in };
+  }
+
   projectsForWorktree(worktreePath: string): ReadonlyArray<OrchestrationProjectShell> {
     const shell = this.#shell;
     if (shell === null) return [];
