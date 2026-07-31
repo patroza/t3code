@@ -43,7 +43,9 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PortExposure from "./preview/PortExposure.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -99,8 +101,11 @@ import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryR
 import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { GrokTranscriptResyncLive } from "./externalSessions/GrokTranscriptResync.ts";
+import { OrphanSessionRecoveryLive } from "./orchestration/Layers/OrphanSessionRecovery.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -108,6 +113,18 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as GitHubAppClient from "./github/GitHubAppClient.ts";
+import * as GitHubAppConfig from "./github/GitHubAppConfig.ts";
+import * as GitHubDeliveryStore from "./github/GitHubDeliveryStore.ts";
+import * as GitHubPrBridge from "./github/GitHubPrBridge.ts";
+import { githubWebhookRouteLayer } from "./github/http.ts";
+import * as JiraAppClient from "./jira/JiraAppClient.ts";
+import * as JiraAppConfig from "./jira/JiraAppConfig.ts";
+import * as JiraDeliveryStore from "./jira/JiraDeliveryStore.ts";
+import * as JiraIssueBridge from "./jira/JiraIssueBridge.ts";
+import { jiraWebhookRouteLayer } from "./jira/http.ts";
+import * as WebhookDebugLog from "./webhooks/WebhookDebugLog.ts";
+import * as ThreadWorkItemStore from "./workItems/ThreadWorkItemStore.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -128,6 +145,41 @@ const PtyAdapterLive = Layer.unwrap(
       return NodePtyAdapter.layer;
     }
   }),
+);
+
+const ResourceAttributionLayerLive = ResourceAttribution.layer;
+const ApplicationObservabilityLive = ObservabilityLive.pipe(
+  Layer.provideMerge(ResourceAttributionLayerLive),
+);
+
+const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
+
+const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
+  Layer.provide(ResourceMonitorBinary.layer),
+);
+
+const DesktopTelemetryReceiverLayerLive = DesktopTelemetryReceiver.layer.pipe(
+  Layer.provideMerge(ServerSettingsLayerLive),
+);
+
+const ResourceTelemetryLayerLive = ResourceTelemetry.layer.pipe(
+  Layer.provideMerge(NativeTelemetryLayerLive),
+  Layer.provideMerge(DesktopTelemetryReceiverLayerLive),
+);
+
+const HostPowerMonitorLayerLive = HostPowerMonitor.layer.pipe(
+  Layer.provide(DesktopTelemetryReceiverLayerLive),
+);
+
+const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
+  Layer.provide(HostPowerMonitorLayerLive),
+  Layer.provideMerge(ServerSettingsLayerLive),
+);
+
+const ResourceDiagnosticsLayerLive = Layer.mergeAll(
+  ResourceTelemetryLayerLive,
+  ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
+  ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
 );
 
 const RelayClientLive = Layer.unwrap(
@@ -244,6 +296,29 @@ const ReviewLayerLive = ReviewService.layer.pipe(
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
 
+/** Shared once for GitHub + Jira bridges (Jira keys / PR URLs → threads). */
+const ThreadWorkItemStoreLive = ThreadWorkItemStore.layer;
+
+const GitHubAppDependenciesLive = Layer.mergeAll(
+  GitHubAppClient.layer,
+  GitHubDeliveryStore.layer,
+).pipe(Layer.provideMerge(GitHubAppConfig.layer));
+
+const GitHubPrBridgeLive = GitHubPrBridge.layer.pipe(
+  Layer.provideMerge(GitHubAppDependenciesLive),
+  Layer.provideMerge(ThreadWorkItemStoreLive),
+);
+
+const JiraAppDependenciesLive = Layer.mergeAll(JiraAppClient.layer, JiraDeliveryStore.layer).pipe(
+  Layer.provideMerge(JiraAppConfig.layer),
+);
+
+const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
+  Layer.provideMerge(JiraAppDependenciesLive),
+  // Prefer the instance already provided by GitHubPrBridgeLive when merged below.
+  Layer.provideMerge(ThreadWorkItemStoreLive),
+);
+
 const VcsLayerLive = Layer.empty.pipe(
   Layer.provideMerge(VcsProjectConfig.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
@@ -266,8 +341,17 @@ const TerminalLayerLive = TerminalManager.layer.pipe(
   Layer.provide(PortScannerLayerLive),
 );
 
+// Self-contained: the HTTP client is only used to prove a published port
+// answers, and the Net service only to notice a dev server that has exited.
+// Neither belongs in the requirements of everything that renders a preview.
+const PortExposureLayerLive = PortExposure.layer.pipe(
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(NetService.layer),
+);
+
 const PreviewLayerLive = Layer.empty.pipe(
   Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(PortExposureLayerLive),
   Layer.provideMerge(PortScannerLayerLive),
 );
 
@@ -302,8 +386,21 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const OrphanSessionRecoveryLayerLive = OrphanSessionRecoveryLive.pipe(
+  Layer.provide(ProviderLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(OrphanSessionRecoveryLayerLive),
+  Layer.provideMerge(
+    GrokTranscriptResyncLive.pipe(
+      Layer.provide(ProviderSessionRuntime.layer),
+      Layer.provide(OrphanSessionRecoveryLayerLive),
+      Layer.provide(OrchestrationLayerLive),
+    ),
+  ),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
@@ -314,7 +411,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
-  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
+  Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, AiUsageMonitor.layer)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
@@ -354,38 +451,21 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
-const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
-  Layer.provide(ResourceMonitorBinary.layer),
-);
-const DesktopTelemetryReceiverLayerLive = DesktopTelemetryReceiver.layer.pipe(
-  Layer.provideMerge(ServerSettingsLayerLive),
-);
-const ResourceTelemetryLayerLive = ResourceTelemetry.layer.pipe(
-  Layer.provideMerge(NativeTelemetryLayerLive),
-  Layer.provideMerge(DesktopTelemetryReceiverLayerLive),
-);
-const HostPowerMonitorLayerLive = HostPowerMonitor.layer.pipe(
-  Layer.provide(DesktopTelemetryReceiverLayerLive),
-);
-const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
-  Layer.provide(HostPowerMonitorLayerLive),
-  Layer.provideMerge(ServerSettingsLayerLive),
-);
-const ResourceDiagnosticsLayerLive = Layer.mergeAll(
-  ResourceTelemetryLayerLive,
-  ProcessDiagnostics.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
-  ProcessResourceMonitor.layer.pipe(Layer.provide(ResourceTelemetryLayerLive)),
-);
-const ResourceAttributionLayerLive = ResourceAttribution.layer;
-const ApplicationObservabilityLive = ObservabilityLive.pipe(
-  Layer.provideMerge(ResourceAttributionLayerLive),
+const RuntimeCoreWithGitHubLive = GitHubPrBridgeLive.pipe(
+  Layer.provideMerge(RuntimeCoreDependenciesLive),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeCoreWithIntegrationsLive = JiraIssueBridgeLive.pipe(
+  Layer.provideMerge(RuntimeCoreWithGitHubLive),
+  // Shared 24h NDJSON debug logs for GitHub + Jira inbound webhooks.
+  Layer.provideMerge(WebhookDebugLog.layer),
+);
+
+const RuntimeDependenciesLive = RuntimeCoreWithIntegrationsLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
+  Layer.provideMerge(HostResourceProbe.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
@@ -417,6 +497,12 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
+);
+
+const productionRoutesLayer = Layer.mergeAll(
+  makeRoutesLayer,
+  githubWebhookRouteLayer,
+  jiraWebhookRouteLayer,
 );
 
 export const makeServerLayer = Layer.unwrap(
@@ -565,7 +651,7 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
+      HttpRouter.serve(productionRoutesLayer, {
         disableLogger: !config.logWebSocketEvents,
       }),
       httpListeningLayer,
