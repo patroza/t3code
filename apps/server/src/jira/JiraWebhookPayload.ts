@@ -479,16 +479,26 @@ export type JiraAdfDocument = {
   readonly content: ReadonlyArray<AdfParagraph>;
 };
 
-/** Normalize accountId for ADF mention attrs (`accountid:…`). */
+/**
+ * Normalize a Jira Cloud account id for an ADF **mention** node `attrs.id`.
+ *
+ * Live GET `/rest/api/3/issue/{key}/comment` returns bare Atlassian account ids
+ * (e.g. `6331c32307a27ebeff15d19d` or `712020:uuid`) — **not** the wiki form
+ * `accountid:…`. Official ADF docs: attrs.id = “Atlassian Account ID”.
+ * Strip a leading `accountid:` if present so inbound wiki/Automation forms still work.
+ */
 export function jiraMentionAccountId(accountId: string): string {
   const trimmed = accountId.trim();
   if (trimmed.length === 0) return trimmed;
-  return trimmed.toLowerCase().startsWith("accountid:") ? trimmed : `accountid:${trimmed}`;
+  return trimmed.replace(/^accountid:/iu, "");
 }
 
 /**
  * Minimal ADF document from plain text paragraphs (API v3 comment body).
  * Optional leading @mention of the human requester (normal Jira reply style).
+ *
+ * Mention shape (matches real comments on this site):
+ * `{ type: "mention", attrs: { id: "<accountId>", text: "@Name", accessLevel: "" } }`
  */
 export function plainTextToAdf(
   text: string,
@@ -500,14 +510,15 @@ export function plainTextToAdf(
     .filter((block) => block.length > 0);
   const blocks = paragraphs.length > 0 ? paragraphs : [text.trim() || " "];
   const mention = options?.mention;
-  const accountId = mention?.accountId?.trim() ?? "";
+  const accountId = jiraMentionAccountId(mention?.accountId?.trim() ?? "");
+  const display = mention?.displayName?.trim().replace(/^@/u, "") || accountId;
   const mentionNode: AdfInlineNode | null =
     accountId.length > 0
       ? {
           type: "mention",
           attrs: {
-            id: jiraMentionAccountId(accountId),
-            text: `@${(mention?.displayName?.trim() || accountId).replace(/^@/u, "")}`,
+            id: accountId,
+            text: `@${display}`,
             accessLevel: "",
           },
         }

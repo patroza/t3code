@@ -397,19 +397,35 @@ describe("Jira helpers", () => {
     expect(isJiraProjectAllowed(new Set(["SA"]), "CFG")).toBe(false);
     expect(isJiraProjectAllowed(new Set(), "ANY")).toBe(true);
     expect(plainTextToAdf("hello\n\nworld").content).toHaveLength(2);
+    // Live Jira comments use bare accountId in attrs.id (no accountid: prefix).
     const withMention = plainTextToAdf("hello", {
       mention: { accountId: "6331c32307a27ebeff15d19d", displayName: "Armin Gebhardt" },
     });
     expect(withMention.content[0]?.content[0]).toMatchObject({
       type: "mention",
       attrs: {
-        id: "accountid:6331c32307a27ebeff15d19d",
+        id: "6331c32307a27ebeff15d19d",
         text: "@Armin Gebhardt",
+        accessLevel: "",
       },
     });
     expect(withMention.content[0]?.content[1]).toMatchObject({
       type: "text",
       text: " hello",
+    });
+    // Wiki/Automation form still normalizes to bare accountId for outbound ADF.
+    const fromWikiForm = plainTextToAdf("ping", {
+      mention: {
+        accountId: "accountid:712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab",
+        displayName: "Omegent",
+      },
+    });
+    expect(fromWikiForm.content[0]?.content[0]).toMatchObject({
+      type: "mention",
+      attrs: {
+        id: "712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab",
+        text: "@Omegent",
+      },
     });
     expect(formatJiraComment("  ok  ")).toBe("ok");
   });
