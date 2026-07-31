@@ -29,15 +29,24 @@ export const JiraCommentWebhook = Schema.Struct({
     updated: Schema.optional(Schema.String),
     /**
      * Present when the comment is a reply in a threaded discussion (when Jira provides it).
-     * String or number depending on payload shape.
+     * String or number depending on payload shape. Empty `id` (Automation blank fields)
+     * is treated as missing by `parentCommentIdFromPayload`.
      */
     parent: Schema.optional(
       Schema.Union([
-        Schema.Struct({ id: Schema.Union([Schema.String, Schema.Number]) }),
+        Schema.Struct({
+          id: Schema.optional(Schema.Union([Schema.String, Schema.Number, Schema.Null])),
+        }),
         Schema.String,
         Schema.Number,
+        Schema.Null,
       ]),
     ),
+    /**
+     * REST list/get shape uses top-level `parentId` (number|string|null). Accept it on
+     * webhooks/Automation so nested mentions resolve without an extra GET when present.
+     */
+    parentId: Schema.optional(Schema.Union([Schema.String, Schema.Number, Schema.Null])),
     jsdPublic: Schema.optional(Schema.Boolean),
   }),
   issue: Schema.Struct({
@@ -310,12 +319,17 @@ export function projectKeyFromIssueKey(issueKey: string): string {
   return match?.[1] ?? issueKey.split("-")[0]?.toUpperCase() ?? "";
 }
 
-function parentCommentId(parent: JiraCommentWebhook["comment"]["parent"]): string | null {
+function parentCommentIdFromPayload(comment: JiraCommentWebhook["comment"]): string | null {
+  // Prefer REST-style parentId (what GET /comment returns and Automation can mirror).
+  const fromParentId = asStringId(comment.parentId ?? null);
+  if (fromParentId !== null) return fromParentId;
+
+  const parent = comment.parent;
   if (parent === undefined || parent === null) return null;
   if (typeof parent === "string" || typeof parent === "number") {
     return asStringId(parent);
   }
-  return asStringId(parent.id);
+  return asStringId(parent.id ?? null);
 }
 
 function isBotAuthor(author: JiraWebhookUser | undefined): boolean {
@@ -356,7 +370,7 @@ export function parseJiraCommentInvocation(
   const commentId = asStringId(payload.comment.id);
   if (commentId === null) return null;
 
-  const parentId = parentCommentId(payload.comment.parent);
+  const parentId = parentCommentIdFromPayload(payload.comment);
   const replyToCommentId = parentId ?? commentId;
   const commentSurface: JiraCommentSurface = parentId !== null ? "reply" : "issue";
   const projectKey =
@@ -384,10 +398,9 @@ export function parseJiraCommentInvocation(
   };
 }
 
-export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
+function jiraPromptHeaderLines(invocation: JiraIssueInvocation): Array<string | null> {
   const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
-  const isUpdate = invocation.webhookEvent === "comment_updated";
-  const lines = [
+  return [
     "<!--",
     "## Jira issue context",
     `- Issue: ${invocation.issueKey}${invocation.issueSummary ? ` — ${invocation.issueSummary}` : ""}`,
@@ -399,6 +412,14 @@ export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
     invocation.commentUpdatedAt ? `- Comment updated at: ${invocation.commentUpdatedAt}` : null,
     `- Jira requester: ${requester}${invocation.actorAccountId ? ` (accountId ${invocation.actorAccountId})` : ""}`,
     invocation.commentUrl ? `- Comment: ${invocation.commentUrl}` : null,
+  ];
+}
+
+export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
+  const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
+  const isUpdate = invocation.webhookEvent === "comment_updated";
+  const lines = [
+    ...jiraPromptHeaderLines(invocation),
     "-->",
     "",
     isUpdate
@@ -445,26 +466,92 @@ function simplePromptFingerprint(prompt: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/** Minimal ADF document from plain text paragraphs (API v3 comment body). */
-export function plainTextToAdf(text: string): {
+export type JiraAdfMention = {
+  readonly accountId: string;
+  readonly displayName?: string | null | undefined;
+};
+
+type AdfInlineNode =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "mention";
+      readonly attrs: {
+        readonly id: string;
+        readonly text: string;
+        readonly accessLevel: string;
+      };
+    };
+
+type AdfParagraph = {
+  readonly type: "paragraph";
+  readonly content: ReadonlyArray<AdfInlineNode>;
+};
+
+export type JiraAdfDocument = {
   readonly type: "doc";
   readonly version: 1;
-  readonly content: ReadonlyArray<{
-    readonly type: "paragraph";
-    readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
-  }>;
-} {
+  readonly content: ReadonlyArray<AdfParagraph>;
+};
+
+/**
+ * Normalize a Jira Cloud account id for an ADF **mention** node `attrs.id`.
+ *
+ * Live GET `/rest/api/3/issue/{key}/comment` returns bare Atlassian account ids
+ * (e.g. `6331c32307a27ebeff15d19d` or `712020:uuid`) — **not** the wiki form
+ * `accountid:…`. Official ADF docs: attrs.id = “Atlassian Account ID”.
+ * Strip a leading `accountid:` if present so inbound wiki/Automation forms still work.
+ */
+export function jiraMentionAccountId(accountId: string): string {
+  const trimmed = accountId.trim();
+  if (trimmed.length === 0) return trimmed;
+  return trimmed.replace(/^accountid:/iu, "");
+}
+
+/**
+ * Minimal ADF document from plain text paragraphs (API v3 comment body).
+ * Optional leading @mention of the human requester (normal Jira reply style).
+ *
+ * Mention shape (matches real comments on this site):
+ * `{ type: "mention", attrs: { id: "<accountId>", text: "@Name", accessLevel: "" } }`
+ */
+export function plainTextToAdf(
+  text: string,
+  options?: { readonly mention?: JiraAdfMention | null | undefined },
+): JiraAdfDocument {
   const paragraphs = text
     .split(/\n{2,}/u)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
   const blocks = paragraphs.length > 0 ? paragraphs : [text.trim() || " "];
+  const mention = options?.mention;
+  const accountId = jiraMentionAccountId(mention?.accountId?.trim() ?? "");
+  const display = mention?.displayName?.trim().replace(/^@/u, "") || accountId;
+  const mentionNode: AdfInlineNode | null =
+    accountId.length > 0
+      ? {
+          type: "mention",
+          attrs: {
+            id: accountId,
+            text: `@${display}`,
+            accessLevel: "",
+          },
+        }
+      : null;
+
   return {
     type: "doc",
     version: 1,
-    content: blocks.map((block) => ({
-      type: "paragraph" as const,
-      content: [{ type: "text" as const, text: block }],
-    })),
+    content: blocks.map((block, index) => {
+      if (index === 0 && mentionNode !== null) {
+        return {
+          type: "paragraph" as const,
+          content: [mentionNode, { type: "text" as const, text: ` ${block}` }],
+        };
+      }
+      return {
+        type: "paragraph" as const,
+        content: [{ type: "text" as const, text: block }],
+      };
+    }),
   };
 }
