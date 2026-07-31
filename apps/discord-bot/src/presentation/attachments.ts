@@ -68,6 +68,7 @@ export function buildStreamHistoryMarkdownFile(streamText: string): File | null 
 /**
  * Append a compact T3 deep link on a Discord caption/chunk.
  * Same-line ` · [T3](url)` — clickable Discord markdown, short label.
+ * Used on the stats footer of every final answer.
  */
 export function withT3DeepLink(caption: string, t3Url: string | null | undefined): string {
   const url = t3Url?.trim() ?? "";
@@ -79,22 +80,8 @@ export function withT3DeepLink(caption: string, t3Url: string | null | undefined
 }
 
 /**
- * When the final answer would need multi-message chunking or contains GFM tables,
- * surface a T3 deep link so the full rendered answer is one click away.
- * Short single-message prose without tables stays link-free.
- */
-export function shouldAttachT3DeepLink(input: {
-  readonly text: string;
-  readonly hasMarkdownTables: boolean;
-  readonly messageChunkCount: number;
-}): boolean {
-  if (input.text.trim() === "") return false;
-  if (input.hasMarkdownTables) return true;
-  return input.messageChunkCount > 1;
-}
-
-/**
- * Append a T3 deep link onto the last message chunk, respecting the Discord limit.
+ * Append a T3 deep link onto the last message chunk (the stats footer),
+ * respecting the Discord limit. Always used on finals when a URL is available.
  * If the link would overflow the last chunk, emit it as its own trailing chunk.
  */
 export function appendT3DeepLinkToChunks(
