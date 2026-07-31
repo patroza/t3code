@@ -1789,7 +1789,7 @@ type SourceAwareOrchestrationMessage = {
 function echoedUserSourceLabel(message: SourceAwareOrchestrationMessage): string {
   const username = message.source?.username?.trim() || "unknown";
   const channel = message.source?.channel?.trim() || "unknown";
-  return `from ${username}@${channel}:`;
+  return `from **${username}@${channel}**:`;
 }
 
 export function formatEchoedUserMessage(message: SourceAwareOrchestrationMessage): string {
@@ -1804,10 +1804,10 @@ export function formatEchoedUserMessage(message: SourceAwareOrchestrationMessage
         : `\n\n_(${attachmentCount} attachments included in the external input)_`;
   if (body === "") {
     return attachmentCount === 0
-      ? `${sourceLabel} _(empty message)_`
-      : `${sourceLabel}\n\n${attachmentNote.trim()}`;
+      ? `${sourceLabel}\n_(empty message)_`
+      : `${sourceLabel}\n${attachmentNote.trim()}`;
   }
-  return `${sourceLabel} ${body}${attachmentNote}`;
+  return `${sourceLabel}\n${body}${attachmentNote}`;
 }
 
 /**
