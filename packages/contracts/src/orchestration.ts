@@ -769,6 +769,17 @@ const ThreadTurnInterruptCommand = Schema.Struct({
 });
 
 /**
+ * Request provider context compaction for a thread session.
+ * Adapters that support manual compact run it; others surface an unsupported error.
+ */
+const ThreadContextCompactCommand = Schema.Struct({
+  type: Schema.Literal("thread.context.compact"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
  * Send a queued message immediately, steering the active turn. Degrades to
  * a normal turn start when the thread is idle by the time it is processed.
  */
@@ -785,6 +796,15 @@ const ThreadQueueRemoveCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
+const ThreadQueueUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.queue.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  text: Schema.String,
   createdAt: IsoDateTime,
 });
 
@@ -838,8 +858,10 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -865,8 +887,10 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
+  ThreadContextCompactCommand,
   ThreadQueueSteerCommand,
   ThreadQueueRemoveCommand,
+  ThreadQueueUpdateCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -959,6 +983,24 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+/**
+ * Rebuild a thread's transcript tail from an authoritative external source.
+ *
+ * Server-internal: raised when T3 notices a provider's own session log has run
+ * ahead of the thread (the ACP stream dropped updates, or the session was driven
+ * from another client). See ThreadMessagesResyncedPayload for the rewind
+ * semantics.
+ */
+const ThreadMessagesResyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.messages.resync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -969,6 +1011,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadQueueDrainCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadMessagesResyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -998,10 +1041,12 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.queued-message-removed",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
+  "thread.context-compact-requested",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
   "thread.checkpoint-revert-requested",
   "thread.reverted",
+  "thread.messages-resynced",
   "thread.session-stop-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
@@ -1181,6 +1226,11 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadContextCompactRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,
@@ -1204,6 +1254,28 @@ export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
 export const ThreadRevertedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+});
+
+/**
+ * A thread's transcript was rebuilt from an authoritative external source (e.g.
+ * a grok session backfill after the ACP stream dropped updates).
+ *
+ * Out-of-band writes straight to the projection are invisible to clients: a
+ * warm-cache client resumes from `afterSequence` and only ever receives events
+ * past that cursor. This event is what makes such a rebuild observable — it
+ * lands past every client's cursor, so the existing catch-up replay delivers it.
+ *
+ * It carries a rewind point rather than a whole snapshot: everything up to and
+ * including `afterMessageId` is known-good and untouched; only the tail after it
+ * is replaced by `messages`. `afterMessageId: null` replaces the whole
+ * transcript. A client that does not hold `afterMessageId` cannot rewind
+ * precisely and must reload the thread instead.
+ */
+export const ThreadMessagesResyncedPayload = Schema.Struct({
+  threadId: ThreadId,
+  afterMessageId: Schema.NullOr(MessageId),
+  messages: Schema.Array(OrchestrationMessage),
+  reason: TrimmedNonEmptyString,
 });
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
@@ -1356,6 +1428,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.context-compact-requested"),
+    payload: ThreadContextCompactRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.approval-response-requested"),
     payload: ThreadApprovalResponseRequestedPayload,
   }),
@@ -1373,6 +1450,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.reverted"),
     payload: ThreadRevertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.messages-resynced"),
+    payload: ThreadMessagesResyncedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
