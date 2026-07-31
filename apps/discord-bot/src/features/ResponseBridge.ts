@@ -25,19 +25,13 @@ import * as Semaphore from "effect/Semaphore";
 
 import { DiscordBotConfig } from "../config.ts";
 import {
-  buildFinalResponseMarkdownText,
   buildStreamHistoryMarkdownText,
   DISCORD_MAX_FILES_PER_MESSAGE,
-  FINAL_RESPONSE_MARKDOWN_NAME,
-  finalResponseCaption,
   imageAttachmentsOf,
-  shouldAttachFinalResponseAsMarkdown,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
-  withOmegentMessageLink,
 } from "../presentation/attachments.ts";
-import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
 import {
   createMessageWithAttachments,
   DiscordUploadError,
@@ -70,7 +64,10 @@ import {
   stripMarkdownImages,
   type MarkdownImageRef,
 } from "../presentation/markdownImages.ts";
-import { hasMarkdownTables } from "../presentation/markdownTables.ts";
+import {
+  chunkDiscordContentPreservingTables,
+  rewriteMarkdownTablesForDiscord,
+} from "../presentation/asciiTables.ts";
 import {
   chunkDiscordContent,
   formatInProgressChunk,
@@ -3079,7 +3076,7 @@ export const runBridge = (
      * - tip ends with italic _Working.._ (optional · N tool calls on the same line)
      *
      * On turn complete: stream messages are deleted, archived as stream-history.md,
-     * and the final answer is posted as short Discord content or response.md (+ real image files).
+     * and the final answer is posted as normal Discord message content (+ real image files).
      */
     const postOrEditAssistantUnlocked = (args: {
       readonly turnId: string | null;
@@ -3488,10 +3485,9 @@ export const runBridge = (
 
     /**
      * Final delivery for a completed assistant turn:
-     * 1. Short finals stay as Discord message content; long / table-heavy finals attach as response.md
+     * 1. Post the final answer as normal Discord message content (chunked if needed)
      * 2. Attach stream-history.md + chat image attachments + local markdown images as files
      * 3. Delete the in-progress stream messages so only the final answer remains visible
-     * In-progress tips always stay as live messages (never force-attached mid-turn).
      */
     const finalizeAssistantMessage = (args: {
       readonly turnId: string | null;
@@ -3690,7 +3686,7 @@ export const runBridge = (
 
         const postedFromFiles = pendingImages.slice(0, imageFiles.length).map((entry) => entry.id);
 
-        // Split once for local-file rewrite notes; re-split after optional response.md.
+        // Split once for local-file rewrite notes; re-split after optional table .txt attachments.
         const initialSplit = splitFilesForDiscordUpload(files);
         const oversizedByName = new Set(initialSplit.oversized.map((file) => file.name));
         const attachedFileNames = new Set(
@@ -3713,10 +3709,38 @@ export const runBridge = (
           extractInlinePathCodeSpanRefs(finalText),
           worktreePath,
         );
-        const renderedFinalText = rewriteInlinePathCodeSpansForDiscord({
+        const pathRewrittenFinalText = rewriteInlinePathCodeSpansForDiscord({
           text: finalText,
           githubUrlsByToken: finalInlineGitHubUrlsByToken,
         });
+        // Discord does not render GFM pipe tables — convert to fenced ASCII grids.
+        const tableRewrite = rewriteMarkdownTablesForDiscord(pathRewrittenFinalText, {
+          style: "rounded",
+          messageLimit: DISCORD_LIMIT,
+        });
+        for (const attachment of tableRewrite.attachments) {
+          files.push(textFile(attachment.name, attachment.body, "text/plain;charset=utf-8"));
+        }
+        const renderedFinalText = tableRewrite.text;
+
+        const { batches: uploadBatches, oversized: oversizedFiles } =
+          tableRewrite.attachments.length > 0 ? splitFilesForDiscordUpload(files) : initialSplit;
+
+        // Avoid posting a lone "…" placeholder (what you saw in Discord when an image-only
+        // turn failed to attach and had no remaining text). Prefer empty content + files,
+        // or a short failure note if we expected images but loaded none.
+        const baseFinalChunks: string[] =
+          renderedFinalText !== ""
+            ? chunkDiscordContentPreservingTables(renderedFinalText, DISCORD_LIMIT)
+            : files.length > 0
+              ? [""]
+              : pendingMarkdown.length > 0 ||
+                  pendingImages.length > 0 ||
+                  pendingMarkdownFiles.length > 0
+                ? ["_(Could not attach file.)_"]
+                : text.trim() !== ""
+                  ? ["_(done)_"]
+                  : [];
 
         // Small italic turn stats on the final answer (model / effort / duration / tokens).
         const statsThread = yield* Ref.get(latestThreadRef);
@@ -3726,73 +3750,6 @@ export const runBridge = (
           turnId,
           latestTurn: statsThread?.latestTurn ?? null,
         });
-
-        // Long / multi-message / table-heavy finals → response.md attachment.
-        // Short single-message finals stay inline. In-progress tips already stream as messages.
-        const provisionalChunks =
-          renderedFinalText !== ""
-            ? appendStatsToMessageChunks(
-                chunkDiscordContent(renderedFinalText, DISCORD_LIMIT),
-                statsLine,
-                DISCORD_LIMIT,
-              )
-            : [];
-        const attachFinalAsMarkdown = shouldAttachFinalResponseAsMarkdown({
-          text: renderedFinalText,
-          hasMarkdownTables: hasMarkdownTables(renderedFinalText),
-          messageChunkCount: provisionalChunks.length,
-        });
-
-        let responseMarkdownBody: string | null = null;
-        if (attachFinalAsMarkdown) {
-          responseMarkdownBody = buildFinalResponseMarkdownText(renderedFinalText);
-          if (responseMarkdownBody !== null) {
-            // Prefer the answer file near the front of the attachment list.
-            files.unshift(
-              textFile(
-                FINAL_RESPONSE_MARKDOWN_NAME,
-                responseMarkdownBody,
-                "text/markdown;charset=utf-8",
-              ),
-            );
-          }
-        }
-
-        const { batches: uploadBatches, oversized: oversizedFiles } =
-          responseMarkdownBody !== null ? splitFilesForDiscordUpload(files) : initialSplit;
-
-        // Avoid posting a lone "…" placeholder (what you saw in Discord when an image-only
-        // turn failed to attach and had no remaining text). Prefer empty content + files,
-        // or a short failure note if we expected images but loaded none.
-        // response.md finals get a short caption + Omegent deep link (hash prepared for
-        // a later client scroll-into-view PR).
-        let baseFinalChunks: string[];
-        if (responseMarkdownBody !== null) {
-          const botConfig = yield* DiscordBotConfig;
-          const omegentUrl = buildOmegentThreadMessageUrl({
-            webUiBaseUrl: botConfig.webUiBaseUrl,
-            threadId: input.t3ThreadId,
-            messageId: t3MessageId,
-          });
-          baseFinalChunks = [
-            withOmegentMessageLink(finalResponseCaption(renderedFinalText), omegentUrl),
-          ];
-        } else if (renderedFinalText !== "") {
-          baseFinalChunks = chunkDiscordContent(renderedFinalText, DISCORD_LIMIT);
-        } else if (files.length > 0) {
-          baseFinalChunks = [""];
-        } else if (
-          pendingMarkdown.length > 0 ||
-          pendingImages.length > 0 ||
-          pendingMarkdownFiles.length > 0
-        ) {
-          baseFinalChunks = ["_(Could not attach file.)_"];
-        } else if (text.trim() !== "") {
-          baseFinalChunks = ["_(done)_"];
-        } else {
-          baseFinalChunks = [];
-        }
-
         const finalChunks = appendStatsToMessageChunks(baseFinalChunks, statsLine, DISCORD_LIMIT);
 
         if (finalChunks.length === 0 && files.length === 0) {
@@ -3832,7 +3789,6 @@ export const runBridge = (
           hadPriorFinalize: alreadyFinalized,
           finalTextLength: finalText.length,
           finalChunkCount: finalChunks.length,
-          attachFinalAsMarkdown: responseMarkdownBody !== null,
           pendingChatImageCount: pendingImages.length,
           pendingMarkdownImageCount: pendingMarkdown.length,
           pendingMarkdownFileCount: pendingMarkdownFiles.length,
@@ -3852,25 +3808,10 @@ export const runBridge = (
          */
         const createFinalWithAttachments = Effect.gen(function* () {
           const ids: string[] = [];
-          // First content message carries the first file batch when present so
-          // response.md lands with its caption instead of on a blank follow-up.
-          let fileBatchIndex = 0;
           for (let index = 0; index < finalChunks.length; index += 1) {
             const chunk = finalChunks[index] ?? "";
             const content = chunk.trim() !== "" ? chunk : "_(done)_";
-            const batch = index === 0 && uploadBatches.length > 0 ? (uploadBatches[0] ?? []) : [];
-            if (index === 0 && batch.length > 0) {
-              fileBatchIndex = 1;
-              yield* Effect.logInfo("Creating Discord attachment batch", {
-                files: batch.map((f) => ({
-                  name: f.name,
-                  mimeType: f.mimeType,
-                  bytes: f.data.byteLength,
-                })),
-                totalBytes: batch.reduce((sum, f) => sum + f.data.byteLength, 0),
-              });
-            }
-            const created = yield* createMessageWithFiles(content, batch);
+            const created = yield* createMessageWithFiles(content, []);
             ids.push(created.id);
             // Persist durable finalize marker as soon as the first text chunk lands so a
             // later timeout cannot treat this assistant as undelivered and re-post.
@@ -3890,8 +3831,7 @@ export const runBridge = (
             }
           }
 
-          for (; fileBatchIndex < uploadBatches.length; fileBatchIndex += 1) {
-            const batch = uploadBatches[fileBatchIndex] ?? [];
+          for (const batch of uploadBatches) {
             yield* Effect.logInfo("Creating Discord attachment batch", {
               files: batch.map((f) => ({
                 name: f.name,
