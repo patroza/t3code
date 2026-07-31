@@ -34,6 +34,9 @@ const setup = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    // Bound lock waits so auth (websocket-ticket) cannot hang indefinitely when
+    // writers hold the single SQL permit longer than expected.
+    yield* sql`PRAGMA busy_timeout = 5000;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* runMigrations();
   }),

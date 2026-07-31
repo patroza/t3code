@@ -1553,6 +1553,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
             }),
@@ -1622,9 +1623,8 @@ it.layer(
             },
           });
 
-          // Poll until the injected process boundary observes the new
-          // executable. This verifies the public settings-to-probe behavior
-          // without depending on timestamps assigned by TestClock.
+          // Poll with real wall time so libuv/process exit callbacks run; pure
+          // TestClock.adjust was enough locally but flaked on CI (only firstMissing).
           const refreshed = yield* pollUntil({
             poll: TestClock.adjust("50 millis").pipe(Effect.andThen(registry.getProviders)),
             until: (providers) => {
@@ -1793,6 +1793,7 @@ it.layer(
             "codex",
             "cursor",
             "grok",
+            "kimi",
             "opencode",
           ]);
           assert.strictEqual(cursorProvider?.enabled, false);
