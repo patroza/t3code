@@ -254,6 +254,7 @@ function ThreadNavigationSidebarPane(
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
     setOwnershipFilter,
+    setOwnershipRelation,
     setListMode,
     setThreadGrouping,
     setProjectSortOrder,
@@ -396,9 +397,16 @@ function ThreadNavigationSidebarPane(
               (participant) => participant.personId,
             ),
             mode: options.ownershipFilter,
+            relation: options.ownershipRelation,
           }),
       ),
-    [claimPersonIdByEnvironment, options.ownershipFilter, selectedProjectRefs, threads],
+    [
+      claimPersonIdByEnvironment,
+      options.ownershipFilter,
+      options.ownershipRelation,
+      selectedProjectRefs,
+      threads,
+    ],
   );
   const scopedPendingTasks = useMemo(
     () =>
@@ -1406,6 +1414,7 @@ function ThreadNavigationSidebarPane(
   const filterCustomized =
     options.selectedEnvironmentIds.length > 0 ||
     options.ownershipFilter !== "any" ||
+    options.ownershipRelation !== "both" ||
     selectedProjectKey !== null ||
     options.threadGrouping !== "project" ||
     (options.listMode === "threads" &&
@@ -1422,12 +1431,14 @@ function ThreadNavigationSidebarPane(
         selectedEnvironmentIds: options.selectedEnvironmentIds,
         selectedProjectKey,
         ownershipFilter: options.ownershipFilter,
+        ownershipRelation: options.ownershipRelation,
         projectSortOrder: options.projectSortOrder,
         threadSortOrder: options.threadSortOrder,
         onClearEnvironments: clearSelectedEnvironments,
         onToggleEnvironment: toggleSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
         onOwnershipFilterChange: setOwnershipFilter,
+        onOwnershipRelationChange: setOwnershipRelation,
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization,
@@ -1448,6 +1459,7 @@ function ThreadNavigationSidebarPane(
       listOrganization,
       options.listMode,
       options.ownershipFilter,
+      options.ownershipRelation,
       options.projectSortOrder,
       options.selectedEnvironmentIds,
       options.threadGrouping,
@@ -1456,6 +1468,7 @@ function ThreadNavigationSidebarPane(
       selectedProjectKey,
       setHideSettledThreads,
       setOwnershipFilter,
+      setOwnershipRelation,
       setProjectSortOrder,
       setThreadGrouping,
       setThreadSortOrder,
