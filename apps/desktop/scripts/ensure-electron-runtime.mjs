@@ -122,6 +122,11 @@ function installElectronRuntime(electronDir, version) {
   try {
     runChecked("curl", [
       "-fsSL",
+      "--retry",
+      "4",
+      "--retry-all-errors",
+      "--connect-timeout",
+      "15",
       `https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${hostPlatform}-${hostArch}.zip`,
       "-o",
       zipPath,
