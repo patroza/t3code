@@ -59,6 +59,7 @@ export type PersonId = typeof PersonId.Type;
 
 export const SourceChannel = Schema.Literals([
   "desktop",
+  "vscode",
   "web",
   "mobile",
   "discord",

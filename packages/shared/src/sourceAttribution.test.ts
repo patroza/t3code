@@ -20,6 +20,10 @@ describe("sourceChannelFromDeviceType", () => {
 });
 
 describe("resolveSourceChannel", () => {
+  it("accepts the VS Code integration channel hint", () => {
+    expect(resolveSourceChannel({ deviceType: "desktop", channelHint: "vscode" })).toBe("vscode");
+  });
+
   it("prefers explicit channel hints", () => {
     expect(resolveSourceChannel({ deviceType: "desktop", channelHint: "discord" })).toBe("discord");
   });
