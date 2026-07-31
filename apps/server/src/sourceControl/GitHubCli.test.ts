@@ -157,6 +157,38 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("detects failing pull request checks from gh pr checks json", () =>
+    Effect.gen(function* () {
+      mockRun.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              { bucket: "pass", state: "SUCCESS" },
+              { bucket: "fail", state: "FAILURE" },
+            ]),
+          ),
+        ),
+      );
+
+      const gh = yield* GitHubCli.GitHubCli;
+      const result = yield* gh.getPullRequestHasFailingChecks({
+        cwd: "/repo",
+        reference: "#42",
+      });
+
+      assert.strictEqual(result, true);
+      expect(mockRun).toHaveBeenCalledWith({
+        operation: "GitHubCli.getPullRequestHasFailingChecks",
+        command: "gh",
+        args: ["pr", "checks", "#42", "--json", "bucket,state"],
+        cwd: "/repo",
+        timeoutMs: 30_000,
+        allowNonZeroExit: true,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("skips invalid entries when parsing pr lists", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(

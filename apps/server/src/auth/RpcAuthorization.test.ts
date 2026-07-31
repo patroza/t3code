@@ -12,7 +12,17 @@ import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorizati
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
+    // Single source of truth: ws.ts must call requiredScopeForRpcMethod / RPC_REQUIRED_SCOPES
+    // and must not keep a parallel Map (that drifted and broke identity.* RPCs in production).
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
+  });
+
+  it("resolves every registered RPC method through requiredScopeForRpcMethod", () => {
+    for (const method of WsRpcGroup.requests.keys()) {
+      expect(requiredScopeForRpcMethod(method)).toBe(
+        RPC_REQUIRED_SCOPES[method as keyof typeof RPC_REQUIRED_SCOPES],
+      );
+    }
   });
 
   it("authorizes background policy reporting and observation deliberately", () => {
