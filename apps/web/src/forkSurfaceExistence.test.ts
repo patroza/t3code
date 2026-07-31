@@ -50,6 +50,17 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebar).toContain("hasComposerDraftMessage");
   });
 
+  it("web deep links stay on shared changes (not discord-only)", () => {
+    const root = readSrc("routes/__root.tsx");
+    expect(root).toContain("OmegentDeepLinkCoordinator");
+    expect(readSrc("components/OmegentDeepLinkCoordinator.tsx")).toContain(
+      "OmegentDeepLinkCoordinator",
+    );
+    expect(readSrc("deepLinks.ts")).toMatch(/thread|message/i);
+    const chat = readSrc("components/ChatView.tsx");
+    expect(chat).toMatch(/deepLink|message-|scrollIntoView/i);
+  });
+
   it("chat header keeps remote Open in VS Code control markers", () => {
     const header = readSrc("components/chat/ChatHeader.tsx");
     expect(header).toContain("shouldOfferRemoteVscodeOpen");
