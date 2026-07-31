@@ -144,6 +144,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -206,6 +207,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: "/tmp/custom-t3",
           browser: false,
           autoBootstrapProjectFromCwd: false,
@@ -236,6 +238,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -259,6 +262,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -280,6 +284,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: "/tmp/my-t3",
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -308,6 +313,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: "/tmp/my-t3",
           browser: true,
           autoBootstrapProjectFromCwd: undefined,
@@ -337,6 +343,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
+          mobileOffset: 0,
           t3Home: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
@@ -727,7 +734,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
+        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1, mobileOffset: 1 });
       }),
     );
 
@@ -742,7 +749,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 1 });
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 1, mobileOffset: 0 });
       }),
     );
 
@@ -757,7 +764,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
+        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1, mobileOffset: 0 });
       }),
     );
 
@@ -771,7 +778,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: () => Effect.succeed(false),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0, mobileOffset: 0 });
       }),
     );
 
@@ -785,7 +792,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           checkPortAvailability: () => Effect.succeed(false),
         });
 
-        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0, mobileOffset: 0 });
       }),
     );
   });
