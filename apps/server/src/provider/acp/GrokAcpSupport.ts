@@ -220,8 +220,10 @@ export function applyGrokAcpModelSelection<E>(input: {
 
 /**
  * Maps T3 interaction mode onto Grok ACP session modes.
- * Build/default always targets agent mode; Plan targets plan mode.
+ * Build/default/unset always targets agent mode; Plan targets plan mode.
  * Never selects ask mode — that was leaving Grok read-only/approval-heavy in Build.
+ *
+ * Kept in lockstep with `resolveGrokAcpModeIdForInteractionMode` in GrokPlanMode.
  */
 export function resolveGrokRequestedModeId(
   interactionMode: ProviderInteractionMode | undefined,

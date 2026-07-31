@@ -37,18 +37,21 @@ export function interactionModeFromGrokAcpModeId(
   return undefined;
 }
 
+/**
+ * Maps T3 interaction mode onto the Grok ACP session mode that should own tools.
+ *
+ * Grok sessions start in **ask** (approval-heavy / effectively read-only tools).
+ * Build/default (and any non-plan mode, including undefined) must pin **agent**.
+ * Plan maps to plan. Never return ask — that is what left Build threads stuck.
+ */
 export function resolveGrokAcpModeIdForInteractionMode(
   interactionMode: ProviderInteractionMode | undefined,
-): string | undefined {
+): string {
   if (interactionMode === "plan") {
-    // Grok plan mode (never leave Build on ask).
     return "plan";
   }
-  if (interactionMode === "default") {
-    // Build maps to Grok *agent* mode — "default"/"ask" leave tools approval-heavy.
-    return "agent";
-  }
-  return undefined;
+  // Build / default / unset — never ask, never ACP "default".
+  return "agent";
 }
 
 function toolMetaName(params: EffectAcpSchema.RequestPermissionRequest): string | undefined {
