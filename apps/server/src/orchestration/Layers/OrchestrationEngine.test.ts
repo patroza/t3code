@@ -459,6 +459,7 @@ describe("OrchestrationEngine", () => {
         threadId: ThreadId.make("thread-archive"),
         requestId: CommandId.make("cmd-thread-archive-title-regeneration"),
         title: "Stale generated title",
+        createdAt: now(),
       }),
     );
     expect(
