@@ -26,7 +26,9 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
+  SourceRef,
   ThreadId,
+  ThreadParticipantSummary,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -77,6 +79,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    source: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -89,6 +92,11 @@ const ProjectionQueuedMessageDbRowSchema = ProjectionQueuedMessage.mapFields(
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    // JSON columns may be SQL NULL or the string "null" from JSON.stringify(null).
+    originSource: Schema.NullOr(Schema.fromJsonString(Schema.NullOr(SourceRef))),
+    participantSummaries: Schema.NullOr(
+      Schema.fromJsonString(Schema.NullOr(Schema.Array(ThreadParticipantSummary))),
+    ),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -463,7 +471,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
       `,
@@ -498,7 +508,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NULL
@@ -535,7 +547,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
         WHERE deleted_at IS NULL
           AND archived_at IS NOT NULL
@@ -556,6 +570,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          source_json AS "source",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1069,7 +1084,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          origin_source_json AS "originSource",
+          participant_summaries_json AS "participantSummaries"
         FROM projection_threads
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
@@ -1108,6 +1125,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          source_json AS "source",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1501,6 +1519,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
                   turnId: row.turnId,
                   streaming: row.isStreaming === 1,
+                  ...(row.source !== null && row.source !== undefined
+                    ? { source: row.source }
+                    : {}),
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                 });
@@ -1649,6 +1670,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 hasMoreActivities: false,
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
+                ...(row.originSource !== null && row.originSource !== undefined
+                  ? { originSource: row.originSource }
+                  : {}),
+                ...(row.participantSummaries !== null && row.participantSummaries !== undefined
+                  ? { participantSummaries: row.participantSummaries }
+                  : {}),
               }));
 
               const snapshot = {
@@ -2039,6 +2066,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
                       hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                      ...(row.originSource !== null && row.originSource !== undefined
+                        ? { originSource: row.originSource }
+                        : {}),
+                      ...(row.participantSummaries !== null &&
+                      row.participantSummaries !== undefined
+                        ? { participantSummaries: row.participantSummaries }
+                        : {}),
                     } satisfies OrchestrationThreadShell)
                   : Result.failVoid,
               ),
@@ -2179,6 +2213,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
                   hasActionableProposedPlan: row.hasActionableProposedPlan > 0,
+                  ...(row.originSource !== null && row.originSource !== undefined
+                    ? { originSource: row.originSource }
+                    : {}),
+                  ...(row.participantSummaries !== null && row.participantSummaries !== undefined
+                    ? { participantSummaries: row.participantSummaries }
+                    : {}),
                 }),
               ),
               updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -2482,6 +2522,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
+        ...(threadRow.value.originSource !== null && threadRow.value.originSource !== undefined
+          ? { originSource: threadRow.value.originSource }
+          : {}),
+        ...(threadRow.value.participantSummaries !== null &&
+        threadRow.value.participantSummaries !== undefined
+          ? { participantSummaries: threadRow.value.participantSummaries }
+          : {}),
       } satisfies OrchestrationThreadShell);
     });
 
@@ -2603,6 +2650,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             text: row.text,
             turnId: row.turnId,
             streaming: row.isStreaming === 1,
+            ...(row.source !== null && row.source !== undefined ? { source: row.source } : {}),
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
           };
@@ -2637,6 +2685,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
+        ...(threadRow.value.originSource !== null && threadRow.value.originSource !== undefined
+          ? { originSource: threadRow.value.originSource }
+          : {}),
+        ...(threadRow.value.participantSummaries !== null &&
+        threadRow.value.participantSummaries !== undefined
+          ? { participantSummaries: threadRow.value.participantSummaries }
+          : {}),
       };
 
       return Option.some(

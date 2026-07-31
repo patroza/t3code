@@ -169,6 +169,47 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(gitActions).toContain('aria-label="View GitHub pull requests"');
     expect(gitActions).toContain("openPullRequestList");
     expect(gitActions).toContain("`${repositoryUrl}/pulls`");
+  it("identity claim gate and participant stack surfaces exist", () => {
+    const gate = readSrc("components/identity/IdentityClaimGate.tsx");
+    expect(gate).toContain('data-testid="identity-claim-gate"');
+    expect(gate).toContain("Who are you?");
+    expect(gate).toContain("identity-claim-suggestions");
+    expect(gate).toContain("Save identity");
+    expect(gate).toContain("requestIdentityClaimGate");
+    expect(gate).toContain("isIdentityClaimRequiredMessage");
+    // Multi-env: claim gate must not only target primary (smart-without-map + t3vm).
+    expect(gate).toContain("forceClaimEnvironmentId");
+    expect(gate).toContain("orderedEnvironmentIds");
+    const stack = readSrc("components/identity/ParticipantStack.tsx");
+    expect(stack).toContain('data-testid="participant-stack"');
+    expect(stack).toContain('data-testid="participant-stack-popup"');
+    expect(stack).toContain("<TooltipPopup");
+    expect(stack).toContain("participantDisplayLabel");
+    expect(stack).toContain("title={null}");
+    expect(stack).toContain('data-testid={youParticipated ? "you-participated-indicator"');
+    expect(stack).toContain("+{extras.length}");
+    expect(stack).toContain('"bg-primary/15 text-primary ring-1 ring-primary/35"');
+    expect(stack).not.toContain("<CheckIcon");
+    expect(stack).toContain("highlighted={lead.personId === claimPersonId}");
+    const avatar = readSrc("components/identity/IdentityAvatar.tsx");
+    expect(avatar).toContain('props.highlighted ? "var(--primary)"');
+    expect(stack).toContain("isClaimedNonStarterParticipant");
+    expect(stack).toContain("· You");
+    const stackLogic = readSrc("components/identity/ParticipantStack.logic.ts");
+    expect(stackLogic).toContain('channels.join(",")');
+    expect(stack).toContain('data-testid="source-channel-glyph"');
+    const sidebarV1 = readSrc("components/Sidebar.tsx");
+    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    expect(sidebarV1).toContain("environmentId={thread.environmentId}");
+    expect(sidebarV2).toContain("environmentId={thread.environmentId}");
+    const root = readSrc("routes/__root.tsx");
+    expect(root).toContain("IdentityClaimGate");
+    const chat = readSrc("components/ChatView.tsx");
+    expect(chat).toContain("requestIdentityClaimGate");
+    expect(sidebarV2).toContain("ParticipantStack");
+    expect(sidebarV2).toContain("sidebar-v2-ownership-filter-");
+    expect(sidebarV1).toContain("ParticipantStack");
+    expect(sidebarV1).toContain("SourceChannelGlyph");
   });
 
   it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {

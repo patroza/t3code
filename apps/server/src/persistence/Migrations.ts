@@ -50,8 +50,10 @@ import Migration0034 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionQueuedMessages.ts";
+import Migration0038 from "./Migrations/038_SessionIdentityClaims.ts";
 import Migration0039 from "./Migrations/039_RepairProjectionThreadTitleRegeneration.ts";
 import Migration0040 from "./Migrations/040_RepairProjectionThreadsPinned.ts";
+import Migration0041 from "./Migrations/041_ProjectionThreadSourceAttribution.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -101,8 +103,10 @@ export const migrationEntries = [
   [35, "ProjectionThreadTitleRegeneration", Migration0035],
   [36, "ProjectionThreadsPinned", Migration0036],
   [37, "ProjectionQueuedMessages", Migration0037],
+  [38, "SessionIdentityClaims", Migration0038],
   [39, "RepairProjectionThreadTitleRegeneration", Migration0039],
   [40, "RepairProjectionThreadsPinned", Migration0040],
+  [41, "ProjectionThreadSourceAttribution", Migration0041],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

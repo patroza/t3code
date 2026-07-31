@@ -17,8 +17,10 @@ import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
 
-const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
+// Identity is residual-free and required by the server command graph type.
+const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer, IdentityService.layer);
 
 const connectPublicConfigMissingMessage =
   "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";

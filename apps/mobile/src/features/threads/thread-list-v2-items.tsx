@@ -30,6 +30,7 @@ import { prefetchEnvironmentThread } from "../../state/threads";
 import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadIdentityLeading } from "../identity/ParticipantStack";
 import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -614,6 +615,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </Text>
       </View>
       <View className="mt-1 flex-row items-center gap-1.5">
+        <ThreadIdentityLeading
+          environmentId={thread.environmentId}
+          originChannel={thread.originSource?.channel}
+          participants={thread.participantSummaries}
+        />
         <Text
           className={cn(
             "flex-1 text-base font-t3-medium",
@@ -795,6 +801,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           ) : null}
           <View className="min-w-0 flex-1">
             <View className="flex-row items-center gap-1.5">
+              <ThreadIdentityLeading
+                environmentId={thread.environmentId}
+                originChannel={thread.originSource?.channel}
+                participants={thread.participantSummaries}
+              />
               <Text
                 className={cn(
                   "min-w-0 flex-1 text-base",

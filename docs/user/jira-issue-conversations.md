@@ -184,9 +184,35 @@ are logged and never block the turn.
 
 Responses are posted as issue comments authored by the service account, preferably as a
 **threaded reply** under the triggering mention (REST body field `parentId` — supported on Jira
-Cloud even though it is lightly documented). When the user mentioned the bot inside an existing
-reply thread, the bridge parents under that thread’s **root** (Jira rejects nesting under a child).
-If threading is rejected (invalid parent), the bridge falls back once to a top-level comment.
+Cloud even though it is lightly documented). The body **@-mentions** the human requester via an ADF `mention` node:
+
+```json
+{
+  "type": "mention",
+  "attrs": {
+    "id": "<bare Atlassian accountId>",
+    "text": "@Display Name",
+    "accessLevel": ""
+  }
+}
+```
+
+`attrs.id` is the **bare** account id from the webhook author (e.g. `6331c323…` or
+`712020:uuid`) — the same shape returned by GET comment bodies on this site — not the wiki
+`[~accountid:…]` form and not plain `@Name` text alone.
+
+**Inline threading (required for reliable replies):** Jira Cloud only accepts children under a
+**root** comment. POST with `parentId` set to a nested reply id returns **400**
+(`Parent comment not found, and no child comments exist`) — the bridge used to fall back flat.
+Before posting, `JiraAppClient` GETs `/rest/api/3/issue/{key}/comment/{id}` and uses that
+comment’s `parentId` when set (else the id itself). Webhooks should send either `comment.parentId`
+(REST shape) or `comment.parent.id` when known; empty Automation fields are ignored. Only if every
+resolved root is rejected does the bridge fall back to a top-level comment (logged as error when
+the create response lacks `parentId`).
+
+**Busy threads:** follow-up mentions always dispatch `thread.turn.start`. Orchestration queues the
+message while a turn is running; the bridge does **not** post an “already working” short-circuit.
+The reply still posts asynchronously when the turn completes (`bridgeTurn` is fork-detached).
 
 Prefer Markdown converted to a minimal ADF document for API v3. Do not @-spam watchers unless the
 agent explicitly mentions users.
