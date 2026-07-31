@@ -104,11 +104,12 @@ function buildChannelInfoPinBody(input: {
 }): string {
   const repoDirectory = NodePath.resolve(input.workspaceRoot);
   const githubLine = input.githubUrl ?? "(unable to resolve origin GitHub URL)";
-  const providerLines = renderProviderLines(input.providers, {
-    ...(input.maxModelsPerProvider === undefined
+  const providerLines = renderProviderLines(
+    input.providers,
+    input.maxModelsPerProvider === undefined
       ? {}
-      : { maxModelsPerProvider: input.maxModelsPerProvider }),
-  });
+      : { maxModelsPerProvider: input.maxModelsPerProvider },
+  );
   const defaultLine =
     input.defaultModelSelection === null
       ? "(unable to resolve)"
