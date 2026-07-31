@@ -263,6 +263,12 @@ export function applyGitStatusStreamEvent(
 ): VcsStatusResult {
   switch (event._tag) {
     case "snapshot":
+      // A stream can emit snapshot with remote:null while the remote poller is still
+      // cold. Never wipe a previously known remote/PR with EMPTY defaults (pr:null) —
+      // that is a major source of Discord title badge flip-flops (▫️⇄❌🔀).
+      if (event.remote === null && current !== null) {
+        return mergeGitStatusParts(event.local, toRemoteStatusPart(current));
+      }
       return mergeGitStatusParts(event.local, event.remote);
     case "localUpdated":
       return mergeGitStatusParts(event.local, current ? toRemoteStatusPart(current) : null);
