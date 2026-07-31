@@ -26,4 +26,19 @@ describe("mobile surface existence (anti stack-drop)", () => {
       /<View className="flex-1" style=\{\{ flex: 1 \}\}>[\s\S]*?<ThreadDetailScreen/,
     );
   });
+
+  it("keys markdown nodes uniquely even when parser spans collide", () => {
+    const nodeKey = NodeFS.readFileSync(
+      NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),
+      "utf8",
+    );
+    const tableBlock = NodeFS.readFileSync(
+      NodePath.join(root, "../modules/t3-markdown-text/src/NativeMarkdownBlock.ios.tsx"),
+      "utf8",
+    );
+    // Index must come before beg/end so colliding spans cannot collide keys.
+    expect(nodeKey).toContain("${node.type}:${index}:");
+    expect(tableBlock).toContain("markdownNodeKey");
+    expect(tableBlock).toContain("key={nodeKey(cell, cellIndex)}");
+  });
 });
