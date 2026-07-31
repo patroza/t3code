@@ -5,7 +5,6 @@ import {
   attachmentKey,
   buildStreamHistoryMarkdownText,
   imageAttachmentsOf,
-  shouldAttachT3DeepLink,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
@@ -95,35 +94,16 @@ describe("buildStreamHistoryMarkdownText", () => {
 });
 
 describe("T3 deep link caption helpers", () => {
-  it("appends a short same-line T3 link", () => {
+  it("appends a short same-line T3 link on the stats footer", () => {
     expect(
-      withT3DeepLink("Summary", "https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1"),
-    ).toBe("Summary · [T3](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)");
+      withT3DeepLink(
+        "_`grok-4.5` · effort high · 50s_",
+        "https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1",
+      ),
+    ).toBe(
+      "_`grok-4.5` · effort high · 50s_ · [T3](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)",
+    );
     expect(withT3DeepLink("Summary", null)).toBe("Summary");
-  });
-
-  it("links when the answer has tables or needs multiple chunks", () => {
-    expect(
-      shouldAttachT3DeepLink({
-        text: "short",
-        hasMarkdownTables: false,
-        messageChunkCount: 1,
-      }),
-    ).toBe(false);
-    expect(
-      shouldAttachT3DeepLink({
-        text: "long",
-        hasMarkdownTables: false,
-        messageChunkCount: 2,
-      }),
-    ).toBe(true);
-    expect(
-      shouldAttachT3DeepLink({
-        text: "| A | B |\n|---|---|\n| 1 | 2 |",
-        hasMarkdownTables: true,
-        messageChunkCount: 1,
-      }),
-    ).toBe(true);
   });
 
   it("appends the link onto the last chunk without overflowing", () => {
