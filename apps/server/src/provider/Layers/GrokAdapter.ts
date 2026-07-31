@@ -568,10 +568,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       readonly ctx?: GrokSessionContext;
     }) =>
       Effect.gen(function* () {
+        // Always returns agent or plan — never skip (undefined used to leave ask).
         const modeId = resolveGrokAcpModeIdForInteractionMode(input.interactionMode);
-        if (!modeId) {
-          return;
-        }
         yield* input.runtime
           .setMode(modeId)
           .pipe(
@@ -1289,10 +1287,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 ? resolveGrokAcpBaseModelId(turnModelSelection.model)
                 : undefined;
               const turnInPlanMode = input.interactionMode === "plan";
-              const turnReasoningEffort =
-                resolveGrokReasoningEffortFromModelSelection(turnModelSelection);
-              // When not in plan: apply effort via set_mode (also exits plan).
+              // When not in plan: apply effort via set_mode first (also exits plan).
               // When in plan: skip effort — it shares the mode channel with plan.
+              // Agent/plan is always re-applied after this so Build cannot stick on ask.
               const currentModelId = yield* applyGrokAcpModelSelection({
                 runtime: ctx.acp,
                 currentModelId: ctx.currentModelId,
@@ -1308,31 +1305,27 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   ),
               });
               ctx.currentModelId = currentModelId;
+              // Effort and plan/agent share Grok's session/set_mode channel. Apply
+              // model+effort first (above), then always re-pin plan or agent so a
+              // Build turn never stays on ask (session default) or an effort-only id.
+              // Skipping agent when effort was set left Grok approval-heavy after
+              // set_mode(high|medium|low). Agent last matches startSession order;
+              // process-level --reasoning-effort still carries effort for the process.
               if (turnInPlanMode) {
                 yield* applyRequestedInteractionMode({
                   runtime: ctx.acp,
                   threadId: input.threadId,
-                  interactionMode: input.interactionMode,
+                  interactionMode: "plan",
                   ctx,
                 });
-              } else if (input.interactionMode === "default") {
-                if (!turnReasoningEffort) {
-                  yield* applyRequestedInteractionMode({
-                    runtime: ctx.acp,
-                    threadId: input.threadId,
-                    interactionMode: input.interactionMode,
-                    ctx,
-                  });
-                } else {
-                  // Effort set_mode already left plan; update UI interaction mode only.
-                  yield* emitInteractionModeIfChanged(ctx, "default", {
-                    method: "session/set_mode",
-                    rawPayload: {
-                      modeId: turnReasoningEffort,
-                      interactionMode: "default",
-                    },
-                  });
-                }
+              } else {
+                // default, undefined, or any non-plan → agent (never ask).
+                yield* applyRequestedInteractionMode({
+                  runtime: ctx.acp,
+                  threadId: input.threadId,
+                  interactionMode: input.interactionMode ?? "default",
+                  ctx,
+                });
               }
 
               const text = input.input?.trim();
