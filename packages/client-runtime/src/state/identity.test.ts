@@ -152,7 +152,7 @@ describe("threadMatchesMine", () => {
   });
 
   it("supports created / participated / both relation sub-filters", () => {
-    // Creator only
+    // Mine: created is origin only; participated is join-without-start
     expect(
       threadMatchesMine({
         claimPersonId: "patroza",
@@ -189,7 +189,6 @@ describe("threadMatchesMine", () => {
         relation: "participated",
       }),
     ).toBe(false);
-    // Both keeps current default behavior
     expect(
       threadMatchesMine({
         claimPersonId: "patroza",
@@ -199,7 +198,8 @@ describe("threadMatchesMine", () => {
         relation: "both",
       }),
     ).toBe(true);
-    // Theirs + created: other person started
+
+    // Theirs never includes threads I joined — Created is not wider than Both
     expect(
       threadMatchesMine({
         claimPersonId: "patroza",
@@ -208,7 +208,64 @@ describe("threadMatchesMine", () => {
         mode: "theirs",
         relation: "created",
       }),
+    ).toBe(false);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["patroza"],
+        mode: "theirs",
+        relation: "both",
+      }),
+    ).toBe(false);
+    // Foreign thread: others started → theirs for created and both
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["alice"],
+        mode: "theirs",
+        relation: "created",
+      }),
     ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["alice"],
+        mode: "theirs",
+        relation: "both",
+      }),
+    ).toBe(true);
+    // Foreign with participants only (no origin): participated ⊆ both, not created
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: ["julius"],
+        mode: "theirs",
+        relation: "created",
+      }),
+    ).toBe(false);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: ["julius"],
+        mode: "theirs",
+        relation: "participated",
+      }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: ["julius"],
+        mode: "theirs",
+        relation: "both",
+      }),
+    ).toBe(true);
+
     // Fully unattributed only under mine + both
     expect(
       threadMatchesMine({
