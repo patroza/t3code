@@ -175,7 +175,7 @@ are logged and never block the turn.
 - Allowlist projects when configured (`T3CODE_JIRA_ALLOWED_PROJECTS`).
 - **Identity map trust gate** (when `T3_IDENTITY_MAP_PATH` has people):
   - **Trusted** — Jira `accountId` appears on a map person (`jira.accountId` / `jiraAccountId`) → full agent turn (same as today, including auto-create when enabled).
-  - **Untrusted** — map on but actor missing/unmapped → **Discord context only** (no agent, no T3 transcript write). Posts a note into the unique Discord thread linked to the issue in `links.json` (`T3CODE_JIRA_DISCORD_LINKS_PATH` + `DISCORD_BOT_TOKEN`). Requires exactly one active Discord link with that issue key; never auto-creates. Jira reply explains the note was filed.
+  - **Untrusted** — map on but actor missing/unmapped → **chat context only** (no agent). Posts a note into the unique chat thread linked to the issue (`links.json` + bot token). Requires exactly one active chat link with that issue key; never auto-creates. Jira reply is an **inline thread reply** under the mention (or that mention’s parent when nested); copy says “identity map” / “chat”, not product internals.
   - Map **off** / empty → legacy full access for all mentioners (backward compatible).
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see
@@ -196,11 +196,11 @@ people:
 
 ## Outbound comments
 
-Responses are posted as issue comments authored by the service account, preferably as a
-**threaded reply** under the triggering mention (REST body field `parentId` — supported on Jira
-Cloud even though it is lightly documented). When the user mentioned the bot inside an existing
-reply thread, the bridge parents under that thread’s **root** (Jira rejects nesting under a child).
-If threading is rejected (invalid parent), the bridge falls back once to a top-level comment.
+Responses are posted as issue comments authored by the service account, as an **inline threaded
+reply** under the triggering mention (REST `parentId` — supported on Jira Cloud even though it is
+lightly documented). When the mention sits inside an existing reply thread, the bridge parents under
+that thread’s **root** (Jira rejects nesting under a child), then retries the mention id if needed.
+Only if every parentId is rejected does the bridge fall back to a top-level comment.
 
 Prefer Markdown converted to a minimal ADF document for API v3. Do not @-spam watchers unless the
 agent explicitly mentions users.

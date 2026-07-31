@@ -53,27 +53,27 @@ import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayl
 const NOT_LINKED_RESPONSE =
   "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_PROJECT_MAP for this Jira key, T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
 const CREATE_DISABLED_RESPONSE =
-  "not yet linked. Auto-create is disabled (T3CODE_JIRA_AUTO_CREATE_THREAD=false); link this issue from Discord/T3 or enable auto-create.";
+  "not yet linked. Auto-create is disabled; link this issue from Chat or enable auto-create.";
 const AMBIGUOUS_RESPONSE =
-  "Multiple T3 threads are linked to this Jira issue, so the bot could not pick which one to use.";
+  "Multiple chat threads are linked to this Jira issue, so the bot could not pick which one to use.";
 const BUSY_RESPONSE =
-  "This T3 thread is already working. Try again after the current turn finishes.";
+  "This chat thread is already working. Try again after the current turn finishes.";
 const FAILED_RESPONSE =
-  "T3 could not complete this request. Check the linked T3 thread for details.";
+  "Could not complete this request. Check the linked chat thread for details.";
 const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const CREATE_FAILED_RESPONSE =
-  "T3 could not create a thread for this Jira issue. Check server logs or link an existing thread.";
+  "Could not create a chat thread for this Jira issue. Check server logs or link an existing thread.";
 const CONTEXT_UNLINKED_RESPONSE =
-  "Your Jira account is not in the T3 identity map, so this is context-only — and there is no Discord thread linked to this issue yet. A trusted operator needs to open a Discord-linked thread first; then untrusted mentions can post context there.";
+  "Your Jira account is not in the identity map, so this is context-only — and there is no chat thread linked to this issue yet. A trusted operator needs to open a chat-linked thread first; then untrusted mentions can post context there.";
 const CONTEXT_AMBIGUOUS_RESPONSE =
-  "Your Jira account is not in the T3 identity map (context-only), but multiple Discord threads are linked to this issue, so the bot could not pick which one to use.";
+  "Your Jira account is not in the identity map (context-only), but multiple chat threads are linked to this issue, so the bot could not pick which one to use.";
 const CONTEXT_NOTED_RESPONSE =
-  "Noted as **context only** on the linked Discord thread (no agent run). Your Jira account is not in the T3 identity map; a trusted operator can act on it.";
+  "Noted as **context only** on the linked chat thread (no agent run). Your Jira account is not in the identity map; a trusted operator can act on it.";
 const CONTEXT_FAILED_RESPONSE =
-  "Could not post context to the linked Discord thread (bot token missing or Discord API error). Ask a trusted operator to check the bot config.";
+  "Could not post context to the linked chat thread. Ask a trusted operator to check the bot config.";
 const CONTEXT_NO_LINKS_PATH_RESPONSE =
-  "Your Jira account is not in the T3 identity map (context-only), but Discord links are not configured on this server (`T3CODE_JIRA_DISCORD_LINKS_PATH`).";
+  "Your Jira account is not in the identity map (context-only), but chat links are not configured on this server.";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
 function jiraSourceRef(
@@ -142,16 +142,34 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * Post a bridge response as a **threaded reply** when possible.
-   * Uses delivery.replyToCommentId (thread root, or the mention itself when top-level).
-   * Jira only allows children under top-level comments — not under existing replies.
+   * Post a bridge response as an **inline threaded reply** under the user's mention.
+   *
+   * Parent order:
+   * 1. `replyToCommentId` — thread root when the mention is a child reply (Jira only
+   *    allows nesting under roots), or the mention itself when top-level
+   * 2. `sourceCommentId` — the triggering mention (always try to answer the user inline)
+   *
+   * Never intentionally posts a bare top-level comment first; flat fallback is only
+   * if Jira rejects every parentId (see JiraAppClient).
    */
-  const postComment = (delivery: StoredJiraDelivery, body: string) =>
-    jira.addIssueComment({
+  const postComment = (delivery: StoredJiraDelivery, body: string) => {
+    const rootParent = delivery.replyToCommentId.trim();
+    const mentionParent = delivery.sourceCommentId.trim();
+    // Prefer the resolved reply parent, then the mention comment itself.
+    const parentCommentId =
+      rootParent.length > 0 ? rootParent : mentionParent.length > 0 ? mentionParent : null;
+    return jira.addIssueComment({
       issueKey: delivery.issueKey,
       body: formatJiraComment(body),
-      parentCommentId: delivery.replyToCommentId || delivery.sourceCommentId || null,
+      parentCommentId,
+      // If parent was a nested reply id that Jira rejects, client retries with the
+      // mention id when it differs (still inline to the user), then top-level last.
+      fallbackParentCommentId:
+        rootParent.length > 0 && mentionParent.length > 0 && rootParent !== mentionParent
+          ? mentionParent
+          : null,
     });
+  };
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
     DateTime.now.pipe(
