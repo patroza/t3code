@@ -7,6 +7,7 @@ export function IdentityAvatar(props: {
   readonly name?: string | null | undefined;
   readonly size?: "micro" | "sm" | "md";
   readonly className?: string;
+  readonly highlighted?: boolean;
   /** `null` suppresses the native title when a parent owns richer tooltip content. */
   readonly title?: string | null;
 }) {
@@ -33,7 +34,10 @@ export function IdentityAvatar(props: {
         sizeClass,
         props.className,
       )}
-      style={{ backgroundColor: model.backgroundColor, color: model.color }}
+      style={{
+        backgroundColor: props.highlighted ? "var(--primary)" : model.backgroundColor,
+        color: props.highlighted ? "var(--primary-foreground)" : model.color,
+      }}
     >
       {model.initials}
     </span>
