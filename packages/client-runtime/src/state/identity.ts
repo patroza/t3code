@@ -73,7 +73,18 @@ export function filterPeopleForTypeahead(
   });
 }
 
-/** Match a thread as "mine" against the session claim personId. */
+/**
+ * Match a thread for Mine / Theirs ownership filters.
+ *
+ * **Mine** includes:
+ * - threads where the session claim person appears on origin or participants
+ * - threads with **no person attribution** (no identity tags, channel-only
+ *   stamps like `{ channel: "desktop" }`, identity-disabled servers, legacy
+ *   threads) — treated as "ours" so filters stay useful offline of a map
+ *
+ * **Theirs** is only threads that have at least one person tag and do not
+ * include the claim person.
+ */
 export function threadMatchesMine(input: {
   readonly claimPersonId: string | null | undefined;
   readonly originPersonId?: string | null | undefined;
@@ -81,16 +92,26 @@ export function threadMatchesMine(input: {
   readonly mode: "mine" | "theirs" | "any";
 }): boolean {
   if (input.mode === "any") return true;
-  const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
-  // No claim for this environment (map off, or user never signed up there):
-  // ownership is unclassifiable — hide from both Mine and Theirs. Multi-env
-  // clients with primary=smart (no map) previously used a single empty claim
-  // and treated every thread as Theirs, which made Mine look broken for t3vm.
-  if (claimId.length === 0) return false;
+
   const people = new Set<string>();
-  if (input.originPersonId) people.add(input.originPersonId.trim().toLowerCase());
+  const origin = input.originPersonId?.trim().toLowerCase() ?? "";
+  if (origin.length > 0) people.add(origin);
   for (const id of input.participantPersonIds ?? []) {
-    people.add(id.trim().toLowerCase());
+    const personId = id?.trim().toLowerCase() ?? "";
+    if (personId.length > 0) people.add(personId);
+  }
+  const unattributed = people.size === 0;
+
+  // No person tags (channel-only source, identity off, pre-attribution history).
+  if (unattributed) {
+    return input.mode === "mine";
+  }
+
+  const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
+  // Attributed threads need a claim to classify as mine; without a claim they
+  // are someone else's tags on a map-enabled env (or another person's work).
+  if (claimId.length === 0) {
+    return input.mode === "theirs";
   }
   const isMine = people.has(claimId);
   return input.mode === "mine" ? isMine : !isMine;
