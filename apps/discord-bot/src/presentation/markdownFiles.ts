@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import {
   assertFilesystemPath,
   guessImageMimeType,
@@ -143,6 +147,45 @@ export function fileNameForLocalFileRef(ref: MarkdownLocalFileRef): string {
     return label;
   }
   return base;
+}
+
+/**
+ * Resolve a local markdown-linked file to an absolute path on disk.
+ *
+ * Agents usually write worktree-relative targets (`.plans/note.md`, `./out.csv`).
+ * The Discord bot process cwd is the bot package — resolve against `worktreePath`
+ * first so relative embeds actually upload.
+ */
+export function resolveLocalFilePathOnDisk(
+  path: string,
+  worktreePath?: string | null,
+): string | null {
+  const normalized = assertFilesystemPath(path);
+  if (normalized === "" || /^https?:\/\//i.test(normalized) || /^data:/i.test(normalized)) {
+    return null;
+  }
+
+  if (NodePath.isAbsolute(normalized)) {
+    return NodeFS.existsSync(normalized) ? NodePath.normalize(normalized) : null;
+  }
+
+  const rel = normalized.replace(/^\.\//u, "");
+  const roots: string[] = [];
+  const worktree = worktreePath?.trim() ?? "";
+  if (worktree !== "") {
+    roots.push(worktree);
+  }
+  // Fallbacks when worktree is unknown (local / no-worktree threads).
+  roots.push(process.cwd());
+
+  for (const root of roots) {
+    const candidate = NodePath.join(root, rel);
+    if (NodeFS.existsSync(candidate) && NodeFS.statSync(candidate).isFile()) {
+      return NodePath.normalize(candidate);
+    }
+  }
+
+  return null;
 }
 
 export function guessFileMimeType(filePath: string): string {
