@@ -3,7 +3,7 @@ import { memo } from "react";
 import { InfoIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { formatProviderDriverKindLabel } from "../../providerModels";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ErrorDetailText } from "../ui/errorDetailText";
 
 export function getProviderStatusBannerKey(status: ServerProvider | null): string | null {
   return !status || status.status === "ready" || status.status === "disabled"
@@ -53,17 +53,14 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
         )}
         role="alert"
       >
-        <InfoIcon className="size-4 shrink-0" aria-hidden />
-        <div className="flex min-w-0 flex-col gap-1">
+        <InfoIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <div className="font-medium">{title}</div>
-          <Tooltip>
-            <TooltipTrigger
-              render={<div className="line-clamp-3 text-muted-foreground">{message}</div>}
-            />
-            <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap">
-              {message}
-            </TooltipPopup>
-          </Tooltip>
+          <ErrorDetailText
+            showCopy={status.status === "error"}
+            text={message}
+            textClassName="text-muted-foreground"
+          />
         </div>
         <button
           type="button"
