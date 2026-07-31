@@ -659,11 +659,13 @@ it.effect("accepts an internal title regeneration completion", () =>
       threadId: "thread-1",
       requestId: "cmd-title-regenerate",
       title: "Updated title",
+      createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.type, "thread.title.regeneration.complete");
     if (parsed.type === "thread.title.regeneration.complete") {
       assert.strictEqual(parsed.requestId, "cmd-title-regenerate");
       assert.strictEqual(parsed.title, "Updated title");
+      assert.strictEqual(parsed.createdAt, "2026-01-01T00:00:00.000Z");
     }
   }),
 );

@@ -119,7 +119,7 @@ export function projectLifecycleRuntimeEnv(input: {
     extraEnv: {
       T3CODE_LIFECYCLE: input.lifecycle,
       ...projectLifecyclePrEnv(pr),
-      ...(input.extraEnv ?? {}),
+      ...input.extraEnv,
     },
   });
 }

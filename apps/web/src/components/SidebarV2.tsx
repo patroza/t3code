@@ -33,6 +33,7 @@ import {
   EllipsisIcon,
   ListIcon,
   MessageSquareIcon,
+  ListFilterIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -113,6 +114,19 @@ import {
 import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
+import { ThreadIdentityMark } from "./identity/ParticipantStack";
+import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "./identity/IdentityClaimGate";
+import {
+  claimPersonIdForEnvironment,
+  DEFAULT_OWNERSHIP_RELATION,
+  isOwnershipRelation,
+  threadMatchesMine,
+  type OwnershipRelation,
+} from "@t3tools/client-runtime/state/identity";
+import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
 import {
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
@@ -168,22 +182,57 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { Kbd } from "./ui/kbd";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
+  DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
+  DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+  DEFAULT_WEB_THREAD_GROUPING,
+  EMPTY_LIST_ENVIRONMENT_FILTER,
+  LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  LIST_MODE_STORAGE_KEY,
+  LIST_THREAD_GROUPING_STORAGE_KEY,
+  ListEnvironmentFilterSchema,
+  ListHideSettledSchema,
+  parseSidebarOwnershipFilter,
+  SIDEBAR_OWNERSHIP_FILTER_LABELS,
+  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_FILTERS,
+  SIDEBAR_OWNERSHIP_RELATION_LABELS,
+  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_RELATIONS,
+  SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
+  SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+  WEB_THREAD_GROUPING_LABELS,
+  WEB_THREAD_GROUPINGS,
+  WebThreadGroupingSchema,
+  defaultThreadGroupingFromLegacyModeStorage,
+  isAllEnvironmentsSelected,
+  isEnvironmentSelected,
+  matchesEnvironmentFilter,
+  resolveSelectedEnvironmentIds,
+  toggleEnvironmentId,
+  usesFlatThreadGrouping,
+  type SidebarOwnershipFilter,
+  type WebThreadGrouping,
+} from "./listEnvironmentFilter";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
-import { useLocalStorage } from "~/hooks/useLocalStorage";
-import {
-  DEFAULT_WEB_THREAD_GROUPING,
-  LIST_THREAD_GROUPING_STORAGE_KEY,
-  WEB_THREAD_GROUPING_LABELS,
-  WEB_THREAD_GROUPINGS,
-  WebThreadGroupingSchema,
-  type WebThreadGrouping,
-} from "./listEnvironmentFilter";
 
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -752,47 +801,61 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       "opacity-70 transition-opacity hover:opacity-100",
   );
 
-  const title = isRenaming ? (
-    <input
-      autoFocus
-      value={renamingTitle}
-      aria-label="Thread title"
-      onChange={(event) => onRenameTitleChange(event.target.value)}
-      onFocus={(event) => event.currentTarget.select()}
-      onKeyDown={handleRenameKeyDown}
-      onBlur={handleRenameBlur}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-      className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
-    />
-  ) : (
-    <span
-      className={cn(
-        "min-w-0 flex-1 text-sm",
-        shouldRecede ? "font-normal" : "font-medium",
-        variant === "card"
-          ? cn(
-              "truncate",
-              isUnread || isWoke
-                ? "text-foreground"
-                : shouldRecede
-                  ? "text-muted-foreground/80"
-                  : status === "failed"
-                    ? "text-foreground/95"
-                    : "text-foreground/90",
-            )
-          : cn(
-              "truncate group-hover/v2-row:text-foreground",
-              props.isActive || isWoke
-                ? "text-foreground"
-                : isUnread
-                  ? "text-muted-foreground"
-                  : "text-muted-foreground/70",
-            ),
+  const participants = thread.participantSummaries ?? [];
+  const originChannel = thread.originSource?.channel ?? participants[0]?.firstChannel ?? null;
+
+  const title = (
+    <div className="flex min-w-0 flex-1 items-center gap-1.5">
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={renamingTitle}
+          aria-label="Thread title"
+          onChange={(event) => onRenameTitleChange(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={handleRenameKeyDown}
+          onBlur={handleRenameBlur}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className="min-w-0 flex-1 rounded-sm border border-input bg-card px-1 text-sm font-medium text-card-foreground outline-none focus:border-foreground"
+        />
+      ) : (
+        <span
+          className={cn(
+            "min-w-0 flex-1 text-sm",
+            shouldRecede ? "font-normal" : "font-medium",
+            variant === "card"
+              ? cn(
+                  "truncate",
+                  isUnread || isWoke
+                    ? "text-foreground"
+                    : shouldRecede
+                      ? "text-muted-foreground/80"
+                      : status === "failed"
+                        ? "text-foreground/95"
+                        : "text-foreground/90",
+                )
+              : cn(
+                  "truncate group-hover/v2-row:text-foreground",
+                  props.isActive || isWoke
+                    ? "text-foreground"
+                    : isUnread
+                      ? "text-muted-foreground"
+                      : "text-muted-foreground/70",
+                ),
+          )}
+        >
+          {thread.title}
+        </span>
       )}
-    >
-      {thread.title}
-    </span>
+      {!isRenaming ? (
+        <ThreadIdentityMark
+          environmentId={thread.environmentId}
+          originChannel={originChannel}
+          participants={participants}
+        />
+      ) : null}
+    </div>
   );
 
   const prBadge =
@@ -1350,6 +1413,30 @@ export default function SidebarV2() {
       ),
     [environments],
   );
+  const [ownershipFilter, setOwnershipFilter] = useState<SidebarOwnershipFilter>(() => {
+    try {
+      return parseSidebarOwnershipFilter(
+        window.localStorage.getItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY),
+      );
+    } catch {
+      return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
+    }
+  });
+  const [ownershipRelation, setOwnershipRelation] = useState<OwnershipRelation>(() => {
+    try {
+      const raw = window.localStorage.getItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
+      if (isOwnershipRelation(raw)) return raw;
+    } catch {
+      // ignore
+    }
+    return DEFAULT_OWNERSHIP_RELATION;
+  });
+  // Per-environment claims (not primary-only): smart has no map while t3vm does.
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+
+  const listOptionsActive =
+    ownershipFilter !== DEFAULT_SIDEBAR_OWNERSHIP_FILTER ||
+    ownershipRelation !== DEFAULT_OWNERSHIP_RELATION;
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1661,7 +1748,19 @@ export default function SidebarV2() {
         (thread) =>
           thread.archivedAt === null &&
           (scopedProjectKeys === null ||
-            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+            scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
+          threadMatchesMine({
+            claimPersonId: claimPersonIdForEnvironment(
+              claimPersonIdByEnvironment,
+              thread.environmentId,
+            ),
+            originPersonId: thread.originSource?.personId ?? null,
+            participantPersonIds: (thread.participantSummaries ?? []).map(
+              (participant) => participant.personId,
+            ),
+            mode: ownershipFilter,
+            relation: ownershipRelation,
+          }),
       );
       const pinned: EnvironmentThreadShell[] = [];
       const active: EnvironmentThreadShell[] = [];
@@ -1679,18 +1778,9 @@ export default function SidebarV2() {
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
         const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
         const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
-        // Snooze outranks everything, including a pin: "hide until Tuesday"
-        // temporarily suspends "keep on top". The pin survives underneath —
-        // pinned cards are creation-ordered, so on wake the thread reappears
-        // at its original spot in the pinned block. (For unpinned threads
-        // this is also the snooze-beats-auto-settle rule: the wake time is a
-        // stronger statement about when the thread matters again.)
+        // Snooze temporarily suspends a pin; the pin survives and resumes on wake.
         if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
           snoozed.push(thread);
-          // A pin otherwise overrides the lifecycle: pinned threads never
-          // auto-settle out of sight. (The decider clears settled state on
-          // pin and the pin on settle, so pin-vs-settled conflicts only
-          // arise from stale or raced writes.)
         } else if (thread.pinnedAt != null) {
           pinned.push(thread);
         } else if (
@@ -1719,8 +1809,11 @@ export default function SidebarV2() {
     }, [
       autoSettleAfterDays,
       changeRequestStateByKey,
+      claimPersonIdByEnvironment,
       nowMinute,
       orderForThreadGrouping,
+      ownershipFilter,
+      ownershipRelation,
       scopedProjectKeys,
       serverConfigs,
       snoozeWakeTick,
@@ -2082,11 +2175,15 @@ export default function SidebarV2() {
             // Never navigate away from a thread that did not settle.
             if (!isAtomCommandInterrupted(result)) {
               const error = squashAtomCommandFailure(result);
+              const message = error instanceof Error ? error.message : "An error occurred.";
+              if (isIdentityClaimRequiredMessage(message)) {
+                requestIdentityClaimGate(threadRef.environmentId);
+              }
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
                   title: "Failed to settle thread",
-                  description: error instanceof Error ? error.message : "An error occurred.",
+                  description: message,
                 }),
               );
             }
@@ -2939,6 +3036,108 @@ export default function SidebarV2() {
                         );
                       })}
                     </MenuRadioGroup>
+                  </MenuPopup>
+                </Menu>
+                <Menu>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <MenuTrigger
+                          render={
+                            <SidebarMenuButton
+                              size="icon"
+                              type="button"
+                              className={cn(
+                                "relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
+                                listOptionsActive && "bg-sidebar-row-hover text-sidebar-foreground",
+                              )}
+                              aria-label="View and filters"
+                              data-testid="sidebar-v2-view-options-trigger"
+                            />
+                          }
+                        />
+                      }
+                    >
+                      <ListFilterIcon />
+                      {listOptionsActive ? (
+                        <span
+                          aria-hidden
+                          className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary"
+                        />
+                      ) : null}
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom">View & filters</TooltipPopup>
+                  </Tooltip>
+                  <MenuPopup align="end" side="bottom" className="min-w-56">
+                    <MenuGroup>
+                      <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                        Ownership
+                      </div>
+                      <MenuRadioGroup
+                        value={ownershipFilter}
+                        onValueChange={(value) => {
+                          if (value !== "any" && value !== "mine" && value !== "theirs") return;
+                          setOwnershipFilter(value);
+                          try {
+                            window.localStorage.setItem(
+                              SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
+                              value,
+                            );
+                          } catch {
+                            // ignore
+                          }
+                        }}
+                      >
+                        {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
+                          <MenuRadioItem
+                            key={value}
+                            value={value}
+                            closeOnClick={false}
+                            className="min-h-7 py-1 sm:text-xs"
+                            data-testid={`sidebar-v2-ownership-filter-${value}`}
+                          >
+                            {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuGroup>
+                    {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
+                      <>
+                        <MenuSeparator />
+                        <MenuGroup>
+                          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                            {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                          </div>
+                          <MenuRadioGroup
+                            value={ownershipRelation}
+                            onValueChange={(value) => {
+                              if (!isOwnershipRelation(value)) return;
+                              setOwnershipRelation(value);
+                              try {
+                                window.localStorage.setItem(
+                                  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+                                  value,
+                                );
+                              } catch {
+                                // ignore
+                              }
+                            }}
+                          >
+                            {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
+                              <MenuRadioItem
+                                key={value}
+                                value={value}
+                                closeOnClick={false}
+                                className="min-h-7 py-1 sm:text-xs"
+                                data-testid={`sidebar-v2-ownership-relation-${value}`}
+                              >
+                                {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
+                              </MenuRadioItem>
+                            ))}
+                          </MenuRadioGroup>
+                        </MenuGroup>
+                      </>
+                    ) : null}
                   </MenuPopup>
                 </Menu>
                 <Tooltip>

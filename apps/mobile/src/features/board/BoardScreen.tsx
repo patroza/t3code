@@ -27,6 +27,7 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { EmptyState } from "../../components/EmptyState";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { SymbolView } from "../../components/AppSymbol";
+import { ThreadIdentityMark } from "../identity/ParticipantStack";
 import { relativeTime } from "../../lib/time";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -173,9 +174,19 @@ function BoardCard(props: {
             />
           ) : null}
           <View className="min-w-0 flex-1 gap-1">
-            <Text className="text-base font-t3-medium text-foreground" numberOfLines={2}>
-              {props.thread.title}
-            </Text>
+            <View className="flex-row items-center gap-1.5">
+              <Text
+                className="min-w-0 flex-1 text-base font-t3-medium text-foreground"
+                numberOfLines={2}
+              >
+                {props.thread.title}
+              </Text>
+              <ThreadIdentityMark
+                environmentId={props.thread.environmentId}
+                originChannel={props.thread.originSource?.channel}
+                participants={props.thread.participantSummaries}
+              />
+            </View>
             {subtitleParts.length > 0 ? (
               <Text className="text-xs text-foreground-muted" numberOfLines={1}>
                 {subtitleParts.join(" · ")}
