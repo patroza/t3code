@@ -19,6 +19,7 @@ import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstall
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { OmegentDeepLinkCoordinator } from "../components/OmegentDeepLinkCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { Button } from "../components/ui/button";
@@ -139,6 +140,10 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <OmegentDeepLinkCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+        {/* Claim gate: primary auth OR hosted-static (paired remotes still need identity). */}
+        {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
+          <IdentityClaimGate />
+        ) : null}
         {appShell}
       </AnchoredToastProvider>
     </ToastProvider>

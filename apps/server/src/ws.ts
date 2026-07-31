@@ -108,6 +108,8 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as IdentityService from "./identity/IdentityService.ts";
+import { stampOrchestrationCommandSource } from "./identity/stampSource.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
@@ -438,6 +440,7 @@ const makeWsRpcLayer = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
+      const identity = yield* IdentityService.IdentityService;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
@@ -1205,11 +1208,51 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.identityGetSnapshot]: () =>
+          observeRpcEffect(WS_METHODS.identityGetSnapshot, identity.getSnapshot()),
+        [WS_METHODS.identityGetSessionClaim]: () =>
+          observeRpcEffect(
+            WS_METHODS.identityGetSessionClaim,
+            identity.getSessionClaim(currentSessionId),
+          ),
+        [WS_METHODS.identityClaim]: (payload) =>
+          observeRpcEffect(WS_METHODS.identityClaim, identity.claim(currentSessionId, payload)),
+        [WS_METHODS.identityClearClaim]: () =>
+          observeRpcEffect(WS_METHODS.identityClearClaim, identity.clearClaim(currentSessionId)),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
+              // Resolve deviceType so bot/integration sessions skip the interactive claim gate.
+              // Discord/Jira share one bot session across many humans; session claim cannot impersonate.
+              const clientDeviceType = yield* sessions.listActive().pipe(
+                Effect.map(
+                  (active) =>
+                    active.find((entry) => entry.sessionId === currentSessionId)?.client.deviceType,
+                ),
+                Effect.orElseSucceed(() => undefined),
+              );
+              const operateClaim = yield* identity
+                .requireOperateClaim(
+                  currentSessionId,
+                  clientDeviceType !== undefined ? { clientDeviceType } : {},
+                )
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new OrchestrationDispatchCommandError({
+                        message: error.message,
+                        code: error.code,
+                      }),
+                  ),
+                );
+              const mapPeople = yield* identity.listMapPeople();
+              const normalizedCommand = stampOrchestrationCommandSource({
+                command: yield* normalizeDispatchCommand(command),
+                claim: operateClaim,
+                clientDeviceType,
+                people: mapPeople,
+              });
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"
                   ? yield* projectionSnapshotQuery
