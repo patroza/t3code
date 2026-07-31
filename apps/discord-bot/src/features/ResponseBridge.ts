@@ -29,7 +29,6 @@ import {
   buildStreamHistoryMarkdownText,
   DISCORD_MAX_FILES_PER_MESSAGE,
   imageAttachmentsOf,
-  shouldAttachT3DeepLink,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
@@ -67,7 +66,6 @@ import {
   stripMarkdownImages,
   type MarkdownImageRef,
 } from "../presentation/markdownImages.ts";
-import { hasMarkdownTables } from "../presentation/asciiTables.ts";
 import {
   chunkDiscordContent,
   formatInProgressChunk,
@@ -3077,7 +3075,7 @@ export const runBridge = (
      *
      * On turn complete: stream messages are deleted, archived as stream-history.md,
      * and the final answer is posted as Discord markdown (links live; no ASCII tables),
-     * with a T3 deep link when the answer is long or has GFM tables.
+     * with a T3 deep link always on the stats footer.
      */
     const postOrEditAssistantUnlocked = (args: {
       readonly turnId: string | null;
@@ -3487,7 +3485,7 @@ export const runBridge = (
     /**
      * Final delivery for a completed assistant turn:
      * 1. Post Discord markdown content (chunked if needed; links stay clickable)
-     * 2. Append · [T3](…#message-…) when multi-chunk or tables (full render in Omegent)
+     * 2. Always append · [T3](…#message-…) on the stats footer
      * 3. Attach stream-history.md + chat/local images as files
      * 4. Delete the in-progress stream messages so only the final answer remains visible
      */
@@ -3698,8 +3696,8 @@ export const runBridge = (
 
         // Final channel text: strip image embeds but keep readable local file references.
         // Never leave Working.. or the stream placeholder.
-        // Keep Discord markdown as-is (links stay clickable). Do not ASCII-ify tables —
-        // long / table-heavy answers get a T3 deep link for full rendering in Omegent.
+        // Keep Discord markdown as-is (links stay clickable). Do not ASCII-ify tables.
+        // Stats footer always gets · [T3](deep link) when the web UI base is configured.
         const finalText = rewriteMarkdownLocalFileLinksForDiscord({
           text: stripWorkingIndicator(stripMarkdownImages(text)),
           githubUrlsBySrc,
@@ -3735,7 +3733,8 @@ export const runBridge = (
                   ? ["_(done)_"]
                   : [];
 
-        // Small italic turn stats on the final answer (model / effort / duration / tokens).
+        // Small italic turn stats on the final answer (model / effort / duration / tokens),
+        // then always append · [T3](deep link) on that footer section when the URL is known.
         const statsThread = yield* Ref.get(latestThreadRef);
         const statsLine = formatTurnResponseStatsLine({
           modelSelection: statsThread?.modelSelection ?? null,
@@ -3745,22 +3744,13 @@ export const runBridge = (
         });
         let finalChunks = appendStatsToMessageChunks(baseFinalChunks, statsLine, DISCORD_LIMIT);
 
-        // Long multi-message finals and any answer with GFM tables → · [T3](deep link).
-        if (
-          shouldAttachT3DeepLink({
-            text: renderedFinalText,
-            hasMarkdownTables: hasMarkdownTables(renderedFinalText),
-            messageChunkCount: finalChunks.length,
-          })
-        ) {
-          const botConfig = yield* DiscordBotConfig;
-          const t3Url = buildOmegentThreadMessageUrl({
-            webUiBaseUrl: botConfig.webUiBaseUrl,
-            threadId: input.t3ThreadId,
-            messageId: t3MessageId,
-          });
-          finalChunks = appendT3DeepLinkToChunks(finalChunks, t3Url, DISCORD_LIMIT);
-        }
+        const botConfig = yield* DiscordBotConfig;
+        const t3Url = buildOmegentThreadMessageUrl({
+          webUiBaseUrl: botConfig.webUiBaseUrl,
+          threadId: input.t3ThreadId,
+          messageId: t3MessageId,
+        });
+        finalChunks = appendT3DeepLinkToChunks(finalChunks, t3Url, DISCORD_LIMIT);
 
         if (finalChunks.length === 0 && files.length === 0) {
           // Nothing useful to post — just clear any leftover Working.. stream messages.
