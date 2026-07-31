@@ -237,11 +237,14 @@ function logReviewHighlighterDiagnostic(message: string, details?: Record<string
   console.log(`[review-highlighter] ${message}`);
 }
 
-function logReviewHighlighterDiagnosticError(message: string, error: unknown): void {
+function logReviewHighlighterRecoveredFailure(message: string, error: unknown): void {
   if (!isReviewHighlighterDebugLoggingEnabled()) {
     return;
   }
-  console.error(`[review-highlighter] ${message}`, error);
+  // React Native turns console.error into an in-app LogBox banner. This path
+  // successfully falls back to the JavaScript engine, so retain the diagnostic
+  // without presenting a non-dismissible runtime error to the user.
+  console.log(`[review-highlighter] ${message}`, error);
 }
 
 function stripTrailingNewline(value: string): string {
@@ -299,7 +302,7 @@ async function getHighlighter(): Promise<HighlighterCore> {
             attemptedEngine: "native",
             cause: error,
           });
-          logReviewHighlighterDiagnosticError(
+          logReviewHighlighterRecoveredFailure(
             "native engine initialization failed; falling back to javascript",
             nativeInitializationError,
           );

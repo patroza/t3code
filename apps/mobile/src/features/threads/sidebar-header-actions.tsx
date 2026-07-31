@@ -2,16 +2,24 @@ import { SymbolView } from "../../components/AppSymbol";
 import { Pressable, StyleSheet, View, useColorScheme } from "react-native";
 
 import { useThemeColor } from "../../lib/useThemeColor";
+import {
+  HOME_LIST_MODE_ICONS,
+  HOME_LIST_MODE_LABELS,
+  otherHomeListModes,
+  type HomeListMode,
+} from "../home/homeListMode";
 
 export interface SidebarHeaderActionsProps {
   readonly onOpenSettings: () => void;
+  readonly listMode: HomeListMode;
+  readonly onListModeChange: (mode: HomeListMode) => void;
   /** Rendered inside a shared capsule group — buttons drop their own chrome. */
   readonly grouped?: boolean;
 }
 
 function FallbackHeaderButton(props: {
   readonly accessibilityLabel: string;
-  readonly icon: "gearshape" | "square.and.pencil";
+  readonly icon: string;
   readonly grouped?: boolean;
   readonly onPress: () => void;
 }) {
@@ -39,14 +47,24 @@ function FallbackHeaderButton(props: {
             },
       ]}
     >
-      <SymbolView name={props.icon} size={20} tintColor={iconColor} type="monochrome" />
+      <SymbolView name={props.icon as never} size={20} tintColor={iconColor} type="monochrome" />
     </Pressable>
   );
 }
 
 export function SidebarHeaderActions(props: SidebarHeaderActionsProps) {
+  const alternateModes = otherHomeListModes(props.listMode);
   return (
     <View className="flex-row items-center gap-0.5">
+      {alternateModes.map((mode) => (
+        <FallbackHeaderButton
+          key={mode}
+          accessibilityLabel={HOME_LIST_MODE_LABELS[mode]}
+          grouped={props.grouped}
+          icon={HOME_LIST_MODE_ICONS[mode]}
+          onPress={() => props.onListModeChange(mode)}
+        />
+      ))}
       <FallbackHeaderButton
         accessibilityLabel="Open settings"
         grouped={props.grouped}
