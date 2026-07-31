@@ -1,0 +1,56 @@
+# Keep EAS project archives small. Mobile only needs the monorepo packages it
+# resolves through pnpm — not vendored agent reference trees or desktop shells.
+
+# Vendored reference repos (agents only; never imported by app code)
+.repos/
+
+# Desktop / electron / native host tooling
+apps/desktop/
+apps/vscode/
+apps/discord-bot/
+native/
+release/
+release-mock/
+dist-electron/
+.electron-runtime/
+
+# Infra, docs, agent metadata
+docs/
+.agents/
+.grok/
+.github/
+.claude/
+.cursor/
+.vscode/
+infra/
+artifacts/
+.showcase/
+apps/mobile/.showcase/
+
+# Tests and snapshots (not needed for EAS bundle)
+**/__screenshots__/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/test-results/
+**/playwright-report/
+**/.vitest-*/
+
+# Local / generated
+node_modules/
+.t3/
+.turbo/
+.alchemy/
+.dir-deploy-n
+.logs/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Git / IDE noise
+.git/
+.idea/
+*.tsbuildinfo
