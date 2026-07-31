@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +10,7 @@ import {
   guessFileMimeType,
   isLocalFileSrc,
   replaceMarkdownLocalFileLinks,
+  resolveLocalFilePathOnDisk,
   stripMarkdownLocalFileLinks,
 } from "./markdownFiles.ts";
 
@@ -83,5 +88,31 @@ describe("local file helpers", () => {
   it("uses native media types for audio and video previews", () => {
     expect(guessFileMimeType("/tmp/clip.mp4")).toBe("video/mp4");
     expect(guessFileMimeType("/tmp/voice.mp3")).toBe("audio/mpeg");
+  });
+});
+
+describe("resolveLocalFilePathOnDisk", () => {
+  it("resolves worktree-relative plan paths that agents emit", () => {
+    const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-discord-md-file-"));
+    try {
+      const plansDir = NodePath.join(tempRoot, ".plans");
+      const relativeFile = ".plans/abas-markisen-agent-collisions.md";
+      const absoluteFile = NodePath.join(tempRoot, relativeFile);
+      NodeFS.mkdirSync(plansDir, { recursive: true });
+      NodeFS.writeFileSync(absoluteFile, "# note\n", "utf8");
+
+      expect(resolveLocalFilePathOnDisk(relativeFile, tempRoot)).toBe(
+        NodePath.normalize(absoluteFile),
+      );
+      expect(resolveLocalFilePathOnDisk(`./${relativeFile}`, tempRoot)).toBe(
+        NodePath.normalize(absoluteFile),
+      );
+      // Absolute path still works when present.
+      expect(resolveLocalFilePathOnDisk(absoluteFile, null)).toBe(NodePath.normalize(absoluteFile));
+      // Without worktree, bot cwd cannot see the project-relative path.
+      expect(resolveLocalFilePathOnDisk(relativeFile, null)).toBeNull();
+    } finally {
+      NodeFS.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });
