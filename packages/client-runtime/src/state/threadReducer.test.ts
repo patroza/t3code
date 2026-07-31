@@ -4,7 +4,9 @@ import {
   CheckpointRef,
   CommandId,
   EventId,
+  IdentityUsername,
   MessageId,
+  PersonId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -301,6 +303,41 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.messages).toHaveLength(1);
         expect(result.thread.messages[0]?.text).toBe("Hello, world!");
+      }
+    });
+
+    it("preserves server-authored source attribution on live messages", () => {
+      const result = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 7,
+        occurredAt: "2026-04-01T06:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-sourced"),
+          role: "user",
+          text: "Sent from desktop",
+          turnId: null,
+          streaming: false,
+          source: {
+            channel: "desktop",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
+          },
+          createdAt: "2026-04-01T06:01:00.000Z",
+          updatedAt: "2026-04-01T06:01:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages[0]?.source).toEqual({
+          channel: "desktop",
+          personId: "patroza",
+          username: "patroza",
+        });
       }
     });
 

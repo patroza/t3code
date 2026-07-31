@@ -8,6 +8,7 @@ import { hasCustomHomeListOptions, type HomeListOptions } from "./home-list-opti
 
 const defaults: HomeListOptions = {
   selectedEnvironmentIds: [],
+  ownershipFilter: "any",
   listMode: "threads",
   threadGrouping: "project",
   projectSortOrder:
@@ -32,6 +33,11 @@ describe("home list options", () => {
     expect(
       hasCustomHomeListOptions({ ...defaults, selectedProjectKey: "environment-1:project-1" }),
     ).toBe(true);
+  });
+
+  it("marks ownership filters as customized", () => {
+    expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "mine" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "theirs" })).toBe(true);
   });
 
   it("marks non-default thread grouping as customized", () => {
