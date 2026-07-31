@@ -1,0 +1,119 @@
+name: Mobile EAS Development
+
+# Keep the installable development client current without rebuilding it for
+# JavaScript-only changes. Expo Fingerprint reuses a compatible native build
+# and publishes an OTA update; native changes produce a new internal build.
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Target platform"
+        required: true
+        type: choice
+        default: ios
+        options:
+          - ios
+          - android
+          - all
+      sha:
+        description: "Exact fork/integration SHA (blank uses its current tip)"
+        required: false
+        type: string
+
+concurrency:
+  group: mobile-eas-development
+  cancel-in-progress: false
+
+jobs:
+  development:
+    name: EAS Development
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      APP_VARIANT: development
+      NODE_OPTIONS: --max-old-space-size=8192
+      MOBILE_VERSION_POLICY: fingerprint
+      T3CODE_MOBILE_EAS_PROJECT_ID: ${{ vars.T3CODE_MOBILE_EAS_PROJECT_ID }}
+      T3CODE_MOBILE_EXPO_OWNER: ${{ vars.T3CODE_MOBILE_EXPO_OWNER }}
+      T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
+      T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
+    steps:
+      - id: expo-token
+        name: Check for EXPO_TOKEN
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -n "$EXPO_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "EXPO_TOKEN is not available; skipping EAS development job."
+          fi
+
+      - name: Checkout
+        if: steps.expo-token.outputs.present == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: fork/integration
+          fetch-depth: 0
+
+      - name: Resolve approved integration source
+        if: steps.expo-token.outputs.present == 'true'
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          integration_sha="$(git rev-parse HEAD)"
+          target_sha="${REQUESTED_SHA:-$integration_sha}"
+          if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "sha must be an exact 40-character commit SHA" >&2
+            exit 1
+          fi
+          git fetch origin "$target_sha"
+          git merge-base --is-ancestor "$target_sha" "$integration_sha"
+          git checkout --detach "$target_sha"
+          test "$(git rev-parse HEAD)" = "$target_sha"
+
+      - name: Setup Vite+
+        if: steps.expo-token.outputs.present == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Expose pnpm
+        if: steps.expo-token.outputs.present == 'true'
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Setup EAS
+        if: steps.expo-token.outputs.present == 'true'
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+          packager: npm
+
+      - name: Pull development environment variables
+        if: steps.expo-token.outputs.present == 'true'
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas env:pull development --non-interactive
+
+      - name: Publish compatible update or development build
+        if: steps.expo-token.outputs.present == 'true'
+        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        with:
+          profile: development
+          branch: development
+          platform: ${{ inputs.platform }}
+          environment: development
+          working-directory: apps/mobile
+          github-token: ${{ secrets.GITHUB_TOKEN }}
