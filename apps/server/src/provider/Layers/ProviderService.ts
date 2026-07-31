@@ -13,6 +13,7 @@ import {
   NonNegativeInt,
   ModelSelection,
   ThreadId,
+  ProviderCompactSessionInput,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -46,7 +47,11 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import {
+  type ProviderAdapterError,
+  ProviderSessionNotFoundError,
+  ProviderValidationError,
+} from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -912,6 +917,38 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const compactSession: ProviderServiceMethod<"compactSession"> = Effect.fn("compactSession")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.compactSession",
+        schema: ProviderCompactSessionInput,
+        payload: rawInput,
+      });
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.compactSession",
+        allowRecovery: true,
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "compact-session",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      if (routed.adapter.compactSession === undefined) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderService.compactSession",
+          issue: `Provider ${routed.adapter.provider} does not support manual context compact.`,
+        });
+      }
+      if (!routed.isActive) {
+        return yield* new ProviderSessionNotFoundError({
+          threadId: input.threadId,
+        });
+      }
+      yield* routed.adapter.compactSession(routed.threadId);
+    },
+  );
+
   const respondToRequest: ProviderServiceMethod<"respondToRequest"> = Effect.fn("respondToRequest")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1267,6 +1304,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactSession,
     respondToRequest,
     respondToUserInput,
     stopSession,
