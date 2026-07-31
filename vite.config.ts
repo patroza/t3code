@@ -83,10 +83,12 @@ export default defineConfig({
     },
     rules: {
       "unicorn/no-array-sort": "off",
+      "unicorn/no-array-reverse": "off",
       "unicorn/consistent-function-scoping": "off",
       "oxc/no-map-spread": "off",
       "react-in-jsx-scope": "off",
       "react-hooks/exhaustive-deps": "off",
+      "react/no-unstable-nested-components": ["warn", { allowAsProps: true }],
       "eslint/no-shadow": "off",
       "eslint/no-await-in-loop": "off",
       "eslint/no-underscore-dangle": "off",
