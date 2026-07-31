@@ -3,6 +3,7 @@ name: Mobile EAS Development
 # Keep the installable development client current without rebuilding it for
 # JavaScript-only changes. Expo Fingerprint reuses a compatible native build
 # and publishes an OTA update; native changes produce a new internal build.
+# Free-plan build failures fall back to OTA against the latest finished binary.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +16,10 @@ on:
           - ios
           - android
           - all
+      runtime_version:
+        description: "Force OTA runtimeVersion (blank = fingerprint / fallback)"
+        required: false
+        type: string
       sha:
         description: "Exact fork/integration SHA (blank uses its current tip)"
         required: false
@@ -73,6 +78,24 @@ jobs:
           git merge-base --is-ancestor "$target_sha" "$integration_sha"
           git checkout --detach "$target_sha"
           test "$(git rev-parse HEAD)" = "$target_sha"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Overlay deploy tooling from workflow ref
+        if: steps.expo-token.outputs.present == 'true' && github.ref_name != 'fork/integration'
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin "$WORKFLOW_SHA"
+          for path in \
+            apps/mobile/scripts/eas-continuous-deploy.sh \
+            apps/mobile/app.config.ts \
+            .easignore; do
+            if git cat-file -e "${WORKFLOW_SHA}:${path}" 2>/dev/null; then
+              git checkout "$WORKFLOW_SHA" -- "$path"
+              echo "overlaid $path from $WORKFLOW_SHA"
+            fi
+          done
+          chmod +x apps/mobile/scripts/eas-continuous-deploy.sh
 
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
@@ -107,13 +130,20 @@ jobs:
 
       - name: Publish compatible update or development build
         if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        with:
-          profile: development
-          branch: development
-          platform: ${{ inputs.platform }}
-          environment: development
-          working-directory: apps/mobile
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          chmod +x scripts/eas-continuous-deploy.sh
+          args=(
+            --profile development
+            --channel development
+            --environment development
+            --platform "${{ inputs.platform }}"
+            --message "Development auto (${{ github.sha }})"
+          )
+          if [ -n "${{ inputs.runtime_version }}" ]; then
+            args+=(--runtime-version "${{ inputs.runtime_version }}")
+          fi
+          ./scripts/eas-continuous-deploy.sh "${args[@]}"
