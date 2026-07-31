@@ -26,4 +26,20 @@ describe("mobile surface existence (anti stack-drop)", () => {
       /<View className="flex-1" style=\{\{ flex: 1 \}\}>[\s\S]*?<ThreadDetailScreen/,
     );
   });
+
+  it("keys markdown nodes uniquely even when parser spans collide", () => {
+    const nodeKey = NodeFS.readFileSync(
+      NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),
+      "utf8",
+    );
+    const tableBlock = NodeFS.readFileSync(
+      NodePath.join(root, "../modules/t3-markdown-text/src/NativeMarkdownBlock.ios.tsx"),
+      "utf8",
+    );
+    // Grid keys for tables (never type:beg:end → table_cell:0:0).
+    expect(nodeKey).toContain("markdownTableCellKey");
+    expect(nodeKey).toContain("i${index}");
+    expect(tableBlock).toContain("markdownTableCellKey");
+    expect(tableBlock).toContain("key={markdownTableCellKey(rowIndex, cellIndex)}");
+  });
 });
