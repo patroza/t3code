@@ -1621,20 +1621,20 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       executableName: "t3code",
       icon: "icons",
       category: "Development",
-      // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
-      // in the .desktop entry (Exec already gets %U), so browsers can hand
-      // t3code:// OAuth callbacks to the app.
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
-        },
-      ],
       desktop: {
         entry: {
           StartupWMClass: "t3code",
+          // Register the external deep-link scheme so xdg-open can launch T3.
+          // electron-builder keeps %U on Exec when MimeType is present.
+          MimeType: "x-scheme-handler/t3code;",
         },
       },
+      protocols: [
+        {
+          name: "T3 Code",
+          schemes: ["t3code"],
+        },
+      ],
     };
   }
 

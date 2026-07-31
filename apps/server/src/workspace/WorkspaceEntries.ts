@@ -14,14 +14,11 @@ import type {
   FilesystemBrowseResult,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
-  ProjectSearchContentsInput,
-  ProjectSearchContentsResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
-import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
@@ -96,9 +93,6 @@ export class WorkspaceEntries extends Context.Service<
     readonly search: (
       input: ProjectSearchEntriesInput,
     ) => Effect.Effect<ProjectSearchEntriesResult, WorkspaceEntriesError>;
-    readonly searchContents: (
-      input: ProjectSearchContentsInput,
-    ) => Effect.Effect<ProjectSearchContentsResult, WorkspaceEntriesError>;
     readonly refresh: (cwd: string) => Effect.Effect<void>;
   }
 >()("t3/workspace/WorkspaceEntries") {}
@@ -154,37 +148,33 @@ export const make = Effect.gen(function* () {
       const normalizedCwd = yield* normalizeWorkspaceRoot(cwd).pipe(
         Effect.orElseSucceed(() => cwd),
       );
-      for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
-        const indexKey = WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, variant);
-        if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, indexKey))) {
-          continue;
-        }
-        const recoverRefreshFailure = (
-          cause:
-            | WorkspaceSearchIndex.WorkspaceSearchIndexCreateFailed
-            | WorkspaceSearchIndex.WorkspaceSearchIndexScanTimedOut
-            | WorkspaceSearchIndex.WorkspaceSearchIndexRefreshFailed,
-        ) =>
-          Effect.gen(function* () {
-            yield* Effect.logWarning("Failed to refresh workspace search index", {
-              cwd,
-              variant,
-              cause,
-            });
-            yield* workspaceSearchIndexes.invalidate(indexKey);
-          });
-        yield* Effect.gen(function* () {
-          const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
-          yield* searchIndex.refresh();
-        }).pipe(
-          Effect.provide(workspaceSearchIndexes.get(indexKey)),
-          Effect.catchTags({
-            WorkspaceSearchIndexCreateFailed: recoverRefreshFailure,
-            WorkspaceSearchIndexScanTimedOut: recoverRefreshFailure,
-            WorkspaceSearchIndexRefreshFailed: recoverRefreshFailure,
-          }),
-        );
+      if (!(yield* RcMap.has(workspaceSearchIndexes.rcMap, normalizedCwd))) {
+        return;
       }
+      const recoverRefreshFailure = (
+        cause:
+          | WorkspaceSearchIndex.WorkspaceSearchIndexCreateFailed
+          | WorkspaceSearchIndex.WorkspaceSearchIndexScanTimedOut
+          | WorkspaceSearchIndex.WorkspaceSearchIndexRefreshFailed,
+      ) =>
+        Effect.gen(function* () {
+          yield* Effect.logWarning("Failed to refresh workspace search index", {
+            cwd,
+            cause,
+          });
+          yield* workspaceSearchIndexes.invalidate(normalizedCwd);
+        });
+      yield* Effect.gen(function* () {
+        const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
+        yield* searchIndex.refresh();
+      }).pipe(
+        Effect.provide(workspaceSearchIndexes.get(normalizedCwd)),
+        Effect.catchTags({
+          WorkspaceSearchIndexCreateFailed: recoverRefreshFailure,
+          WorkspaceSearchIndexScanTimedOut: recoverRefreshFailure,
+          WorkspaceSearchIndexRefreshFailed: recoverRefreshFailure,
+        }),
+      );
     },
   );
 
@@ -240,37 +230,16 @@ export const make = Effect.gen(function* () {
   const search: WorkspaceEntries["Service"]["search"] = Effect.fn("WorkspaceEntries.search")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
-      const normalizedQuery = normalizeSearchQuery(input.query, {
-        trimLeadingPattern: /^[@./]+/,
-      });
+      const normalizedQuery = input.query
+        .trim()
+        .toLowerCase()
+        .replace(/^[@./]+/, "");
       return yield* Effect.gen(function* () {
         const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
-        return yield* searchIndex.search(normalizedQuery, input.limit, input.kind);
-      }).pipe(
-        Effect.provide(
-          workspaceSearchIndexes.get(
-            WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
-          ),
-        ),
-      );
+        return yield* searchIndex.search(normalizedQuery, input.limit);
+      }).pipe(Effect.provide(workspaceSearchIndexes.get(normalizedCwd)));
     },
   );
-
-  const searchContents: WorkspaceEntries["Service"]["searchContents"] = Effect.fn(
-    "WorkspaceEntries.searchContents",
-  )(function* (input) {
-    const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
-    return yield* Effect.gen(function* () {
-      const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
-      return yield* searchIndex.searchContents(input);
-    }).pipe(
-      Effect.provide(
-        workspaceSearchIndexes.get(
-          WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "content"),
-        ),
-      ),
-    );
-  });
 
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
     function* (input) {
@@ -278,17 +247,11 @@ export const make = Effect.gen(function* () {
       return yield* Effect.gen(function* () {
         const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
         return yield* searchIndex.list();
-      }).pipe(
-        Effect.provide(
-          workspaceSearchIndexes.get(
-            WorkspaceSearchIndex.workspaceSearchIndexKey(normalizedCwd, "paths"),
-          ),
-        ),
-      );
+      }).pipe(Effect.provide(workspaceSearchIndexes.get(normalizedCwd)));
     },
   );
 
-  return WorkspaceEntries.of({ browse, list, refresh, search, searchContents });
+  return WorkspaceEntries.of({ browse, list, refresh, search });
 });
 
 export const layer = Layer.effect(WorkspaceEntries, make).pipe(

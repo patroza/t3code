@@ -15,6 +15,7 @@ const {
   relaunchMock,
   removeListenerMock,
   removeSwitchMock,
+  requestSingleInstanceLockMock,
   setAboutPanelOptionsMock,
   setAppUserModelIdMock,
   setAsDefaultProtocolClientMock,
@@ -36,6 +37,7 @@ const {
   relaunchMock: vi.fn(),
   removeListenerMock: vi.fn(),
   removeSwitchMock: vi.fn(),
+  requestSingleInstanceLockMock: vi.fn(() => true),
   setAboutPanelOptionsMock: vi.fn(),
   setAppUserModelIdMock: vi.fn(),
   setAsDefaultProtocolClientMock: vi.fn(() => true),
@@ -68,6 +70,7 @@ vi.mock("electron", () => ({
     quit: quitMock,
     relaunch: relaunchMock,
     removeListener: removeListenerMock,
+    requestSingleInstanceLock: requestSingleInstanceLockMock,
     runningUnderARM64Translation: false,
     setAboutPanelOptions: setAboutPanelOptionsMock,
     setAsDefaultProtocolClient: setAsDefaultProtocolClientMock,
@@ -93,6 +96,7 @@ describe("ElectronApp", () => {
     relaunchMock.mockClear();
     removeListenerMock.mockClear();
     removeSwitchMock.mockClear();
+    requestSingleInstanceLockMock.mockClear();
     setPathMock.mockClear();
   });
 

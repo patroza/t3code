@@ -12,8 +12,6 @@ import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
   OrchestrationThread,
-  ProjectContentMatch,
-  ProjectEntryKind,
   ThreadId,
   VcsListRefsResult,
   VcsRef,
@@ -26,19 +24,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
-import { projectContentSearch, projectEnvironment } from "./projects";
+import { projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
 import { useEnvironmentThread } from "./threads";
 import { vcsEnvironment } from "./vcs";
 
-const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
+const COMPOSER_PATH_SEARCH_DEBOUNCE_MS = 120;
 const COMPOSER_PATH_SEARCH_LIMIT = 80;
-const PROJECT_CONTENT_SEARCH_DEBOUNCE_MS = 120;
-const PROJECT_CONTENT_SEARCH_LIMIT = 500;
 const THREAD_SEARCH_DEBOUNCE_MS = 200;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
-const EMPTY_CONTENT_MATCHES: ReadonlyArray<ProjectContentMatch> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> = Object.freeze([]);
 const EMPTY_THREAD_SEARCH_ATOM = Atom.make({
@@ -234,50 +229,26 @@ export function usePaginatedBranches(target: VcsRefTarget) {
   };
 }
 
-type ProjectPathSearchTarget = ComposerPathSearchTarget & {
-  readonly kind?: ProjectEntryKind | undefined;
-};
-
-export function areProjectPathSearchTargetsEqual(
-  left: ProjectPathSearchTarget,
-  right: ProjectPathSearchTarget,
-): boolean {
-  return (
-    left.environmentId === right.environmentId &&
-    left.cwd === right.cwd &&
-    left.query === right.query &&
-    left.kind === right.kind
-  );
-}
-
-export function useProjectPathSearch(
-  target: ProjectPathSearchTarget,
-  limit: number,
-  options?: { readonly allowEmptyQuery?: boolean },
-) {
-  const allowEmptyQuery = options?.allowEmptyQuery === true;
+export function useComposerPathSearch(target: ComposerPathSearchTarget) {
   const normalizedTarget = useMemo(
     () => ({
       environmentId: target.environmentId,
       cwd: target.cwd,
-      query: target.query == null ? null : target.query.trim(),
-      kind: target.kind,
+      query: target.query?.trim() ?? "",
     }),
-    [target.cwd, target.environmentId, target.kind, target.query],
+    [target.cwd, target.environmentId, target.query],
   );
-  const debouncedTarget = useDebouncedValue(normalizedTarget, PROJECT_PATH_SEARCH_DEBOUNCE_MS);
+  const debouncedTarget = useDebouncedValue(normalizedTarget, COMPOSER_PATH_SEARCH_DEBOUNCE_MS);
   const result = useEnvironmentQuery(
     debouncedTarget.environmentId !== null &&
       debouncedTarget.cwd !== null &&
-      debouncedTarget.query !== null &&
-      (allowEmptyQuery || debouncedTarget.query.length > 0)
+      debouncedTarget.query.length > 0
       ? projectEnvironment.searchEntries({
           environmentId: debouncedTarget.environmentId,
           input: {
             cwd: debouncedTarget.cwd,
             query: debouncedTarget.query,
-            limit,
-            ...(debouncedTarget.kind ? { kind: debouncedTarget.kind } : {}),
+            limit: COMPOSER_PATH_SEARCH_LIMIT,
           },
         })
       : null,
@@ -286,58 +257,8 @@ export function useProjectPathSearch(
   return {
     entries: result.data?.entries ?? [],
     error: result.error,
-    isPending:
-      !areProjectPathSearchTargetsEqual(normalizedTarget, debouncedTarget) || result.isPending,
-    searchedQuery: debouncedTarget.query ?? "",
+    isPending: normalizedTarget.query !== debouncedTarget.query || result.isPending,
     refresh: result.refresh,
-  };
-}
-
-export function useComposerPathSearch(target: ComposerPathSearchTarget) {
-  return useProjectPathSearch(target, COMPOSER_PATH_SEARCH_LIMIT);
-}
-
-interface ProjectContentSearchTarget {
-  readonly environmentId: EnvironmentId | null;
-  readonly cwd: string | null;
-  readonly query: string;
-  readonly caseSensitive: boolean;
-  readonly wholeWord: boolean;
-  readonly useRegex: boolean;
-}
-
-export function useProjectContentSearch(target: ProjectContentSearchTarget) {
-  // Whitespace is significant in content queries; trimming is only used to
-  // decide whether the input is blank.
-  const query = target.query;
-  const hasQuery = query.trim().length > 0;
-  const debouncedQuery = useDebouncedValue(query, PROJECT_CONTENT_SEARCH_DEBOUNCE_MS);
-  const result = useEnvironmentQuery(
-    target.environmentId !== null &&
-      target.cwd !== null &&
-      hasQuery &&
-      debouncedQuery.trim().length > 0
-      ? projectContentSearch({
-          environmentId: target.environmentId,
-          input: {
-            cwd: target.cwd,
-            query: debouncedQuery,
-            limit: PROJECT_CONTENT_SEARCH_LIMIT,
-            caseSensitive: target.caseSensitive,
-            wholeWord: target.wholeWord,
-            useRegex: target.useRegex,
-          },
-        })
-      : null,
-  );
-
-  return {
-    matches: result.data?.matches ?? EMPTY_CONTENT_MATCHES,
-    error: result.error,
-    isPending: hasQuery && (query !== debouncedQuery || result.isPending),
-    hasQuery,
-    truncated: result.data?.truncated ?? false,
-    invalidRegex: target.useRegex && result.data?.regexFallbackError !== undefined,
   };
 }
 

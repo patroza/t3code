@@ -13,6 +13,7 @@ import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
+import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
@@ -23,6 +24,7 @@ import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import { readLiveExistingBackend } from "../backend/DesktopExistingBackend.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -65,6 +67,24 @@ const { logInfo: logBootstrapInfo, logWarning: logBootstrapWarning } =
 
 const { logInfo: logStartupInfo, logError: logStartupError } =
   DesktopObservability.makeComponentLogger("desktop-startup");
+
+export function resolveDesktopBackendPortHint(
+  existingBackendHttpBaseUrl: string | undefined,
+  configuredPort: Option.Option<number>,
+): Option.Option<number> {
+  if (existingBackendHttpBaseUrl !== undefined) {
+    try {
+      const port = Number.parseInt(new URL(existingBackendHttpBaseUrl).port, 10);
+      if (Number.isSafeInteger(port) && port > 0 && port <= MAX_TCP_PORT) {
+        return Option.some(port);
+      }
+    } catch {
+      // Fall through to the configured port when the live marker is malformed.
+    }
+  }
+
+  return configuredPort;
+}
 
 const resolveDesktopBackendPort = Effect.fn("resolveDesktopBackendPort")(function* (
   configuredPort: Option.Option<number>,
@@ -154,7 +174,10 @@ const bootstrap = Effect.gen(function* () {
     return yield* new DesktopDevelopmentBackendPortRequiredError();
   }
 
-  const backendPortSelection = yield* resolveDesktopBackendPort(environment.configuredBackendPort);
+  const existingBackend = readLiveExistingBackend(environment.stateDir);
+  const backendPortSelection = yield* resolveDesktopBackendPort(
+    resolveDesktopBackendPortHint(existingBackend?.httpBaseUrl, environment.configuredBackendPort),
+  );
   const backendPort = backendPortSelection.port;
   yield* logBootstrapInfo(
     backendPortSelection.selectedByScan
@@ -165,6 +188,13 @@ const bootstrap = Effect.gen(function* () {
       ...(backendPortSelection.selectedByScan ? { startPort: DEFAULT_DESKTOP_BACKEND_PORT } : {}),
     },
   );
+  if (existingBackend) {
+    yield* logBootstrapInfo("reusing existing backend for shared T3 home", {
+      pid: existingBackend.pid,
+      httpBaseUrl: existingBackend.httpBaseUrl,
+      stateDir: existingBackend.stateDir,
+    });
+  }
 
   const settings = yield* desktopSettings.get;
   if (settings.serverExposureMode !== environment.defaultDesktopSettings.serverExposureMode) {
@@ -216,6 +246,12 @@ const bootstrap = Effect.gen(function* () {
     // slow first wsl.exe spawn.
     yield* Effect.forkScoped(wslBackend.reconcile);
   }
+
+  // Catalog + window services are usable; flush any deep link captured from
+  // initial argv / open-url during single-instance setup.
+  const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
+  yield* deepLinks.start;
+  yield* logBootstrapInfo("bootstrap deep links ready");
 }).pipe(Effect.withSpan("desktop.bootstrap"));
 
 const startup = Effect.gen(function* () {
