@@ -1,6 +1,25 @@
 import { defineConfig } from "vite-plus";
+import { defineProject } from "vite-plus/test/config";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+
+const isolatedDesktopTestFiles = [
+  "src/app/DesktopClerk.test.ts",
+  "src/backend/DesktopNetworkInterfaces.test.ts",
+  "src/electron/ElectronApp.test.ts",
+  "src/electron/ElectronDialog.test.ts",
+  "src/electron/ElectronMenu.test.ts",
+  "src/electron/ElectronProtocol.test.ts",
+  "src/electron/ElectronShell.test.ts",
+  "src/electron/ElectronTheme.test.ts",
+  "src/electron/ElectronUpdater.test.ts",
+  "src/electron/ElectronWindow.test.ts",
+  "src/electron/MacApplicationIcon.test.ts",
+  "src/ipc/methods/preview.test.ts",
+  "src/preview/BrowserSession.test.ts",
+  "src/preview/Manager.test.ts",
+  "src/window/DesktopWindow.test.ts",
+] as const;
 
 const repoEnv = loadRepoEnv();
 const shouldLaunchElectronAfterPack = process.env.T3CODE_DESKTOP_DEV === "1";
@@ -11,6 +30,35 @@ const publicConfigDefine = {
 };
 
 export default defineConfig({
+  test: {
+    projects: [
+      defineProject({
+        test: {
+          name: "desktop",
+          environment: "node",
+          include: ["src/**/*.test.ts"],
+          exclude: [...isolatedDesktopTestFiles],
+          isolate: false,
+          fileParallelism: true,
+          maxWorkers: 4,
+          hookTimeout: 60_000,
+          testTimeout: 60_000,
+        },
+      }),
+      defineProject({
+        test: {
+          name: "desktop-isolated-module-mocks",
+          environment: "node",
+          include: [...isolatedDesktopTestFiles],
+          isolate: true,
+          fileParallelism: true,
+          maxWorkers: 1,
+          hookTimeout: 60_000,
+          testTimeout: 60_000,
+        },
+      }),
+    ],
+  },
   run: {
     tasks: {
       build: {
