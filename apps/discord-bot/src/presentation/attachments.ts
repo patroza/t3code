@@ -64,3 +64,59 @@ export function buildStreamHistoryMarkdownFile(streamText: string): File | null 
     type: "text/markdown;charset=utf-8",
   });
 }
+
+/**
+ * Append a compact T3 deep link on a Discord caption/chunk.
+ * Same-line ` · [T3](url)` — clickable Discord markdown, short label.
+ */
+export function withT3DeepLink(caption: string, t3Url: string | null | undefined): string {
+  const url = t3Url?.trim() ?? "";
+  if (url === "") return caption;
+  const link = `[T3](${url})`;
+  const body = caption.trimEnd();
+  if (body === "") return link;
+  return `${body} · ${link}`;
+}
+
+/**
+ * When the final answer would need multi-message chunking or contains GFM tables,
+ * surface a T3 deep link so the full rendered answer is one click away.
+ * Short single-message prose without tables stays link-free.
+ */
+export function shouldAttachT3DeepLink(input: {
+  readonly text: string;
+  readonly hasMarkdownTables: boolean;
+  readonly messageChunkCount: number;
+}): boolean {
+  if (input.text.trim() === "") return false;
+  if (input.hasMarkdownTables) return true;
+  return input.messageChunkCount > 1;
+}
+
+/**
+ * Append a T3 deep link onto the last message chunk, respecting the Discord limit.
+ * If the link would overflow the last chunk, emit it as its own trailing chunk.
+ */
+export function appendT3DeepLinkToChunks(
+  chunks: ReadonlyArray<string>,
+  t3Url: string | null | undefined,
+  limit: number,
+): string[] {
+  const url = t3Url?.trim() ?? "";
+  if (url === "" || chunks.length === 0) return [...chunks];
+
+  const out = [...chunks];
+  const lastIndex = out.length - 1;
+  const last = out[lastIndex] ?? "";
+  const linked = withT3DeepLink(last, url);
+  if (linked.length <= limit) {
+    out[lastIndex] = linked;
+    return out;
+  }
+
+  const solo = withT3DeepLink("", url);
+  if (solo.length <= limit) {
+    out.push(solo);
+  }
+  return out;
+}

@@ -97,6 +97,32 @@ export function buildT3WebThreadUrl(
 }
 
 /**
+ * Same web UI base as the pin's "Open in Omegent" (`T3_WEB_UI_BASE_URL`),
+ * plus `#message-{messageId}` for client scroll-into-view.
+ * Does not invent a short `t3vm` host — that rewrite is only for public PR bodies.
+ */
+export function buildOmegentThreadMessageUrl(input: {
+  readonly webUiBaseUrl?: string | null | undefined;
+  readonly threadId: string | undefined | null;
+  readonly messageId: string | undefined | null;
+}): string | null {
+  const messageId = input.messageId?.trim() ?? "";
+  if (messageId === "") return null;
+
+  const threadUrl = buildT3WebThreadUrl(input.webUiBaseUrl, input.threadId);
+  if (threadUrl === null) return null;
+
+  try {
+    const url = new URL(threadUrl);
+    url.hash = `message-${messageId}`;
+    return url.toString();
+  } catch {
+    const withoutHash = threadUrl.replace(/#.*$/u, "");
+    return `${withoutHash}#message-${messageId}`;
+  }
+}
+
+/**
  * Public-safe short form: same URL with hostname forced to `t3vm` (no port).
  * Example: `https://t3vm.tail….ts.net/?thread=x` → `https://t3vm/?thread=x`
  */

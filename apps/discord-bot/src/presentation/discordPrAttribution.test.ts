@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appendDiscordPrAttributionFooter,
   buildDiscordThreadJumpUrl,
+  buildOmegentThreadMessageUrl,
   buildT3WebThreadUrl,
   DISCORD_PR_ATTRIBUTION_MARKER,
   ensureDiscordPrAttributionFooters,
@@ -102,6 +103,23 @@ describe("T3 thread URL helpers", () => {
     const once = withT3ThreadLink(base, "https://t3vm/?thread=1");
     expect(once).toBe(`${base} · [T3](https://t3vm/?thread=1)`);
     expect(withT3ThreadLink(once, "https://t3vm/?thread=1")).toBe(once);
+  });
+
+  it("builds message deep links from the configured web UI base", () => {
+    expect(
+      buildOmegentThreadMessageUrl({
+        webUiBaseUrl: "https://t3vm.tail86038f.ts.net/",
+        threadId: "tid-1",
+        messageId: "msg-1",
+      }),
+    ).toBe("https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1");
+    expect(
+      buildOmegentThreadMessageUrl({
+        webUiBaseUrl: undefined,
+        threadId: "tid-1",
+        messageId: "msg-1",
+      }),
+    ).toBeNull();
   });
 });
 

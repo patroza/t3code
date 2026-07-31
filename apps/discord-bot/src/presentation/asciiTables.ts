@@ -217,6 +217,11 @@ export function extractMarkdownTables(text: string): TableMatch[] {
   return matches;
 }
 
+/** True when `text` contains at least one GFM pipe table. */
+export function hasMarkdownTables(text: string): boolean {
+  return extractMarkdownTables(text).length > 0;
+}
+
 /** Exclusive end offset for `lineIndex`, including its trailing newline when present. */
 function lineEndExclusive(
   text: string,

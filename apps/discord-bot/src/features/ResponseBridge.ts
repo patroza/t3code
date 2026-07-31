@@ -25,13 +25,16 @@ import * as Semaphore from "effect/Semaphore";
 
 import { DiscordBotConfig } from "../config.ts";
 import {
+  appendT3DeepLinkToChunks,
   buildStreamHistoryMarkdownText,
   DISCORD_MAX_FILES_PER_MESSAGE,
   imageAttachmentsOf,
+  shouldAttachT3DeepLink,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
 } from "../presentation/attachments.ts";
+import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
 import {
   createMessageWithAttachments,
   DiscordUploadError,
@@ -64,10 +67,7 @@ import {
   stripMarkdownImages,
   type MarkdownImageRef,
 } from "../presentation/markdownImages.ts";
-import {
-  chunkDiscordContentPreservingTables,
-  rewriteMarkdownTablesForDiscord,
-} from "../presentation/asciiTables.ts";
+import { hasMarkdownTables } from "../presentation/asciiTables.ts";
 import {
   chunkDiscordContent,
   formatInProgressChunk,
@@ -3076,7 +3076,8 @@ export const runBridge = (
      * - tip ends with italic _Working.._ (optional · N tool calls on the same line)
      *
      * On turn complete: stream messages are deleted, archived as stream-history.md,
-     * and the final answer is posted as normal Discord message content (+ real image files).
+     * and the final answer is posted as Discord markdown (links live; no ASCII tables),
+     * with a T3 deep link when the answer is long or has GFM tables.
      */
     const postOrEditAssistantUnlocked = (args: {
       readonly turnId: string | null;
@@ -3485,9 +3486,10 @@ export const runBridge = (
 
     /**
      * Final delivery for a completed assistant turn:
-     * 1. Post the final answer as normal Discord message content (chunked if needed)
-     * 2. Attach stream-history.md + chat image attachments + local markdown images as files
-     * 3. Delete the in-progress stream messages so only the final answer remains visible
+     * 1. Post Discord markdown content (chunked if needed; links stay clickable)
+     * 2. Append · [T3](…#message-…) when multi-chunk or tables (full render in Omegent)
+     * 3. Attach stream-history.md + chat/local images as files
+     * 4. Delete the in-progress stream messages so only the final answer remains visible
      */
     const finalizeAssistantMessage = (args: {
       readonly turnId: string | null;
@@ -3686,15 +3688,18 @@ export const runBridge = (
 
         const postedFromFiles = pendingImages.slice(0, imageFiles.length).map((entry) => entry.id);
 
-        // Split once for local-file rewrite notes; re-split after optional table .txt attachments.
-        const initialSplit = splitFilesForDiscordUpload(files);
-        const oversizedByName = new Set(initialSplit.oversized.map((file) => file.name));
+        // Split once for local-file rewrite notes (no table .txt attachments).
+        const { batches: uploadBatches, oversized: oversizedFiles } =
+          splitFilesForDiscordUpload(files);
+        const oversizedByName = new Set(oversizedFiles.map((file) => file.name));
         const attachedFileNames = new Set(
-          initialSplit.batches.flatMap((batch) => batch.map((file) => file.name)),
+          uploadBatches.flatMap((batch) => batch.map((file) => file.name)),
         );
 
         // Final channel text: strip image embeds but keep readable local file references.
         // Never leave Working.. or the stream placeholder.
+        // Keep Discord markdown as-is (links stay clickable). Do not ASCII-ify tables —
+        // long / table-heavy answers get a T3 deep link for full rendering in Omegent.
         const finalText = rewriteMarkdownLocalFileLinksForDiscord({
           text: stripWorkingIndicator(stripMarkdownImages(text)),
           githubUrlsBySrc,
@@ -3709,29 +3714,17 @@ export const runBridge = (
           extractInlinePathCodeSpanRefs(finalText),
           worktreePath,
         );
-        const pathRewrittenFinalText = rewriteInlinePathCodeSpansForDiscord({
+        const renderedFinalText = rewriteInlinePathCodeSpansForDiscord({
           text: finalText,
           githubUrlsByToken: finalInlineGitHubUrlsByToken,
         });
-        // Discord does not render GFM pipe tables — convert to fenced ASCII grids.
-        const tableRewrite = rewriteMarkdownTablesForDiscord(pathRewrittenFinalText, {
-          style: "rounded",
-          messageLimit: DISCORD_LIMIT,
-        });
-        for (const attachment of tableRewrite.attachments) {
-          files.push(textFile(attachment.name, attachment.body, "text/plain;charset=utf-8"));
-        }
-        const renderedFinalText = tableRewrite.text;
-
-        const { batches: uploadBatches, oversized: oversizedFiles } =
-          tableRewrite.attachments.length > 0 ? splitFilesForDiscordUpload(files) : initialSplit;
 
         // Avoid posting a lone "…" placeholder (what you saw in Discord when an image-only
         // turn failed to attach and had no remaining text). Prefer empty content + files,
         // or a short failure note if we expected images but loaded none.
         const baseFinalChunks: string[] =
           renderedFinalText !== ""
-            ? chunkDiscordContentPreservingTables(renderedFinalText, DISCORD_LIMIT)
+            ? chunkDiscordContent(renderedFinalText, DISCORD_LIMIT)
             : files.length > 0
               ? [""]
               : pendingMarkdown.length > 0 ||
@@ -3750,7 +3743,24 @@ export const runBridge = (
           turnId,
           latestTurn: statsThread?.latestTurn ?? null,
         });
-        const finalChunks = appendStatsToMessageChunks(baseFinalChunks, statsLine, DISCORD_LIMIT);
+        let finalChunks = appendStatsToMessageChunks(baseFinalChunks, statsLine, DISCORD_LIMIT);
+
+        // Long multi-message finals and any answer with GFM tables → · [T3](deep link).
+        if (
+          shouldAttachT3DeepLink({
+            text: renderedFinalText,
+            hasMarkdownTables: hasMarkdownTables(renderedFinalText),
+            messageChunkCount: finalChunks.length,
+          })
+        ) {
+          const botConfig = yield* DiscordBotConfig;
+          const t3Url = buildOmegentThreadMessageUrl({
+            webUiBaseUrl: botConfig.webUiBaseUrl,
+            threadId: input.t3ThreadId,
+            messageId: t3MessageId,
+          });
+          finalChunks = appendT3DeepLinkToChunks(finalChunks, t3Url, DISCORD_LIMIT);
+        }
 
         if (finalChunks.length === 0 && files.length === 0) {
           // Nothing useful to post — just clear any leftover Working.. stream messages.

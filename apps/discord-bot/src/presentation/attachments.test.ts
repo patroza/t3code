@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  appendT3DeepLinkToChunks,
   attachmentKey,
   buildStreamHistoryMarkdownText,
   imageAttachmentsOf,
+  shouldAttachT3DeepLink,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
+  withT3DeepLink,
 } from "./attachments.ts";
 
 describe("imageAttachmentsOf", () => {
@@ -88,5 +91,47 @@ describe("buildStreamHistoryMarkdownText", () => {
 
   it("returns null for blank stream text", () => {
     expect(buildStreamHistoryMarkdownText("   \n")).toBeNull();
+  });
+});
+
+describe("T3 deep link caption helpers", () => {
+  it("appends a short same-line T3 link", () => {
+    expect(
+      withT3DeepLink("Summary", "https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1"),
+    ).toBe("Summary · [T3](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)");
+    expect(withT3DeepLink("Summary", null)).toBe("Summary");
+  });
+
+  it("links when the answer has tables or needs multiple chunks", () => {
+    expect(
+      shouldAttachT3DeepLink({
+        text: "short",
+        hasMarkdownTables: false,
+        messageChunkCount: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldAttachT3DeepLink({
+        text: "long",
+        hasMarkdownTables: false,
+        messageChunkCount: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldAttachT3DeepLink({
+        text: "| A | B |\n|---|---|\n| 1 | 2 |",
+        hasMarkdownTables: true,
+        messageChunkCount: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("appends the link onto the last chunk without overflowing", () => {
+    const url = "https://t3vm.example/?thread=t#message-m";
+    expect(appendT3DeepLinkToChunks(["hello"], url, 2000)).toEqual([`hello · [T3](${url})`]);
+    const almostFull = "x".repeat(1990);
+    const next = appendT3DeepLinkToChunks([almostFull], url, 2000);
+    expect(next).toHaveLength(2);
+    expect(next[1]).toBe(`[T3](${url})`);
   });
 });

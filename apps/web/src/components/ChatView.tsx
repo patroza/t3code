@@ -232,6 +232,8 @@ import {
   useThreadRefs,
   useThreadShell,
 } from "../state/entities";
+import { parseMessageIdFromHash } from "../deepLinks";
+import { peekPendingDeepLink, takePendingDeepLinkMessage } from "../deepLinkStore";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -4027,6 +4029,50 @@ function ChatViewContent(props: ChatViewProps) {
     planSidebarDismissedForTurnRef.current = null;
     // activeThreadRef resets transitively with the active thread.
   }, [activeThread?.id]);
+
+  // Omegent deep link: scroll a target message into view (`#message-{id}` /
+  // pending store from `?thread=` navigation).
+  const deepLinkScrollHandledForThreadRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeThread || activeThreadKey === null) return;
+    if (deepLinkScrollHandledForThreadRef.current === activeThread.id) return;
+
+    const pending = peekPendingDeepLink();
+    let targetMessageId: string | null = null;
+    if (pending !== null && pending.threadId === activeThread.id && pending.messageId !== null) {
+      targetMessageId = pending.messageId;
+    } else {
+      targetMessageId = parseMessageIdFromHash(window.location.hash);
+    }
+    if (targetMessageId === null) return;
+
+    const messageExists = activeThread.messages.some(
+      (message) => String(message.id) === targetMessageId,
+    );
+    if (!messageExists) {
+      // Messages may still be loading; retry when the list updates.
+      return;
+    }
+
+    deepLinkScrollHandledForThreadRef.current = activeThread.id;
+    if (pending !== null && pending.threadId === activeThread.id) {
+      takePendingDeepLinkMessage(activeThread.id);
+    }
+
+    const messageId = MessageId.make(targetMessageId);
+    pendingTimelineAnchorRef.current = messageId;
+    positionedTimelineAnchorRef.current = null;
+    settledTimelineAnchorRef.current = null;
+    activeTimelineAnchorIndexRef.current = null;
+    timelineScrollModeRef.current = "anchoring-new-turn";
+    liveFollowUserScrollGenerationRef.current = null;
+    setMaintainTimelineAtEnd(false);
+    setShowScrollToBottom(false);
+    setTimelineAnchor({
+      threadKey: activeThreadKey,
+      messageId,
+    });
+  }, [activeThread, activeThread?.messages, activeThreadKey]);
 
   // Auto-open the plan sidebar when plan/todo steps arrive for the current turn.
   // Don't auto-open for plans carried over from a previous turn (the user can open manually).
