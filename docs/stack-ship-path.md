@@ -217,12 +217,12 @@ you intentionally freeze merges for a cutover window.
 
 ## Current automation state
 
-| Job                          | Intended role                                   | Status                                                                                                                                                                     |
-| ---------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compose fork integration** | Integration tip from changes + **all** overlays | **Active** — merge into `fork/changes` / overlay bases, or `workflow_dispatch`. **No push trigger.** Not a required layer check. |
-| **Fork CI**                  | Green gate on product PR tips / composed integration | **Active** — only quality signal for permanent layer drafts                                                                 |
-| **Rebase fork PR stack**     | Full layer rebuild + PR cascade                 | **`disabled_manually` in GitHub Actions — leave it that way.** Do **not** enable or dispatch this workflow. Slow-path restacks are **local only** (see slow path section). |
-| **Smart integration poller** | Deploy CI-approved integration SHA              | On when fleet should track green integration                                                                                                                               |
+| Job                          | Intended role                                        | Status                                                                                                                                                                     |
+| ---------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compose fork integration** | Integration tip from changes + **all** overlays      | **Active** — merge into `fork/changes` / overlay bases, or `workflow_dispatch`. **No push trigger.** Not a required layer check.                                           |
+| **Fork CI**                  | Green gate on product PR tips / composed integration | **Active** — only quality signal for permanent layer drafts                                                                                                                |
+| **Rebase fork PR stack**     | Full layer rebuild + PR cascade                      | **`disabled_manually` in GitHub Actions — leave it that way.** Do **not** enable or dispatch this workflow. Slow-path restacks are **local only** (see slow path section). |
+| **Smart integration poller** | Deploy CI-approved integration SHA                   | On when fleet should track green integration                                                                                                                               |
 
 **Do not re-enable `Rebase fork PR stack`.** Operators who need a full upstream / Tim / candidates
 rewrite run `node scripts/rebase-pr-stack.ts sync --push` (or equivalent) **locally** with appropriate
