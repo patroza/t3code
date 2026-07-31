@@ -20,18 +20,19 @@ on:
   # Full PR CI for product layers. Job names match required checks (Check / Test /
   # Mobile Native Static Analysis / Release Smoke) on protected bases.
   #
-  # Permanent stack PRs:
-  # - #27 candidates → base fork/tim (covered below)
-  # - #2 changes → base fork/candidates (covered below)
-  # - #1 tim → base main is NOT listed here (would also fire on ordinary main PRs).
-  #   Green Tim tip: workflow_dispatch on fork/changes with checkout_ref=fork/tim
+  # Permanent stack PRs (bases):
+  # - #255 base → main (dispatch only; do not list main here)
+  # - #1 tim → fork/base
+  # - #27 candidates → fork/tim
+  # - #2 changes → fork/candidates
   #
-  # Upstream `.github/workflows/ci.yml` (Blacksmith runners) must stay **disabled**
-  # at repository level — this fork has no Blacksmith capacity; those jobs queue forever.
+  # Upstream Blacksmith CI must stay disabled_manually. fork/base supplies
+  # GitHub-hosted runners + fork-ci.yml for all layers above it.
   #
   # Keep overlay bases in sync with integrationOverlays in pr-stack.json.
   pull_request:
     branches:
+      - fork/base
       - fork/tim
       - fork/candidates
       - fork/changes
