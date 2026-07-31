@@ -1,0 +1,40 @@
+{
+  "overlays": [
+    {
+      "id": "desktop-links",
+      "branch": "t3-discord/f7d37879-desktop-deeplinks",
+      "pullRequest": 10,
+      "paths": [
+        "apps/desktop/src/app/DesktopApp.ts",
+        "apps/desktop/src/app/DesktopClerk.test.ts",
+        "apps/desktop/src/app/DesktopClerk.ts",
+        "apps/desktop/src/app/DesktopDeepLinks.test.ts",
+        "apps/desktop/src/app/DesktopDeepLinks.ts",
+        "apps/desktop/src/backend/DesktopBackendPool.test.ts",
+        "apps/desktop/src/electron/ElectronProtocol.ts",
+        "apps/desktop/src/main.ts",
+        "apps/desktop/src/window/DesktopApplicationMenu.test.ts",
+        "apps/desktop/src/window/DesktopWindow.test.ts",
+        "apps/desktop/src/window/DesktopWindow.ts",
+        "scripts/build-desktop-artifact.ts"
+      ]
+    },
+    {
+      "id": "discord",
+      "branch": "fork/discord",
+      "pullRequest": 80,
+      "paths": [
+        "apps/discord-bot/**",
+        "docs/integrations/discord-bot.md",
+        "docs/architecture/discord-browser-automation.md",
+        "docs/examples/project-aliases.yaml"
+      ]
+    },
+    {
+      "id": "vscode",
+      "branch": "fork/vscode",
+      "pullRequest": 79,
+      "paths": ["apps/vscode/**", ".vscode/launch.json"]
+    }
+  ]
+}
