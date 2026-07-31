@@ -1,0 +1,76 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.23",
+  "version": "1.0.0",
+  "id": "${TEAMS_APP_ID}",
+  "developer": {
+    "name": "T3 Code",
+    "websiteUrl": "${PUBLIC_BASE_URL}",
+    "privacyUrl": "${PUBLIC_BASE_URL}/privacy",
+    "termsOfUseUrl": "${PUBLIC_BASE_URL}/terms"
+  },
+  "name": {
+    "short": "T3 Code",
+    "full": "T3 Code engineering agent"
+  },
+  "description": {
+    "short": "Start and continue T3 Code work from Microsoft Teams.",
+    "full": "Runs T3 Code engineering sessions from Teams conversations or from the Start T3 investigation message action."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#5B5FC7",
+  "bots": [
+    {
+      "botId": "${TEAMS_CLIENT_ID}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": true,
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {
+              "title": "stop",
+              "description": "Stop the active T3 turn in this conversation."
+            },
+            {
+              "title": "approve",
+              "description": "Approve a pending T3 request by request id."
+            },
+            {
+              "title": "deny",
+              "description": "Deny a pending T3 request by request id."
+            },
+            {
+              "title": "answer",
+              "description": "Answer a T3 user-input request with a JSON object."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "composeExtensions": [
+    {
+      "botId": "${TEAMS_CLIENT_ID}",
+      "commands": [
+        {
+          "id": "startT3Investigation",
+          "type": "action",
+          "title": "Start T3 investigation",
+          "description": "Start a T3 investigation from the selected message.",
+          "initialRun": false,
+          "fetchTask": true,
+          "context": ["message"]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["${PUBLIC_HOST}"]
+}

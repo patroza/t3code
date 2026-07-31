@@ -23,6 +23,10 @@
       "types": "./src/agentAwareness.ts",
       "import": "./src/agentAwareness.ts"
     },
+    "./agentRulesPointer": {
+      "types": "./src/agentRulesPointer.ts",
+      "import": "./src/agentRulesPointer.ts"
+    },
     "./sessionWake": {
       "types": "./src/sessionWake.ts",
       "import": "./src/sessionWake.ts"
