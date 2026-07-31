@@ -12,6 +12,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  DEFAULT_SERVER_SETTINGS,
   MessageId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -354,7 +355,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // The server's configured default decides the mode until the user picks one
   // explicitly — same resolution web uses for new draft threads.
   const defaultWorkspaceMode: WorkspaceMode =
-    selectedEnvironmentServerConfig?.settings.defaultThreadEnvMode ?? "local";
+    selectedEnvironmentServerConfig?.settings.defaultThreadEnvMode ??
+    DEFAULT_SERVER_SETTINGS.defaultThreadEnvMode;
   const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode;
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
@@ -365,7 +367,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const startFromOrigin =
     draftStartFromOrigin ??
     selectedEnvironmentServerConfig?.settings.newWorktreesStartFromOrigin ??
-    true;
+    DEFAULT_SERVER_SETTINGS.newWorktreesStartFromOrigin;
   const runtimeMode = selectedProjectDraft.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode = selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
 
