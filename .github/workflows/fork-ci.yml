@@ -7,17 +7,33 @@ env:
 
 on:
   workflow_dispatch:
-  # Full PR CI for the product layer and every registered integration-overlay
-  # base. Child PRs that target an overlay (desktop / discord / vscode) must get
-  # the same Check/Test gates as PRs into fork/changes — otherwise lint/typecheck
-  # only fails after compose on fork/integration.
-  # Candidate and Tim permanent stack PRs stay excluded: they are verified after
-  # they fold into fork/integration (including them here duplicates every restack).
-  # Keep the overlay branch list in sync with integrationOverlays in pr-stack.json
-  # and with compose-integration.yml `on.pull_request` base branches (merge-only;
-  # compose has no push trigger — layer status is this workflow only).
+    inputs:
+      # Tim/candidates provenance tips do not carry fork-ci.yml (only upstream
+      # Blacksmith ci.yml). Dispatch against fork/changes (or any ref that has
+      # this workflow) and set checkout_ref to the tip under test so checks
+      # attach to that SHA / permanent draft PR.
+      checkout_ref:
+        description: "Git ref or SHA to check out and test (default: dispatch ref)"
+        required: false
+        type: string
+        default: ""
+  # Full PR CI for product layers. Job names match required checks (Check / Test /
+  # Mobile Native Static Analysis / Release Smoke) on protected bases.
+  #
+  # Permanent stack PRs:
+  # - #27 candidates → base fork/tim (covered below)
+  # - #2 changes → base fork/candidates (covered below)
+  # - #1 tim → base main is NOT listed here (would also fire on ordinary main PRs).
+  #   Green Tim tip: workflow_dispatch on fork/changes with checkout_ref=fork/tim
+  #
+  # Upstream `.github/workflows/ci.yml` (Blacksmith runners) must stay **disabled**
+  # at repository level — this fork has no Blacksmith capacity; those jobs queue forever.
+  #
+  # Keep overlay bases in sync with integrationOverlays in pr-stack.json.
   pull_request:
     branches:
+      - fork/tim
+      - fork/candidates
       - fork/changes
       # Registered integration overlays (same names as .github/pr-stack.json)
       - t3-discord/f7d37879-desktop-deeplinks
@@ -26,7 +42,7 @@ on:
       - fork/identity
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || inputs.checkout_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -37,6 +53,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -86,6 +104,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -107,6 +127,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -143,6 +165,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.sha }}
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
