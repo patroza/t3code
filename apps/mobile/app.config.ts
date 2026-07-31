@@ -176,13 +176,19 @@ const config: ExpoConfig = {
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.0.1",
-  runtimeVersion: {
-    // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
-    // project — native deps, config plugins, AND patches/ — matches the update.
-    // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
-    // could land on a binary missing the native changes it needs and crash.
-    policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
-  },
+  // Default: fingerprint policy so OTAs only reach binaries with matching native
+  // inputs (deps, config plugins, patches). Override with MOBILE_RUNTIME_VERSION_OVERRIDE
+  // when CI must ship pure-JS fixes to an already-installed binary (e.g. Free-plan
+  // build quota exhausted, or a fingerprint drift without a finished native build).
+  runtimeVersion: (() => {
+    const override = process.env.MOBILE_RUNTIME_VERSION_OVERRIDE?.trim();
+    if (override) {
+      return override;
+    }
+    return {
+      policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
+    };
+  })(),
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
