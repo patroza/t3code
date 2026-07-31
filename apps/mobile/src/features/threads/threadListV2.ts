@@ -9,6 +9,10 @@ import {
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -234,11 +238,19 @@ export interface ThreadListV2SettledShelfListItem {
   readonly expanded: boolean;
 }
 
+export interface ThreadListV2RecencyHeaderListItem {
+  readonly type: "v2-recency-header";
+  readonly key: string;
+  readonly label: string;
+  readonly section: "active" | "settled";
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2SnoozedShelfListItem
-  | ThreadListV2SettledShelfListItem;
+  | ThreadListV2SettledShelfListItem
+  | ThreadListV2RecencyHeaderListItem;
 
 /**
  * Builds the shared mobile order: active → pending → snoozed shelf → settled.
@@ -255,9 +267,12 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
+  /** Adds activity buckets inside active and settled sections. Pinned cards
+      remain above the active buckets. */
+  readonly groupByRecency?: boolean;
 }): ThreadListV2ListItem[] {
-  const threadItems = input.items.map(
-    (item): ThreadListV2ListItem => ({
+  const threadItems: ThreadListV2ThreadListItem[] = input.items.map(
+    (item): ThreadListV2ThreadListItem => ({
       type: "v2-thread",
       key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
       item,
@@ -281,7 +296,41 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const addRecencyHeaders = (
+    items: ReadonlyArray<ThreadListV2ThreadListItem>,
+    section: "active" | "settled",
+  ): ThreadListV2ListItem[] => {
+    if (input.groupByRecency !== true) return [...items];
+    const groups = groupSortedThreadsByRecency(
+      items.map((item) => item.item.thread),
+      input.snoozeLabelNow === undefined ? undefined : new Date(input.snoozeLabelNow),
+    );
+    if (!shouldShowRecencySectionHeaders(groups)) return [...items];
+    const itemByKey = new Map(
+      items.map((item) => [`${item.item.thread.environmentId}:${item.item.thread.id}`, item]),
+    );
+    return groups.flatMap((group) => [
+      {
+        type: "v2-recency-header" as const,
+        key: `v2-recency-header:${section}:${group.id}`,
+        label: group.label,
+        section,
+      },
+      ...group.threads.flatMap((thread) => {
+        const item = itemByKey.get(`${thread.environmentId}:${thread.id}`);
+        return item === undefined ? [] : [item];
+      }),
+    ]);
+  };
+  const activeItems = threadItems.slice(0, activeEnd);
+  const pinnedEnd = activeItems.findIndex((item) => !item.item.pinned);
+  const pinnedItems = pinnedEnd < 0 ? activeItems : activeItems.slice(0, pinnedEnd);
+  const unpinnedActiveItems = pinnedEnd < 0 ? [] : activeItems.slice(pinnedEnd);
+  const result: ThreadListV2ListItem[] = [
+    ...pinnedItems,
+    ...addRecencyHeaders(unpinnedActiveItems, "active"),
+    ...pendingItems,
+  ];
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",
@@ -298,24 +347,37 @@ export function buildThreadListV2ListItems(input: {
       count: settledCount,
       expanded: input.settledShelfExpanded !== false,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    result.push(...addRecencyHeaders(threadItems.slice(settledShelfHeaderIndex), "settled"));
   }
   return result;
 }
 
 /**
  * Partitions visible threads into the active card block (creation order) and
- * the settled recency tail, matching the web v2 list. `autoSettleAfterDays`
+ * the settled recency tail, matching the web Sidebar V2 list (and classic
+ * Recent hide-settled shelf: history is shelved, never dropped). Callers must
+ * not pass settledLimit: 0 to emulate "hide settled" — use paging only.
+ *
+ * `autoSettleAfterDays`
  * mirrors the web default of 3 — mobile has no client-settings sync yet, so
  * the default is fixed here rather than user-configurable.
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly environmentId: EnvironmentId | null;
+  /**
+   * Multi-select environment filter. Empty = all environments.
+   * Prefer this over the legacy single-id field.
+   */
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
+  readonly environmentId?: EnvironmentId | null;
   readonly projectRefs?: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId;
   }> | null;
+  /** Default/false preserves upstream creation order. Recency changes only
+      active and pinned card order; lifecycle sections and variants stay put. */
+  readonly orderByRecency?: boolean;
   readonly searchQuery: string;
   readonly matchedThreadKeys?: ReadonlySet<string>;
   /** Per-row PR state reported up by visible rows ("env:threadId" keys). */
@@ -349,9 +411,22 @@ export function buildThreadListV2Items(input: {
   const snoozeNow = input.snoozeNow ?? now;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
   const query = input.searchQuery.trim().toLocaleLowerCase();
+  const selectedEnvironmentIds =
+    input.selectedEnvironmentIds ??
+    (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
+  const orderActiveThreads = (threads: ReadonlyArray<EnvironmentThreadShell>) => {
+    const upstreamOrder = sortThreadsForListV2(threads);
+    if (input.orderByRecency !== true) return upstreamOrder;
+    return upstreamOrder.sort(
+      (left, right) =>
+        firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt, right.createdAt) -
+          firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt, left.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+  };
 
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -361,7 +436,12 @@ export function buildThreadListV2Items(input: {
   for (const thread of input.threads) {
     // Callers pass live (unarchived) shells; settled threads are among them
     // and partition into the tail via effectiveSettled.
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
+    if (
+      selectedEnvironmentIds.length > 0 &&
+      !selectedEnvironmentIds.includes(thread.environmentId)
+    ) {
+      continue;
+    }
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }
@@ -412,7 +492,7 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = sortThreadsForListV2(active);
+  const orderedActive = orderActiveThreads(active);
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
@@ -444,7 +524,7 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of sortThreadsForListV2(pinned)) {
+  for (const thread of orderActiveThreads(pinned)) {
     items.push({
       thread,
       variant: "card",

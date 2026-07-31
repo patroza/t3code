@@ -26,6 +26,7 @@ import * as Order from "effect/Order";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { matchesEnvironmentFilter } from "./homeEnvironmentFilter";
 
 export type HomeProjectSortOrder = Exclude<SidebarProjectSortOrder, "manual">;
 
@@ -50,11 +51,17 @@ function getProjectSortTimestamp(
 
 export function buildHomeProjectScopes(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
-  readonly environmentId: EnvironmentId | null;
+  /** Empty = all environments. Prefer this over the legacy single-id field. */
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
+  readonly environmentId?: EnvironmentId | null;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
 }): ReadonlyArray<HomeProjectScope> {
-  const projects = input.projects.filter(
-    (project) => input.environmentId === null || project.environmentId === input.environmentId,
+  const selectedEnvironmentIds =
+    input.selectedEnvironmentIds ??
+    (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
+  const projects = input.projects.filter((project) =>
+    matchesEnvironmentFilter(project.environmentId, selectedEnvironmentIds),
   );
   return buildProjectGroups({
     projects,
@@ -204,7 +211,9 @@ export function buildHomeThreadGroups(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly pendingTasks?: ReadonlyArray<PendingNewTask>;
-  readonly environmentId: EnvironmentId | null;
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  /** @deprecated Use selectedEnvironmentIds. */
+  readonly environmentId?: EnvironmentId | null;
   readonly searchQuery: string;
   readonly matchedThreadKeys?: ReadonlySet<string>;
   readonly projectSortOrder: HomeProjectSortOrder;
@@ -214,6 +223,9 @@ export function buildHomeThreadGroups(input: {
   readonly now?: number;
 }): ReadonlyArray<HomeThreadGroup> {
   const now = input.now ?? Date.now();
+  const selectedEnvironmentIds =
+    input.selectedEnvironmentIds ??
+    (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
   const groups = new Map<string, MutableHomeThreadGroup>();
   const groupTitleByKey = new Map<string, string>();
   const groupKeyByProjectKey = new Map<string, string>();
@@ -235,7 +247,7 @@ export function buildHomeThreadGroups(input: {
   }
 
   for (const pendingTask of input.pendingTasks ?? []) {
-    if (input.environmentId !== null && pendingTask.message.environmentId !== input.environmentId) {
+    if (!matchesEnvironmentFilter(pendingTask.message.environmentId, selectedEnvironmentIds)) {
       continue;
     }
 
@@ -277,7 +289,7 @@ export function buildHomeThreadGroups(input: {
     if (thread.archivedAt !== null) {
       continue;
     }
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) {
+    if (!matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds)) {
       continue;
     }
 

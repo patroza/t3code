@@ -26,6 +26,9 @@ import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useThreadPr } from "../../state/use-thread-pr";
+import { prefetchEnvironmentThread } from "../../state/threads";
+import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import {
   resolveThreadListV2SnoozeMenuSelection,
@@ -35,6 +38,7 @@ import {
   type ThreadListV2Status,
 } from "./threadListV2";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { useAtomValue } from "@effect/atom-react";
 
 /**
  * Thread List v2 renders one flat native list: rich edge-to-edge rows for
@@ -204,8 +208,6 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly pane?: "screen" | "sidebar";
   /** Draws the "Pending" divider above the first queued row. */
   readonly showPendingDivider: boolean;
-  /** Keeps row hairlines inside a section; section headers draw their own rule. */
-  readonly showTrailingDivider?: boolean;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
 }) {
@@ -293,9 +295,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
           ) : (
             <View className="bg-screen">
               <View className="px-5 py-2.5">{rowContent}</View>
-              {props.showTrailingDivider !== false ? (
-                <View className="ml-5 h-px bg-border-subtle" />
-              ) : null}
+              <View className="ml-5 h-px bg-border-subtle" />
             </View>
           )}
         </Pressable>
@@ -331,8 +331,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       into the drawer surface, selection filled with the accent color —
       matching the v1 sidebar rows. */
   readonly pane?: "screen" | "sidebar";
-  /** Keeps row hairlines inside a section; section headers draw their own rule. */
-  readonly showTrailingDivider?: boolean;
   /** Highlights the thread open in the detail pane (iPad split view). The
       compact Home list never sets it — phones navigate away on select. */
   readonly selected?: boolean;
@@ -389,10 +387,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   const pr = useThreadPr(thread, props.projectCwd ?? props.project?.workspaceRoot ?? null);
   const prState = pr?.state ?? null;
-  const threadKey = `${thread.environmentId}:${thread.id}`;
+  const threadKey = scopedThreadKey(thread.environmentId, thread.id);
   useEffect(() => {
     onChangeRequestState?.(threadKey, prState);
   }, [onChangeRequestState, prState, threadKey]);
+  const composerDrafts = useAtomValue(composerDraftsAtom);
+  const hasDraft = hasComposerDraftMessage(composerDrafts[threadKey]);
 
   const screenColor = useThemeColor("--color-screen");
   const drawerColor = useThemeColor("--color-drawer");
@@ -613,15 +613,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {statusLabel?.label ?? timeLabel}
         </Text>
       </View>
-      <Text
-        className={cn(
-          "mt-1 text-base font-t3-medium",
-          selected ? "text-user-bubble-foreground" : "text-foreground",
-        )}
-        numberOfLines={2}
-      >
-        {thread.title}
-      </Text>
+      <View className="mt-1 flex-row items-center gap-1.5">
+        <Text
+          className={cn(
+            "flex-1 text-base font-t3-medium",
+            selected ? "text-user-bubble-foreground" : "text-foreground",
+          )}
+          numberOfLines={2}
+        >
+          {thread.title}
+        </Text>
+        {hasDraft ? (
+          <View
+            accessibilityLabel="Unsent draft"
+            className="size-1.5 shrink-0 rounded-full bg-blue-500"
+          />
+        ) : null}
+      </View>
       {props.searchMatch ? (
         <View className="mt-1">
           <ThreadSearchMatchExcerpt
@@ -706,6 +714,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityLabel={thread.title}
         accessibilityRole="button"
         accessibilityState={{ selected }}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -734,9 +745,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
              actions reveal behind the row. */
           <View className="bg-screen">
             <View className="px-5 py-2.5">{cardContent}</View>
-            {props.showTrailingDivider !== false ? (
-              <View className="ml-5 h-px bg-border-subtle" />
-            ) : null}
+            <View className="ml-5 h-px bg-border-subtle" />
           </View>
         )}
       </Pressable>
@@ -747,6 +756,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         accessibilityRole="button"
         accessibilityState={{ selected }}
         className={sidebarPane ? undefined : "bg-screen"}
+        onPressIn={() => {
+          prefetchEnvironmentThread(thread.environmentId, thread.id);
+        }}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -782,15 +794,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </View>
           ) : null}
           <View className="min-w-0 flex-1">
-            <Text
-              className={cn(
-                "text-base",
-                selected ? "text-user-bubble-foreground" : "text-foreground-muted",
-              )}
-              numberOfLines={1}
-            >
-              {thread.title}
-            </Text>
+            <View className="flex-row items-center gap-1.5">
+              <Text
+                className={cn(
+                  "min-w-0 flex-1 text-base",
+                  selected ? "text-user-bubble-foreground" : "text-foreground-muted",
+                )}
+                numberOfLines={1}
+              >
+                {thread.title}
+              </Text>
+              {hasDraft ? (
+                <View
+                  accessibilityLabel="Unsent draft"
+                  className="size-1.5 shrink-0 rounded-full bg-blue-500"
+                />
+              ) : null}
+            </View>
             {props.searchMatch ? (
               <ThreadSearchMatchExcerpt
                 match={props.searchMatch}
