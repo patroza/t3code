@@ -77,6 +77,7 @@ type ProviderIntentEvent = Extract<
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.context-compact-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
@@ -308,6 +309,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.start.failed"
       | "provider.turn.recovery.failed"
       | "provider.turn.interrupt.failed"
+      | "provider.context.compact.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
       | "provider.session.stop.failed";
@@ -644,6 +646,22 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+
+      if (
+        cwdChanged &&
+        activeSession?.provider === "opencode" &&
+        activeSession.resumeCursor !== undefined
+      ) {
+        return yield* new ProviderAdapterRequestError({
+          provider: activeSession.provider,
+          method: "thread.turn.start",
+          detail: [
+            `OpenCode session for thread '${threadId}' is bound to '${activeSession.cwd ?? "unknown"}' but the thread workspace is '${effectiveCwd ?? "unknown"}'.`,
+            "Refusing to resume or replace it silently because that would either run in the wrong directory or lose conversation history.",
+            "Stop this provider session and start a fresh thread/session for the selected worktree.",
+          ].join(" "),
+        });
+      }
 
       if (
         !runtimeModeChanged &&
@@ -1169,7 +1187,65 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    // Clearing the projection here is authoritative: a persisted session may
+    // say "running" even though its provider process disappeared yesterday.
+    // Provider cancellation remains best-effort so Abort always restores a
+    // usable composer without mistaking a quiet, live process for a dead one.
+    yield* providerService
+      .interruptTurn({ threadId: event.payload.threadId })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider turn interrupt failed", { cause }),
+        ),
+      );
+
+    const latestThread = yield* resolveThread(event.payload.threadId);
+    const session = latestThread?.session;
+    if (session && session.status !== "stopped") {
+      yield* setThreadSession({
+        threadId: event.payload.threadId,
+        session: {
+          ...session,
+          status: "ready",
+          activeTurnId: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
+  });
+
+  const processContextCompactRequested = Effect.fn("processContextCompactRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.context-compact-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const hasSession = thread.session && thread.session.status !== "stopped";
+    if (!hasSession) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.context.compact.failed",
+        summary: "Context compact failed",
+        detail: "No active provider session is bound to this thread.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    yield* providerService.compactSession({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.context.compact.failed",
+          summary: "Context compact failed",
+          detail: Cause.pretty(cause),
+          turnId: null,
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1644,6 +1720,9 @@ const make = Effect.gen(function* () {
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
         return;
+      case "thread.context-compact-requested":
+        yield* processContextCompactRequested(event);
+        return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
         return;
@@ -1818,6 +1897,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.context-compact-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested"
@@ -1853,6 +1933,9 @@ const make = Effect.gen(function* () {
       yield* forkParked(clearInterrupted);
     }
 
+    // Startup recovery must finish before server startup settles orphaned
+    // sessions. Otherwise the orphan audit can clear the persisted recovery
+    // marker or stop the replacement process while it is being started.
     yield* reconcileStartup().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("provider restart reconciliation failed", {
@@ -1860,7 +1943,6 @@ const make = Effect.gen(function* () {
         }),
       ),
       Effect.ensuring(Deferred.succeed(startupReconciliationDone, undefined).pipe(Effect.ignore)),
-      Effect.forkScoped,
     );
   });
 
