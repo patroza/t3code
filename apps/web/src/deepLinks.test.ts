@@ -4,6 +4,7 @@ import { messageDeepLinkHash, parseMessageIdFromHash, parseOmegentDeepLink } fro
 import {
   clearPendingDeepLink,
   hasAwaitingThreadDeepLink,
+  hasThreadDeepLinkIntent,
   markDeepLinkNavigationIssued,
   peekPendingDeepLink,
   setPendingDeepLink,
@@ -57,8 +58,11 @@ describe("deepLinkStore", () => {
     setPendingDeepLink({ threadId: "tid-1", messageId: null });
     expect(peekPendingDeepLink()?.awaitingNavigation).toBe(true);
     expect(hasAwaitingThreadDeepLink()).toBe(true);
+    expect(hasThreadDeepLinkIntent()).toBe(true);
     markDeepLinkNavigationIssued("tid-1");
     expect(hasAwaitingThreadDeepLink()).toBe(false);
+    // Without a live ?thread= query, intent ends once navigation is issued.
+    expect(hasThreadDeepLinkIntent()).toBe(false);
     expect(peekPendingDeepLink()).toEqual({
       threadId: "tid-1",
       messageId: null,

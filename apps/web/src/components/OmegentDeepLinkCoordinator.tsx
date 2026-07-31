@@ -1,20 +1,18 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef } from "react";
 
 import {
-  clearPendingDeepLink,
+  captureDeepLinkFromWindowLocation,
   markDeepLinkNavigationIssued,
   peekPendingDeepLink,
   setPendingDeepLink,
 } from "../deepLinkStore";
 import { parseOmegentDeepLink } from "../deepLinks";
 import { buildThreadRouteParams } from "../threadRoutes";
-import {
-  findThreadRef,
-  useAllEnvironmentShellsBootstrapped,
-  useThreadRefs,
-} from "../state/entities";
+import { findThreadRef, useThreadRefs } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
 
 function stripThreadQueryFromLocation(): void {
   const next = new URL(window.location.href);
@@ -27,38 +25,24 @@ function stripThreadQueryFromLocation(): void {
 
 /**
  * Consumes `/?thread={id}#message-{messageId}` deep links:
- * stashes intent immediately (before the index auto-draft can wipe `?thread=`),
- * then navigates to the thread route once shells are bootstrapped.
+ * stashes intent immediately (before index auto-draft / welcome bootstrap can
+ * wipe `?thread=`), then navigates to the thread route.
+ *
+ * Does not require the thread to already be in the shell list — falls back to
+ * the primary environment id. The thread route owns missing/loading states.
  */
 export function OmegentDeepLinkCoordinator() {
   const navigate = useNavigate();
-  const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const threadRefs = useThreadRefs();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const handledThreadIdRef = useRef<string | null>(null);
 
-  // Capture before paint so sibling index-route effects that also wait on
-  // bootstrap cannot replace the URL with a new draft first.
+  // Capture before paint so sibling landing effects cannot replace the URL first.
   useLayoutEffect(() => {
-    const { threadId, messageId } = parseOmegentDeepLink(new URL(window.location.href));
-    if (threadId === null) return;
-    const existing = peekPendingDeepLink();
-    if (existing !== null && existing.threadId === threadId) {
-      // Prefer a message id from the live URL when present.
-      if (messageId !== null && existing.messageId === null) {
-        setPendingDeepLink({
-          threadId,
-          messageId,
-          awaitingNavigation: existing.awaitingNavigation,
-        });
-      }
-      return;
-    }
-    setPendingDeepLink({ threadId, messageId, awaitingNavigation: true });
+    captureDeepLinkFromWindowLocation();
   }, []);
 
   useEffect(() => {
-    if (!bootstrapped) return;
-
     const fromUrl = parseOmegentDeepLink(new URL(window.location.href));
     const pending = peekPendingDeepLink();
     const threadId = fromUrl.threadId ?? pending?.threadId ?? null;
@@ -73,13 +57,16 @@ export function OmegentDeepLinkCoordinator() {
       awaitingNavigation: pending?.awaitingNavigation ?? true,
     });
 
-    const threadRef = findThreadRef(ThreadId.make(threadId));
+    const knownRef = findThreadRef(ThreadId.make(threadId));
+    // Prefer the shell list (correct env in multi-env). Fall back to primary
+    // so we never sit forever on `/` waiting for a ref that is slow/empty.
+    const threadRef =
+      knownRef ??
+      (primaryEnvironmentId !== null
+        ? scopeThreadRef(primaryEnvironmentId, ThreadId.make(threadId))
+        : null);
     if (threadRef === null) {
-      // Shells are bootstrapped: this id is not in the open shell list.
-      // Drop the deep link so the index route can fall through to a new draft.
-      handledThreadIdRef.current = threadId;
-      clearPendingDeepLink();
-      stripThreadQueryFromLocation();
+      // No environment yet — retry when catalog/primary becomes available.
       return;
     }
 
@@ -94,7 +81,7 @@ export function OmegentDeepLinkCoordinator() {
     }).then(() => {
       stripThreadQueryFromLocation();
     });
-  }, [bootstrapped, navigate, threadRefs]);
+  }, [navigate, primaryEnvironmentId, threadRefs]);
 
   return null;
 }
