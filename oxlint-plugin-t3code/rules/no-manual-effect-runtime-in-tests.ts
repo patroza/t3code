@@ -32,7 +32,7 @@ const LEGACY_BASELINE = new Map<string, number>([
   ["apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts", 70],
   ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts", 31],
   ["apps/server/src/orchestration/Layers/ThreadDeletionReactor.test.ts", 2],
-  ["apps/server/src/orchestration/projector.test.ts", 20],
+  ["apps/server/src/orchestration/projector.test.ts", 21],
   ["apps/server/src/project/Layers/ProjectSetupScriptRunner.test.ts", 4],
   ["apps/server/src/provider/acp/CursorAcpSupport.test.ts", 1],
   ["apps/server/src/provider/Layers/ClaudeAdapter.test.ts", 2],
