@@ -9,6 +9,7 @@ import {
   nativeMarkdownListItemBlocks,
   nativeMarkdownTextRuns,
 } from "./nativeMarkdownText";
+import { markdownNodeKey } from "./markdownNodeKey";
 import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText.ios";
 import type {
   MarkdownCodeHighlighter,
@@ -23,7 +24,7 @@ const highlightedCodePromiseCache = new Map<string, Promise<HighlightedCode>>();
 const HIGHLIGHTED_CODE_CACHE_LIMIT = 64;
 
 function nodeKey(node: MarkdownNode, index: number): string {
-  return `${node.type}:${node.beg ?? index}:${node.end ?? index}`;
+  return markdownNodeKey(node, index);
 }
 
 /** Code inside markdown scales with the base text size (12pt at the default 15pt body). */
@@ -132,7 +133,9 @@ function useHighlightedCode(
     const cached = highlightedCodeCache.get(key);
     if (cached) {
       cacheHighlightedCode(key, cached);
-      setHighlighted({ key, tokens: cached });
+      setHighlighted((current) =>
+        current.key === key && current.tokens === cached ? current : { key, tokens: cached },
+      );
       return () => {
         active = false;
       };
@@ -320,6 +323,17 @@ function collectTableRows(node: MarkdownNode): MarkdownNode[] {
   return rows;
 }
 
+function tableCellRuns(
+  cell: MarkdownNode,
+  emphasize: boolean,
+): ReturnType<typeof nativeMarkdownTextRuns> {
+  const runs = nativeMarkdownTextRuns(cell);
+  if (!emphasize) {
+    return runs;
+  }
+  return runs.map((run) => (run.bold ? run : { ...run, bold: true }));
+}
+
 function NativeTable(props: {
   readonly node: MarkdownNode;
   readonly textStyle: NativeMarkdownTextStyle;
@@ -359,9 +373,7 @@ function NativeTable(props: {
                 }}
               >
                 <NativeMarkdownSelectableText
-                  runs={nativeMarkdownTextRuns(cell).map((run) =>
-                    rowIndex === 0 || cell.isHeader ? { ...run, bold: true } : run,
-                  )}
+                  runs={tableCellRuns(cell, rowIndex === 0 || cell.isHeader === true)}
                   textStyle={props.textStyle}
                   onLinkPress={props.onLinkPress}
                 />
