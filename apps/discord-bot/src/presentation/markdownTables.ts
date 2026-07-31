@@ -62,7 +62,7 @@ function isTableRowLine(line: string): boolean {
   const trimmed = line.trim();
   if (trimmed.length === 0) return false;
   if (!trimmed.includes("|")) return false;
-  if (/^```/.test(trimmed)) return false;
+  if (trimmed.startsWith("```")) return false;
   return true;
 }
 
