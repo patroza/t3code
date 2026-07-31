@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -22,6 +23,10 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import {
+  SERVER_RUNTIME_DESCRIPTOR_FILE,
+  ServerRuntimeDescriptor,
+} from "@t3tools/shared/serverRuntime";
 
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -30,11 +35,13 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { runWebVersionWatcher } from "./webVersionWatcher.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as OrphanSessionRecovery from "./orchestration/Services/OrphanSessionRecovery.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
@@ -291,12 +298,20 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+/**
+ * Pure helper for session rows that claimed to be live across a process restart.
+ * Only marks **Wake Required** (`interrupted`) when a turn was actually in flight.
+ * Zombie `running`/`starting` sessions with no active turn settle to `ready`.
+ */
 export function interruptSessionAfterServerRestart(
   session: OrchestrationSession | null,
   updatedAt: string,
 ): OrchestrationSession | null {
-  if (session?.status !== "starting" && session?.status !== "running") return null;
-  if (session.activeTurnId == null) {
+  if (session?.status !== "starting" && session?.status !== "running") {
+    return null;
+  }
+  const hadActiveTurn = session.activeTurnId != null;
+  if (!hadActiveTurn) {
     return {
       ...session,
       status: "ready",
@@ -320,13 +335,33 @@ interface StartupOptions {
   readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
 }
 
+const ServerRuntimeDescriptorJson = Schema.fromJsonString(ServerRuntimeDescriptor);
+const encodeServerRuntimeDescriptor = Schema.encodeEffect(ServerRuntimeDescriptorJson);
+const decodeServerRuntimeDescriptor = Schema.decodeEffect(ServerRuntimeDescriptorJson);
+
+/**
+ * Exact contents written to the runtime descriptor file. The desktop client
+ * reads this file back and decodes it with the same schema
+ * (`DesktopExistingBackend`), so the on-disk shape is a cross-process contract.
+ */
+export const encodeServerRuntimeDescriptorFile = (
+  descriptor: ServerRuntimeDescriptor,
+): Effect.Effect<string, Schema.SchemaError> =>
+  encodeServerRuntimeDescriptor(descriptor).pipe(Effect.map((json) => `${json}\n`));
+
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+    const orphanSessionRecovery = yield* OrphanSessionRecovery.OrphanSessionRecovery;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+    // Broadcast when the served web bundle is hot-swapped on disk so clients can
+    // offer a reload without a server restart.
+    yield* Effect.forkScoped(runWebVersionWatcher(lifecycleEvents));
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const crypto = yield* Crypto.Crypto;
@@ -375,6 +410,22 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
+        }),
+      );
+
+      yield* runStartupPhase(
+        "sessions.interrupt-stale",
+        Effect.gen(function* () {
+          // Full orphan audit: clear shell sessions *and* provider runtimes that
+          // claim to be live. No provider process can have survived the restart,
+          // so leaving them "running" deadlocks resync/reaper behind active turns.
+          const result = yield* orphanSessionRecovery.settleAllAfterServerRestart();
+          if (result.settledSessions > 0 || result.settledRuntimes > 0) {
+            yield* Effect.logWarning("interrupted stale provider sessions after server restart", {
+              interruptedCount: result.settledSessions,
+              settledRuntimes: result.settledRuntimes,
+            });
+          }
         }),
       );
 
@@ -449,6 +500,39 @@ export const make = (options?: StartupOptions) =>
 
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+
+      const runtimeDescriptorPath = path.join(
+        serverConfig.stateDir,
+        SERVER_RUNTIME_DESCRIPTOR_FILE,
+      );
+      const descriptorHost =
+        serverConfig.host === undefined || isWildcardHost(serverConfig.host)
+          ? "127.0.0.1"
+          : serverConfig.host;
+      const runtimeStartedAt = DateTime.formatIso(yield* DateTime.now);
+      const runtimeDescriptorContents = yield* encodeServerRuntimeDescriptorFile({
+        version: 1,
+        pid: process.pid,
+        stateDir: serverConfig.stateDir,
+        httpBaseUrl: `http://${formatHostForUrl(descriptorHost)}:${serverConfig.port}`,
+        startedAt: runtimeStartedAt,
+      }).pipe(Effect.orDie);
+      yield* fileSystem
+        .writeFileString(runtimeDescriptorPath, runtimeDescriptorContents, { mode: 0o600 })
+        .pipe(Effect.orDie);
+      yield* Effect.addFinalizer(() =>
+        // Best-effort cleanup: only this process's own descriptor is removed,
+        // and a missing, unreadable, or malformed file must not fail shutdown.
+        fileSystem.readFileString(runtimeDescriptorPath).pipe(
+          Effect.flatMap(decodeServerRuntimeDescriptor),
+          Effect.flatMap((current) =>
+            current.pid === process.pid
+              ? fileSystem.remove(runtimeDescriptorPath, { force: true })
+              : Effect.void,
+          ),
+          Effect.ignore,
+        ),
+      );
       yield* runStartupPhase(
         "auxiliary-roots.parked",
         options?.awaitAuxiliaryParked ?? Effect.void,
