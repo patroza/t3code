@@ -399,7 +399,7 @@ export function serverConfigStateChanges(environmentId: EnvironmentId) {
 export function projectServerWelcome(
   current: Option.Option<ServerLifecycleWelcomePayload>,
   event: {
-    readonly type: "welcome" | "ready";
+    readonly type: "welcome" | "ready" | "webVersionChanged";
     readonly payload: unknown;
   },
 ): readonly [
@@ -411,6 +411,25 @@ export function projectServerWelcome(
   }
   const welcome = event.payload as ServerLifecycleWelcomePayload;
   return [Option.some(welcome), [welcome]];
+}
+
+/**
+ * Accumulates the latest served web-bundle version from the lifecycle stream.
+ * The first value a client observes is the version it is running; a later,
+ * different value means the server hot-swapped its web assets.
+ */
+export function projectServerWebVersion(
+  current: Option.Option<string>,
+  event: {
+    readonly type: "welcome" | "ready" | "webVersionChanged";
+    readonly payload: unknown;
+  },
+): readonly [Option.Option<string>, ReadonlyArray<string>] {
+  if (event.type !== "webVersionChanged") {
+    return [current, []];
+  }
+  const { webVersion } = event.payload as { readonly webVersion: string };
+  return [Option.some(webVersion), [webVersion]];
 }
 
 export function resolveServerConfigValue(
@@ -695,6 +714,12 @@ export function createServerEnvironmentAtoms<R, E>(
         stream.pipe(
           Stream.mapAccum(Option.none<ServerLifecycleWelcomePayload>, projectServerWelcome),
         ),
+    }),
+    webVersion: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:web-version",
+      tag: WS_METHODS.subscribeServerLifecycle,
+      transform: (stream) =>
+        stream.pipe(Stream.mapAccum(Option.none<string>, projectServerWebVersion)),
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
