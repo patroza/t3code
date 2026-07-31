@@ -1,5 +1,4 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -9,14 +8,11 @@ import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
-import { peekPendingDeepLink } from "../deepLinkStore";
-import { parseOmegentDeepLink } from "../deepLinks";
+import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
-  findThreadRef,
   useAllEnvironmentShellsBootstrapped,
   useProjects,
-  useThreadRefs,
   useThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
@@ -37,43 +33,23 @@ function ChatIndexRouteView() {
 }
 
 /**
- * True while a `/?thread=` deep link should own the index landing instead of
- * auto-opening a new draft. Index route effects run in the same commit as the
- * deep-link coordinator, so this must be decided from the URL / pending store
- * and shell membership — not by waiting for the coordinator.
- */
-function shouldDeferIndexDraftForDeepLink(bootstrapped: boolean): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  const fromUrl = parseOmegentDeepLink(new URL(window.location.href));
-  const threadId = fromUrl.threadId ?? peekPendingDeepLink()?.threadId ?? null;
-  if (threadId === null) {
-    return false;
-  }
-  // Before shells load, always wait — the target thread may still appear.
-  if (!bootstrapped) {
-    return true;
-  }
-  // After bootstrap: only defer when the shell list has the thread
-  // (coordinator will navigate). Missing/unknown ids fall through to draft.
-  return findThreadRef(ThreadId.make(threadId)) !== null;
-}
-
-/**
  * Landing on the index route drops straight into a draft thread for the most
  * recently active project, so the first screen is a prompt instead of a dead
  * end. Falls back to an add-project hero when no project exists yet.
+ *
+ * While `?thread=` (or a pending deep-link store entry) is present, skip
+ * auto-draft so OmegentDeepLinkCoordinator can open the real thread.
  */
 
 function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
-  const threadRefs = useThreadRefs();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+  // Re-read each render: store is module-level; coordinator clears/marks it.
+  const deferForDeepLink = hasThreadDeepLinkIntent();
 
   const mostRecentProject = useMemo(
     () =>
@@ -81,15 +57,6 @@ function IndexDraftLanding() {
         ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
         : null,
     [bootstrapped, projects, threads],
-  );
-
-  // Recompute when shell refs change so a resolved/missing deep link can
-  // unblock the auto-draft path without a full reload.
-  const deferForDeepLink = useMemo(
-    () => shouldDeferIndexDraftForDeepLink(bootstrapped),
-    // threadRefs: shell membership for the target id can appear after bootstrap.
-    // startState.retryRequest: keep in sync with the start effect below.
-    [bootstrapped, threadRefs, startState.retryRequest],
   );
 
   useEffect(() => {
