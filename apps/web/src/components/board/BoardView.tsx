@@ -23,7 +23,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import type { ScopedThreadRef, VcsStatusResult } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef, VcsStatusResult } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -53,6 +53,14 @@ import { buildThreadRouteParams } from "../../threadRoutes";
 import type { Project, SidebarThreadSummary } from "../../types";
 import { useUiStateStore } from "../../uiStateStore";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
+import { ListEnvironmentFilterControl } from "../ListEnvironmentFilterControl";
+import {
+  EMPTY_LIST_ENVIRONMENT_FILTER,
+  LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+  ListEnvironmentFilterSchema,
+  matchesEnvironmentFilter,
+  resolveSelectedEnvironmentIds,
+} from "../listEnvironmentFilter";
 import { ProjectFavicon, ProjectFaviconFallback } from "../ProjectFavicon";
 import {
   SETTLED_TAIL_INITIAL_COUNT,
@@ -204,6 +212,37 @@ function BoardContent() {
     null,
     BoardProjectFilterSchema,
   );
+  const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
+    LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+    EMPTY_LIST_ENVIRONMENT_FILTER,
+    ListEnvironmentFilterSchema,
+  );
+  const availableEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  const selectedEnvironmentIds = useMemo(
+    () =>
+      resolveSelectedEnvironmentIds(
+        storedEnvironmentFilter as readonly EnvironmentId[],
+        availableEnvironmentIds,
+      ),
+    [availableEnvironmentIds, storedEnvironmentFilter],
+  );
+  const environmentFilterOptions = useMemo(
+    () =>
+      environments.map((environment) => ({
+        environmentId: environment.environmentId,
+        label: environment.label,
+      })),
+    [environments],
+  );
+  const handleSelectedEnvironmentIdsChange = useCallback(
+    (next: readonly EnvironmentId[]) => {
+      setStoredEnvironmentFilter([...next]);
+    },
+    [setStoredEnvironmentFilter],
+  );
 
   const environmentLabelById = useMemo(
     () =>
@@ -254,16 +293,30 @@ function BoardContent() {
   );
 
   const threads = useMemo(
-    () => threadShells.filter((thread) => thread.archivedAt === null),
-    [threadShells],
+    () =>
+      threadShells.filter(
+        (thread) =>
+          thread.archivedAt === null &&
+          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
+      ),
+    [selectedEnvironmentIds, threadShells],
+  );
+  const envFilteredProjectSnapshots = useMemo(
+    () =>
+      projectSnapshots.filter((snapshot) =>
+        snapshot.memberProjects.some((member) =>
+          matchesEnvironmentFilter(member.environmentId, selectedEnvironmentIds),
+        ),
+      ),
+    [projectSnapshots, selectedEnvironmentIds],
   );
   const filterPredicate = useMemo(
     () =>
       buildBoardProjectFilterPredicate({
         selectedProjectKey: storedProjectFilter,
-        snapshots: projectSnapshots,
+        snapshots: envFilteredProjectSnapshots,
       }),
-    [projectSnapshots, storedProjectFilter],
+    [envFilteredProjectSnapshots, storedProjectFilter],
   );
   const filteredThreads = useMemo(
     () => threads.filter(filterPredicate),
@@ -321,7 +374,6 @@ function BoardContent() {
       const changeRequestState =
         resolveThreadPr({
           threadBranch: thread.branch,
-          hasDedicatedWorktree: thread.worktreePath != null,
           gitStatus: getThreadGitContext(thread).gitStatus,
         })?.state ?? null;
       if (
@@ -763,22 +815,24 @@ function BoardContent() {
   const projectFilterItems = useMemo(
     () => [
       { value: BOARD_PROJECT_FILTER_ALL, label: "All projects" },
-      ...projectSnapshots.map((snapshot) => ({
+      ...envFilteredProjectSnapshots.map((snapshot) => ({
         value: snapshot.projectKey,
         label: snapshot.displayName,
       })),
     ],
-    [projectSnapshots],
+    [envFilteredProjectSnapshots],
   );
   const selectedFilterValue =
     storedProjectFilter !== null &&
-    projectSnapshots.some((snapshot) => snapshot.projectKey === storedProjectFilter)
+    envFilteredProjectSnapshots.some((snapshot) => snapshot.projectKey === storedProjectFilter)
       ? storedProjectFilter
       : BOARD_PROJECT_FILTER_ALL;
   const selectedFilterSnapshot =
     selectedFilterValue === BOARD_PROJECT_FILTER_ALL
       ? null
-      : (projectSnapshots.find((snapshot) => snapshot.projectKey === selectedFilterValue) ?? null);
+      : (envFilteredProjectSnapshots.find(
+          (snapshot) => snapshot.projectKey === selectedFilterValue,
+        ) ?? null);
 
   return (
     <>
@@ -794,6 +848,14 @@ function BoardContent() {
       >
         <span className="truncate text-sm font-medium text-foreground">Board</span>
         <div className="ms-auto flex min-w-0 items-center gap-2 wco:pr-[var(--workspace-native-controls-inset)]">
+          <ListEnvironmentFilterControl
+            environments={environmentFilterOptions}
+            selectedEnvironmentIds={selectedEnvironmentIds}
+            onSelectedEnvironmentIdsChange={handleSelectedEnvironmentIdsChange}
+            size="sm"
+            triggerClassName="w-36 min-w-0 sm:w-44"
+            data-testid="board-environment-filter"
+          />
           <Select
             modal={false}
             value={selectedFilterValue}
@@ -831,7 +893,7 @@ function BoardContent() {
                   <span className="truncate">All projects</span>
                 </span>
               </SelectItem>
-              {projectSnapshots.map((snapshot) => (
+              {envFilteredProjectSnapshots.map((snapshot) => (
                 <SelectItem key={snapshot.projectKey} value={snapshot.projectKey}>
                   <span className="flex min-w-0 items-center gap-1.5">
                     <ProjectFavicon

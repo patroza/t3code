@@ -84,6 +84,8 @@ import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { useAssetUrl } from "../assets/assetUrls";
+import { isLocalMarkdownImageSrc, normalizeLocalMarkdownImageSrc } from "../markdown-images";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import {
   isBrowserPreviewFile,
@@ -869,6 +871,55 @@ const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: 
   );
 });
 
+const MARKDOWN_IMAGE_CLASS_NAME =
+  "my-2 max-h-[28rem] max-w-full rounded-md border border-border/60 object-contain bg-muted/20";
+
+const MarkdownWorkspaceImage = memo(function MarkdownWorkspaceImage({
+  src,
+  alt,
+  threadRef,
+  className,
+  ...props
+}: {
+  src: string;
+  alt?: string | undefined;
+  threadRef: ScopedThreadRef;
+  className?: string | undefined;
+} & Omit<React.ComponentProps<"img">, "src" | "alt" | "className">) {
+  const localPath = normalizeLocalMarkdownImageSrc(src);
+  const assetUrl = useAssetUrl(threadRef.environmentId, {
+    _tag: "workspace-file",
+    threadId: threadRef.threadId,
+    path: localPath,
+  });
+  const [failed, setFailed] = useState(false);
+
+  if (failed || assetUrl === null) {
+    return (
+      <span
+        className="my-2 inline-flex max-w-full items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground"
+        title={localPath}
+      >
+        <span aria-hidden>🖼</span>
+        <span className="min-w-0 truncate">
+          {alt?.trim() || localPath.split(/[/\\]/).at(-1) || "Image"}
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <img
+      {...props}
+      src={assetUrl}
+      alt={alt ?? ""}
+      loading="lazy"
+      className={cn(MARKDOWN_IMAGE_CLASS_NAME, className)}
+      onError={() => setFailed(true)}
+    />
+  );
+});
+
 function leadingExternalLinkTextLength(text: string): number {
   const protocol = /^(?:https?:\/\/)/i.exec(text)?.[0];
   if (protocol) return protocol.length;
@@ -1409,6 +1460,30 @@ function ChatMarkdown({
     };
 
     return {
+      img({ node: _node, src, alt, className, ...props }) {
+        const srcValue = typeof src === "string" ? src : undefined;
+        if (srcValue && isLocalMarkdownImageSrc(srcValue) && threadRef) {
+          return (
+            <MarkdownWorkspaceImage
+              src={srcValue}
+              alt={alt}
+              threadRef={threadRef}
+              className={typeof className === "string" ? className : undefined}
+              {...props}
+            />
+          );
+        }
+        if (!srcValue) return null;
+        return (
+          <img
+            {...props}
+            src={srcValue}
+            alt={alt ?? ""}
+            loading="lazy"
+            className={cn(MARKDOWN_IMAGE_CLASS_NAME, className)}
+          />
+        );
+      },
       p({ node: _node, children, ...props }) {
         return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
       },
