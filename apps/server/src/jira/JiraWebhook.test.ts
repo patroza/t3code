@@ -8,7 +8,7 @@ import {
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
 import { formatJiraComment } from "./JiraIssueBridge.ts";
-import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
   classifyWebhookBodyFailure,
   previewWebhookBody,
@@ -321,11 +321,13 @@ describe("Jira thread lookup", () => {
       links: [
         {
           t3ThreadId: "thread-a",
+          discordThreadId: "discord-a",
           status: "active",
           jiraIssueKeys: ["SA-402", "SA-409"],
         },
         {
           t3ThreadId: "thread-b",
+          discordThreadId: "discord-b",
           status: "tombstone",
           jiraIssueKeys: ["SA-402"],
         },
@@ -334,6 +336,13 @@ describe("Jira thread lookup", () => {
     expect(resolveThreadIdForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
       _tag: "linked",
       threadId: "thread-a",
+    });
+    expect(resolveDiscordLinkForJiraIssue({ issueKey: "SA-402", linksJson })).toEqual({
+      _tag: "linked",
+      discordThreadId: "discord-a",
+      t3ThreadId: "thread-a",
+      channelId: null,
+      guildId: null,
     });
   });
 
@@ -356,6 +365,28 @@ describe("Jira thread lookup", () => {
         }),
       }),
     ).toMatchObject({ _tag: "ambiguous" });
+
+    expect(
+      resolveDiscordLinkForJiraIssue({
+        issueKey: "SA-1",
+        linksJson: JSON.stringify({
+          links: [
+            {
+              t3ThreadId: "a",
+              discordThreadId: "d1",
+              status: "active",
+              jiraIssueKeys: ["SA-1"],
+            },
+            {
+              t3ThreadId: "b",
+              discordThreadId: "d2",
+              status: "active",
+              jiraIssueKeys: ["SA-1"],
+            },
+          ],
+        }),
+      }),
+    ).toMatchObject({ _tag: "ambiguous" });
   });
 });
 
@@ -366,6 +397,36 @@ describe("Jira helpers", () => {
     expect(isJiraProjectAllowed(new Set(["SA"]), "CFG")).toBe(false);
     expect(isJiraProjectAllowed(new Set(), "ANY")).toBe(true);
     expect(plainTextToAdf("hello\n\nworld").content).toHaveLength(2);
+    // Live Jira comments use bare accountId in attrs.id (no accountid: prefix).
+    const withMention = plainTextToAdf("hello", {
+      mention: { accountId: "6331c32307a27ebeff15d19d", displayName: "Armin Gebhardt" },
+    });
+    expect(withMention.content[0]?.content[0]).toMatchObject({
+      type: "mention",
+      attrs: {
+        id: "6331c32307a27ebeff15d19d",
+        text: "@Armin Gebhardt",
+        accessLevel: "",
+      },
+    });
+    expect(withMention.content[0]?.content[1]).toMatchObject({
+      type: "text",
+      text: " hello",
+    });
+    // Wiki/Automation form still normalizes to bare accountId for outbound ADF.
+    const fromWikiForm = plainTextToAdf("ping", {
+      mention: {
+        accountId: "accountid:712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab",
+        displayName: "Omegent",
+      },
+    });
+    expect(fromWikiForm.content[0]?.content[0]).toMatchObject({
+      type: "mention",
+      attrs: {
+        id: "712020:187d3a46-cef9-4fcd-881b-b66f1a7e56ab",
+        text: "@Omegent",
+      },
+    });
     expect(formatJiraComment("  ok  ")).toBe("ok");
   });
 

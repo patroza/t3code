@@ -9,6 +9,13 @@ import {
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import {
+  IdentityClaimInput,
+  IdentityClaimResult,
+  IdentityError,
+  IdentitySessionClaimResult,
+  IdentitySnapshot,
+} from "./identity.ts";
+import {
   BackgroundPolicySnapshot,
   ClientActivityReportInput,
   HostPowerSnapshot,
@@ -87,9 +94,6 @@ import {
   ProjectReadFileError,
   ProjectReadFileInput,
   ProjectReadFileResult,
-  ProjectSearchContentsError,
-  ProjectSearchContentsInput,
-  ProjectSearchContentsResult,
   ProjectSearchEntriesError,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -183,7 +187,6 @@ export const WS_METHODS = {
   projectsRemove: "projects.remove",
   projectsListEntries: "projects.listEntries",
   projectsReadFile: "projects.readFile",
-  projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
 
@@ -258,6 +261,12 @@ export const WS_METHODS = {
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+
+  // Session identity (closed-set map claim)
+  identityGetSnapshot: "identity.getSnapshot",
+  identityGetSessionClaim: "identity.getSessionClaim",
+  identityClaim: "identity.claim",
+  identityClearClaim: "identity.clearClaim",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -426,6 +435,30 @@ export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRela
   stream: true,
 });
 
+export const WsIdentityGetSnapshotRpc = Rpc.make(WS_METHODS.identityGetSnapshot, {
+  payload: Schema.Struct({}),
+  success: IdentitySnapshot,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityGetSessionClaimRpc = Rpc.make(WS_METHODS.identityGetSessionClaim, {
+  payload: Schema.Struct({}),
+  success: IdentitySessionClaimResult,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityClaimRpc = Rpc.make(WS_METHODS.identityClaim, {
+  payload: IdentityClaimInput,
+  success: IdentityClaimResult,
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
+export const WsIdentityClearClaimRpc = Rpc.make(WS_METHODS.identityClearClaim, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ cleared: Schema.Boolean }),
+  error: Schema.Union([IdentityError, EnvironmentAuthorizationError]),
+});
+
 export const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
   payload: ClientActivityReportInput,
   error: EnvironmentAuthorizationError,
@@ -470,12 +503,6 @@ export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntr
   payload: ProjectSearchEntriesInput,
   success: ProjectSearchEntriesResult,
   error: Schema.Union([ProjectSearchEntriesError, EnvironmentAuthorizationError]),
-});
-
-export const WsProjectsSearchContentsRpc = Rpc.make(WS_METHODS.projectsSearchContents, {
-  payload: ProjectSearchContentsInput,
-  success: ProjectSearchContentsResult,
-  error: Schema.Union([ProjectSearchContentsError, EnvironmentAuthorizationError]),
 });
 
 export const WsProjectsListEntriesRpc = Rpc.make(WS_METHODS.projectsListEntries, {
@@ -880,12 +907,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetBackgroundPolicyRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsIdentityGetSnapshotRpc,
+  WsIdentityGetSessionClaimRpc,
+  WsIdentityClaimRpc,
+  WsIdentityClearClaimRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
-  WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,

@@ -5,8 +5,10 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationThread,
+  type SourceRef,
   type TurnId,
 } from "@t3tools/contracts";
+import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -22,6 +24,8 @@ import {
   githubFinalAnswerWithStats,
   resolveGitHubBridgeTurnOutcome,
 } from "../github/GitHubPrBridge.ts";
+import * as IdentityService from "../identity/IdentityService.ts";
+import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
@@ -37,24 +41,53 @@ import {
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
-import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
+import {
+  formatDiscordJiraContextNote,
+  postDiscordChannelMessage,
+  resolveDiscordBotToken,
+} from "./jiraDiscordContext.ts";
 import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayload.ts";
 
 const NOT_LINKED_RESPONSE =
   "not yet linked. No T3 thread lists this issue, and auto-create could not pick a project (set T3CODE_JIRA_PROJECT_MAP for this Jira key, T3CODE_JIRA_DEFAULT_PROJECT_ID, or ensure exactly one T3 project exists).";
 const CREATE_DISABLED_RESPONSE =
-  "not yet linked. Auto-create is disabled (T3CODE_JIRA_AUTO_CREATE_THREAD=false); link this issue from Discord/T3 or enable auto-create.";
+  "not yet linked. Auto-create is disabled; link this issue from Chat or enable auto-create.";
 const AMBIGUOUS_RESPONSE =
-  "Multiple T3 threads are linked to this Jira issue, so the bot could not pick which one to use.";
+  "Multiple chat threads are linked to this Jira issue, so the bot could not pick which one to use.";
 const BUSY_RESPONSE =
-  "This T3 thread is already working. Try again after the current turn finishes.";
+  "This chat thread is already working. Try again after the current turn finishes.";
 const FAILED_RESPONSE =
-  "T3 could not complete this request. Check the linked T3 thread for details.";
+  "Could not complete this request. Check the linked chat thread for details.";
 const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const CREATE_FAILED_RESPONSE =
-  "T3 could not create a thread for this Jira issue. Check server logs or link an existing thread.";
+  "Could not create a chat thread for this Jira issue. Check server logs or link an existing thread.";
+/** Untrusted-actor replies: short, no product jargon; @-mention is applied separately in ADF. */
+const CONTEXT_UNAUTHORIZED_RESPONSE =
+  "You're not currently authorized to run agent work from Jira. Please ask a team member who is authorized to take this forward.";
+const CONTEXT_NOTED_RESPONSE =
+  "Thanks — noted for the team. You're not currently authorized to run agent work from Jira, so this was filed as context only. An authorized teammate can pick it up.";
+const CONTEXT_FAILED_RESPONSE =
+  "You're not currently authorized to run agent work from Jira, and I couldn't file this as context either. Please ping an authorized teammate.";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
+
+function jiraSourceRef(
+  invocation: JiraIssueInvocation,
+  people: ReadonlyArray<IdentityMapPerson>,
+): SourceRef {
+  return buildIntegrationSourceRef({
+    people,
+    channel: "jira",
+    platformId: invocation.actorAccountId,
+    displayName: invocation.actorDisplayName,
+    location: {
+      ...(invocation.projectKey ? { projectKey: invocation.projectKey } : {}),
+      issueKey: invocation.issueKey,
+    },
+  });
+}
 
 export function formatJiraComment(body: string): string {
   const trimmed = body.trim();
@@ -89,21 +122,54 @@ const make = Effect.gen(function* () {
   const jira = yield* JiraAppClient;
   const engine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
+  const identity = yield* IdentityService.IdentityService;
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const createLock = yield* Semaphore.make(1);
 
+  const resolveActorTrust = (invocation: JiraIssueInvocation) =>
+    Effect.gen(function* () {
+      const people = yield* identity.listMapPeople();
+      const mapEnabled = yield* identity.isMapEnabled();
+      return classifyJiraActorTrust({
+        identityMapEnabled: mapEnabled,
+        actorAccountId: invocation.actorAccountId,
+        people,
+      }) satisfies JiraActorTrustDecision;
+    });
+
   /**
-   * Post a bridge response as a **threaded reply** when possible.
-   * Uses delivery.replyToCommentId (thread root, or the mention itself when top-level).
-   * Jira only allows children under top-level comments — not under existing replies.
+   * Post a bridge response as an **inline threaded reply** under the user's mention.
+   *
+   * Parent order:
+   * 1. `replyToCommentId` — thread root when the mention is a child reply (Jira only
+   *    allows nesting under roots), or the mention itself when top-level
+   * 2. `sourceCommentId` — the triggering mention (always try to answer the user inline)
+   *
+   * Never intentionally posts a bare top-level comment first; flat fallback is only
+   * if Jira rejects every parentId (see JiraAppClient).
    */
-  const postComment = (delivery: StoredJiraDelivery, body: string) =>
-    jira.addIssueComment({
+  const postComment = (delivery: StoredJiraDelivery, body: string) => {
+    const rootParent = delivery.replyToCommentId.trim();
+    const mentionParent = delivery.sourceCommentId.trim();
+    // Prefer the resolved reply parent, then the mention comment itself.
+    const parentCommentId =
+      rootParent.length > 0 ? rootParent : mentionParent.length > 0 ? mentionParent : null;
+    return jira.addIssueComment({
       issueKey: delivery.issueKey,
       body: formatJiraComment(body),
-      parentCommentId: delivery.replyToCommentId || delivery.sourceCommentId || null,
+      parentCommentId,
+      // If parent was a nested reply id that Jira rejects, client retries with the
+      // mention id when it differs (still inline to the user), then top-level last.
+      fallbackParentCommentId:
+        rootParent.length > 0 && mentionParent.length > 0 && rootParent !== mentionParent
+          ? mentionParent
+          : null,
+      // Normal Jira reply style: @ the human who triggered the bot.
+      mentionAccountId: delivery.actorAccountId,
+      mentionDisplayName: delivery.actorDisplayName,
     });
+  };
 
   const updateDelivery = (delivery: StoredJiraDelivery, patch: Partial<StoredJiraDelivery>) =>
     DateTime.now.pipe(
@@ -381,6 +447,8 @@ const make = Effect.gen(function* () {
       commentSurface: input.invocation.commentSurface,
       responseCommentId: null,
       acknowledgmentEmojiId: null,
+      actorAccountId: input.invocation.actorAccountId,
+      actorDisplayName: input.invocation.actorDisplayName,
       threadId: null,
       previousTurnId: null,
       userMessageId: null,
@@ -450,9 +518,91 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const trust = yield* resolveActorTrust(input.invocation);
+    yield* Effect.logInfo("Classified Jira actor trust", {
+      deliveryId: input.deliveryId,
+      issueKey: input.invocation.issueKey,
+      actorAccountId: input.invocation.actorAccountId,
+      mode: trust.mode,
+      reason: trust.reason,
+      personId: trust.person?.personId ?? null,
+    });
+
     const link = yield* resolveLinkedThreadId(input.invocation.issueKey);
     if (link._tag === "ambiguous") {
       yield* finishDelivery(acknowledged, AMBIGUOUS_RESPONSE, "rejected");
+      return;
+    }
+
+    // Untrusted actors: optional chat context note only (no agent). Never auto-creates.
+    // Requires a unique chat-linked issue in links.json when filing context.
+    if (trust.mode === "context-only") {
+      const linksPath = config.discordLinksPath;
+      if (linksPath === null || linksPath.length === 0) {
+        yield* finishDelivery(acknowledged, CONTEXT_UNAUTHORIZED_RESPONSE, "rejected");
+        return;
+      }
+      const linksRaw = yield* fileSystem
+        .readFileString(linksPath)
+        .pipe(Effect.orElseSucceed(() => ""));
+      const discordLink = resolveDiscordLinkForJiraIssue({
+        issueKey: input.invocation.issueKey,
+        linksJson: linksRaw,
+      });
+      if (discordLink._tag === "unlinked" || discordLink._tag === "ambiguous") {
+        yield* finishDelivery(acknowledged, CONTEXT_UNAUTHORIZED_RESPONSE, "rejected");
+        return;
+      }
+
+      const token = yield* Effect.promise(() => resolveDiscordBotToken());
+      if (token === null) {
+        yield* finishDelivery(acknowledged, CONTEXT_FAILED_RESPONSE, "rejected");
+        return;
+      }
+
+      const requester =
+        input.invocation.actorDisplayName ?? input.invocation.actorAccountId ?? "unknown";
+      const content = formatDiscordJiraContextNote({
+        issueKey: input.invocation.issueKey,
+        requester,
+        prompt: input.invocation.prompt,
+        commentUrl: input.invocation.commentUrl,
+      });
+      const posted = yield* Effect.promise(() =>
+        postDiscordChannelMessage({
+          token,
+          channelId: discordLink.discordThreadId,
+          content,
+        })
+          .then((message) => ({ _tag: "ok" as const, message }))
+          .catch((cause) => ({ _tag: "err" as const, cause })),
+      );
+      if (posted._tag === "err") {
+        yield* Effect.logError("Failed to post Jira context-only note to Discord", {
+          deliveryId: input.deliveryId,
+          issueKey: input.invocation.issueKey,
+          discordThreadId: discordLink.discordThreadId,
+          cause: posted.cause,
+        });
+        yield* finishDelivery(acknowledged, CONTEXT_FAILED_RESPONSE, "rejected");
+        return;
+      }
+
+      yield* Effect.logInfo("Posted Jira context-only note to Discord (no agent run)", {
+        deliveryId: input.deliveryId,
+        issueKey: input.invocation.issueKey,
+        discordThreadId: discordLink.discordThreadId,
+        t3ThreadId: discordLink.t3ThreadId,
+        discordMessageId: posted.message.id,
+      });
+      const notedDelivery: StoredJiraDelivery = {
+        ...acknowledged,
+        threadId:
+          discordLink.t3ThreadId !== null
+            ? (discordLink.t3ThreadId as ThreadId)
+            : acknowledged.threadId,
+      };
+      yield* finishDelivery(notedDelivery, CONTEXT_NOTED_RESPONSE, "completed");
       return;
     }
 
@@ -477,7 +627,7 @@ const make = Effect.gen(function* () {
         thread = snapshot.value;
       }
     } else {
-      // unlinked — join-or-create
+      // unlinked — join-or-create (trusted actors only)
       if (!config.enabled || !config.autoCreateThread) {
         yield* finishDelivery(acknowledged, CREATE_DISABLED_RESPONSE, "rejected");
         return;
@@ -522,8 +672,12 @@ const make = Effect.gen(function* () {
       threadId: thread.id,
       issueKey: input.invocation.issueKey,
       userMessageId: messageId,
+      trustMode: trust.mode,
+      personId: trust.person?.personId ?? null,
     });
 
+    const mapPeople = yield* identity.listMapPeople();
+    const source = jiraSourceRef(input.invocation, mapPeople);
     const dispatched = yield* engine
       .dispatch({
         type: "thread.turn.start",
@@ -539,6 +693,7 @@ const make = Effect.gen(function* () {
         titleSeed: input.invocation.prompt.slice(0, 80) || "Jira comment",
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
+        source,
         createdAt: DateTime.formatIso(yield* DateTime.now),
       })
       .pipe(

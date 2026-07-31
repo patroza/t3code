@@ -52,6 +52,7 @@ it.layer(NodeServices.layer)("title regeneration decider", (it) => {
           threadId: ThreadId.make("thread-1"),
           requestId: CommandId.make("cmd-old-regeneration-request"),
           title: "Generated title",
+          createdAt: UPDATED_AT,
         },
         readModel,
       });
