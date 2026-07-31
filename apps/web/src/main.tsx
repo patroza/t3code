@@ -16,6 +16,11 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
+import { installVitePreloadRecovery } from "./vitePreloadRecovery";
+
+// After a deploy, open tabs still reference old hashed lazy chunks. Reload so
+// the browser picks up the new index + asset map instead of hard-crashing.
+installVitePreloadRecovery();
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
