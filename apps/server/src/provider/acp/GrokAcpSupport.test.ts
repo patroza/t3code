@@ -4,10 +4,12 @@ import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
   applyGrokAcpModelSelection,
+  applyGrokAcpSessionMode,
   buildGrokAcpSpawnInput,
   resolveGrokAcpBaseModelId,
   resolveGrokReasoningEffortFromModelSelection,
   resolveGrokReasoningEffortSelection,
+  resolveGrokRequestedModeId,
 } from "./GrokAcpSupport.ts";
 
 describe("resolveGrokAcpBaseModelId", () => {
@@ -74,27 +76,27 @@ describe("resolveGrokReasoningEffortSelection", () => {
   });
 });
 
-describe("applyGrokAcpModelSelection", () => {
-  const makeRecordingRuntime = (failure?: EffectAcpErrors.AcpError) => {
-    const modelCalls: Array<string> = [];
-    const modeCalls: Array<string> = [];
-    const runtime = {
-      setSessionModel: (modelId: string) =>
-        Effect.gen(function* () {
-          modelCalls.push(modelId);
-          if (failure) return yield* failure;
-          return {};
-        }),
-      setMode: (modeId: string) =>
-        Effect.gen(function* () {
-          modeCalls.push(modeId);
-          if (failure) return yield* failure;
-          return {};
-        }),
-    };
-    return { runtime, modelCalls, modeCalls };
+const makeRecordingRuntime = (failure?: EffectAcpErrors.AcpError) => {
+  const modelCalls: Array<string> = [];
+  const modeCalls: Array<string> = [];
+  const runtime = {
+    setSessionModel: (modelId: string) =>
+      Effect.gen(function* () {
+        modelCalls.push(modelId);
+        if (failure) return yield* failure;
+        return {};
+      }),
+    setMode: (modeId: string) =>
+      Effect.gen(function* () {
+        modeCalls.push(modeId);
+        if (failure) return yield* failure;
+        return {};
+      }),
   };
+  return { runtime, modelCalls, modeCalls };
+};
 
+describe("applyGrokAcpModelSelection", () => {
   it.effect("calls session/set_model when the requested model differs from current", () =>
     Effect.gen(function* () {
       const { runtime, modelCalls } = makeRecordingRuntime();
@@ -181,6 +183,41 @@ describe("applyGrokAcpModelSelection", () => {
         }),
       );
       expect(error).toBe(failure.message);
+    }),
+  );
+});
+
+describe("resolveGrokRequestedModeId", () => {
+  it("pins Build and unset to agent; Plan to plan; never ask", () => {
+    expect(resolveGrokRequestedModeId("plan")).toBe("plan");
+    expect(resolveGrokRequestedModeId("default")).toBe("agent");
+    expect(resolveGrokRequestedModeId(undefined)).toBe("agent");
+  });
+});
+
+describe("applyGrokAcpSessionMode", () => {
+  it.effect("session/set_mode uses agent for Build so Grok leaves ask", () =>
+    Effect.gen(function* () {
+      const { runtime, modeCalls } = makeRecordingRuntime();
+      const modeId = yield* applyGrokAcpSessionMode({
+        runtime,
+        interactionMode: "default",
+        mapError: (cause) => cause.message,
+      });
+      expect(modeId).toBe("agent");
+      expect(modeCalls).toEqual(["agent"]);
+    }),
+  );
+
+  it.effect("session/set_mode uses agent when interactionMode is omitted", () =>
+    Effect.gen(function* () {
+      const { runtime, modeCalls } = makeRecordingRuntime();
+      yield* applyGrokAcpSessionMode({
+        runtime,
+        interactionMode: undefined,
+        mapError: (cause) => cause.message,
+      });
+      expect(modeCalls).toEqual(["agent"]);
     }),
   );
 });
