@@ -74,10 +74,14 @@ export function filterPeopleForTypeahead(
 }
 
 /**
- * Sub-filter for Mine / Theirs: which attribution signal to use.
- * - `created` — only origin/starter person
- * - `participated` — only participant person ids
- * - `both` (default) — origin or any participant
+ * Sub-filter for Mine / Theirs. Always a *refinement* of the mode:
+ * - `both` (default) — created or participated (widest for that mode)
+ * - `created` — starter/origin role only
+ * - `participated` — joined without being the starter
+ *
+ * For a given mode, `both` is always a superset of `created` and of
+ * `participated`. Looking only at one field for Theirs used to invert that
+ * (Created could show more than Created-or-participated).
  */
 export type OwnershipRelation = "created" | "participated" | "both";
 
@@ -91,16 +95,16 @@ export function isOwnershipRelation(value: unknown): value is OwnershipRelation 
  * Match a thread for Mine / Theirs ownership filters.
  *
  * **Mine** (relation `both`, default) includes:
- * - threads where the session claim person appears on origin or participants
- * - threads with **no person attribution** (no identity tags, channel-only
- *   stamps like `{ channel: "desktop" }`, identity-disabled servers, legacy
- *   threads) — treated as "ours" so filters stay useful offline of a map
+ * - threads the claim person started or later joined
+ * - threads with **no person attribution** (channel-only stamps, identity off,
+ *   legacy) — treated as "ours" so filters stay useful offline of a map
  *
- * **Mine** with `created` / `participated` only matches that signal (and does
- * not pull in fully unattributed threads).
+ * **Mine** + `created` / `participated` narrows to that role only (unattributed
+ * threads are not included).
  *
- * **Theirs** is only threads that have at least one person tag in the active
- * relation set and do not include the claim person.
+ * **Theirs** is attributed threads the claim person is not on. Relation then
+ * narrows by how *others* appear: origin set (`created`), non-starter
+ * participants (`participated`), or either (`both`).
  */
 export function threadMatchesMine(input: {
   readonly claimPersonId: string | null | undefined;
@@ -120,34 +124,50 @@ export function threadMatchesMine(input: {
     if (personId.length > 0) participants.add(personId);
   }
 
-  // Fully unattributed (no origin, no participants) stays under Mine only for
-  // the default "both" relation so created/participated refinements stay precise.
   const fullyUnattributed = origin.length === 0 && participants.size === 0;
+  // Unattributed stays under Mine only for the default "both" relation.
   if (fullyUnattributed) {
     return input.mode === "mine" && relation === "both";
   }
 
-  const people = new Set<string>();
-  if (relation === "created" || relation === "both") {
-    if (origin.length > 0) people.add(origin);
-  }
-  if (relation === "participated" || relation === "both") {
-    for (const personId of participants) people.add(personId);
-  }
-
-  // Relation-specific empty (e.g. "created" with participants only) is not a match.
-  if (people.size === 0) {
-    return false;
-  }
-
   const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
-  // Attributed threads need a claim to classify as mine; without a claim they
-  // are someone else's tags on a map-enabled env (or another person's work).
+  const fullPeople = new Set<string>(participants);
+  if (origin.length > 0) fullPeople.add(origin);
+
+  // No session claim: attributed work is someone else's.
   if (claimId.length === 0) {
-    return input.mode === "theirs";
+    if (input.mode === "mine") return false;
+    return matchesTheirsRelation({ relation, origin, participants });
   }
-  const isMine = people.has(claimId);
-  return input.mode === "mine" ? isMine : !isMine;
+
+  const createdByMe = origin.length > 0 && origin === claimId;
+  // Joined without starting. Origin counts as created, not participated.
+  const participatedByMe = !createdByMe && fullPeople.has(claimId);
+  const involved = createdByMe || participatedByMe;
+
+  if (input.mode === "mine") {
+    if (relation === "created") return createdByMe;
+    if (relation === "participated") return participatedByMe;
+    return involved;
+  }
+
+  // Theirs: not on the thread at all, then refine by others' roles.
+  if (involved) return false;
+  return matchesTheirsRelation({ relation, origin, participants });
+}
+
+function matchesTheirsRelation(input: {
+  readonly relation: OwnershipRelation;
+  readonly origin: string;
+  readonly participants: ReadonlySet<string>;
+}): boolean {
+  const othersCreated = input.origin.length > 0;
+  // Participant list may restate the origin; any non-empty roster is enough
+  // for "someone participated" when we already know the claim is not on it.
+  const othersParticipated = input.participants.size > 0;
+  if (input.relation === "created") return othersCreated;
+  if (input.relation === "participated") return othersParticipated;
+  return othersCreated || othersParticipated;
 }
 
 /** Whether the claimed person participated after someone else started the thread. */
