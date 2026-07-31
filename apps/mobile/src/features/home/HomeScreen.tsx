@@ -251,7 +251,8 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     const selected = new Set(props.selectedEnvironmentIds);
     return connectedIds.filter((environmentId) => selected.has(environmentId));
-  }, [props.environments, props.selectedEnvironmentIds]);  const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
+  }, [props.environments, props.selectedEnvironmentIds]);
+  const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
   const threadSearchMatchByKey = useMemo(() => {
     const matches = new Map<string, EnvironmentThreadSearchMatch>();
     for (const match of threadSearch.matches) {

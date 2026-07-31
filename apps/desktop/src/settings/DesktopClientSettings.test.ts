@@ -31,6 +31,7 @@ const clientSettings: ClientSettings = {
   fontSizeTerminal: 12,
   fontSmoothing: true,
   glassOpacity: 80,
+  providerFavorites: [],
   openWithEntries: [
     {
       id: OpenWithEntryId.make("terminal"),
@@ -49,8 +50,10 @@ const clientSettings: ClientSettings = {
     "environment-1:/tmp/project-a": "separate",
   },
   sidebarProjectSortOrder: "manual",
+  sidebarRecentThreadsEnabled: true,
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
+  sidebarHideProviderIcons: false,
   sidebarV2Enabled: false,
   sidebarV2ConfiguredByUser: false,
   timestampFormat: "24-hour",
