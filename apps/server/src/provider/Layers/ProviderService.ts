@@ -11,7 +11,9 @@
  */
 import {
   NonNegativeInt,
+  ModelSelection,
   ThreadId,
+  ProviderCompactSessionInput,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -25,6 +27,7 @@ import {
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -44,7 +47,11 @@ import {
   providerTurnMetricAttributes,
   withMetrics,
 } from "../../observability/Metrics.ts";
-import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import {
+  type ProviderAdapterError,
+  ProviderSessionNotFoundError,
+  ProviderValidationError,
+} from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -61,6 +68,8 @@ import {
   readPersistedProviderModelSelection,
 } from "../ProviderRestartRecovery.ts";
 
+const isModelSelection = Schema.is(ModelSelection);
+
 /**
  * Hook for tests that want to override the canonical event logger pulled
  * from `ProviderEventLoggers`. Production wiring leaves this undefined and
@@ -68,6 +77,12 @@ import {
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  /**
+   * Maximum time the server gives all provider adapters, collectively, to
+   * stop during process shutdown. Recovery intent is persisted before this
+   * clock starts.
+   */
+  readonly shutdownGracePeriod?: Duration.Input;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -148,6 +163,37 @@ function toRuntimePayloadFromSession(
   };
 }
 
+function readPersistedModelSelection(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): ModelSelection | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
+  return isModelSelection(raw) ? raw : undefined;
+}
+
+function readPersistedCwd(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): string | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
+  if (typeof rawCwd !== "string") return undefined;
+  const trimmed = rawCwd.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeProviderCwd(cwd: string): string {
+  const trimmed = cwd.trim();
+  return trimmed.length > 1 ? trimmed.replace(/[\\/]+$/, "") : trimmed;
+}
+
+function providerCwdMatches(actual: string | undefined, expected: string | undefined): boolean {
+  if (expected === undefined) return true;
+  return actual !== undefined && normalizeProviderCwd(actual) === normalizeProviderCwd(expected);
+}
 const dieOnMissingBindingInstanceId = (
   operation: string,
   payload: {
@@ -442,6 +488,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (session) => session.threadId === input.binding.threadId,
         );
         if (existing) {
+          const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
+          if (!providerCwdMatches(existing.cwd, persistedCwd)) {
+            return yield* toValidationError(
+              input.operation,
+              [
+                `Active provider session for thread '${input.binding.threadId}' is in '${existing.cwd ?? "unknown"}' but persisted cwd is '${persistedCwd ?? "unknown"}'.`,
+                "Refusing to recover a provider session for the wrong workspace.",
+              ].join(" "),
+            );
+          }
           yield* upsertSessionBinding(
             { ...existing, providerInstanceId: bindingInstanceId },
             input.binding.threadId,
@@ -484,6 +540,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         return yield* toValidationError(
           input.operation,
           `Adapter/provider mismatch while recovering thread '${input.binding.threadId}'. Expected '${adapter.provider}', received '${resumed.provider}'.`,
+        );
+      }
+      if (!providerCwdMatches(resumed.cwd, persistedCwd)) {
+        yield* adapter.stopSession(resumed.threadId).pipe(Effect.ignore);
+        yield* clearMcpSession(input.binding.threadId);
+        return yield* toValidationError(
+          input.operation,
+          [
+            `Recovered provider session for thread '${input.binding.threadId}' is in '${resumed.cwd ?? "unknown"}' but persisted cwd is '${persistedCwd ?? "unknown"}'.`,
+            "Refusing to recover a provider session for the wrong workspace.",
+          ].join(" "),
         );
       }
 
@@ -677,6 +744,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
           );
         }
+        if (!providerCwdMatches(session.cwd, effectiveCwd)) {
+          yield* adapter.stopSession(session.threadId).pipe(Effect.ignore);
+          yield* clearMcpSession(threadId);
+          return yield* toValidationError(
+            "ProviderService.startSession",
+            [
+              `Provider '${adapter.provider}' started in '${session.cwd ?? "unknown"}' but T3 requested '${effectiveCwd}'.`,
+              "Refusing to persist a provider session for the wrong workspace.",
+            ].join(" "),
+          );
+        }
         const sessionWithInstance = {
           ...session,
           providerInstanceId: resolvedInstanceId,
@@ -809,7 +887,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
+          // Interrupt must never resurrect an old persisted session merely to
+          // cancel it. The orchestration reactor authoritatively clears the
+          // projected running state even when no live adapter session exists.
+          allowRecovery: false,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
@@ -818,7 +899,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
-        yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        if (routed.isActive) {
+          yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        }
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
         });
@@ -831,6 +914,38 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             }),
         }),
       );
+    },
+  );
+
+  const compactSession: ProviderServiceMethod<"compactSession"> = Effect.fn("compactSession")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.compactSession",
+        schema: ProviderCompactSessionInput,
+        payload: rawInput,
+      });
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.compactSession",
+        allowRecovery: true,
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "compact-session",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      if (routed.adapter.compactSession === undefined) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderService.compactSession",
+          issue: `Provider ${routed.adapter.provider} does not support manual context compact.`,
+        });
+      }
+      if (!routed.isActive) {
+        return yield* new ProviderSessionNotFoundError({
+          threadId: input.threadId,
+        });
+      }
+      yield* routed.adapter.compactSession(routed.threadId);
     },
   );
 
@@ -1117,7 +1232,36 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
       }),
     ).pipe(Effect.asVoid);
-    yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
+    const adapterStops = yield* Effect.forEach(
+      currentAdapters,
+      ([instanceId, adapter]) =>
+        adapter.stopAll().pipe(
+          Effect.exit,
+          Effect.map((exit) => ({ instanceId, exit })),
+        ),
+      { concurrency: "unbounded" },
+    ).pipe(
+      // Scope finalizers are uninterruptible by default. Restore
+      // interruptibility here so the timeout can release a provider whose
+      // protocol drain never completes.
+      Effect.interruptible,
+      Effect.timeoutOption(options?.shutdownGracePeriod ?? "1 minute"),
+    );
+    if (Option.isNone(adapterStops)) {
+      yield* Effect.logWarning("provider shutdown grace period elapsed", {
+        timeout: String(options?.shutdownGracePeriod ?? "1 minute"),
+        sessionCount: activeSessions.length,
+      });
+    } else {
+      yield* Effect.forEach(
+        adapterStops.value,
+        ({ instanceId, exit }) =>
+          exit._tag === "Failure"
+            ? Effect.logWarning("provider adapter failed during shutdown", { instanceId })
+            : Effect.void,
+        { discard: true },
+      );
+    }
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
     McpProviderSession.clearAllMcpProviderSessions();
     const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
@@ -1160,6 +1304,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    compactSession,
     respondToRequest,
     respondToUserInput,
     stopSession,

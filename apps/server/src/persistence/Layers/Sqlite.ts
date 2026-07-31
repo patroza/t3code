@@ -30,14 +30,20 @@ const makeRuntimeSqliteLayer = Effect.fn("makeRuntimeSqliteLayer")(function* (
   return clientModule.layer(config);
 }, Layer.unwrap);
 
-const setup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`PRAGMA foreign_keys = ON;`;
-    yield* sql`PRAGMA journal_mode = WAL;`;
-    yield* runMigrations();
-  }),
-);
+const setup = (trial: boolean) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA foreign_keys = ON;`;
+      if (!trial) {
+        yield* sql`PRAGMA journal_mode = WAL;`;
+        // Bound lock waits so auth (websocket-ticket) cannot hang indefinitely when
+        // writers hold the single SQL permit longer than expected.
+        yield* sql`PRAGMA busy_timeout = 5000;`;
+        yield* runMigrations();
+      }
+    }),
+  );
 
 export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(function* (
   dbPath: string,
@@ -47,7 +53,7 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
   yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
 
   return Layer.provideMerge(
-    setup,
+    setup(false),
     makeRuntimeSqliteLayer({
       filename: dbPath,
       spanAttributes: {
@@ -59,7 +65,7 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
 }, Layer.unwrap);
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
-  setup,
+  setup(true),
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 
