@@ -2,16 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   attachmentKey,
-  buildFinalResponseMarkdownText,
   buildStreamHistoryMarkdownText,
-  FINAL_RESPONSE_MARKDOWN_NAME,
-  finalResponseCaption,
   imageAttachmentsOf,
-  shouldAttachFinalResponseAsMarkdown,
   STREAM_HISTORY_MARKDOWN_NAME,
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
-  withOmegentMessageLink,
 } from "./attachments.ts";
 
 describe("imageAttachmentsOf", () => {
@@ -93,60 +88,5 @@ describe("buildStreamHistoryMarkdownText", () => {
 
   it("returns null for blank stream text", () => {
     expect(buildStreamHistoryMarkdownText("   \n")).toBeNull();
-  });
-});
-
-describe("final response markdown attachment", () => {
-  it("builds response.md body and caption", () => {
-    const body = buildFinalResponseMarkdownText("# Summary\n\nLong answer body.");
-    expect(body).toContain("# Summary");
-    expect(body?.endsWith("\n")).toBe(true);
-    expect(FINAL_RESPONSE_MARKDOWN_NAME).toBe("response.md");
-    expect(finalResponseCaption("# Summary\n\nLong answer body.")).toBe("Summary");
-    expect(finalResponseCaption("x".repeat(200))).toBe(
-      `Full response attached as \`${FINAL_RESPONSE_MARKDOWN_NAME}\`.`,
-    );
-  });
-
-  it("attaches when the answer has tables or would need multiple messages", () => {
-    expect(
-      shouldAttachFinalResponseAsMarkdown({
-        text: "short",
-        hasMarkdownTables: false,
-        messageChunkCount: 1,
-      }),
-    ).toBe(false);
-    expect(
-      shouldAttachFinalResponseAsMarkdown({
-        text: "long multi chunk body",
-        hasMarkdownTables: false,
-        messageChunkCount: 2,
-      }),
-    ).toBe(true);
-    expect(
-      shouldAttachFinalResponseAsMarkdown({
-        text: "| A | B |\n|---|---|\n| 1 | 2 |",
-        hasMarkdownTables: true,
-        messageChunkCount: 1,
-      }),
-    ).toBe(true);
-    expect(
-      shouldAttachFinalResponseAsMarkdown({
-        text: "   ",
-        hasMarkdownTables: true,
-        messageChunkCount: 3,
-      }),
-    ).toBe(false);
-  });
-
-  it("appends a short T3 deep link on the response.md caption", () => {
-    expect(
-      withOmegentMessageLink(
-        "Summary",
-        "https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1",
-      ),
-    ).toBe("Summary · [T3](https://t3vm.tail86038f.ts.net/?thread=tid-1#message-msg-1)");
-    expect(withOmegentMessageLink("Summary", null)).toBe("Summary");
-    expect(withOmegentMessageLink("Summary", "  ")).toBe("Summary");
   });
 });
