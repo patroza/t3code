@@ -133,6 +133,13 @@ function rebaseInProgress(repoDir: string): boolean {
 }
 
 /**
+ * Paths where overlay vs fork/changes conflicts should keep the product base
+ * (fork/changes) during auto-rebase. These are ship/policy surfaces owned by
+ * changes, not by a single client overlay.
+ */
+const OVERLAY_REBASE_OURS_PATHS = new Set(["apps/mobile/app.config.ts"]);
+
+/**
  * Rebase every registered integration overlay onto current origin/fork/changes.
  * Force-with-lease pushes when `push` is true.
  */
@@ -227,19 +234,46 @@ export function rebaseIntegrationOverlays(
         `  #${overlay.number} ${overlay.branch}: rebase --onto ${newBase.slice(0, 12)} ${plan.oldBase.slice(0, 12)} (from ${tip.slice(0, 12)})`,
       );
       git(repoDir, ["checkout", "--quiet", "--detach", tip]);
-      const rebaseResult = run(
+      let rebaseResult = run(
         "git",
         ["-c", "commit.gpgsign=false", "rebase", "--onto", newBase, plan.oldBase],
         repoDir,
         { allowFailure: true },
       );
-      if (rebaseResult.status !== 0) {
-        if (rebaseInProgress(repoDir)) {
-          run("git", ["rebase", "--abort"], repoDir, { allowFailure: true });
+      // Auto-resolve known product-base drift files by keeping fork/changes
+      // ("ours" during rebase). Overlay product should not fight mobile
+      // runtimeVersion / OTA policy from the changes layer.
+      while (rebaseResult.status !== 0 && rebaseInProgress(repoDir)) {
+        const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
+          allowFailure: true,
+        })
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        const autoResolvable =
+          conflictPaths.length > 0 &&
+          conflictPaths.every((path) => OVERLAY_REBASE_OURS_PATHS.has(path));
+        if (!autoResolvable) {
+          break;
         }
+        for (const path of conflictPaths) {
+          run("git", ["checkout", "--ours", "--", path], repoDir);
+          run("git", ["add", "--", path], repoDir);
+        }
+        console.log(
+          `  #${overlay.number} ${overlay.branch}: auto-resolved (keep ${manifest.forkChangesBranch}): ${conflictPaths.join(", ")}`,
+        );
+        rebaseResult = run("git", ["-c", "commit.gpgsign=false", "rebase", "--continue"], repoDir, {
+          allowFailure: true,
+        });
+      }
+      if (rebaseResult.status !== 0) {
         const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
           allowFailure: true,
         });
+        if (rebaseInProgress(repoDir)) {
+          run("git", ["rebase", "--abort"], repoDir, { allowFailure: true });
+        }
         const message = conflictPaths
           ? `conflict rebasing onto ${manifest.forkChangesBranch} from ${plan.oldBase.slice(0, 12)}: ${conflictPaths.split("\n").join(", ")}`
           : stripAnsi(rebaseResult.stderr || rebaseResult.stdout || "rebase --onto failed");
