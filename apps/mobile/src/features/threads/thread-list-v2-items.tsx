@@ -30,6 +30,7 @@ import { prefetchEnvironmentThread } from "../../state/threads";
 import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadIdentityMark } from "../identity/ParticipantStack";
 import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -623,6 +624,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         >
           {thread.title}
         </Text>
+        <ThreadIdentityMark
+          environmentId={thread.environmentId}
+          originChannel={thread.originSource?.channel}
+          participants={thread.participantSummaries}
+        />
         {hasDraft ? (
           <View
             accessibilityLabel="Unsent draft"
@@ -804,6 +810,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               >
                 {thread.title}
               </Text>
+              <ThreadIdentityMark
+                environmentId={thread.environmentId}
+                originChannel={thread.originSource?.channel}
+                participants={thread.participantSummaries}
+                className="opacity-60"
+              />
               {hasDraft ? (
                 <View
                   accessibilityLabel="Unsent draft"

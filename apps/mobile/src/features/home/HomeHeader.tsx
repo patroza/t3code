@@ -1,6 +1,6 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
-import type { MenuAction } from "@react-native-menu/menu";
 import Constants from "expo-constants";
+import type { MenuAction } from "@react-native-menu/menu";
 import {
   NativeHeaderToolbar,
   NativeStackScreenOptions,
@@ -14,16 +14,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
-import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
-import { resolveMobileStageLabel } from "../../lib/mobileBranding";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
+import { resolveMobileStageLabel } from "../../lib/mobileBranding";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
-import {
-  createNativeMailSearchToolbarItem,
-  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
-} from "../layout/native-mail-search-toolbar";
+import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import {
   buildHomeListFilterMenu,
@@ -32,6 +28,7 @@ import {
 } from "./home-list-filter-menu";
 import {
   hasCustomHomeListOptions,
+  type OwnershipFilter,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
@@ -60,6 +57,7 @@ export function HomeHeader(props: {
   readonly threadGrouping: HomeThreadGrouping;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  readonly ownershipFilter: OwnershipFilter;
   /**
    * Hide settled from the main Threads inbox. Recency/none default on;
    * project grouping defaults off at the call site.
@@ -73,6 +71,7 @@ export function HomeHeader(props: {
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
   readonly onHideSettledThreadsChange: (hide: boolean) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
@@ -110,6 +109,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
+    props.ownershipFilter !== "any" ||
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&
       props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
@@ -117,6 +117,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
+        ownershipFilter: props.ownershipFilter,
         listMode: props.listMode,
         threadGrouping: props.threadGrouping,
         projectSortOrder: props.projectSortOrder,
@@ -142,6 +143,18 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
             ),
           })),
         ],
+      },
+      {
+        id: "ownership",
+        title: "Ownership",
+        subactions: [
+          { id: "ownership:any", title: "Anyone" },
+          { id: "ownership:mine", title: "Mine" },
+          { id: "ownership:theirs", title: "Theirs" },
+        ].map((action) => ({
+          ...action,
+          state: checkedMenuState(action.id === `ownership:${props.ownershipFilter}`),
+        })),
       },
       ...(props.projects.length === 0 || props.listMode === "board"
         ? []
@@ -209,6 +222,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       props.environments,
       props.hideSettledThreads,
       props.listMode,
+      props.ownershipFilter,
       props.projectSortOrder,
       props.projects,
       props.selectedEnvironmentIds,
@@ -233,6 +247,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 
       if (id === "project:all") {
         props.onProjectChange(null);
+        return;
+      }
+
+      if (id.startsWith("ownership:")) {
+        const ownership = id.slice("ownership:".length);
+        if (ownership === "any" || ownership === "mine" || ownership === "theirs") {
+          props.onOwnershipFilterChange(ownership);
+        }
         return;
       }
 
@@ -278,9 +300,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     <>
       <NativeStackScreenOptions options={{ headerShown: false }} />
       <View
-        className="border-b border-header-border bg-header pb-3"
+        className="border-b border-header-border bg-header px-4 pb-3"
         style={{
-          paddingHorizontal: HOME_HORIZONTAL_INSET,
           paddingTop: Math.max(insets.top, 12),
         }}
       >
@@ -293,7 +314,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               </RNText>
               <View className="rounded-full bg-subtle px-2 py-0.75">
                 <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                  {stageLabel}
+                  Alpha
                 </RNText>
               </View>
             </View>
@@ -399,6 +420,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const useSolidBoardHeader = isBoardMode && NATIVE_LIQUID_GLASS_SUPPORTED;
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
+    props.ownershipFilter !== "any" ||
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&
       props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
@@ -406,6 +428,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
     (listOrganization &&
       hasCustomHomeListOptions({
         selectedEnvironmentIds: props.selectedEnvironmentIds,
+        ownershipFilter: props.ownershipFilter,
         listMode: props.listMode,
         threadGrouping: props.threadGrouping,
         projectSortOrder: props.projectSortOrder,
@@ -422,11 +445,13 @@ function IosHomeHeader(props: HomeHeaderProps) {
     projects: props.projects,
     selectedEnvironmentIds: props.selectedEnvironmentIds,
     selectedProjectKey: props.selectedProjectKey,
+    ownershipFilter: props.ownershipFilter,
     projectSortOrder: props.projectSortOrder,
     threadSortOrder: props.threadSortOrder,
     onClearEnvironments: props.onClearEnvironments,
     onToggleEnvironment: props.onToggleEnvironment,
     onProjectChange: props.onProjectChange,
+    onOwnershipFilterChange: props.onOwnershipFilterChange,
     onProjectSortOrderChange: props.onProjectSortOrderChange,
     onThreadSortOrderChange: props.onThreadSortOrderChange,
     listOrganization,
@@ -510,20 +535,20 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     searchTextChangeId: "home-search-text",
                   }),
                 ]
+              : undefined,
+          headerSearchBarOptions:
+            Platform.OS === "ios"
+              ? undefined
               : {
-                  // Pre-Liquid-Glass iOS: standard pull-down search in the nav
-                  // bar; create + sort live in the plain bottom toolbar below.
-                  headerSearchBarOptions: {
-                    ref: searchBarRef,
-                    autoCapitalize: "none" as const,
-                    hideNavigationBar: false,
-                    placeholder: "Search",
-                    onCancelButtonPress: () => {
-                      props.onSearchQueryChange("");
-                    },
-                    onChangeText: (event: { nativeEvent: { text: string } }) => {
-                      props.onSearchQueryChange(event.nativeEvent.text);
-                    },
+                  ref: searchBarRef,
+                  allowToolbarIntegration: true,
+                  hideNavigationBar: false,
+                  placeholder: "Search",
+                  onCancelButtonPress: () => {
+                    props.onSearchQueryChange("");
+                  },
+                  onChangeText: (event: { nativeEvent: { text: string } }) => {
+                    props.onSearchQueryChange(event.nativeEvent.text);
                   },
                 },
         }}
@@ -583,6 +608,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 </NativeHeaderToolbar.MenuAction>
               ))}
             </NativeHeaderToolbar.Menu>
+
             {props.projects.length > 0 && props.listMode !== "board" ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>
@@ -604,6 +630,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 ))}
               </NativeHeaderToolbar.Menu>
             ) : null}
+
             {props.listMode === "threads" ? (
               <>
                 <NativeHeaderToolbar.Menu title="Group threads">
@@ -629,6 +656,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 </NativeHeaderToolbar.MenuAction>
               </>
             ) : null}
+
             {listOrganization ? (
               <>
                 <NativeHeaderToolbar.Menu title="Sort projects">
@@ -657,9 +685,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   ))}
                 </NativeHeaderToolbar.Menu>
               </>
-            ) : null}{" "}
+            ) : null}
           </NativeHeaderToolbar.Menu>
-          <NativeHeaderToolbar.Spacer flexible />
+          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
+          <NativeHeaderToolbar.SearchBarSlot />
+          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"
             icon="square.and.pencil"

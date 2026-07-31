@@ -14,6 +14,7 @@ import {
   shouldShowRecencySectionHeaders,
 } from "@t3tools/client-runtime/state/thread-recency-groups";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { threadMatchesAttributeQuery } from "@t3tools/shared/threadAttributeSearch";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
@@ -447,7 +448,15 @@ export function buildThreadListV2Items(input: {
     }
     if (
       query.length > 0 &&
-      !thread.title.toLocaleLowerCase().includes(query) &&
+      !threadMatchesAttributeQuery(
+        {
+          title: thread.title,
+          branch: thread.branch,
+          originSource: thread.originSource ?? null,
+          participantSummaries: thread.participantSummaries ?? [],
+        },
+        query,
+      ) &&
       input.matchedThreadKeys?.has(
         threadSearchMatchKey({
           environmentId: thread.environmentId,

@@ -1101,6 +1101,7 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       requestId: input.requestId,
       ...(input.title !== undefined ? { title: input.title } : {}),
+      createdAt: yield* DateTime.now.pipe(Effect.map(DateTime.formatIso)),
     });
   });
   const findInterruptedThreadTitleRegenerations = Effect.fn(

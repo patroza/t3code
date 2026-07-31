@@ -4,6 +4,10 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import {
+  claimPersonIdForEnvironment,
+  threadMatchesMine,
+} from "@t3tools/client-runtime/state/identity";
+import {
   threadSearchMatchKey,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -30,6 +34,7 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import {
   resolveHideSettledOnProjects,
   resolveHideSettledOnRecent,
@@ -248,11 +253,13 @@ function ThreadNavigationSidebarPane(
     options,
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
+    setOwnershipFilter,
     setListMode,
     setThreadGrouping,
     setProjectSortOrder,
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
   const searchEnvironmentIds = useMemo(() => {
     const connectedIds = workspaceEnvironments
       .filter((environment) => environment.connectionState === "connected")
@@ -375,12 +382,23 @@ function ThreadNavigationSidebarPane(
   );
   const scopedThreads = useMemo(
     () =>
-      selectedProjectRefs === null
-        ? threads
-        : threads.filter((thread) =>
-            selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId)),
-          ),
-    [selectedProjectRefs, threads],
+      threads.filter(
+        (thread) =>
+          (selectedProjectRefs === null ||
+            selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId))) &&
+          threadMatchesMine({
+            claimPersonId: claimPersonIdForEnvironment(
+              claimPersonIdByEnvironment,
+              thread.environmentId,
+            ),
+            originPersonId: thread.originSource?.personId ?? null,
+            participantPersonIds: (thread.participantSummaries ?? []).map(
+              (participant) => participant.personId,
+            ),
+            mode: options.ownershipFilter,
+          }),
+      ),
+    [claimPersonIdByEnvironment, options.ownershipFilter, selectedProjectRefs, threads],
   );
   const scopedPendingTasks = useMemo(
     () =>
@@ -745,7 +763,7 @@ function ThreadNavigationSidebarPane(
     // Always partition settled into the slim tail (web V2 / classic Recent
     // shelf). Hide-settled must not erase that history on mobile.
     return buildThreadListV2Items({
-      threads: threads.filter((thread) => thread.archivedAt === null),
+      threads: scopedThreads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: options.selectedEnvironmentIds,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
       orderByRecency: options.threadGrouping === "recency",
@@ -775,7 +793,7 @@ function ThreadNavigationSidebarPane(
     settledShelfExpanded,
     props.selectedThreadKey,
     threadListV2Enabled,
-    threads,
+    scopedThreads,
     selectedProjectScope,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the
@@ -1414,6 +1432,7 @@ function ThreadNavigationSidebarPane(
   // light the "customized" state (sort options are hidden).
   const filterCustomized =
     options.selectedEnvironmentIds.length > 0 ||
+    options.ownershipFilter !== "any" ||
     selectedProjectKey !== null ||
     options.threadGrouping !== "project" ||
     (options.listMode === "threads" &&
@@ -1429,11 +1448,13 @@ function ThreadNavigationSidebarPane(
         projects: projectFilterOptions,
         selectedEnvironmentIds: options.selectedEnvironmentIds,
         selectedProjectKey,
+        ownershipFilter: options.ownershipFilter,
         projectSortOrder: options.projectSortOrder,
         threadSortOrder: options.threadSortOrder,
         onClearEnvironments: clearSelectedEnvironments,
         onToggleEnvironment: toggleSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
+        onOwnershipFilterChange: setOwnershipFilter,
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization,
@@ -1453,6 +1474,7 @@ function ThreadNavigationSidebarPane(
       hideSettledThreads,
       listOrganization,
       options.listMode,
+      options.ownershipFilter,
       options.projectSortOrder,
       options.selectedEnvironmentIds,
       options.threadGrouping,
@@ -1460,6 +1482,7 @@ function ThreadNavigationSidebarPane(
       projectFilterOptions,
       selectedProjectKey,
       setHideSettledThreads,
+      setOwnershipFilter,
       setProjectSortOrder,
       setThreadGrouping,
       setThreadSortOrder,

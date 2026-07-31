@@ -16,7 +16,6 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
 import { cn } from "../../lib/cn";
-import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useEnvironmentServerConfig } from "../../state/entities";
@@ -28,6 +27,7 @@ import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { ThreadIdentityMark } from "../identity/ParticipantStack";
 import { resolveSettledRowTimestamp, resolveThreadStatus } from "./threadPresentation";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import {
@@ -46,7 +46,7 @@ import { useAtomValue } from "@effect/atom-react";
 export type ThreadListVariant = "compact" | "sidebar";
 
 /** Left inset that aligns compact secondary rows with the title column. */
-export const THREAD_LIST_COMPACT_INSET = HOME_HORIZONTAL_INSET;
+export const THREAD_LIST_COMPACT_INSET = 20;
 const SIDEBAR_ROW_RADIUS = 12;
 
 const MONO_FONT = Platform.select({
@@ -808,6 +808,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 <Text className="flex-1 text-lg font-t3-bold text-foreground" numberOfLines={1}>
                   {thread.title}
                 </Text>
+                <ThreadIdentityMark
+                  environmentId={thread.environmentId}
+                  originChannel={thread.originSource?.channel}
+                  participants={thread.participantSummaries}
+                />
                 {hasDraft ? (
                   <View
                     accessibilityLabel="Unsent draft"
@@ -885,6 +890,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
               >
                 {thread.title}
               </Text>
+              <ThreadIdentityMark
+                environmentId={thread.environmentId}
+                originChannel={thread.originSource?.channel}
+                participants={thread.participantSummaries}
+              />
               {hasDraft ? (
                 <View
                   accessibilityLabel="Unsent draft"

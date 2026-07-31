@@ -21,6 +21,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ClientSourceHint, SourceRef, ThreadParticipantSummary } from "./identity.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -244,6 +245,8 @@ export const OrchestrationMessage = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  /** Server-authored provenance; absent on legacy / assistant messages. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -371,6 +374,8 @@ export const OrchestrationQueuedMessage = Schema.Struct({
   attachments: Schema.Array(ChatAttachment),
   modelSelection: Schema.optional(ModelSelection),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Server-stamped at enqueue; preserved when the queue drains to message-sent. */
+  source: Schema.optional(SourceRef),
   queuedAt: IsoDateTime,
 });
 export type OrchestrationQueuedMessage = typeof OrchestrationQueuedMessage.Type;
@@ -434,6 +439,9 @@ export const OrchestrationThread = Schema.Struct({
   hasMoreActivities: Schema.optional(Schema.Boolean),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  // Optional without default so legacy fixtures omit the field; clients use ?? [].
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -485,6 +493,13 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
   hasActionableProposedPlan: Schema.Boolean,
+  /** First user message SourceRef; null/absent on legacy threads. */
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  /**
+   * Distinct people on user messages: origin person first, then first-participation order.
+   * Used for creator + +N participant stack. Absent on legacy shells (clients use ?? []).
+   */
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
@@ -766,6 +781,17 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /**
+   * Server-authored only. Gate layer stamps from session claim + deviceType
+   * or resolves platform actors from `sourceHint` (bots / integrations).
+   * Clients must not send trusted person fields.
+   */
+  source: Schema.optional(SourceRef),
+  /**
+   * Non-person hints from trusted integrations (Discord bot, etc.).
+   * Server resolves personId via the identity map; never trusts client person fields.
+   */
+  sourceHint: Schema.optional(ClientSourceHint),
   createdAt: IsoDateTime,
 });
 
@@ -785,6 +811,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Platform actor/location only — server stamps person from the identity map. */
+  sourceHint: Schema.optional(ClientSourceHint),
   createdAt: IsoDateTime,
 });
 
@@ -1013,6 +1041,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   threadId: ThreadId,
   requestId: CommandId,
   title: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
 });
 
 /**
@@ -1228,6 +1257,8 @@ export const ThreadMessageSentPayload = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  /** Server-authored only; clients must not invent person fields. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1239,6 +1270,8 @@ export const ThreadMessageQueuedPayload = Schema.Struct({
   attachments: Schema.Array(ChatAttachment),
   modelSelection: Schema.optional(ModelSelection),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  /** Server-stamped provenance for the queued user message. */
+  source: Schema.optional(SourceRef),
   queuedAt: IsoDateTime,
 });
 
@@ -1758,6 +1791,8 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   "OrchestrationDispatchCommandError",
   {
     message: TrimmedNonEmptyString,
+    /** Optional machine code (e.g. identity_claim_required) for client branching. */
+    code: Schema.optionalKey(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
