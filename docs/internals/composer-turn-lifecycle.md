@@ -5,6 +5,10 @@ send / abort lifecycle, why they exist (they are mostly consequences of the
 current optimistic client state model plus a missing turn-liveness guarantee,
 not random bugs), and a plan to fix them.
 
+For server-wide pending starts, provider-command head-of-line blocking, startup
+reconciliation, and the operator recovery procedure, see
+[Provider Turn Startup and Recovery](../operations/provider-turn-recovery.md).
+
 ## Reported symptoms
 
 1. **Intermittent submit while a turn is processing.** After sending a message
