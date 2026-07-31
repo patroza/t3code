@@ -119,6 +119,16 @@ export class DiscordBotRunning extends Context.Service<
   { readonly botUserId: string }
 >()("@t3tools/discord-bot/features/MentionRouter/DiscordBotRunning") {}
 
+export const THREAD_BOOTSTRAP_REACTION_EMOJI = "👀";
+
+export function shouldShowThreadBootstrapReaction(input: {
+  readonly inThread: boolean;
+  readonly intentKind: ReturnType<typeof parseMentionIntent>["kind"];
+  readonly hasPromptOrAttachment: boolean;
+}): boolean {
+  return !input.inThread && input.intentKind === "prompt" && input.hasPromptOrAttachment;
+}
+
 class DiscordImageDownloadError extends Schema.TaggedErrorClass<DiscordImageDownloadError>()(
   "DiscordImageDownloadError",
   { cause: Schema.Defect() },
@@ -471,6 +481,11 @@ type BridgedTurnInput = {
   readonly discordAttachments?: ReadonlyArray<DiscordInboundAttachment>;
   readonly attachments?: ReadonlyArray<UploadChatAttachment>;
   readonly presentationMode?: "full" | "final-only";
+  /** Original channel mention carrying 👀 until the linked thread-info pin is ready. */
+  readonly pendingReadyReaction?: {
+    readonly channelId: string;
+    readonly messageId: string;
+  };
 };
 
 const make = (botConfig: DiscordBotConfig) =>
@@ -1329,6 +1344,24 @@ const make = (botConfig: DiscordBotConfig) =>
           local: input.flags.local,
           skipChannelRepoLookup: true,
         }).pipe(
+          Effect.tap(() =>
+            input.pendingReadyReaction === undefined
+              ? Effect.void
+              : rest
+                  .deleteMyMessageReaction(
+                    input.pendingReadyReaction.channelId,
+                    input.pendingReadyReaction.messageId,
+                    THREAD_BOOTSTRAP_REACTION_EMOJI,
+                  )
+                  .pipe(
+                    Effect.catch((error) =>
+                      Effect.logWarning("Failed to clear Discord thread bootstrap reaction", {
+                        discordMessageId: input.pendingReadyReaction?.messageId,
+                        error: String(error),
+                      }),
+                    ),
+                  ),
+          ),
           Effect.catch((error) =>
             Effect.logWarning("Failed to create initial thread info pin", {
               discordThreadId: input.discordThreadId,
@@ -2168,6 +2201,40 @@ const make = (botConfig: DiscordBotConfig) =>
           }
         }
 
+        const intent = mentioned
+          ? parseMentionIntent(body)
+          : {
+              kind: "prompt" as const,
+              local: false,
+              plan: false,
+              prompt: body,
+            };
+        const flags = intent.kind === "prompt" ? intent : parseMentionFlags(body);
+        const pendingReadyReaction = shouldShowThreadBootstrapReaction({
+          inThread,
+          intentKind: intent.kind,
+          hasPromptOrAttachment:
+            (intent.kind === "prompt" && intent.prompt.length > 0) || gatewayAttachments.length > 0,
+        })
+          ? { channelId: event.channel_id, messageId: event.id }
+          : undefined;
+        if (pendingReadyReaction !== undefined) {
+          yield* rest
+            .addMyMessageReaction(
+              pendingReadyReaction.channelId,
+              pendingReadyReaction.messageId,
+              THREAD_BOOTSTRAP_REACTION_EMOJI,
+            )
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to add Discord thread bootstrap reaction", {
+                  discordMessageId: event.id,
+                  error: String(error),
+                }),
+              ),
+            );
+        }
+
         const imageCandidates = filterDiscordImageAttachments(gatewayAttachments);
         const downloaded = yield* Effect.tryPromise({
           try: () => downloadDiscordImagesAsUploadAttachments(imageCandidates),
@@ -2208,15 +2275,6 @@ const make = (botConfig: DiscordBotConfig) =>
           },
         );
 
-        const intent = mentioned
-          ? parseMentionIntent(body)
-          : {
-              kind: "prompt" as const,
-              local: false,
-              plan: false,
-              prompt: body,
-            };
-        const flags = intent.kind === "prompt" ? intent : parseMentionFlags(body);
         const prompt =
           intent.kind === "prompt" && intent.prompt.length > 0
             ? intent.prompt
@@ -2524,6 +2582,15 @@ const make = (botConfig: DiscordBotConfig) =>
         }
 
         if (parentUnavailable || parseTopicShortName(topic) === null) {
+          if (pendingReadyReaction !== undefined) {
+            yield* rest
+              .deleteMyMessageReaction(
+                pendingReadyReaction.channelId,
+                pendingReadyReaction.messageId,
+                THREAD_BOOTSTRAP_REACTION_EMOJI,
+              )
+              .pipe(Effect.catch(() => Effect.void));
+          }
           yield* rest.createMessage(event.channel_id, {
             content: missingProjectBindingMessage({
               inThread: false,
@@ -2558,6 +2625,7 @@ const make = (botConfig: DiscordBotConfig) =>
             : {}),
           ...(gatewayAttachments.length > 0 ? { discordAttachments: gatewayAttachments } : {}),
           ...(uploadAttachments.length > 0 ? { attachments: uploadAttachments } : {}),
+          ...(pendingReadyReaction === undefined ? {} : { pendingReadyReaction }),
         }).pipe(Effect.catch((error) => reportError(discordThread.id, error)));
       }).pipe(Effect.catchCause(Effect.logError));
 
