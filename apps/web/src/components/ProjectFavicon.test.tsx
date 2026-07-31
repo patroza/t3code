@@ -51,9 +51,12 @@ vi.mock("react", async (importOriginal) => {
 });
 
 vi.mock("react/compiler-runtime", () => ({ c: hooks.useMemoCache }));
-vi.mock("../assets/assetUrls", () => ({
-  useAssetUrl: () => testState.faviconUrl,
+const assetUrlMocks = vi.hoisted(() => ({
+  useAssetUrl: vi.fn(() => testState.faviconUrl),
 }));
+
+vi.mock("../assets/assetUrls", () => assetUrlMocks);
+vi.mock("~/assets/assetUrls", () => assetUrlMocks);
 
 import { ProjectFavicon } from "./ProjectFavicon";
 
@@ -102,6 +105,8 @@ function renderImage(
 describe("ProjectFavicon", () => {
   beforeEach(() => {
     hooks.reset();
+    assetUrlMocks.useAssetUrl.mockReset();
+    assetUrlMocks.useAssetUrl.mockImplementation(() => testState.faviconUrl);
   });
 
   it("falls back when the displayed favicon fails without discarding a valid older image early", () => {
