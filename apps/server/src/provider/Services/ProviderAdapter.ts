@@ -69,6 +69,12 @@ export interface ProviderAdapterShape<TError> {
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
 
   /**
+   * Manually compact provider context for a session, when supported.
+   * Omit on adapters that only auto-compact or have no compact RPC.
+   */
+  readonly compactSession?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
    * Respond to an interactive approval request.
    */
   readonly respondToRequest: (
