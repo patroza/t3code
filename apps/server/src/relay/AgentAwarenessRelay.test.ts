@@ -27,6 +27,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -555,7 +556,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
   it.effect("publishes agent activity to the relay transport URL, not the relay issuer", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const originalFetch = globalThis.fetch;
         const context = yield* Effect.context<never>();
         const runFork = Effect.runForkWith(context);
         const events = yield* Queue.unbounded<OrchestrationEvent>();
@@ -641,7 +641,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           },
         } satisfies ExecutionEnvironmentDescriptor;
 
-        globalThis.fetch = ((input: Parameters<typeof fetch>[0]) => {
+        const testFetch = ((input: Parameters<typeof fetch>[0]) => {
           const url = new URL(
             typeof input === "string" || input instanceof URL
               ? input
@@ -650,11 +650,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           runFork(Deferred.succeed(fetchSeen, url));
           return Promise.resolve(Response.json({ ok: true, deliveries: [] }));
         }) as unknown as typeof fetch;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            globalThis.fetch = originalFetch;
-          }),
-        );
 
         const layer = Layer.mergeAll(
           Layer.succeed(ServerSecretStore.ServerSecretStore, secrets.store),
@@ -717,6 +712,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             ),
           ),
           Effect.provideService(RelayClientTracer, Option.some(collectingTracer(productSpans))),
+          Effect.provideService(FetchHttpClient.Fetch, testFetch),
           Effect.withTracer(collectingTracer(userSpans)),
         );
       }),

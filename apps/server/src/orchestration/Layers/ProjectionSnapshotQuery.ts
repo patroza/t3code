@@ -2666,18 +2666,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
         ),
       );
-
-  const getThreadLifecycleById: ProjectionSnapshotQueryShape["getThreadLifecycleById"] = (
-    threadId,
-  ) =>
-    getThreadLifecycleRowById({ threadId }).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionSnapshotQuery.getThreadLifecycleById:query",
-          "ProjectionSnapshotQuery.getThreadLifecycleById:decodeRow",
-        ),
-      ),
-    );
   const getThreadActivitiesPage: ProjectionSnapshotQueryShape["getThreadActivitiesPage"] = (
     input,
   ) =>
@@ -2715,6 +2703,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       return { activities: page, hasMore };
     });
 
+  const getThreadLifecycleById: ProjectionSnapshotQueryShape["getThreadLifecycleById"] = (
+    threadId,
+  ) =>
+    getThreadLifecycleRowById({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadLifecycleById:query",
+          "ProjectionSnapshotQuery.getThreadLifecycleById:decodeRow",
+        ),
+      ),
+    );
   return {
     getCommandReadModel,
     getSnapshot,
