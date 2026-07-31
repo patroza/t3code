@@ -6,20 +6,25 @@ import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionOnboarding from "./onboarding.ts";
+import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as PlatformConnectionSource from "../platform/source.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
+
+const diagnosticsLogLayer = ConnectionDiagnosticsLog.layer;
 
 const resolverLayer = ConnectionResolver.layer.pipe(
   Layer.provide(RemoteEnvironmentAuthorization.layer),
 );
 
 const driverLayer = ConnectionDriver.layer.pipe(
-  Layer.provide(Layer.mergeAll(resolverLayer, RpcSession.layer)),
+  Layer.provide(Layer.mergeAll(resolverLayer, RpcSession.layer, diagnosticsLogLayer)),
 );
 
-const registryLayer = EnvironmentRegistry.layer.pipe(Layer.provide(driverLayer));
+const registryLayer = EnvironmentRegistry.layer.pipe(
+  Layer.provide(Layer.mergeAll(driverLayer, diagnosticsLogLayer)),
+);
 
 const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
 
@@ -27,6 +32,7 @@ const connectionServicesLayer = Layer.mergeAll(
   registryLayer,
   RelayEnvironmentDiscovery.layer,
   onboardingLayer,
+  diagnosticsLogLayer,
 );
 
 const connectionStartupLayer = Layer.effectDiscard(
