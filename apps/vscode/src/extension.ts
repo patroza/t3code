@@ -18,6 +18,7 @@ import {
 import { serverCandidates } from "./serverResolution.ts";
 import { T3ChatViewProvider } from "./chatViewProvider.ts";
 import { T3Client } from "./t3Client.ts";
+import { filterIdentityPeople, type IdentityPerson } from "./identity.ts";
 
 const ACTIVE_THREAD_KEY_PREFIX = "t3Code.activeThread";
 const BEARER_TOKEN_SECRET = "t3Code.serverBearerToken";
@@ -182,6 +183,45 @@ export function activate(context: vscode.ExtensionContext): void {
     !supportsSecondarySidebar,
   );
 
+  const pickIdentity = (
+    people: ReadonlyArray<IdentityPerson>,
+  ): Promise<IdentityPerson | undefined> =>
+    new Promise((resolve) => {
+      const picker = vscode.window.createQuickPick<
+        vscode.QuickPickItem & { person: IdentityPerson }
+      >();
+      picker.title = "Choose your T3 Code identity";
+      picker.placeholder = "Type at least 3 characters";
+      picker.matchOnDescription = true;
+      picker.items = [];
+      picker.onDidChangeValue((value) => {
+        picker.items = filterIdentityPeople(people, value).map((person) => ({
+          label: person.username,
+          ...(person.name === undefined ? {} : { description: person.name }),
+          person,
+        }));
+      });
+      picker.onDidAccept(() => {
+        const selected = picker.selectedItems[0]?.person;
+        picker.hide();
+        resolve(selected);
+      });
+      picker.onDidHide(() => {
+        picker.dispose();
+        resolve(undefined);
+      });
+      picker.show();
+    });
+
+  const ensureIdentityClaim = async (): Promise<void> => {
+    const status = await client.identityStatus();
+    if (!status.snapshot.enabled || status.claim !== null) return;
+    const person = await pickIdentity(status.snapshot.people);
+    if (person === undefined) throw new Error("Choose your T3 Code identity before sending.");
+    const claim = await client.claimIdentity(person.personId);
+    void vscode.window.showInformationMessage(`Using ${claim.username}@vscode`);
+  };
+
   const ensureConnected = async (): Promise<void> => {
     const config = configuration();
     const bearerToken = await context.secrets.get(BEARER_TOKEN_SECRET);
@@ -204,12 +244,14 @@ export function activate(context: vscode.ExtensionContext): void {
     const desktopServerUrl = await readDesktopServerUrl();
     const candidates = serverCandidates(desktopServerUrl, config.serverUrl);
     let lastCause: unknown = new Error("No T3 Code server endpoint is available.");
+    let connected = false;
     for (const candidate of candidates) {
       try {
         log(`connection candidate source=${candidate.source} endpoint=${candidate.url}`);
         await connect(candidate.url);
         await client.waitForShell();
-        return;
+        connected = true;
+        break;
       } catch (cause) {
         lastCause = cause;
         log(
@@ -217,7 +259,8 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }
-    throw lastCause;
+    if (!connected) throw lastCause;
+    await ensureIdentityClaim();
   };
 
   const rememberThread = async (threadId: ThreadId): Promise<void> => {

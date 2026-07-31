@@ -55,11 +55,17 @@ import * as Stream from "effect/Stream";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "./ids.ts";
+import type { IdentitySnapshot, IdentityStatus, SessionIdentityClaim } from "./identity.ts";
 
 type ThreadListener = (thread: OrchestrationThread | null) => void;
 type ShellListener = (shell: OrchestrationShellSnapshot) => void;
 type ConnectionListener = (connected: boolean) => void;
 type VcsStatusListener = (status: VcsStatusResult | null) => void;
+
+type CompatibilityRpcClient = Record<
+  string,
+  ((payload: unknown) => Effect.Effect<unknown, Error>) | undefined
+>;
 
 function wsBaseUrl(httpBaseUrl: string): string {
   const url = new URL(httpBaseUrl);
@@ -195,6 +201,35 @@ export class T3Client {
   async waitForShell(): Promise<OrchestrationShellSnapshot> {
     if (this.#shell !== null) return this.#shell;
     return new Promise((resolve) => this.#shellWaiters.add(resolve));
+  }
+
+  async identityStatus(): Promise<IdentityStatus> {
+    const client = this.#requireSession().client as unknown as CompatibilityRpcClient;
+    const getSnapshot = client["identity.getSnapshot"];
+    const getSessionClaim = client["identity.getSessionClaim"];
+    if (getSnapshot === undefined || getSessionClaim === undefined) {
+      return {
+        snapshot: { enabled: false, claimRequired: false, people: [] },
+        claim: null,
+      };
+    }
+    const snapshot = (await this.#runtime.runPromise(getSnapshot({}))) as IdentitySnapshot;
+    if (!snapshot.enabled) return { snapshot, claim: null };
+    const result = (await this.#runtime.runPromise(getSessionClaim({}))) as {
+      readonly claim: SessionIdentityClaim | null;
+    };
+    return { snapshot, claim: result.claim };
+  }
+
+  async claimIdentity(personId: string): Promise<SessionIdentityClaim> {
+    const client = this.#requireSession().client as unknown as CompatibilityRpcClient;
+    const claim = client["identity.claim"];
+    if (claim === undefined)
+      throw new Error("This T3 Code server does not support identity claims.");
+    const result = (await this.#runtime.runPromise(claim({ personId, method: "typeahead" }))) as {
+      readonly claim: SessionIdentityClaim;
+    };
+    return result.claim;
   }
 
   async waitForActiveThread(): Promise<OrchestrationThread> {
@@ -433,11 +468,12 @@ export class T3Client {
       titleSeed: input.prompt.trim().slice(0, 80) || "New thread",
       runtimeMode: input.runtimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
       interactionMode,
+      sourceHint: { channel: "vscode" },
       ...(input.sourceProposedPlan === undefined
         ? {}
         : { sourceProposedPlan: input.sourceProposedPlan }),
       createdAt: new Date().toISOString(),
-    });
+    } as ClientOrchestrationCommand);
   }
 
   async steerQueuedMessage(messageId: MessageId): Promise<void> {
