@@ -1,5 +1,6 @@
 // @effect-diagnostics anyUnknownInErrorContext:off missingEffectContext:off globalFetchInEffect:off unknownInEffectCatch:off nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import type {
   ChatImageAttachment,
   OrchestrationThread,
@@ -48,6 +49,7 @@ import {
   guessFileMimeType,
   isLocalFileSrc,
   replaceMarkdownLocalFileLinks,
+  resolveLocalFilePathOnDisk,
   stripMarkdownLocalFileLinks,
   type MarkdownLocalFileRef,
 } from "../presentation/markdownFiles.ts";
@@ -2878,6 +2880,7 @@ export const runBridge = (
       refs: ReadonlyArray<MarkdownLocalFileRef>,
       alreadyPosted: ReadonlyArray<string>,
       maxFiles: number,
+      worktreePath: string | null,
     ) =>
       Effect.gen(function* () {
         const posted = new Set(alreadyPosted);
@@ -2891,13 +2894,20 @@ export const runBridge = (
         const files: DiscordUploadFile[] = [];
         const loadedSrcs: string[] = [];
         for (const ref of pending) {
-          const filePath = assertFilesystemFilePath(ref.src);
+          // Agents write worktree-relative paths (e.g. `.plans/note.md`). Resolve
+          // against the thread worktree before reading — bot cwd is not the project.
+          const resolved =
+            resolveLocalFilePathOnDisk(ref.src, worktreePath) ??
+            resolveLocalFilePathOnDisk(ref.rawSrc, worktreePath) ??
+            assertFilesystemFilePath(ref.src);
+          const filePath = resolved;
           const name = fileNameForLocalFileRef(ref);
           const mime = guessFileMimeType(filePath);
 
           yield* Effect.logInfo("Loading markdown file for Discord multipart", {
             rawSrc: ref.rawSrc,
             filePath,
+            worktreePath,
             name,
           });
 
@@ -2920,11 +2930,23 @@ export const runBridge = (
             continue;
           }
 
+          // Asset URL preview rejects most text types (.md). Prefer a worktree-relative
+          // path for the RPC so the server can resolve under the project root.
+          const assetPathForUrl = (() => {
+            const raw = assertFilesystemFilePath(ref.src);
+            if (!NodePath.isAbsolute(raw)) return raw.replace(/^\.\//u, "");
+            const root = worktreePath?.trim() ?? "";
+            if (root !== "" && raw.startsWith(root)) {
+              const rel = raw.slice(root.length).replace(/^[/\\]+/u, "");
+              if (rel !== "") return rel;
+            }
+            return raw;
+          })();
+
           const fromAsset = yield* Effect.gen(function* () {
-            const assetPath = assertFilesystemFilePath(ref.src);
             const url = yield* t3.createWorkspaceFileUrl({
               threadId: input.t3ThreadId as ThreadId,
-              path: assetPath,
+              path: assetPathForUrl,
             });
             const response = yield* Effect.tryPromise({
               try: () => globalThis.fetch(url),
@@ -2932,7 +2954,7 @@ export const runBridge = (
             });
             if (!response.ok) {
               yield* Effect.logWarning(
-                `Asset file download failed (${response.status}) for ${assetPath}`,
+                `Asset file download failed (${response.status}) for ${assetPathForUrl}`,
               );
               return null as DiscordUploadFile | null;
             }
@@ -2949,7 +2971,7 @@ export const runBridge = (
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
                 yield* Effect.logWarning(
-                  `Could not load markdown file for Discord (disk+asset): raw=${ref.rawSrc} path=${filePath}`,
+                  `Could not load markdown file for Discord (disk+asset): raw=${ref.rawSrc} path=${filePath} worktree=${worktreePath ?? "null"}`,
                 );
                 yield* Effect.logError(cause);
                 return null as DiscordUploadFile | null;
@@ -3593,6 +3615,7 @@ export const runBridge = (
             pendingMarkdownFiles,
             state.postedMarkdownFileSrcs,
             fileSlotsLeft,
+            worktreePath,
           );
           const files = [...imageFiles, ...mdLoaded.files, ...linkedFilesLoaded.files];
           if (files.length === 0) return;
@@ -3675,6 +3698,7 @@ export const runBridge = (
           pendingMarkdownFiles,
           state.postedMarkdownFileSrcs,
           slots,
+          worktreePath,
         );
         files.push(...linkedFilesLoaded.files);
 
