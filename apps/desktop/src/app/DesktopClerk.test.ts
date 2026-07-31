@@ -60,7 +60,7 @@ describe("DesktopClerk", () => {
   it.effect("acquires and releases the SDK bridge with the layer", () => {
     const cleanup = vi.fn();
     storageMock.mockReturnValue(storageAdapter);
-    createClerkBridgeMock.mockReturnValue({ cleanup });
+    createClerkBridgeMock.mockReturnValue({ cleanup, isPrimaryInstance: true });
 
     return Effect.gen(function* () {
       yield* Effect.scoped(Layer.build(makeDesktopClerkLayer()));
@@ -108,6 +108,7 @@ describe("DesktopClerk", () => {
       cleanup: () => {
         throw cause;
       },
+      isPrimaryInstance: true,
     });
 
     return Effect.gen(function* () {
@@ -132,7 +133,7 @@ describe("DesktopClerk", () => {
     { isDevelopment: true, scheme: "t3code-dev" },
     { isDevelopment: false, scheme: "t3code" },
   ])("configures the SDK with the $scheme renderer origin", ({ isDevelopment, scheme }) => {
-    const bridge = { cleanup: vi.fn() };
+    const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
     storageMock.mockReturnValue(storageAdapter);
     createClerkBridgeMock.mockReturnValue(bridge);
 
@@ -155,7 +156,7 @@ describe("DesktopClerk", () => {
     "wires second-instance argv into deep links and registers the protocol when packaged",
     () => {
       storageMock.mockReturnValue(storageAdapter);
-      createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn() });
+      createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
 
       return Effect.gen(function* () {
         const handledArgv = yield* Ref.make<Array<readonly string[]>>([]);
@@ -259,7 +260,7 @@ describe("DesktopClerk", () => {
 
   it.effect("does not register the OS protocol client in development", () => {
     storageMock.mockReturnValue(storageAdapter);
-    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn() });
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
 
     return Effect.gen(function* () {
       let protocolClientRegistered = false;
