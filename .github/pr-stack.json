@@ -83,12 +83,6 @@
       "commit": "*",
       "path": ".github/workflows/ci.yml",
       "strategy": "theirs"
-    },
-    {
-      "branch": "fork/tim",
-      "commit": "*",
-      "path": "apps/server/src/vcs/GitVcsDriverCore.test.ts",
-      "strategy": "theirs"
     }
   ]
 }
