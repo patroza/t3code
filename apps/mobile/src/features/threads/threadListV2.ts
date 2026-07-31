@@ -303,13 +303,23 @@ export function buildThreadListV2ListItems(input: {
 
 /**
  * Partitions visible threads into the active card block (creation order) and
- * the settled recency tail, matching the web v2 list. `autoSettleAfterDays`
+ * the settled recency tail, matching the web Sidebar V2 list (and classic
+ * Recent hide-settled shelf: history is shelved, never dropped). Callers must
+ * not pass settledLimit: 0 to emulate "hide settled" — use paging only.
+ *
+ * `autoSettleAfterDays`
  * mirrors the web default of 3 — mobile has no client-settings sync yet, so
  * the default is fixed here rather than user-configurable.
  */
 export function buildThreadListV2Items(input: {
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  readonly environmentId: EnvironmentId | null;
+  /**
+   * Multi-select environment filter. Empty = all environments.
+   * Prefer this over the legacy single-id field.
+   */
+  readonly selectedEnvironmentIds?: readonly EnvironmentId[];
+  /** @deprecated Use selectedEnvironmentIds. Kept for call-site migration. */
+  readonly environmentId?: EnvironmentId | null;
   readonly projectRefs?: ReadonlyArray<{
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId;
@@ -347,6 +357,9 @@ export function buildThreadListV2Items(input: {
   const snoozeNow = input.snoozeNow ?? now;
   const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
   const query = input.searchQuery.trim().toLocaleLowerCase();
+  const selectedEnvironmentIds =
+    input.selectedEnvironmentIds ??
+    (input.environmentId != null && input.environmentId !== undefined ? [input.environmentId] : []);
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
@@ -358,7 +371,12 @@ export function buildThreadListV2Items(input: {
   for (const thread of input.threads) {
     // Callers pass live (unarchived) shells; settled threads are among them
     // and partition into the tail via effectiveSettled.
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
+    if (
+      selectedEnvironmentIds.length > 0 &&
+      !selectedEnvironmentIds.includes(thread.environmentId)
+    ) {
+      continue;
+    }
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }
