@@ -76,6 +76,7 @@ const isolatedUnitTestFiles = [
   "src/cloud/linkEnvironment.test.ts",
   "src/cloud/managedAuth.test.ts",
   "src/components/ComposerPromptEditor.test.ts",
+  "src/components/ProjectFavicon.test.tsx",
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
   "src/components/chat/MessagesTimeline.test.tsx",
