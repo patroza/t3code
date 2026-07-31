@@ -340,8 +340,7 @@ function convertToolbarChild(child: ReactNode): NativeStackHeaderItem | null {
     return {
       type: "spacing",
       spacing: typeof child.props.width === "number" ? child.props.width : 8,
-      flexible: Boolean(child.props.flexible),
-    } as NativeStackHeaderItem;
+    };
   }
 
   return null;
@@ -352,11 +351,6 @@ function collectToolbarItems(children: ReactNode): NativeStackHeaderItem[] {
   Children.forEach(children, (child) => {
     const item = convertToolbarChild(child);
     if (item) {
-      if (item.type === "spacing") {
-        // Native inserts spacing items at `index`, treating a missing index
-        // as 0 — which would move the spacer in front of earlier siblings.
-        (item as { index?: number }).index = items.length;
-      }
       items.push(item);
     }
   });
@@ -370,8 +364,7 @@ function NativeHeaderToolbarRoot(props: {
   const navigation = useNativeStackNavigation();
   const items = useMemo(() => collectToolbarItems(props.children), [props.children]);
 
-  // Swap toolbar owners before paint so split and compact headers cannot clear each other.
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!navigation) {
       return;
     }
@@ -447,7 +440,6 @@ function NativeHeaderToolbarLabel(_props: { readonly children?: ReactNode }) {
 NativeHeaderToolbarLabel.displayName = "NativeHeaderToolbarLabel";
 
 function NativeHeaderToolbarSpacer(_props: {
-  readonly flexible?: boolean;
   readonly sharesBackground?: boolean;
   readonly width?: number;
 }) {

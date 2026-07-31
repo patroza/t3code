@@ -1,85 +1,20 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IdentityUsername,
+  PersonId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
   buildBrowseGroups,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   filterCommandPaletteGroups,
-  reduceCommandPaletteUiState,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
-
-describe("reduceCommandPaletteUiState", () => {
-  const closedState = { open: false, mode: "command", openIntent: null } as const;
-
-  it("toggles each overlay mode open and closed", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-    expect(filesOpen).toEqual({ open: true, mode: "files", openIntent: null });
-
-    const contentOpen = reduceCommandPaletteUiState(filesOpen, {
-      _tag: "ToggleMode",
-      mode: "content",
-    });
-    expect(contentOpen).toEqual({ open: true, mode: "content", openIntent: null });
-
-    expect(
-      reduceCommandPaletteUiState(contentOpen, { _tag: "ToggleMode", mode: "content" }),
-    ).toEqual({ open: false, mode: "command", openIntent: null });
-  });
-
-  it("switches between open modes without closing", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "ToggleMode", mode: "command" })).toEqual(
-      {
-        open: true,
-        mode: "command",
-        openIntent: null,
-      },
-    );
-  });
-
-  it("routes open intents to command mode", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "OpenAddProject" })).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: { kind: "add-project" },
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "OpenNewThreadIn" })).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: { kind: "new-thread-in" },
-    });
-  });
-
-  it("resets to command mode for dialog-driven opens and closes", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: false })).toEqual({
-      open: false,
-      mode: "command",
-      openIntent: null,
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: true })).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: null,
-    });
-  });
-});
 
 describe("enumerateCommandPaletteItems", () => {
   it("assigns positional jump shortcuts to the first nine displayed items", () => {
@@ -212,6 +147,54 @@ describe("buildThreadActionItems", () => {
       "thread:thread-title-match",
       "thread:thread-context-match",
     ]);
+  });
+
+  it("matches identity handles, PR numbers, and Jira keys in thread search", () => {
+    const threadItems = buildThreadActionItems({
+      threads: [
+        makeThread({
+          id: ThreadId.make("thread-attributed"),
+          title: "Harden claim gate SA-49",
+          branch: "pr/9001-claim-gate",
+          originSource: {
+            channel: "desktop",
+            personId: PersonId.make("patroza"),
+            username: IdentityUsername.make("patroza"),
+            location: { issueKey: "SA-49", number: 9001, kind: "pr" },
+          },
+          participantSummaries: [
+            {
+              personId: PersonId.make("patroza"),
+              username: IdentityUsername.make("patroza"),
+              firstChannel: "desktop",
+              firstParticipatedAt: "2026-03-20T00:00:00.000Z",
+            },
+          ],
+        }),
+        makeThread({
+          id: ThreadId.make("thread-other"),
+          title: "Unrelated cleanup",
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    for (const query of ["@patroza", "patroza@desktop", "@desktop", "#9001", "SA-49"]) {
+      const groups = filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems: [],
+        threadSearchItems: threadItems,
+      });
+      expect(
+        groups[0]?.items.map((item) => item.value),
+        query,
+      ).toEqual(["thread:thread-attributed"]);
+    }
   });
 
   it("preserves thread project-name matches when there is no stronger title match", () => {
