@@ -2,12 +2,8 @@ import {
   filterPeopleForTypeahead,
   identityClaimRequired,
 } from "@t3tools/client-runtime/state/identity";
-import {
-  IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS,
-  IdentityUsername,
-  type EnvironmentId,
-} from "@t3tools/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { IDENTITY_CLAIM_TYPEAHEAD_MIN_CHARS, IdentityUsername } from "@t3tools/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, TextInput, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -15,6 +11,7 @@ import { useEnvironments, type EnvironmentPresentation } from "../../state/envir
 import { identityEnvironment } from "../../state/identity";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { resolveIdentityClaimCandidate } from "./identityClaimCandidate";
 
 /**
  * Claim gate for multi-env mobile (e.g. local + t3vm).
@@ -42,29 +39,30 @@ export function IdentityClaimGate() {
   }, [environments]);
 
   const [activeIndex, setActiveIndex] = useState(0);
+  const candidateKey = candidates.map((environment) => environment.environmentId).join("\0");
 
-  // When the candidate list shrinks or reorders, keep the index valid.
+  // A changed connection set starts a fresh probe. Reaching the end of an unchanged
+  // set stays exhausted instead of wrapping to zero and probing forever.
   useEffect(() => {
-    if (activeIndex >= candidates.length) {
-      setActiveIndex(0);
-    }
-  }, [activeIndex, candidates.length]);
+    setActiveIndex(0);
+  }, [candidateKey]);
 
-  if (candidates.length === 0) {
+  const onSkip = useCallback(() => {
+    setActiveIndex((index) => index + 1);
+  }, []);
+
+  const environment = resolveIdentityClaimCandidate(candidates, activeIndex);
+  if (environment === undefined) {
     return null;
   }
 
   // Probe candidates in order: each reports whether it needs a claim; we advance
   // past envs that do not (map off / already claimed) without showing a Modal.
-  const environment = candidates[Math.min(activeIndex, candidates.length - 1)]!;
   return (
     <IdentityClaimGateBody
       key={environment.environmentId}
       environment={environment}
-      onSkip={() => {
-        // Map off or already claimed — try the next connected env.
-        setActiveIndex((index) => index + 1);
-      }}
+      onSkip={onSkip}
     />
   );
 }
@@ -84,6 +82,7 @@ function IdentityClaimGateBody(props: {
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const didSkipRef = useRef(false);
 
   const needsClaim = identityClaimRequired(snapshotQuery.data, claimQuery.data);
 
@@ -99,12 +98,16 @@ function IdentityClaimGateBody(props: {
       !snapshotQuery.data.enabled ||
       !needsClaim
     ) {
+      if (didSkipRef.current) {
+        return;
+      }
+      didSkipRef.current = true;
       props.onSkip();
     }
   }, [
     claimQuery.isPending,
     needsClaim,
-    props,
+    props.onSkip,
     snapshotQuery.data,
     snapshotQuery.error,
     snapshotQuery.isPending,
