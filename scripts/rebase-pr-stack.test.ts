@@ -377,6 +377,44 @@ interface FixtureOptions {
   readonly advanceTopAfterIntegration?: boolean;
 }
 
+/**
+ * Git's repository-scoping variables. Inherited from a parent git process — a
+ * hook, or anything the ship gate runs — they override `cwd` entirely, so these
+ * fixtures would operate on the developer's real checkout instead of the temp
+ * directory. `git init --bare <tmp>` then sets `core.bare = true` on the actual
+ * repository, which breaks `git status`, `add` and `commit` until someone
+ * notices and unsets it.
+ *
+ * This is the same precaution `.githooks/pre-push` takes with
+ * `git rev-parse --local-env-vars`; the list is hardcoded here so the fixture
+ * does not need a working git repository to discover it.
+ */
+const GIT_LOCAL_ENV_VARS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_NAMESPACE",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_PREFIX",
+  "GIT_SUPER_PREFIX",
+  "GIT_INTERNAL_SUPER_PREFIX",
+] as const;
+
+const gitFixtureEnv = (): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Stack Test",
+    GIT_AUTHOR_EMAIL: "stack-test@example.com",
+    GIT_COMMITTER_NAME: "Stack Test",
+    GIT_COMMITTER_EMAIL: "stack-test@example.com",
+  };
+  for (const name of GIT_LOCAL_ENV_VARS) delete env[name];
+  return env;
+};
+
 function runGit(
   cwd: string,
   args: ReadonlyArray<string>,
@@ -385,13 +423,7 @@ function runGit(
   const result = NodeChildProcess.spawnSync("git", [...args], {
     cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Stack Test",
-      GIT_AUTHOR_EMAIL: "stack-test@example.com",
-      GIT_COMMITTER_NAME: "Stack Test",
-      GIT_COMMITTER_EMAIL: "stack-test@example.com",
-    },
+    env: gitFixtureEnv(),
   });
   if (!options.allowFailure && result.status !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
@@ -429,6 +461,9 @@ function isAncestor(repository: string, parent: string, child: string): boolean 
   const result = NodeChildProcess.spawnSync("git", ["merge-base", "--is-ancestor", parent, child], {
     cwd: repository,
     encoding: "utf8",
+    // Same scrub as the fixture writer: an inherited GIT_DIR would answer this
+    // question about the developer's repository rather than the fixture's.
+    env: gitFixtureEnv(),
   });
   return result.status === 0;
 }
