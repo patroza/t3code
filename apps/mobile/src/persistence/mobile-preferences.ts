@@ -61,6 +61,15 @@ export interface Preferences {
    * Device-local; survives restarts. Omitted = default project grouping.
    */
   readonly threadGrouping?: "recency" | "project" | "none";
+  /**
+   * Home/sidebar ownership filter (anyone / mine / theirs). Device-local so
+   * it survives app restarts — without this, Mine/Theirs resets on launch.
+   */
+  readonly ownershipFilter?: "any" | "mine" | "theirs";
+  /**
+   * Sub-filter for mine/theirs: created, participated, or both (default).
+   */
+  readonly ownershipRelation?: "created" | "participated" | "both";
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -119,6 +128,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     hideSettledOnRecent?: boolean;
     hideSettledOnProjects?: boolean;
     threadGrouping?: "recency" | "project" | "none";
+    ownershipFilter?: "any" | "mine" | "theirs";
+    ownershipRelation?: "created" | "participated" | "both";
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -182,7 +193,47 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.threadGrouping = parsed.threadGrouping;
   }
+  if (
+    parsed.ownershipFilter === "any" ||
+    parsed.ownershipFilter === "mine" ||
+    parsed.ownershipFilter === "theirs"
+  ) {
+    preferences.ownershipFilter = parsed.ownershipFilter;
+  }
+  if (
+    parsed.ownershipRelation === "created" ||
+    parsed.ownershipRelation === "participated" ||
+    parsed.ownershipRelation === "both"
+  ) {
+    preferences.ownershipRelation = parsed.ownershipRelation;
+  }
   return preferences;
+}
+
+/** Resolve stored ownership filter; default anyone when never chosen. */
+export function resolveOwnershipFilter(preferences: Preferences): "any" | "mine" | "theirs" {
+  if (
+    preferences.ownershipFilter === "any" ||
+    preferences.ownershipFilter === "mine" ||
+    preferences.ownershipFilter === "theirs"
+  ) {
+    return preferences.ownershipFilter;
+  }
+  return "any";
+}
+
+/** Resolve mine/theirs relation sub-filter; default both. */
+export function resolveOwnershipRelation(
+  preferences: Preferences,
+): "created" | "participated" | "both" {
+  if (
+    preferences.ownershipRelation === "created" ||
+    preferences.ownershipRelation === "participated" ||
+    preferences.ownershipRelation === "both"
+  ) {
+    return preferences.ownershipRelation;
+  }
+  return "both";
 }
 
 /** Resolve stored Threads grouping; default project when never chosen. */
