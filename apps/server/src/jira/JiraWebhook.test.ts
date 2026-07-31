@@ -397,6 +397,20 @@ describe("Jira helpers", () => {
     expect(isJiraProjectAllowed(new Set(["SA"]), "CFG")).toBe(false);
     expect(isJiraProjectAllowed(new Set(), "ANY")).toBe(true);
     expect(plainTextToAdf("hello\n\nworld").content).toHaveLength(2);
+    const withMention = plainTextToAdf("hello", {
+      mention: { accountId: "6331c32307a27ebeff15d19d", displayName: "Armin Gebhardt" },
+    });
+    expect(withMention.content[0]?.content[0]).toMatchObject({
+      type: "mention",
+      attrs: {
+        id: "accountid:6331c32307a27ebeff15d19d",
+        text: "@Armin Gebhardt",
+      },
+    });
+    expect(withMention.content[0]?.content[1]).toMatchObject({
+      type: "text",
+      text: " hello",
+    });
     expect(formatJiraComment("  ok  ")).toBe("ok");
   });
 

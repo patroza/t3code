@@ -168,6 +168,9 @@ const make = Effect.gen(function* () {
         rootParent.length > 0 && mentionParent.length > 0 && rootParent !== mentionParent
           ? mentionParent
           : null,
+      // Normal Jira reply style: @ the human who triggered the bot.
+      mentionAccountId: delivery.actorAccountId,
+      mentionDisplayName: delivery.actorDisplayName,
     });
   };
 
@@ -447,6 +450,8 @@ const make = Effect.gen(function* () {
       commentSurface: input.invocation.commentSurface,
       responseCommentId: null,
       acknowledgmentEmojiId: null,
+      actorAccountId: input.invocation.actorAccountId,
+      actorDisplayName: input.invocation.actorDisplayName,
       threadId: null,
       previousTurnId: null,
       userMessageId: null,

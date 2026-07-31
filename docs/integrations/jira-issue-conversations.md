@@ -198,9 +198,10 @@ people:
 
 Responses are posted as issue comments authored by the service account, as an **inline threaded
 reply** under the triggering mention (REST `parentId` — supported on Jira Cloud even though it is
-lightly documented). When the mention sits inside an existing reply thread, the bridge parents under
-that thread’s **root** (Jira rejects nesting under a child), then retries the mention id if needed.
-Only if every parentId is rejected does the bridge fall back to a top-level comment.
+lightly documented). The body **@-mentions** the human requester (ADF `mention` node) like a normal
+Jira reply. When the mention sits inside an existing reply thread, the bridge parents under that
+thread’s **root** (Jira rejects nesting under a child), then retries the mention id if needed. Only
+if every parentId is rejected does the bridge fall back to a top-level comment.
 
 Prefer Markdown converted to a minimal ADF document for API v3. Do not @-spam watchers unless the
 agent explicitly mentions users.

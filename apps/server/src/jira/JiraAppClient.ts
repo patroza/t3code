@@ -24,6 +24,9 @@ export class JiraAppClient extends Context.Service<
        * Keeps the reply inline when the first parentId is invalid.
        */
       readonly fallbackParentCommentId?: string | null;
+      /** @-mention this Jira user at the start of the reply (normal reply style). */
+      readonly mentionAccountId?: string | null;
+      readonly mentionDisplayName?: string | null;
     }) => Effect.Effect<{ readonly id: string } | null, never>;
     /**
      * Best-effort reaction on a comment (👀). Jira Cloud support varies; returns the emoji id
@@ -64,11 +67,20 @@ export const make = Effect.gen(function* () {
     readonly body: string;
     readonly parentCommentId?: string | null;
     readonly fallbackParentCommentId?: string | null;
+    readonly mentionAccountId?: string | null;
+    readonly mentionDisplayName?: string | null;
   }) {
     if (!config.enabled) return null;
 
     const url = `${config.baseUrl}/rest/api/3/issue/${encodeURIComponent(input.issueKey)}/comment`;
-    const adfBody = plainTextToAdf(input.body);
+    const adfBody = plainTextToAdf(input.body, {
+      mention: input.mentionAccountId
+        ? {
+            accountId: input.mentionAccountId,
+            displayName: input.mentionDisplayName,
+          }
+        : null,
+    });
 
     /** Jira accepts parentId as string or number; prefer numeric when pure digits. */
     const parentIdValue = (raw: string): string | number =>

@@ -452,26 +452,81 @@ function simplePromptFingerprint(prompt: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/** Minimal ADF document from plain text paragraphs (API v3 comment body). */
-export function plainTextToAdf(text: string): {
+export type JiraAdfMention = {
+  readonly accountId: string;
+  readonly displayName?: string | null | undefined;
+};
+
+type AdfInlineNode =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "mention";
+      readonly attrs: {
+        readonly id: string;
+        readonly text: string;
+        readonly accessLevel: string;
+      };
+    };
+
+type AdfParagraph = {
+  readonly type: "paragraph";
+  readonly content: ReadonlyArray<AdfInlineNode>;
+};
+
+export type JiraAdfDocument = {
   readonly type: "doc";
   readonly version: 1;
-  readonly content: ReadonlyArray<{
-    readonly type: "paragraph";
-    readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
-  }>;
-} {
+  readonly content: ReadonlyArray<AdfParagraph>;
+};
+
+/** Normalize accountId for ADF mention attrs (`accountid:…`). */
+export function jiraMentionAccountId(accountId: string): string {
+  const trimmed = accountId.trim();
+  if (trimmed.length === 0) return trimmed;
+  return trimmed.toLowerCase().startsWith("accountid:") ? trimmed : `accountid:${trimmed}`;
+}
+
+/**
+ * Minimal ADF document from plain text paragraphs (API v3 comment body).
+ * Optional leading @mention of the human requester (normal Jira reply style).
+ */
+export function plainTextToAdf(
+  text: string,
+  options?: { readonly mention?: JiraAdfMention | null | undefined },
+): JiraAdfDocument {
   const paragraphs = text
     .split(/\n{2,}/u)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
   const blocks = paragraphs.length > 0 ? paragraphs : [text.trim() || " "];
+  const mention = options?.mention;
+  const accountId = mention?.accountId?.trim() ?? "";
+  const mentionNode: AdfInlineNode | null =
+    accountId.length > 0
+      ? {
+          type: "mention",
+          attrs: {
+            id: jiraMentionAccountId(accountId),
+            text: `@${(mention?.displayName?.trim() || accountId).replace(/^@/u, "")}`,
+            accessLevel: "",
+          },
+        }
+      : null;
+
   return {
     type: "doc",
     version: 1,
-    content: blocks.map((block) => ({
-      type: "paragraph" as const,
-      content: [{ type: "text" as const, text: block }],
-    })),
+    content: blocks.map((block, index) => {
+      if (index === 0 && mentionNode !== null) {
+        return {
+          type: "paragraph" as const,
+          content: [mentionNode, { type: "text" as const, text: ` ${block}` }],
+        };
+      }
+      return {
+        type: "paragraph" as const,
+        content: [{ type: "text" as const, text: block }],
+      };
+    }),
   };
 }
