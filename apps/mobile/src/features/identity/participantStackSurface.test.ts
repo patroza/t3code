@@ -17,6 +17,9 @@ describe("mobile participation indicator surface", () => {
     expect(stack).toContain("+{extras.length}");
     expect(stack).toContain('"border border-primary bg-primary/15"');
     expect(stack).not.toContain(">✓</Text>");
+    expect(stack).toContain("highlighted={lead.personId === claimPersonId}");
+    const avatar = readSource("./IdentityAvatar.tsx");
+    expect(avatar).toContain('props.highlighted && "bg-primary"');
     expect(stack).toContain("isClaimedNonStarterParticipant");
     expect(stack).toContain("You participated");
     expect(listV1).toContain("environmentId={thread.environmentId}");

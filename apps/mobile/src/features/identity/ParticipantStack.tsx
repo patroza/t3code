@@ -53,6 +53,7 @@ export function ParticipantStack(props: {
         username={lead.username}
         name={lead.name}
         size="micro"
+        highlighted={lead.personId === claimPersonId}
       />
       {extras.length > 0 ? (
         <View

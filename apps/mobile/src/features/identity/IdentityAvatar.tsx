@@ -13,6 +13,7 @@ export function IdentityAvatar(props: {
   readonly name?: string | null | undefined;
   readonly size?: "micro" | "sm" | "md";
   readonly className?: string;
+  readonly highlighted?: boolean;
 }) {
   const model = identityAvatar({
     personId: props.personId,
@@ -26,10 +27,18 @@ export function IdentityAvatar(props: {
   return (
     <View
       accessibilityLabel={model.label}
-      className={cn("shrink-0 items-center justify-center rounded-full", box, props.className)}
-      style={{ backgroundColor: model.backgroundColor }}
+      className={cn(
+        "shrink-0 items-center justify-center rounded-full",
+        box,
+        props.highlighted && "bg-primary",
+        props.className,
+      )}
+      style={props.highlighted ? undefined : { backgroundColor: model.backgroundColor }}
     >
-      <Text className={cn("font-t3-bold", text)} style={{ color: model.color }}>
+      <Text
+        className={cn("font-t3-bold", text, props.highlighted && "text-primary-foreground")}
+        style={props.highlighted ? undefined : { color: model.color }}
+      >
         {model.initials}
       </Text>
     </View>

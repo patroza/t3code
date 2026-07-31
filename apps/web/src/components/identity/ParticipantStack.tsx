@@ -52,6 +52,7 @@ export function ParticipantStack(props: {
         name={lead.name}
         size="micro"
         title={null}
+        highlighted={lead.personId === claimPersonId}
       />
       {extras.length > 0 ? (
         <span
@@ -88,6 +89,7 @@ export function ParticipantStack(props: {
               name={person.name}
               size="micro"
               title={null}
+              highlighted={person.personId === claimPersonId}
             />
             <span className="truncate text-foreground">
               {participantDisplayLabel(person)}
