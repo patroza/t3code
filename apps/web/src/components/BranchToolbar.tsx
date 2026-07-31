@@ -17,10 +17,12 @@ import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   type EnvMode,
   type EnvironmentOption,
+  type WorkspaceTarget,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveEffectiveEnvMode,
   resolveLockedWorkspaceLabel,
+  resolveWorkspaceTarget,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
   shouldShowEnvironmentIndicator,
@@ -45,7 +47,7 @@ interface BranchToolbarProps {
   environmentId: EnvironmentId;
   threadId: ThreadId;
   draftId?: DraftId;
-  onEnvModeChange: (mode: EnvMode) => void;
+  onWorkspaceTargetChange: (target: WorkspaceTarget) => void;
   effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
@@ -68,9 +70,9 @@ interface MobileRunContextSelectorProps {
   showEnvironmentPicker: boolean;
   showEnvironmentIndicator: boolean;
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
-  effectiveEnvMode: EnvMode;
+  workspaceTarget: WorkspaceTarget;
   activeWorktreePath: string | null;
-  onEnvModeChange: (mode: EnvMode) => void;
+  onWorkspaceTargetChange: (target: WorkspaceTarget) => void;
   previousWorktreeLabel: string | null;
   onUsePreviousWorktree: () => void;
 }
@@ -83,9 +85,9 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   showEnvironmentPicker,
   showEnvironmentIndicator,
   onEnvironmentChange,
-  effectiveEnvMode,
+  workspaceTarget,
   activeWorktreePath,
-  onEnvModeChange,
+  onWorkspaceTargetChange,
   previousWorktreeLabel,
   onUsePreviousWorktree,
 }: MobileRunContextSelectorProps) {
@@ -94,16 +96,18 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     [availableEnvironments, environmentId],
   );
   const WorkspaceIcon =
-    effectiveEnvMode === "worktree"
+    workspaceTarget === "worktree"
       ? FolderGit2Icon
-      : activeWorktreePath
+      : workspaceTarget === "current-worktree"
         ? FolderGitIcon
         : FolderIcon;
   const workspaceLabel = envModeLocked
     ? resolveLockedWorkspaceLabel(activeWorktreePath)
-    : effectiveEnvMode === "worktree"
+    : workspaceTarget === "worktree"
       ? resolveEnvModeLabel("worktree")
-      : resolveCurrentWorkspaceLabel(activeWorktreePath);
+      : workspaceTarget === "current-worktree"
+        ? resolveCurrentWorkspaceLabel(activeWorktreePath)
+        : resolveEnvModeLabel("local");
   const isLocked = envLocked || envModeLocked;
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
   const icon = showEnvironmentIndicator ? (
@@ -174,27 +178,31 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         <MenuGroup>
           <MenuGroupLabel>Workspace</MenuGroupLabel>
           <MenuRadioGroup
-            value={effectiveEnvMode}
+            value={workspaceTarget}
             onValueChange={(value) => {
               if (value === "previous-worktree") {
                 onUsePreviousWorktree();
                 return;
               }
-              onEnvModeChange(value as EnvMode);
+              onWorkspaceTargetChange(value as WorkspaceTarget);
             }}
           >
             <MenuRadioItem disabled={envModeLocked} value="local">
               <span className="flex min-w-0 items-center gap-1.5">
-                {activeWorktreePath ? (
-                  <FolderGitIcon className="size-3" />
-                ) : (
-                  <FolderIcon className="size-3" />
-                )}
-                <span className="min-w-0 truncate">
-                  {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-                </span>
+                <FolderIcon className="size-3" />
+                <span className="min-w-0 truncate">{resolveEnvModeLabel("local")}</span>
               </span>
             </MenuRadioItem>
+            {activeWorktreePath ? (
+              <MenuRadioItem disabled={envModeLocked} value="current-worktree">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FolderGitIcon className="size-3" />
+                  <span className="min-w-0 truncate">
+                    {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+                  </span>
+                </span>
+              </MenuRadioItem>
+            ) : null}
             <MenuRadioItem disabled={envModeLocked} value="worktree">
               <span className="flex min-w-0 items-center gap-1.5">
                 <FolderGit2Icon className="size-3" />
@@ -220,7 +228,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   environmentId,
   threadId,
   draftId,
-  onEnvModeChange,
+  onWorkspaceTargetChange,
   effectiveEnvModeOverride,
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
@@ -258,6 +266,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       hasServerThread: serverThread !== null,
       draftThreadEnvMode: draftThread?.envMode,
     });
+  const workspaceTarget = resolveWorkspaceTarget({ effectiveEnvMode, activeWorktreePath });
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
 
   // "Previous worktree" hops a draft into the most recently active worktree
@@ -318,9 +327,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           showEnvironmentPicker={showEnvironmentPicker}
           showEnvironmentIndicator={showEnvironmentIndicator}
           onEnvironmentChange={onEnvironmentChange}
-          effectiveEnvMode={effectiveEnvMode}
+          workspaceTarget={workspaceTarget}
           activeWorktreePath={activeWorktreePath}
-          onEnvModeChange={onEnvModeChange}
+          onWorkspaceTargetChange={onWorkspaceTargetChange}
           previousWorktreeLabel={previousWorktreeLabel}
           onUsePreviousWorktree={onUsePreviousWorktree}
         />
@@ -339,9 +348,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           )}
           <BranchToolbarEnvModeSelector
             envLocked={envModeLocked}
-            effectiveEnvMode={effectiveEnvMode}
+            workspaceTarget={workspaceTarget}
             activeWorktreePath={activeWorktreePath}
-            onEnvModeChange={onEnvModeChange}
+            onWorkspaceTargetChange={onWorkspaceTargetChange}
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
           />
