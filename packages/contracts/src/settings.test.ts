@@ -39,6 +39,18 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings sidebarHideProviderIcons", () => {
+  it("defaults to false", () => {
+    expect(decodeClientSettings({}).sidebarHideProviderIcons).toBe(false);
+  });
+
+  it("round-trips an explicit value", () => {
+    expect(decodeClientSettings({ sidebarHideProviderIcons: true }).sidebarHideProviderIcons).toBe(
+      true,
+    );
+  });
+});
+
 describe("ClientSettings worktree removal confirmation", () => {
   it("defaults confirmation on for existing settings", () => {
     expect(decodeClientSettings({}).confirmWorktreeRemoval).toBe(true);
@@ -67,27 +79,10 @@ describe("ClientSettings glass opacity", () => {
   });
 });
 
-describe("ClientSettings environment identification", () => {
-  it("defaults to artwork and accepts each presentation mode", () => {
-    expect(decodeClientSettings({}).environmentIdentificationMode).toBe("artwork");
-
-    for (const mode of ["artwork", "pill", "none"] as const) {
-      expect(
-        decodeClientSettingsPatch({ environmentIdentificationMode: mode })
-          .environmentIdentificationMode,
-      ).toBe(mode);
-    }
-  });
-
-  it("rejects unsupported presentation modes", () => {
-    expect(() => decodeClientSettings({ environmentIdentificationMode: "badge" })).toThrow();
-    expect(() => decodeClientSettingsPatch({ environmentIdentificationMode: "badge" })).toThrow();
-  });
-});
-
-describe("ClientSettings sidebar v2", () => {
-  it("defaults the beta off with a three-day auto-settle threshold", () => {
+describe("ClientSettings sidebar", () => {
+  it("defaults recent work on and the v2 beta off with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
+    expect(settings.sidebarRecentThreadsEnabled).toBe(true);
     expect(settings.sidebarV2Enabled).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
   });
@@ -115,6 +110,12 @@ describe("ClientSettings sidebar v2", () => {
     });
     expect(patch.sidebarV2Enabled).toBe(false);
     expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+  });
+
+  it("allows the recent work queue to be disabled", () => {
+    expect(
+      decodeClientSettings({ sidebarRecentThreadsEnabled: false }).sidebarRecentThreadsEnabled,
+    ).toBe(false);
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {
