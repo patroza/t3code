@@ -130,7 +130,6 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setName: () => Effect.void,
     setAboutPanelOptions: () => Effect.void,
     setAppUserModelId: () => Effect.void,
-    requestSingleInstanceLock: Effect.succeed(true),
     isDefaultProtocolClient: () => Effect.succeed(false),
     setAsDefaultProtocolClient: () => Effect.succeed(false),
     setDesktopName: () => Effect.void,
