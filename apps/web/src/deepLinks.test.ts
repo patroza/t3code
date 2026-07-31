@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { messageDeepLinkHash, parseMessageIdFromHash, parseOmegentDeepLink } from "./deepLinks.ts";
 import {
   clearPendingDeepLink,
+  hasAwaitingThreadDeepLink,
+  markDeepLinkNavigationIssued,
   peekPendingDeepLink,
   setPendingDeepLink,
   takePendingDeepLinkMessage,
@@ -39,10 +41,29 @@ describe("deepLinkStore", () => {
   it("hands off message scroll once per thread", () => {
     clearPendingDeepLink();
     setPendingDeepLink({ threadId: "tid-1", messageId: "msg-1" });
-    expect(peekPendingDeepLink()).toEqual({ threadId: "tid-1", messageId: "msg-1" });
+    expect(peekPendingDeepLink()).toEqual({
+      threadId: "tid-1",
+      messageId: "msg-1",
+      awaitingNavigation: true,
+    });
     expect(takePendingDeepLinkMessage("tid-2")).toBeNull();
     expect(takePendingDeepLinkMessage("tid-1")).toBe("msg-1");
     expect(takePendingDeepLinkMessage("tid-1")).toBeNull();
+    clearPendingDeepLink();
+  });
+
+  it("tracks awaiting navigation for index deferral", () => {
+    clearPendingDeepLink();
+    setPendingDeepLink({ threadId: "tid-1", messageId: null });
+    expect(peekPendingDeepLink()?.awaitingNavigation).toBe(true);
+    expect(hasAwaitingThreadDeepLink()).toBe(true);
+    markDeepLinkNavigationIssued("tid-1");
+    expect(hasAwaitingThreadDeepLink()).toBe(false);
+    expect(peekPendingDeepLink()).toEqual({
+      threadId: "tid-1",
+      messageId: null,
+      awaitingNavigation: false,
+    });
     clearPendingDeepLink();
   });
 });
