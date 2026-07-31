@@ -2,6 +2,10 @@ import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import {
+  claimPersonIdForEnvironment,
+  threadMatchesMine,
+} from "@t3tools/client-runtime/state/identity";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -13,13 +17,13 @@ import {
 } from "../../persistence/mobile-preferences";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
-import { checkForAppUpdateOnLaunch } from "../updates/app-updates";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
@@ -77,12 +81,31 @@ export function HomeRouteScreen() {
     options: listOptions,
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
+    setOwnershipFilter,
     setListMode,
     setThreadGrouping,
     setProjectSortOrder,
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const ownershipFilteredThreads = useMemo(
+    () =>
+      threads.filter((thread) =>
+        threadMatchesMine({
+          claimPersonId: claimPersonIdForEnvironment(
+            claimPersonIdByEnvironment,
+            thread.environmentId,
+          ),
+          originPersonId: thread.originSource?.personId ?? null,
+          participantPersonIds: (thread.participantSummaries ?? []).map(
+            (participant) => participant.personId,
+          ),
+          mode: listOptions.ownershipFilter,
+        }),
+      ),
+    [claimPersonIdByEnvironment, listOptions.ownershipFilter, threads],
+  );
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   // Recency/none default to hide settled; project grouping defaults to show.
@@ -131,9 +154,7 @@ export function HomeRouteScreen() {
   if (layout.usesSplitView) {
     return (
       <>
-        <NativeStackScreenOptions
-          options={{ title: "", headerTitle: "", unstable_headerLeftItems: () => [] }}
-        />
+        <NativeStackScreenOptions options={{ title: "", headerTitle: "" }} />
         <WorkspaceSidebarToolbar
           afterSidebarButton={
             <NativeHeaderToolbar.Button
@@ -155,7 +176,7 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Title is owned by HomeHeader (tracks list mode). */}{" "}
+        {/* Title is owned by HomeHeader (tracks list mode). */}
         <HomeHeader
           environments={environments}
           projects={projectFilterOptions}
@@ -164,6 +185,7 @@ export function HomeRouteScreen() {
           threadGrouping={listOptions.threadGrouping}
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
+          ownershipFilter={listOptions.ownershipFilter}
           hideSettledThreads={hideSettledThreads}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
@@ -172,6 +194,7 @@ export function HomeRouteScreen() {
           onClearEnvironments={clearSelectedEnvironments}
           onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
+          onOwnershipFilterChange={setOwnershipFilter}
           onHideSettledThreadsChange={setHideSettledThreads}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
@@ -179,6 +202,7 @@ export function HomeRouteScreen() {
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
         />
+
         <HomeScreen
           catalogState={catalogState}
           environments={environments}
@@ -237,7 +261,7 @@ export function HomeRouteScreen() {
           searchQuery={searchQuery}
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
-          threads={threads}
+          threads={ownershipFilteredThreads}
           threadSortOrder={listOptions.threadSortOrder}
         />
       </>
