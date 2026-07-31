@@ -29,15 +29,24 @@ export const JiraCommentWebhook = Schema.Struct({
     updated: Schema.optional(Schema.String),
     /**
      * Present when the comment is a reply in a threaded discussion (when Jira provides it).
-     * String or number depending on payload shape.
+     * String or number depending on payload shape. Empty `id` (Automation blank fields)
+     * is treated as missing by `parentCommentIdFromPayload`.
      */
     parent: Schema.optional(
       Schema.Union([
-        Schema.Struct({ id: Schema.Union([Schema.String, Schema.Number]) }),
+        Schema.Struct({
+          id: Schema.optional(Schema.Union([Schema.String, Schema.Number, Schema.Null])),
+        }),
         Schema.String,
         Schema.Number,
+        Schema.Null,
       ]),
     ),
+    /**
+     * REST list/get shape uses top-level `parentId` (number|string|null). Accept it on
+     * webhooks/Automation so nested mentions resolve without an extra GET when present.
+     */
+    parentId: Schema.optional(Schema.Union([Schema.String, Schema.Number, Schema.Null])),
     jsdPublic: Schema.optional(Schema.Boolean),
   }),
   issue: Schema.Struct({
@@ -310,12 +319,17 @@ export function projectKeyFromIssueKey(issueKey: string): string {
   return match?.[1] ?? issueKey.split("-")[0]?.toUpperCase() ?? "";
 }
 
-function parentCommentId(parent: JiraCommentWebhook["comment"]["parent"]): string | null {
+function parentCommentIdFromPayload(comment: JiraCommentWebhook["comment"]): string | null {
+  // Prefer REST-style parentId (what GET /comment returns and Automation can mirror).
+  const fromParentId = asStringId(comment.parentId ?? null);
+  if (fromParentId !== null) return fromParentId;
+
+  const parent = comment.parent;
   if (parent === undefined || parent === null) return null;
   if (typeof parent === "string" || typeof parent === "number") {
     return asStringId(parent);
   }
-  return asStringId(parent.id);
+  return asStringId(parent.id ?? null);
 }
 
 function isBotAuthor(author: JiraWebhookUser | undefined): boolean {
@@ -356,7 +370,7 @@ export function parseJiraCommentInvocation(
   const commentId = asStringId(payload.comment.id);
   if (commentId === null) return null;
 
-  const parentId = parentCommentId(payload.comment.parent);
+  const parentId = parentCommentIdFromPayload(payload.comment);
   const replyToCommentId = parentId ?? commentId;
   const commentSurface: JiraCommentSurface = parentId !== null ? "reply" : "issue";
   const projectKey =

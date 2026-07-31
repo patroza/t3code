@@ -222,6 +222,45 @@ describe("parseJiraCommentInvocation", () => {
     });
   });
 
+  it("accepts REST-style comment.parentId for threaded replies", () => {
+    const invocation = parseJiraCommentInvocation(
+      webhook("@omegent continue", {
+        comment: {
+          id: "10800",
+          body: "@omegent continue",
+          parentId: 71399,
+          author: { accountId: "user-1", displayName: "Ada", accountType: "atlassian" },
+        },
+      }),
+      "omegent",
+    );
+    expect(invocation).toMatchObject({
+      commentId: "10800",
+      replyToCommentId: "71399",
+      commentSurface: "reply",
+    });
+  });
+
+  it("ignores empty Automation parent.id and treats the mention as top-level", () => {
+    const invocation = parseJiraCommentInvocation(
+      webhook("@omegent investigate packing", {
+        comment: {
+          id: "71413",
+          body: "@omegent investigate packing",
+          parent: { id: "" },
+          parentId: null,
+          author: { accountId: "user-1", displayName: "Ada", accountType: "atlassian" },
+        },
+      }),
+      "omegent",
+    );
+    expect(invocation).toMatchObject({
+      commentId: "71413",
+      replyToCommentId: "71413",
+      commentSurface: "issue",
+    });
+  });
+
   it("uses the mention itself as replyTo when the comment is top-level", () => {
     const invocation = parseJiraCommentInvocation(
       webhook("@omegent investigate packing"),

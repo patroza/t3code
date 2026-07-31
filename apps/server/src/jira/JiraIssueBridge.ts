@@ -56,8 +56,6 @@ const CREATE_DISABLED_RESPONSE =
   "not yet linked. Auto-create is disabled; link this issue from Chat or enable auto-create.";
 const AMBIGUOUS_RESPONSE =
   "Multiple chat threads are linked to this Jira issue, so the bot could not pick which one to use.";
-const BUSY_RESPONSE =
-  "This chat thread is already working. Try again after the current turn finishes.";
 const FAILED_RESPONSE =
   "Could not complete this request. Check the linked chat thread for details.";
 const EMPTY_PROMPT_RESPONSE =
@@ -93,16 +91,6 @@ export function formatJiraComment(body: string): string {
   const trimmed = body.trim();
   if (trimmed.length <= MAX_JIRA_COMMENT_LENGTH) return trimmed;
   return `${trimmed.slice(0, MAX_JIRA_COMMENT_LENGTH - 20)}\n\n…(truncated)`;
-}
-
-function isThreadBusy(thread: OrchestrationThread): boolean {
-  const latest = thread.latestTurn;
-  if (latest?.state === "running") return true;
-  const session = thread.session;
-  if (session === null) return false;
-  return (
-    session.activeTurnId !== null && (session.status === "running" || session.status === "starting")
-  );
 }
 
 export class JiraIssueBridge extends Context.Service<
@@ -141,30 +129,26 @@ const make = Effect.gen(function* () {
   /**
    * Post a bridge response as an **inline threaded reply** under the user's mention.
    *
-   * Parent order:
-   * 1. `replyToCommentId` — thread root when the mention is a child reply (Jira only
-   *    allows nesting under roots), or the mention itself when top-level
-   * 2. `sourceCommentId` — the triggering mention (always try to answer the user inline)
+   * Parent candidates (JiraAppClient resolves each to the **thread root** via GET —
+   * Jira rejects nesting under a child comment with 400):
+   * 1. `sourceCommentId` — the triggering mention (reply next to the user)
+   * 2. `replyToCommentId` — webhook parent / root when present and different
    *
    * Never intentionally posts a bare top-level comment first; flat fallback is only
-   * if Jira rejects every parentId (see JiraAppClient).
+   * if every resolved parentId is rejected (see JiraAppClient).
    */
   const postComment = (delivery: StoredJiraDelivery, body: string) => {
-    const rootParent = delivery.replyToCommentId.trim();
     const mentionParent = delivery.sourceCommentId.trim();
-    // Prefer the resolved reply parent, then the mention comment itself.
-    const parentCommentId =
-      rootParent.length > 0 ? rootParent : mentionParent.length > 0 ? mentionParent : null;
+    const replyParent = delivery.replyToCommentId.trim();
+    // Prefer the mention itself so we always answer that comment's thread; client
+    // walks parentId up to the root when the mention is already a nested reply.
+    const parentCommentId = mentionParent.length > 0 ? mentionParent : null;
     return jira.addIssueComment({
       issueKey: delivery.issueKey,
       body: formatJiraComment(body),
       parentCommentId,
-      // If parent was a nested reply id that Jira rejects, client retries with the
-      // mention id when it differs (still inline to the user), then top-level last.
       fallbackParentCommentId:
-        rootParent.length > 0 && mentionParent.length > 0 && rootParent !== mentionParent
-          ? mentionParent
-          : null,
+        replyParent.length > 0 && replyParent !== mentionParent ? replyParent : null,
       // Normal Jira reply style: @ the human who triggered the bot.
       mentionAccountId: delivery.actorAccountId,
       mentionDisplayName: delivery.actorDisplayName,
@@ -649,11 +633,9 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.ignore);
 
-    if (isThreadBusy(thread)) {
-      yield* finishDelivery({ ...acknowledged, threadId: thread.id }, BUSY_RESPONSE, "completed");
-      return;
-    }
-
+    // Always dispatch. When the thread is mid-turn, orchestration queues the
+    // message (thread.message-queued) — do not short-circuit with a busy reply.
+    // Response posting stays async via forkDetach(bridgeTurn) below.
     const commandId = CommandId.make(yield* crypto.randomUUIDv4);
     const messageId = MessageId.make(yield* crypto.randomUUIDv4);
     const processing: StoredJiraDelivery = {
