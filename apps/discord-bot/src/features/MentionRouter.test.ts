@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - existence contract reads router source on disk.
+import * as NodeFS from "node:fs";
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -6,7 +8,62 @@ import {
   findDiscordLinkForT3Target,
   getContinuedConversationModelChangeError,
   isIncompleteDiscordLink,
+  shouldShowThreadBootstrapReaction,
 } from "./MentionRouter.ts";
+
+const mentionRouterSource = NodeFS.readFileSync(
+  new URL("./MentionRouter.ts", import.meta.url),
+  "utf8",
+);
+
+describe("shouldShowThreadBootstrapReaction", () => {
+  it("marks channel prompts that need a Discord/T3 thread bootstrap", () => {
+    expect(
+      shouldShowThreadBootstrapReaction({
+        inThread: false,
+        intentKind: "prompt",
+        hasPromptOrAttachment: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not mark existing threads, commands, or empty mentions", () => {
+    expect(
+      shouldShowThreadBootstrapReaction({
+        inThread: true,
+        intentKind: "prompt",
+        hasPromptOrAttachment: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowThreadBootstrapReaction({
+        inThread: false,
+        intentKind: "help",
+        hasPromptOrAttachment: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowThreadBootstrapReaction({
+        inThread: false,
+        intentKind: "prompt",
+        hasPromptOrAttachment: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("wires 👀 addition to channel intake and removal to initial-pin success", () => {
+    expect(mentionRouterSource).toContain(
+      ".addMyMessageReaction(\n              pendingReadyReaction.channelId",
+    );
+    expect(mentionRouterSource).toContain(
+      "Effect.tap(() =>\n            input.pendingReadyReaction === undefined",
+    );
+    expect(mentionRouterSource).toContain(
+      ".deleteMyMessageReaction(\n                    input.pendingReadyReaction.channelId",
+    );
+    expect(mentionRouterSource).toContain("const discordThread = yield* openOrReuseThread(");
+  });
+});
 
 describe("createHandledDiscordMessageTracker", () => {
   it("marks handled messages and evicts the oldest ids beyond the limit", () => {
