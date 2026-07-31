@@ -185,6 +185,7 @@ export interface GitHubPullRequestSummary {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state?: "open" | "closed" | "merged";
+  readonly hasFailingChecks?: boolean;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
@@ -215,6 +216,10 @@ export class GitHubCli extends Context.Service<
       readonly cwd: string;
       readonly reference: string;
     }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
+    readonly getPullRequestHasFailingChecks: (input: {
+      readonly cwd: string;
+      readonly reference: string;
+    }) => Effect.Effect<boolean, GitHubCliError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
@@ -390,6 +395,38 @@ export const make = Effect.gen(function* () {
           ),
         ),
       ),
+    getPullRequestHasFailingChecks: (input) =>
+      process
+        .run({
+          operation: "GitHubCli.getPullRequestHasFailingChecks",
+          command: "gh",
+          args: ["pr", "checks", input.reference, "--json", "bucket,state"],
+          cwd: input.cwd,
+          timeoutMs: DEFAULT_TIMEOUT_MS,
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.mapError((error) => fromVcsError({ command: "gh", cwd: input.cwd }, error)),
+          Effect.map((result) => {
+            const raw = result.stdout.trim();
+            if (raw.length === 0) return false;
+            try {
+              const parsed = JSON.parse(raw) as ReadonlyArray<{
+                readonly bucket?: string | null;
+                readonly state?: string | null;
+              }>;
+              return parsed.some((check) => {
+                const bucket = check.bucket?.trim().toLowerCase();
+                const state = check.state?.trim().toLowerCase();
+                return (
+                  bucket === "fail" || state === "fail" || state === "failure" || state === "error"
+                );
+              });
+            } catch {
+              return false;
+            }
+          }),
+        ),
     getRepositoryCloneUrls: (input) =>
       execute({
         cwd: input.cwd,

@@ -39,6 +39,9 @@ function toChangeRequest(summary: GitHubCli.GitHubPullRequestSummary): ChangeReq
     ...(summary.headRepositoryOwnerLogin !== undefined
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
+    ...(summary.hasFailingChecks !== undefined
+      ? { hasFailingChecks: summary.hasFailingChecks }
+      : {}),
   };
 }
 
@@ -188,8 +191,15 @@ export const make = Effect.gen(function* () {
     kind: "github",
     listChangeRequests,
     getChangeRequest: (input) =>
-      github.getPullRequest(input).pipe(
-        Effect.map(toChangeRequest),
+      Effect.all({
+        summary: github.getPullRequest(input),
+        hasFailingChecks: github
+          .getPullRequestHasFailingChecks(input)
+          .pipe(Effect.orElseSucceed(() => false)),
+      }).pipe(
+        Effect.map(({ summary, hasFailingChecks }) =>
+          toChangeRequest({ ...summary, ...(hasFailingChecks ? { hasFailingChecks } : {}) }),
+        ),
         Effect.mapError(
           (error) =>
             new SourceControlProviderError({

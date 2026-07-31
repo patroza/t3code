@@ -38,6 +38,9 @@ const setup = (trial: boolean) =>
       yield* sql`PRAGMA foreign_keys = ON;`;
       if (!trial) {
         yield* sql`PRAGMA journal_mode = WAL;`;
+        // Bound lock waits so auth (websocket-ticket) cannot hang indefinitely when
+        // writers hold the single SQL permit longer than expected.
+        yield* sql`PRAGMA busy_timeout = 5000;`;
         yield* runMigrations();
       }
     }),

@@ -1,7 +1,9 @@
 import {
   type ClaudeSettings,
+  DEFAULT_MODEL_BY_PROVIDER,
   type ModelCapabilities,
   type ModelSelection,
+  ProviderDriverKind,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -47,6 +49,7 @@ const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabili
   optionDescriptors: [],
 });
 
+const PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
@@ -313,7 +316,11 @@ const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
       ],
     }),
   },
-];
+].toSorted(
+  (left, right) =>
+    Number(right.slug === DEFAULT_MODEL_BY_PROVIDER[PROVIDER]) -
+    Number(left.slug === DEFAULT_MODEL_BY_PROVIDER[PROVIDER]),
+);
 
 const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = CLAUDE_MODEL_CATALOG.map((model) =>
   isLegacyClaudeModel(model.slug) ? { ...model, isLegacy: true } : model,
