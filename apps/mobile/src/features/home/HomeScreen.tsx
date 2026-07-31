@@ -227,6 +227,10 @@ export function HomeScreen(props: HomeScreenProps) {
   const listRef = useRef<LegendListRef | null>(null);
   const insets = useSafeAreaInsets();
   const accentColor = useThemeColor("--color-icon-muted");
+  const iosBottomToolbarClearance =
+    Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
+      ? PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT
+      : 0;
   const searchEnvironmentIds = useMemo(() => {
     const connectedIds = props.environments
       .filter((environment) => environment.connectionState === "connected")
@@ -236,7 +240,8 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     const selected = new Set(props.selectedEnvironmentIds);
     return connectedIds.filter((environmentId) => selected.has(environmentId));
-  }, [props.environments, props.selectedEnvironmentIds]);  const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
+  }, [props.environments, props.selectedEnvironmentIds]);
+  const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
   const threadSearchMatchByKey = useMemo(() => {
     const matches = new Map<string, EnvironmentThreadSearchMatch>();
     for (const match of threadSearch.matches) {

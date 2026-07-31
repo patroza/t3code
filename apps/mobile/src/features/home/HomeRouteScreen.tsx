@@ -158,7 +158,8 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Title is owned by HomeHeader (tracks list mode). */}        <HomeHeader
+        {/* Title is owned by HomeHeader (tracks list mode). */}{" "}
+        <HomeHeader
           environments={environments}
           projects={projectFilterOptions}
           searchQuery={searchQuery}
@@ -181,7 +182,6 @@ export function HomeRouteScreen() {
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
           onThreadSortOrderChange={setThreadSortOrder}
         />
-
         <HomeScreen
           catalogState={catalogState}
           environments={environments}
