@@ -21,7 +21,8 @@ describe("GrokPlanMode", () => {
   it("resolves interaction modes back to Grok ACP mode ids", () => {
     expect(resolveGrokAcpModeIdForInteractionMode("plan")).toBe("plan");
     expect(resolveGrokAcpModeIdForInteractionMode("default")).toBe("agent");
-    expect(resolveGrokAcpModeIdForInteractionMode(undefined)).toBeUndefined();
+    // Unset must still leave ask — Build threads often omit interactionMode.
+    expect(resolveGrokAcpModeIdForInteractionMode(undefined)).toBe("agent");
   });
 
   it("detects exit_plan_mode permission requests from real Grok payloads", () => {
