@@ -55,6 +55,10 @@ export function presentConnectionState(
   }
 }
 
+function compactConnectionError(error: string): string {
+  return error.replace(/\.$/, "").trim();
+}
+
 export function connectionStatusText(connection: EnvironmentConnectionPresentation): string {
   switch (connection.phase) {
     case "available":
@@ -64,21 +68,25 @@ export function connectionStatusText(connection: EnvironmentConnectionPresentati
     case "connecting":
       return "Connecting...";
     case "reconnecting":
+      // Keep the primary line short; put the useful bit after a middle dot.
       return connection.error
-        ? `Failed to connect. Reconnecting... Reason: ${connection.error}`
+        ? `Reconnecting… · ${compactConnectionError(connection.error)}`
         : "Reconnecting...";
     case "connected":
       return "Connected";
     case "error":
       return connection.error
-        ? `Connection failed. Reason: ${connection.error}`
+        ? `Connection failed · ${compactConnectionError(connection.error)}`
         : "Connection failed";
   }
 }
 
 export function connectionStatusTitle(connection: EnvironmentConnectionPresentation): string {
-  if (connection.phase === "reconnecting" && connection.error) {
-    return "Failed to connect. Reconnecting...";
+  if (connection.phase === "reconnecting") {
+    return "Reconnecting...";
+  }
+  if (connection.phase === "error") {
+    return "Connection failed";
   }
   return connectionStatusText({ ...connection, error: null });
 }
