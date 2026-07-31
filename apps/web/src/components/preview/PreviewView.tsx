@@ -19,7 +19,8 @@ import {
   updatePreviewServerSnapshot,
   useThreadPreviewState,
 } from "~/previewStateStore";
-import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { resolveNavigableUrl } from "~/browser/browserTargetResolver";
+import { useEnvironment, useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
@@ -149,18 +150,25 @@ export function PreviewView({
   const handleSubmitUrl = useCallback(
     async (next: string) => {
       try {
-        await navigateToResolvedUrl(normalizePreviewUrl(next));
+        await navigateToResolvedUrl(
+          await resolveNavigableUrl(threadRef.environmentId, {
+            kind: "url",
+            url: normalizePreviewUrl(next),
+          }),
+        );
       } catch {
         // Server-side `failed` event renders the unreachable view.
       }
     },
-    [navigateToResolvedUrl],
+    [navigateToResolvedUrl, threadRef.environmentId],
   );
 
   const handleOpenServerUrl = useCallback(
     async (next: string) => {
       try {
-        await navigateToResolvedUrl(resolveDiscoveredServerUrl(threadRef.environmentId, next));
+        await navigateToResolvedUrl(
+          await resolveNavigableUrl(threadRef.environmentId, { kind: "url", url: next }),
+        );
       } catch {
         // Server-side `failed` event renders the unreachable view.
       }
