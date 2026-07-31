@@ -34,6 +34,7 @@ import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
+import { BoardRouteScreen } from "./features/board/BoardRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
@@ -394,6 +395,15 @@ export const RootStack = createNativeStackNavigator({
         contentStyle: { backgroundColor: "transparent" },
         headerBackVisible: false,
         ...getCompactBrandHeaderOptions(),
+      },
+    }),
+    Board: createNativeStackScreen({
+      screen: BoardRouteScreen,
+      linking: "board",
+      options: {
+        ...GLASS_HEADER_OPTIONS,
+        contentStyle: { backgroundColor: "transparent" },
+        title: "Board",
       },
     }),
     Thread: createNativeStackScreen({
