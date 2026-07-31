@@ -21,8 +21,15 @@ export default defineConfig({
     testTimeout: 60_000,
   },
   staged: {
-    // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+    // Commit runs format + lint (keep in sync with lint-staged.config.js).
+    // Heavier typecheck + tests stay in the agent ship gate (pre-push on ready
+    // PRs / `pnpm pr:ready`).
+    // `--no-error-on-unmatched-pattern`: a commit whose staged files are all
+    // unformattable (e.g. only *.nix) leaves `vp fmt` with no targets, which
+    // otherwise fails the whole pre-commit. Treat "nothing to format" as a no-op.
+    "*": "vp fmt --no-error-on-unmatched-pattern",
+    // Lint (with autofix) only the code files oxlint understands.
+    "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": "vp lint --fix",
   },
   fmt: {
     ignorePatterns: [
