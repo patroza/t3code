@@ -42,6 +42,7 @@ interface ThreadStreamBatchReduction {
   readonly lastSequence: number;
   readonly awaitingCompletion: boolean;
   readonly threadDeleted: boolean;
+  readonly reloadRequired: boolean;
   readonly persistableSnapshot: OrchestrationThreadDetailSnapshot | null;
 }
 
@@ -60,6 +61,7 @@ function reduceThreadStreamItems(
   let awaitingCompletion = currentAwaitingCompletion;
   let thread = Option.getOrNull(currentState.data);
   let threadDeleted = false;
+  let reloadRequired = false;
   let persistableSnapshot: OrchestrationThreadDetailSnapshot | null = null;
 
   for (const item of items) {
@@ -128,6 +130,8 @@ function reduceThreadStreamItems(
         status: "deleted",
         error: Option.none(),
       };
+    } else if (result.kind === "reload-required") {
+      reloadRequired = true;
     }
   }
 
@@ -136,6 +140,7 @@ function reduceThreadStreamItems(
     lastSequence,
     awaitingCompletion,
     threadDeleted,
+    reloadRequired,
     persistableSnapshot,
   };
 }
@@ -304,6 +309,32 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     yield* removeCachedThread;
   });
 
+  // Re-read the thread from the server, replacing whatever we hold. Used when an
+  // event cannot be reconciled against the cached transcript ("reload-required"),
+  // and by the manual reload action. Failures leave the current state in place —
+  // the caller is already in a degraded path and a live subscription may recover.
+  const reloadFromServer = Effect.fn("EnvironmentThreadState.reloadFromServer")(function* () {
+    const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+    if (Option.isNone(prepared)) {
+      return;
+    }
+    const fresh = yield* snapshotLoader
+      .load(prepared.value, threadId)
+      .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThreadDetailSnapshot>()));
+    if (Option.isNone(fresh)) {
+      return;
+    }
+    yield* SubscriptionRef.set(lastSequence, fresh.value.snapshotSequence);
+    yield* SubscriptionRef.set(state, {
+      data: Option.some(fresh.value.thread),
+      status: (yield* Ref.get(awaitingCompletion)) ? "synchronizing" : "live",
+      error: Option.none(),
+    });
+    if (shouldPersistThread(fresh.value.thread)) {
+      yield* Queue.offer(persistence, fresh.value);
+    }
+  });
+
   const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
     items: ReadonlyArray<OrchestrationThreadStreamItem>,
   ) {
@@ -328,6 +359,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
     if (reduction.persistableSnapshot !== null) {
       yield* Queue.offer(persistence, reduction.persistableSnapshot);
+    }
+    if (reduction.reloadRequired) {
+      yield* reloadFromServer();
     }
   });
 

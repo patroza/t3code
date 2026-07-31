@@ -15,11 +15,7 @@ import {
   type RemoteEnvironmentRequestError,
 } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
-
-// Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
-// fallback for long. The cached thread renders while this runs, so the wait only
-// delays the transition to live data on the first open, not the initial paint.
-const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
+import { SNAPSHOT_HTTP_TIMEOUT_MS } from "./snapshotHttpPolicy.ts";
 
 /**
  * Load a thread's detail snapshot over HTTP instead of embedding it in the
@@ -47,7 +43,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   );
   return yield* executeEnvironmentHttpRequest(
     requestUrl,
-    input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
+    input.timeoutMs ?? SNAPSHOT_HTTP_TIMEOUT_MS,
     withEnvironmentCredentials(
       input.prepared.httpAuthorization,
       client.orchestration.threadSnapshot({
