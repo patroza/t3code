@@ -19,11 +19,29 @@ we may close it without merging it, or never review it.
 
 <!-- Explain the problem being solved and why this approach is the right one. -->
 
+## Downstream Fork Relationship
+
+<!--
+For downstream-fork work, name the base branch, affected areas, and whether this depends on another
+open PR. Delete this section for upstream contributions.
+-->
+
+## External-Fork Provenance
+
+<!--
+For an external-fork import, list what was imported unchanged, adapted locally, intentionally
+excluded, and the fully qualified source links. Delete this section for original work.
+-->
+
 ## UI Changes
 
 <!-- If this PR changes UI, include clear before/after screenshots.
      If the change involves motion or interaction, include a short video.
      Delete this section if not applicable. -->
+
+## Verification
+
+<!-- List focused tests and checks run for this change. -->
 
 ## Checklist
 
