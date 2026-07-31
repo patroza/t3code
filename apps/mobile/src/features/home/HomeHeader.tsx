@@ -105,6 +105,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
+  const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
   const listOrganization = usesListOrganization(props.listMode, props.threadGrouping);
   const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
@@ -121,7 +122,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         projectSortOrder: props.projectSortOrder,
         threadSortOrder: props.threadSortOrder,
         selectedProjectKey: props.selectedProjectKey,
-      }));  const menuActions = useMemo<MenuAction[]>(
+      }));
+  const menuActions = useMemo<MenuAction[]>(
     () => [
       {
         id: "environment",
@@ -493,7 +495,8 @@ function IosHomeHeader(props: HomeHeaderProps) {
           // Board has no thread search — hide the bottom mail search toolbar.
           unstable_headerToolbarItems:
             Platform.OS === "ios" && !isBoardMode
-              ? () => [                  createNativeMailSearchToolbarItem({
+              ? () => [
+                  createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
                     composeSystemImageName: "square.and.pencil",
                     filterMenu,
@@ -506,24 +509,23 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     placeholder: "Search",
                     searchTextChangeId: "home-search-text",
                   }),
-                ],
-              }
-            : {
-                // Pre-Liquid-Glass iOS: standard pull-down search in the nav
-                // bar; create + sort live in the plain bottom toolbar below.
-                headerSearchBarOptions: {
-                  ref: searchBarRef,
-                  autoCapitalize: "none" as const,
-                  hideNavigationBar: false,
-                  placeholder: "Search",
-                  onCancelButtonPress: () => {
-                    props.onSearchQueryChange("");
-                  },
-                  onChangeText: (event) => {
-                    props.onSearchQueryChange(event.nativeEvent.text);
+                ]
+              : {
+                  // Pre-Liquid-Glass iOS: standard pull-down search in the nav
+                  // bar; create + sort live in the plain bottom toolbar below.
+                  headerSearchBarOptions: {
+                    ref: searchBarRef,
+                    autoCapitalize: "none" as const,
+                    hideNavigationBar: false,
+                    placeholder: "Search",
+                    onCancelButtonPress: () => {
+                      props.onSearchQueryChange("");
+                    },
+                    onChangeText: (event: { nativeEvent: { text: string } }) => {
+                      props.onSearchQueryChange(event.nativeEvent.text);
+                    },
                   },
                 },
-              }),
         }}
       />
 
@@ -547,7 +549,8 @@ function IosHomeHeader(props: HomeHeaderProps) {
         </NativeHeaderToolbar>
       )}
 
-      {Platform.OS === "ios" ? null : (        <NativeHeaderToolbar placement="bottom">
+      {Platform.OS === "ios" ? null : (
+        <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter and sort threads"
             icon={
@@ -580,7 +583,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 </NativeHeaderToolbar.MenuAction>
               ))}
             </NativeHeaderToolbar.Menu>
-
             {props.projects.length > 0 && props.listMode !== "board" ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>
@@ -602,7 +604,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 ))}
               </NativeHeaderToolbar.Menu>
             ) : null}
-
             {props.listMode === "threads" ? (
               <>
                 <NativeHeaderToolbar.Menu title="Group threads">
@@ -628,7 +629,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 </NativeHeaderToolbar.MenuAction>
               </>
             ) : null}
-
             {listOrganization ? (
               <>
                 <NativeHeaderToolbar.Menu title="Sort projects">
@@ -657,7 +657,8 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   ))}
                 </NativeHeaderToolbar.Menu>
               </>
-            ) : null}          </NativeHeaderToolbar.Menu>
+            ) : null}{" "}
+          </NativeHeaderToolbar.Menu>
           <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"

@@ -2295,7 +2295,8 @@ function OpenCommandPaletteDialog(props: {
               <span className="truncate text-muted-foreground/85 text-xs">
                 {remoteProjectContext.description}
               </span>
-            </span>          </div>
+            </span>{" "}
+          </div>
         </div>
       ) : null}
       <CommandPaletteResults
