@@ -4,7 +4,6 @@ import {
   isClaimedNonStarterParticipant,
 } from "@t3tools/client-runtime/state/identity";
 import type { ThreadParticipantSummary } from "@t3tools/contracts";
-import { CheckIcon } from "lucide-react";
 import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { IdentityAvatar } from "./IdentityAvatar";
 import { participantDisplayLabel } from "./ParticipantStack.logic";
@@ -56,19 +55,17 @@ export function ParticipantStack(props: {
       />
       {extras.length > 0 ? (
         <span
-          className="inline-flex size-3.5 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground"
-          aria-hidden
+          className={cn(
+            "inline-flex size-3.5 items-center justify-center rounded-full text-[8px] font-medium",
+            youParticipated
+              ? "bg-primary/15 text-primary ring-1 ring-primary/35"
+              : "bg-muted text-muted-foreground",
+          )}
+          aria-hidden={!youParticipated}
+          aria-label={youParticipated ? "You participated" : undefined}
+          data-testid={youParticipated ? "you-participated-indicator" : undefined}
         >
           +{extras.length}
-        </span>
-      ) : null}
-      {youParticipated ? (
-        <span
-          className="inline-flex size-3.5 items-center justify-center rounded-full bg-primary/15 text-primary ring-1 ring-primary/35"
-          aria-label="You participated"
-          data-testid="you-participated-indicator"
-        >
-          <CheckIcon className="size-2.5" aria-hidden />
         </span>
       ) : null}
     </span>

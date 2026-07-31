@@ -13,7 +13,10 @@ describe("mobile participation indicator surface", () => {
     const listV2 = readSource("../threads/thread-list-v2-items.tsx");
     const board = readSource("../board/BoardScreen.tsx");
 
-    expect(stack).toContain('testID="you-participated-indicator"');
+    expect(stack).toContain('testID={youParticipated ? "you-participated-indicator"');
+    expect(stack).toContain("+{extras.length}");
+    expect(stack).toContain('"border border-primary bg-primary/15"');
+    expect(stack).not.toContain(">✓</Text>");
     expect(stack).toContain("isClaimedNonStarterParticipant");
     expect(stack).toContain("You participated");
     expect(listV1).toContain("environmentId={thread.environmentId}");

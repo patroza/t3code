@@ -56,23 +56,23 @@ export function ParticipantStack(props: {
       />
       {extras.length > 0 ? (
         <View
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          className="size-3.5 items-center justify-center rounded-full bg-subtle"
+          accessibilityElementsHidden={!youParticipated}
+          importantForAccessibility={youParticipated ? "auto" : "no-hide-descendants"}
+          accessibilityLabel={youParticipated ? "You participated" : undefined}
+          className={cn(
+            "size-3.5 items-center justify-center rounded-full",
+            youParticipated ? "border border-primary bg-primary/15" : "bg-subtle",
+          )}
+          testID={youParticipated ? "you-participated-indicator" : undefined}
         >
-          <Text className="text-[8px] font-t3-medium text-foreground-tertiary">
+          <Text
+            className={cn(
+              "text-[8px] font-t3-medium",
+              youParticipated ? "text-primary" : "text-foreground-tertiary",
+            )}
+          >
             +{extras.length}
           </Text>
-        </View>
-      ) : null}
-      {youParticipated ? (
-        <View
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          className="size-3.5 items-center justify-center rounded-full border border-primary bg-primary/15"
-          testID="you-participated-indicator"
-        >
-          <Text className="text-[9px] font-t3-bold text-primary">✓</Text>
         </View>
       ) : null}
     </View>

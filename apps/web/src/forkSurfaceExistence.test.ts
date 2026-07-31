@@ -137,7 +137,10 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(stack).toContain("<TooltipPopup");
     expect(stack).toContain("participantDisplayLabel");
     expect(stack).toContain("title={null}");
-    expect(stack).toContain('data-testid="you-participated-indicator"');
+    expect(stack).toContain('data-testid={youParticipated ? "you-participated-indicator"');
+    expect(stack).toContain("+{extras.length}");
+    expect(stack).toContain('"bg-primary/15 text-primary ring-1 ring-primary/35"');
+    expect(stack).not.toContain("<CheckIcon");
     expect(stack).toContain("isClaimedNonStarterParticipant");
     expect(stack).toContain("· You");
     const stackLogic = readSrc("components/identity/ParticipantStack.logic.ts");
