@@ -7,6 +7,7 @@ import {
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
   PreviewAutomationTargetNotEditableError,
+  PreviewAutomationTimeoutError,
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
@@ -19,6 +20,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
@@ -495,6 +497,46 @@ it.effect("removes host availability when the authoritative request stream disco
   ),
 );
 
+it.effect("evicts an unresponsive host so its automation stream can reconnect", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const staleRequests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runDrain(staleRequests).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const pendingTimeout = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {}, timeoutMs: 10 })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 millis");
+      const timeout = yield* Fiber.join(pendingTimeout);
+      expect(timeout).toBeInstanceOf(PreviewAutomationTimeoutError);
+
+      const unavailable = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(unavailable).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+
+      const replacementRequests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(replacementRequests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "reconnected",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke<string>({ scope, operation: "status", input: {} })).toBe(
+        "reconnected",
+      );
+    }),
+  ),
+);
+
 it.effect("routes requests for background threads through an environment-level host", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -651,6 +693,76 @@ it.effect("pins a provider session to its initial host despite later focus chang
           input: {},
         }),
       ).toBe("second");
+    }),
+  ),
+);
+
+it.effect("routes a claimed thread to its host without affecting other threads", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      let claimedConnectionId = "";
+      const claimedRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({ clientId: "client-discord", supportedOperations: ["status", "snapshot"] }),
+        ),
+        (connectionId) => {
+          claimedConnectionId = connectionId;
+        },
+      );
+      const richerRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({
+            clientId: "client-desktop",
+            supportedOperations: ["status", "snapshot", "evaluate"],
+          }),
+        ),
+      );
+      yield* Stream.runForEach(claimedRequests, (request) =>
+        broker.respond({
+          clientId: "client-discord",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "discord",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Stream.runForEach(richerRequests, (request) =>
+        broker.respond({
+          clientId: "client-desktop",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "desktop",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke<string>({ scope, operation: "snapshot", input: {} })).toBe(
+        "desktop",
+      );
+      yield* broker.focusHost({
+        clientId: "client-discord",
+        environmentId: scope.environmentId,
+        connectionId: claimedConnectionId,
+        focused: true,
+        threadId: scope.threadId,
+      });
+
+      expect(yield* broker.invoke<string>({ scope, operation: "snapshot", input: {} })).toBe(
+        "discord",
+      );
+      expect(
+        yield* broker.invoke<string>({
+          scope: {
+            ...scope,
+            threadId: ThreadId.make("thread-desktop"),
+            providerSessionId: "provider-session-desktop",
+          },
+          operation: "snapshot",
+          input: {},
+        }),
+      ).toBe("desktop");
     }),
   ),
 );

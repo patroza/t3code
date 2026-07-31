@@ -3,6 +3,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ModelSelection,
+  type OrchestrationSession,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -289,6 +290,29 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.annotateSpans({ "startup.phase": phase }),
     Effect.withSpan(`server.startup.${phase}`),
   );
+
+export function interruptSessionAfterServerRestart(
+  session: OrchestrationSession | null,
+  updatedAt: string,
+): OrchestrationSession | null {
+  if (session?.status !== "starting" && session?.status !== "running") return null;
+  if (session.activeTurnId == null) {
+    return {
+      ...session,
+      status: "ready",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt,
+    };
+  }
+  return {
+    ...session,
+    status: "interrupted",
+    activeTurnId: null,
+    lastError: "Server restarted while the agent was working. Send a follow-up to resume it.",
+    updatedAt,
+  };
+}
 
 interface StartupOptions {
   readonly activate?: Effect.Effect<void>;
