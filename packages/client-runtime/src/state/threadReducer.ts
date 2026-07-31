@@ -288,6 +288,7 @@ export function applyThreadDetailEvent(
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
+        ...(event.payload.source !== undefined ? { source: event.payload.source } : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
         createdAt: event.payload.createdAt,
@@ -311,6 +312,9 @@ export function applyThreadDetailEvent(
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
+                    : {}),
+                  ...(entry.source === undefined && message.source !== undefined
+                    ? { source: message.source }
                     : {}),
                 },
           )
@@ -389,6 +393,7 @@ export function applyThreadDetailEvent(
         ...(event.payload.sourceProposedPlan !== undefined
           ? { sourceProposedPlan: event.payload.sourceProposedPlan }
           : {}),
+        ...(event.payload.source !== undefined ? { source: event.payload.source } : {}),
         queuedAt: event.payload.queuedAt,
       };
       return {
