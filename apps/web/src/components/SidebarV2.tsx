@@ -117,7 +117,10 @@ import {
 } from "./identity/IdentityClaimGate";
 import {
   claimPersonIdForEnvironment,
+  DEFAULT_OWNERSHIP_RELATION,
+  isOwnershipRelation,
   threadMatchesMine,
+  type OwnershipRelation,
 } from "@t3tools/client-runtime/state/identity";
 import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
 import {
@@ -1335,6 +1338,15 @@ export default function SidebarV2() {
     }
     return "any";
   });
+  const [ownershipRelation, setOwnershipRelation] = useState<OwnershipRelation>(() => {
+    try {
+      const raw = window.localStorage.getItem("t3.sidebar.ownershipRelation");
+      if (isOwnershipRelation(raw)) return raw;
+    } catch {
+      // ignore
+    }
+    return DEFAULT_OWNERSHIP_RELATION;
+  });
   // Per-environment claims (not primary-only): smart has no map while t3vm does.
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
 
@@ -1343,7 +1355,8 @@ export default function SidebarV2() {
     storedThreadGrouping !== DEFAULT_WEB_THREAD_GROUPING ||
     settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS ||
     settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED ||
-    ownershipFilter !== "any";
+    ownershipFilter !== "any" ||
+    ownershipRelation !== DEFAULT_OWNERSHIP_RELATION;
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1654,6 +1667,7 @@ export default function SidebarV2() {
             (participant) => participant.personId,
           ),
           mode: ownershipFilter,
+          relation: ownershipRelation,
         }),
     );
     const active: EnvironmentThreadShell[] = [];
@@ -1707,6 +1721,7 @@ export default function SidebarV2() {
     claimPersonIdByEnvironment,
     nowMinute,
     ownershipFilter,
+    ownershipRelation,
     scopedProjectKeys,
     selectedEnvironmentIds,
     serverConfigs,
@@ -2841,6 +2856,46 @@ export default function SidebarV2() {
                       ))}
                     </MenuRadioGroup>
                   </MenuGroup>
+                  {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                          {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                        </div>
+                        <MenuRadioGroup
+                          value={ownershipRelation}
+                          onValueChange={(value) => {
+                            if (!isOwnershipRelation(value)) return;
+                            setOwnershipRelation(value);
+                            try {
+                              window.localStorage.setItem("t3.sidebar.ownershipRelation", value);
+                            } catch {
+                              // ignore
+                            }
+                          }}
+                        >
+                          {(
+                            [
+                              ["both", "Created or participated"],
+                              ["created", "Created"],
+                              ["participated", "Participated"],
+                            ] as const
+                          ).map(([value, label]) => (
+                            <MenuRadioItem
+                              key={value}
+                              value={value}
+                              closeOnClick={false}
+                              className="min-h-7 py-1 sm:text-xs"
+                              data-testid={`sidebar-v2-ownership-relation-${value}`}
+                            >
+                              {label}
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuGroup>
+                    </>
+                  ) : null}
                   <MenuSeparator />
                   <MenuGroup>
                     <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">

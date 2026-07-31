@@ -11,11 +11,21 @@ describe("mobile ownership filter surface", () => {
     const homeHeader = readSource("../home/HomeHeader.tsx");
     const homeRoute = readSource("../home/HomeRouteScreen.tsx");
     const sidebar = readSource("../threads/ThreadNavigationSidebar.tsx");
+    const preferences = readSource("../../persistence/mobile-preferences.ts");
+    const layout = readSource("../layout/AdaptiveWorkspaceLayout.tsx");
 
     expect(homeHeader).toContain('title: "Ownership"');
     expect(homeHeader).toContain("onOwnershipFilterChange");
+    expect(homeHeader).toContain("onOwnershipRelationChange");
     expect(homeRoute).toContain("ownershipFilteredThreads");
+    expect(homeRoute).toContain("relation: listOptions.ownershipRelation");
     expect(sidebar).toContain("threadMatchesMine");
     expect(sidebar).toContain("ownershipFilter: options.ownershipFilter");
+    expect(sidebar).toContain("ownershipRelation: options.ownershipRelation");
+    // Device persistence — without these, Mine/Theirs resets on every launch.
+    expect(preferences).toContain("ownershipFilter");
+    expect(preferences).toContain("ownershipRelation");
+    expect(layout).toContain("storedOwnershipFilter");
+    expect(layout).toContain("onStoreOwnershipFilter");
   });
 });
