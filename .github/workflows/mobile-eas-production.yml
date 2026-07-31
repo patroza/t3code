@@ -5,6 +5,11 @@ name: Mobile EAS Production
 # in the same OS/pnpm as the EAS build; a macOS `eas build` computes a different
 # fingerprint (platform-specific deps + pnpm version) and errors. On this Linux
 # runner, with corepack pinning pnpm 10.24 in eas.json, local == build.
+#
+# mode=auto uses apps/mobile/scripts/eas-continuous-deploy.sh (full logs). When a
+# native rebuild is needed but blocked (e.g. Expo Free plan monthly iOS quota),
+# it falls back to OTA against the latest finished production binary runtime so
+# pure-JS fixes still reach installed TestFlight clients.
 on:
   workflow_dispatch:
     inputs:
@@ -27,7 +32,11 @@ on:
           - android
           - all
       message:
-        description: "OTA update message (mode=update only)"
+        description: "OTA update message (mode=update / auto)"
+        required: false
+        type: string
+      runtime_version:
+        description: "Force OTA runtimeVersion (mode=update or auto). Blank = fingerprint / fallback"
         required: false
         type: string
       sha:
@@ -94,6 +103,27 @@ jobs:
           test "$(git rev-parse HEAD)" = "$target_sha"
           echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
+      # Workflow file may come from a feature branch (workflow_dispatch --ref)
+      # while product code is always the approved integration SHA above. Overlay
+      # the deploy script + app.config runtime override from the workflow ref so
+      # we can ship fixes without waiting for a full compose.
+      - name: Overlay deploy tooling from workflow ref
+        if: steps.expo-token.outputs.present == 'true' && github.ref_name != 'fork/integration'
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin "$WORKFLOW_SHA"
+          for path in \
+            apps/mobile/scripts/eas-continuous-deploy.sh \
+            apps/mobile/app.config.ts \
+            .easignore; do
+            if git cat-file -e "${WORKFLOW_SHA}:${path}" 2>/dev/null; then
+              git checkout "$WORKFLOW_SHA" -- "$path"
+              echo "overlaid $path from $WORKFLOW_SHA"
+            fi
+          done
+          chmod +x apps/mobile/scripts/eas-continuous-deploy.sh
+
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
         uses: voidzero-dev/setup-vp@v1
@@ -130,40 +160,70 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull production --non-interactive
 
-      # Fingerprint decides: a JavaScript-only integration publishes an OTA
-      # update to the production channel, which the installed TestFlight build
-      # picks up on next launch. A change to native runtime inputs starts a
-      # production build and submits it to TestFlight instead.
-      - name: Deploy with fingerprint check
+      - name: Deploy with fingerprint check (auto)
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'auto'
-        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        with:
-          profile: production
-          branch: production
-          platform: ${{ inputs.platform }}
-          environment: production
-          auto-submit-builds: true
-          working-directory: apps/mobile
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          chmod +x scripts/eas-continuous-deploy.sh
+          args=(
+            --profile production
+            --channel production
+            --environment production
+            --platform "${{ inputs.platform }}"
+            --auto-submit
+            --message "${{ inputs.message || format('Production auto ({0})', steps.source.outputs.sha) }}"
+          )
+          if [ -n "${{ inputs.runtime_version }}" ]; then
+            args+=(--runtime-version "${{ inputs.runtime_version }}")
+          fi
+          ./scripts/eas-continuous-deploy.sh "${args[@]}"
 
       - name: Build and submit
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
+        run: |
+          set -o pipefail
+          eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait 2>&1 | tee /tmp/eas-build.log
+          if grep -q 'used its iOS builds from the Free plan' /tmp/eas-build.log; then
+            echo "::error::Expo Free plan iOS build quota exhausted. Upgrade at https://expo.dev/accounts/patroza/settings/billing or wait for the monthly reset, then re-run mode=build. Pure-JS fixes can still ship via mode=auto (fallback OTA) or mode=update with runtime_version."
+          fi
 
       - name: Publish OTA update
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GITHUB_SHA: ${{ steps.source.outputs.sha }}
+          RUNTIME_VERSION: ${{ inputs.runtime_version }}
         run: |
-          eas update \
-            --channel production \
-            --environment production \
-            --platform ${{ inputs.platform }} \
-            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
-            --non-interactive
+          chmod +x scripts/eas-continuous-deploy.sh
+          args=(
+            --profile production
+            --channel production
+            --environment production
+            --platform "${{ inputs.platform }}"
+            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}"
+          )
+          if [ -n "$RUNTIME_VERSION" ]; then
+            args+=(--runtime-version "$RUNTIME_VERSION")
+          else
+            # mode=update without runtime: publish under fingerprint policy only
+            # (no native rebuild attempt). Use --runtime-version to target an
+            # installed binary when fingerprints drifted.
+            :
+          fi
+          if [ -n "$RUNTIME_VERSION" ]; then
+            ./scripts/eas-continuous-deploy.sh "${args[@]}"
+          else
+            eas update \
+              --channel production \
+              --environment production \
+              --platform ${{ inputs.platform }} \
+              --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
+              --non-interactive
+          fi
