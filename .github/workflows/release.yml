@@ -19,6 +19,11 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: false
         type: string
+      artifacts_only:
+        description: "Build downloadable desktop artifacts without publishing a release"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -639,7 +644,7 @@ jobs:
   publish_cli:
     name: Publish CLI to npm
     needs: [preflight, relay_public_config, build]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
+    if: ${{ !failure() && !cancelled() && inputs.artifacts_only != true && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04 # ubuntu-24.04
     timeout-minutes: 10
     permissions:
