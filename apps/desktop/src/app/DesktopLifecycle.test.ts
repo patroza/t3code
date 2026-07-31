@@ -29,6 +29,7 @@ describe("DesktopLifecycle", () => {
         setName: () => Effect.void,
         setAboutPanelOptions: () => Effect.void,
         setAppUserModelId: () => Effect.void,
+        requestSingleInstanceLock: Effect.succeed(true),
         getAppMetrics: Effect.succeed([]),
         isDefaultProtocolClient: () => Effect.succeed(false),
         setAsDefaultProtocolClient: () => Effect.succeed(true),
@@ -79,6 +80,8 @@ describe("DesktopLifecycle", () => {
         flushMainWindowBounds: Effect.void,
         dispatchMenuAction: () => Effect.void,
         syncAppearance: Effect.void,
+        navigateToThread: () => Effect.void,
+        navigateToProject: () => Effect.void,
       });
 
       const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
