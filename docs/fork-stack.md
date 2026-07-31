@@ -43,14 +43,15 @@ pnpm fork:stack overlay-promote 10 upstream/desktop-deep-links
 
 To change an overlay, commit directly to its branch or create a child PR with the overlay branch as
 its base and merge the child into the overlay PR. Do not put the same change into `fork/changes`.
-Pushing or merging into a registered overlay branch triggers **Compose fork integration** (same as
-landing on `fork/changes`), so `fork/integration` picks up the new overlay tip automatically once
-the tip is based on current `fork/changes`.
-When `fork/changes` rewrites, rebase each overlay onto the new tip (or use the manual stack restack),
-then compose runs again. Landing an overlay into shared product is deliberate: remove its manifest
-entry in the same reviewed change that lands the implementation in `fork/changes`, drop its branch
-from `compose-integration.yml` `on:` lists, then verify that the resulting `fork/integration` tree
-is unchanged.
+**Merging** a child PR into a registered overlay base (or into `fork/changes`) triggers **Compose
+fork integration**, so `fork/integration` picks up the new tip once overlays are based on current
+`fork/changes`. Plain **pushes** / force-pushes do **not** compose — that keeps permanent draft PR
+status limited to Fork CI (Check/Test/…) and keeps rebase storms manual.
+When `fork/changes` rewrites without a merge event, rebase overlays and compose with
+`workflow_dispatch` (or local scripts). Landing an overlay into shared product is deliberate: remove
+its manifest entry in the same reviewed change that lands the implementation in `fork/changes`, drop
+its branch from `compose-integration.yml` / `fork-ci.yml` base lists, then verify that the resulting
+`fork/integration` tree is unchanged.
 
 Some overlays also own complete client integrations. Their path ownership and change-routing rules
 live in [client-overlays.md](./client-overlays.md). Check that ownership before starting ordinary
@@ -63,26 +64,31 @@ Do not use GitHub's **Sync fork** button, create a PR into this repository's `ma
 manually. A GitHub PR merge would rewrite upstream commits, while an ordinary push is correctly
 blocked by the `Protect upstream main` ruleset.
 
-### Fast path — compose `fork/integration` after product or overlay landings
+### Fast path — compose `fork/integration` after product or overlay **merges**
 
 Day-to-day merges do **not** run a full layer restack. Workflow **Compose fork integration**
 (`.github/workflows/compose-integration.yml`) rebuilds `fork/integration` and dispatches Fork CI
-when:
+**only** when:
 
-- something is pushed/merged to **`fork/changes`**, or
-- something is pushed/merged to a **registered overlay branch** (child PR into desktop/discord/vscode
-  tip), or
-- it is started manually:
+- a PR is **merged** into **`fork/changes`**, or
+- a PR is **merged** into a **registered overlay base** (child PR into desktop/discord/vscode/
+  identity), or
+- it is started manually (`workflow_dispatch`):
 
 ```sh
 gh workflow run compose-integration.yml --repo patroza/t3code --ref fork/changes
 ```
 
+It does **not** run on branch **pushes** (including overlay auto-rebase force-with-lease and agent
+deploy-key tip rewrites). Permanent layer draft PRs must not show compose as a failing/required
+check — only Fork CI jobs gate those PRs.
+
 Before compose, the workflow runs `node scripts/rebase-integration-overlays.ts` so registered
 overlay tips are force-with-lease rebased onto current `fork/changes` when they lag (no-op when
-already based). Clean merges to `fork/changes` should no longer require a human to rebase every
+already based). Clean **merges** to `fork/changes` should no longer require a human to rebase every
 overlay first. Conflicts still fail the job with the overlay branch and paths. Overlay branch names
-in the workflow `on:` block must stay aligned with `.github/pr-stack.json` → `integrationOverlays`.
+in the workflow `on.pull_request` base list must stay aligned with `.github/pr-stack.json` →
+`integrationOverlays`.
 
 ### Slow path — full provenance restack (local only)
 

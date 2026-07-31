@@ -14,7 +14,8 @@ on:
   # Candidate and Tim permanent stack PRs stay excluded: they are verified after
   # they fold into fork/integration (including them here duplicates every restack).
   # Keep the overlay branch list in sync with integrationOverlays in pr-stack.json
-  # and with compose-integration.yml `on.push` / `on.pull_request` lists.
+  # and with compose-integration.yml `on.pull_request` base branches (merge-only;
+  # compose has no push trigger — layer status is this workflow only).
   pull_request:
     branches:
       - fork/changes

@@ -106,7 +106,7 @@ Unblocks “I just want to ship.” Still ends with **full** integration (all re
 pnpm fork:stack start my-fix     # from fork/changes
   → implement + local gates (vp check, typecheck, focused tests)
   → PR → fork/changes → merge
-  → Compose fork integration workflow (automatic):
+  → Compose fork integration workflow (on merge only, not on push):
        1. auto-rebase every registered overlay onto current fork/changes
        2. compose overlays onto fork/changes → push fork/integration
        3. dispatch Fork CI on that SHA
@@ -114,13 +114,19 @@ pnpm fork:stack start my-fix     # from fork/changes
 ```
 
 **Does not** rebuild `main`, `fork/tim`, or `fork/candidates`.  
-**Does not** auto-rebase the entire open _feature_ PR forest (only **registered overlays**).  
+**Does not** run on force-pushes / tip rebases of product layers (those are manual compose).  
+**Does not** auto-rebase the entire open _feature_ PR forest (only **registered overlays** on merge).  
 **Does not** wait for a mega restack job.  
 **Does** require clean overlay rebases — real product conflicts still fail the job (fix that overlay, re-run compose).
 
+Layer PR status is **Fork CI only** (Check / Test / Mobile / Release Smoke). Compose is not a
+layer quality signal and must not be a required check on permanent `fork/*` drafts.
+
 #### Compose (integration)
 
-After `fork/changes` moves (or an overlay tip moves), **Compose fork integration** runs. Locally:
+After a PR **merges** into `fork/changes` or a registered overlay base, **Compose fork integration**
+runs. Direct pushes to those tips do **not** compose — use `workflow_dispatch` or local scripts.
+Locally:
 
 ```sh
 # From a clean checkout of fork/changes (with push credentials for stack branches)
@@ -213,14 +219,15 @@ you intentionally freeze merges for a cutover window.
 
 | Job                          | Intended role                                   | Status                                                                                                                                                                     |
 | ---------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Compose fork integration** | Integration tip from changes + **all** overlays | **Active** — `.github/workflows/compose-integration.yml` on push/merge to `fork/changes` and registered overlay branches (and `workflow_dispatch`)                         |
-| **Fork CI**                  | Green gate on PR tips / composed integration    | **Active**                                                                                                                                                                 |
+| **Compose fork integration** | Integration tip from changes + **all** overlays | **Active** — merge into `fork/changes` / overlay bases, or `workflow_dispatch`. **No push trigger.** Not a required layer check. |
+| **Fork CI**                  | Green gate on product PR tips / composed integration | **Active** — only quality signal for permanent layer drafts                                                                 |
 | **Rebase fork PR stack**     | Full layer rebuild + PR cascade                 | **`disabled_manually` in GitHub Actions — leave it that way.** Do **not** enable or dispatch this workflow. Slow-path restacks are **local only** (see slow path section). |
 | **Smart integration poller** | Deploy CI-approved integration SHA              | On when fleet should track green integration                                                                                                                               |
 
-**Do not re-enable `Rebase fork PR stack`.** Operators who need a full upstream rewrite run
-`node scripts/rebase-pr-stack.ts sync --push` (or equivalent) **locally** with appropriate credentials,
-layer by layer, green gates first. GitHub Actions must not auto-restack the provenance stack.
+**Do not re-enable `Rebase fork PR stack`.** Operators who need a full upstream / Tim / candidates
+rewrite run `node scripts/rebase-pr-stack.ts sync --push` (or equivalent) **locally** with appropriate
+credentials, layer by layer, green gates first. GitHub Actions must not auto-restack the provenance
+stack on pushes to `main` / `fork/tim` / `fork/candidates`.
 
 ---
 

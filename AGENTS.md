@@ -59,29 +59,39 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
 ### Automatic integration and deployment
 
 - Opening or updating a PR runs CI but does not deploy.
+- **Layer status = Fork CI only.** Permanent `fork/*` / overlay draft PRs must look green or red
+  solely from **Check**, **Test**, **Mobile Native Static Analysis**, and **Release Smoke**
+  (`.github/workflows/fork-ci.yml`). **Compose fork integration** is an integration rebuild, not a
+  product-layer quality gate — do **not** add it (or any compose/rebase job) to required status
+  checks for those branches.
 - **Fast path (day-to-day):** `.github/workflows/compose-integration.yml` (**Compose fork
-  integration**) runs when:
-  - a commit is pushed to **`fork/changes`** (including merges into `fork/changes`), or
-  - a commit is pushed to a **registered overlay branch** (including merges of child PRs into
-    desktop / discord / vscode overlays), or
-  - it is started with `workflow_dispatch`.
-    It first **auto-rebases every registered overlay** onto current `fork/changes` (no-op when
-    already based; force-with-lease on clean rebases), then composes those tips into
-    `fork/integration` and dispatches **Fork CI**. It does **not** rewrite main/tim/candidates or
+  integration**) runs **only** when:
+  - a PR is **merged** into **`fork/changes`**, or
+  - a PR is **merged** into a **registered overlay base** (desktop / discord / vscode / identity),
+    or
+  - it is started with **`workflow_dispatch`** (manual compose after a local tip rewrite).
+    It does **not** run on branch **pushes** (force-push rebases, deploy-key updates, compose's own
+    overlay force-with-lease). That avoids check noise on permanent draft PRs and rebase storms.
+    On merge it auto-rebases every registered overlay onto current `fork/changes` (no-op when
+    already based; force-with-lease on clean rebases), composes those tips into `fork/integration`,
+    and dispatches **Fork CI** on the composed tip. It does **not** rewrite main/tim/candidates or
     ordinary feature PRs. Real overlay rebase conflicts fail the job with branch + paths — fix that
-    overlay, then re-run compose. When adding an overlay to `.github/pr-stack.json`, also add its
-    branch to the `on.push` / `on.pull_request` lists in `compose-integration.yml`.
-- **Slow path (upstream / Tim / candidates):** run **locally** with
+    overlay, then re-run compose (`workflow_dispatch` or merge again). When adding an overlay to
+    `.github/pr-stack.json`, also add its branch to the `on.pull_request` base list in
+    `compose-integration.yml` (and to `fork-ci.yml` PR bases).
+- **Slow path (upstream / Tim / candidates):** **manual / local only.** Run
   `node scripts/rebase-pr-stack.ts sync --push` (or layer-by-layer hand restack). The Actions
   workflow **Rebase fork PR stack** stays **`disabled_manually`** — do **not** enable it, schedule
-  it, or `gh workflow run` it. Local restacks mirror `pingdotgg/t3code:main`, rebuild provenance
-  layers with stop-the-line green gates, rebase overlays, compose integration, and rely on
-  **Compose fork integration** / Fork CI as needed. Deploy key (if used) is only for intentional
+  it, or `gh workflow run` it. Pushes to `main` / `fork/tim` / `fork/candidates` must not auto-restack
+  or auto-compose. Local restacks mirror `pingdotgg/t3code:main`, rebuild provenance layers with
+  stop-the-line green gates, rebase overlays, then compose integration via
+  `workflow_dispatch` / local compose scripts. Deploy key (if used) is only for intentional
   protected-branch force-with-lease; agents must never print or reuse it.
-- Fork checks live in `.github/workflows/fork-ci.yml` and run for PRs or by explicit integration
-  dispatch. The inherited upstream `.github/workflows/ci.yml` and `deploy-relay.yml` workflows are
-  disabled at repository level so mirror updates do not run redundant CI or attempt upstream relay
-  deployment. Do not re-enable or target those workflows for fork releases.
+- Fork checks live in `.github/workflows/fork-ci.yml` and run for PRs targeting product bases (or by
+  explicit integration `workflow_dispatch`). The inherited upstream `.github/workflows/ci.yml` and
+  `deploy-relay.yml` workflows are disabled at repository level so mirror updates do not run
+  redundant CI or attempt upstream relay deployment. Do not re-enable or target those workflows for
+  fork releases.
 - Successful `fork/integration` CI classifies the complete tree diff from the previous approved
   integration tree. Runtime-affecting changes hand the exact tested SHA to the private operations
   repository; tests, documentation, agent metadata, and GitHub-only metadata do not deploy.

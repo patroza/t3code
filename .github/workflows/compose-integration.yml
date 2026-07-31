@@ -2,17 +2,28 @@
 # needed, rebuild fork/integration from changes + every overlay tip, then
 # dispatch Fork CI. Does not rewrite main / fork/tim / fork/candidates.
 #
-# Runs when:
-# - something lands on fork/changes (merge or direct push via deploy key)
-# - something lands on a registered overlay branch (child PR merge, tip update)
+# Runs only when:
+# - a PR is **merged** into fork/changes or a registered overlay base
 # - manual workflow_dispatch
+#
+# Deliberately does **not** run on branch pushes (force-push rebases, deploy-key
+# tip updates, compose's own overlay force-with-lease). Those must not attach a
+# "Compose and dispatch integration CI" check to permanent fork/* draft PRs or
+# make layer status look red. Layer green is Fork CI only (Check / Test / Mobile
+# Native Static Analysis / Release Smoke).
+#
+# Full upstream / Tim / candidates restacks stay local and manual
+# (`node scripts/rebase-pr-stack.ts sync --push`). Do not re-enable
+# rebase-pr-stack.yml automation.
 #
 # Overlay branch names below must stay in sync with integrationOverlays in
 # .github/pr-stack.json (workflow `on:` cannot load that file dynamically).
 name: Compose fork integration
 
 on:
-  push:
+  # Only real merges into product bases — not every tip push / rebase.
+  pull_request:
+    types: [closed]
     branches:
       - fork/changes
       # Registered integration overlays (keep in sync with .github/pr-stack.json)
@@ -20,21 +31,10 @@ on:
       - fork/discord
       - fork/vscode
       - fork/identity
-  # Explicit merge path: child PR merged into fork/changes or an overlay base.
-  # Redundant with `push` for normal GitHub merges; still useful if a merge
-  # path does not emit the expected branch push, and makes intent obvious.
-  pull_request:
-    types: [closed]
-    branches:
-      - fork/changes
-      - t3-discord/f7d37879-desktop-deeplinks
-      - fork/discord
-      - fork/vscode
-      - fork/identity
   workflow_dispatch:
 
 concurrency:
-  # Serialize force-pushes to fork/integration (including double-fire push+PR).
+  # Serialize force-pushes to fork/integration (and overlay auto-rebase).
   group: fork-integration-compose
   cancel-in-progress: false
 
@@ -46,9 +46,11 @@ permissions:
 jobs:
   compose:
     name: Compose and dispatch integration CI
+    # Merged PRs only (closed without merge is a no-op). Manual dispatch always runs.
+    # This job is an integration rebuild, not a product-layer quality gate — do not
+    # add it to required status checks for fork/changes or overlay draft PRs.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-24.04
     # Overlay rebase + lock regenerate can exceed a short window after large merges.
@@ -87,6 +89,7 @@ jobs:
           # compose no longer fails after ordinary merges to fork/changes.
           # Real conflicts hard-fail with the overlay branch + paths (fix that
           # overlay locally, then re-run this workflow).
+          # Overlay force-pushes here must not re-trigger this workflow (no push: on).
           node scripts/rebase-integration-overlays.ts
 
       - name: Compose registered integration overlays
