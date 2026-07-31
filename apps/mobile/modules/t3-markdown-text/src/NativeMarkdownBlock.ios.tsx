@@ -9,7 +9,7 @@ import {
   nativeMarkdownListItemBlocks,
   nativeMarkdownTextRuns,
 } from "./nativeMarkdownText";
-import { markdownNodeKey } from "./markdownNodeKey";
+import { markdownNodeKey, markdownTableCellKey, markdownTableRowKey } from "./markdownNodeKey";
 import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText.ios";
 import type {
   MarkdownCodeHighlighter,
@@ -353,7 +353,7 @@ function NativeTable(props: {
       >
         {rows.map((row, rowIndex) => (
           <View
-            key={nodeKey(row, rowIndex)}
+            key={markdownTableRowKey(rowIndex)}
             style={{
               flexDirection: "row",
               backgroundColor: rowIndex === 0 ? props.textStyle.codeBackgroundColor : "transparent",
@@ -363,7 +363,7 @@ function NativeTable(props: {
           >
             {(row.children ?? []).map((cell, cellIndex) => (
               <View
-                key={nodeKey(cell, cellIndex)}
+                key={markdownTableCellKey(rowIndex, cellIndex)}
                 style={{
                   width: 160,
                   borderLeftColor: props.textStyle.dividerColor,
