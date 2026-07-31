@@ -20,6 +20,7 @@ import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPrompt
 import { OmegentDeepLinkCoordinator } from "../components/OmegentDeepLinkCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
+import { hasThreadDeepLinkIntent } from "../deepLinkStore";
 import { Button } from "../components/ui/button";
 import {
   AnchoredToastProvider,
@@ -320,6 +321,10 @@ function EventRouter() {
       useUiStateStore.getState().setProjectExpanded(bootstrapProjectKey, true);
 
       if (readPathname() !== "/") {
+        return;
+      }
+      // Do not steal `/?thread=` landings for the server's bootstrap thread.
+      if (hasThreadDeepLinkIntent()) {
         return;
       }
       if (handledBootstrapThreadIdRef.current === payload.bootstrapThreadId) {
