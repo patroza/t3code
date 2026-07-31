@@ -1,5 +1,4 @@
 import { ThreadId } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
@@ -44,7 +43,7 @@ export function OmegentDeepLinkCoordinator() {
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
       replace: true,
-      hash: messageId !== null ? `message-${messageId}` : undefined,
+      ...(messageId !== null ? { hash: `message-${messageId}` } : {}),
     }).then(() => {
       // Drop the query form so the address bar matches the canonical route.
       const next = new URL(window.location.href);
