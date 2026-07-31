@@ -3,7 +3,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import {
   NavigationContext,
@@ -36,12 +36,18 @@ import {
 } from "../../lib/layout";
 import { resolveThreadSelectionNavigationAction } from "../../lib/adaptive-navigation";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { mobilePreferencesAtom } from "../../state/preferences";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { prefetchEnvironmentThread, warmSelectedEnvironmentThread } from "../../state/threads";
 import {
   parseActiveThreadPath,
   useHardwareKeyboardCommand,
 } from "../keyboard/hardwareKeyboardCommands";
 import { HomeListOptionsProvider, resolveProjectGroupingMode } from "../home/home-list-options";
+import {
+  DEFAULT_HOME_THREAD_GROUPING,
+  resolveHomeThreadGrouping,
+  type HomeThreadGrouping,
+} from "../home/homeListMode";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
@@ -188,17 +194,47 @@ export function AdaptiveWorkspaceLayout(props: {
   readonly pathname: string;
 }) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const storeEnvironmentIds = useCallback(
+    (ids: readonly EnvironmentId[]) => {
+      savePreferences({ selectedEnvironmentIds: [...ids] });
+    },
+    [savePreferences],
+  );
+  const storeThreadGrouping = useCallback(
+    (grouping: HomeThreadGrouping) => {
+      savePreferences({ threadGrouping: grouping });
+    },
+    [savePreferences],
+  );
+
   if (!AsyncResult.isSuccess(preferencesResult)) {
     return AsyncResult.isFailure(preferencesResult) ? (
-      <AdaptiveWorkspaceLayoutContent {...props} projectGroupingMode="repository" />
+      <AdaptiveWorkspaceLayoutContent
+        {...props}
+        projectGroupingMode="repository"
+        storedEnvironmentIds={[]}
+        onStoreEnvironmentIds={storeEnvironmentIds}
+        storedThreadGrouping={DEFAULT_HOME_THREAD_GROUPING}
+        onStoreThreadGrouping={storeThreadGrouping}
+      />
     ) : null;
   }
+
+  const storedEnvironmentIds = (preferencesResult.value.selectedEnvironmentIds ??
+    []) as readonly EnvironmentId[];
+  const storedThreadGrouping = resolveHomeThreadGrouping(preferencesResult.value.threadGrouping);
+
   return (
     <AdaptiveWorkspaceLayoutContent
       {...props}
       projectGroupingMode={resolveProjectGroupingMode(
         preferencesResult.value.projectGroupingEnabled,
       )}
+      storedEnvironmentIds={storedEnvironmentIds}
+      onStoreEnvironmentIds={storeEnvironmentIds}
+      storedThreadGrouping={storedThreadGrouping}
+      onStoreThreadGrouping={storeThreadGrouping}
     />
   );
 }
@@ -209,6 +245,10 @@ function AdaptiveWorkspaceLayoutContent(
     readonly pathname: string;
   } & {
     readonly projectGroupingMode: SidebarProjectGroupingMode;
+    readonly storedEnvironmentIds: readonly EnvironmentId[];
+    readonly onStoreEnvironmentIds: (ids: readonly EnvironmentId[]) => void;
+    readonly storedThreadGrouping: HomeThreadGrouping;
+    readonly onStoreThreadGrouping: (grouping: HomeThreadGrouping) => void;
   },
 ) {
   const projectGroupingMode = props.projectGroupingMode;
@@ -478,6 +518,9 @@ function AdaptiveWorkspaceLayoutContent(
         environmentId: String(thread.environmentId),
         threadId: String(thread.id),
       };
+      // Overlap SQLite/HTTP detail hydrate with navigation / setParams.
+      prefetchEnvironmentThread(thread.environmentId, thread.id);
+      warmSelectedEnvironmentThread(thread.environmentId, thread.id);
       const navigationAction = resolveThreadSelectionNavigationAction({
         usesSplitView: layout.usesSplitView,
         pathname,
@@ -502,7 +545,13 @@ function AdaptiveWorkspaceLayoutContent(
   );
 
   return (
-    <HomeListOptionsProvider projectGroupingMode={projectGroupingMode}>
+    <HomeListOptionsProvider
+      projectGroupingMode={projectGroupingMode}
+      storedEnvironmentIds={props.storedEnvironmentIds}
+      onStoreEnvironmentIds={props.onStoreEnvironmentIds}
+      storedThreadGrouping={props.storedThreadGrouping}
+      onStoreThreadGrouping={props.onStoreThreadGrouping}
+    >
       <AdaptiveWorkspaceContext.Provider value={contextValue}>
         <View testID="adaptive-workspace-layout" className="flex-1 flex-row">
           {shouldRenderPrimarySidebar && layout.listPaneWidth !== null ? (
