@@ -37,12 +37,15 @@ export interface HomeListOptions {
    * the provider is given a storage callback.
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
+  readonly ownershipFilter: OwnershipFilter;
   readonly listMode: HomeListMode;
   /** Organization of the Threads list (ignored on Board). */
   readonly threadGrouping: HomeThreadGrouping;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
 }
+
+export type OwnershipFilter = "any" | "mine" | "theirs";
 
 export interface ResolvedHomeListOptions extends HomeListOptions {
   readonly projectGroupingMode: SidebarProjectGroupingMode;
@@ -73,6 +76,7 @@ export const THREAD_SORT_OPTIONS: ReadonlyArray<{
 function defaultHomeListOptions(): HomeListOptions {
   return {
     selectedEnvironmentIds: [],
+    ownershipFilter: "any",
     listMode: DEFAULT_HOME_LIST_MODE,
     threadGrouping: DEFAULT_HOME_THREAD_GROUPING,
     projectSortOrder:
@@ -191,6 +195,7 @@ export function hasCustomHomeListOptions(
       : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER;
   return (
     options.selectedEnvironmentIds.length > 0 ||
+    options.ownershipFilter !== "any" ||
     (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
     options.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||
     options.projectSortOrder !== defaultProjectSortOrder ||
@@ -240,6 +245,12 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     },
     [setOptions],
   );
+  const setOwnershipFilter = useCallback(
+    (value: OwnershipFilter) => {
+      setOptions((current) => ({ ...current, ownershipFilter: value }));
+    },
+    [setOptions],
+  );
   const setThreadGrouping = useCallback(
     (value: HomeThreadGrouping) => {
       setOptions((current) => ({ ...current, threadGrouping: value }));
@@ -263,6 +274,7 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     setSelectedEnvironmentIds,
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
+    setOwnershipFilter,
     setListMode,
     setThreadGrouping,
     setProjectSortOrder,

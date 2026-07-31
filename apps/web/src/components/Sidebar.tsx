@@ -33,6 +33,11 @@ import {
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
+import { ParticipantStack, SourceChannelGlyph } from "./identity/ParticipantStack";
+import {
+  isIdentityClaimRequiredMessage,
+  requestIdentityClaimGate,
+} from "./identity/IdentityClaimGate";
 import { hasComposerDraftMessage, useComposerDraftStore } from "../composerDraftStore";
 import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
@@ -158,7 +163,6 @@ import {
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import {
@@ -814,21 +818,34 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               onDoubleClick={handleRenameInputClick}
             />
           ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    className="min-w-0 flex-1 truncate text-sm"
-                    data-testid={`thread-title-${thread.id}`}
-                  >
-                    {thread.title}
-                  </span>
+            <>
+              <SourceChannelGlyph
+                channel={
+                  thread.originSource?.channel ??
+                  thread.participantSummaries?.[0]?.firstChannel ??
+                  null
                 }
               />
-              <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
-                {thread.title}
-              </TooltipPopup>
-            </Tooltip>
+              <ParticipantStack
+                environmentId={thread.environmentId}
+                participants={thread.participantSummaries ?? []}
+              />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span
+                      className="min-w-0 flex-1 truncate text-sm"
+                      data-testid={`thread-title-${thread.id}`}
+                    >
+                      {thread.title}
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
+                  {thread.title}
+                </TooltipPopup>
+              </Tooltip>
+            </>
           )}
           {hasDraft ? <ComposerDraftDot /> : null}
           {prStatus && pr ? (
@@ -2318,12 +2335,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           clicked === "settle" ? await settleThread(threadRef) : await unsettleThread(threadRef);
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
+          const message = error instanceof Error ? error.message : "An error occurred.";
+          if (isIdentityClaimRequiredMessage(message)) {
+            requestIdentityClaimGate(threadRef.environmentId);
+          }
           toastManager.add(
             stackedThreadToast({
               type: "error",
               title:
                 clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
+              description: message,
             }),
           );
         }
@@ -3268,12 +3289,16 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               : await props.unsettleThread(threadRef);
           if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
             const error = squashAtomCommandFailure(result);
+            const message = error instanceof Error ? error.message : "An error occurred.";
+            if (isIdentityClaimRequiredMessage(message)) {
+              requestIdentityClaimGate(threadRef.environmentId);
+            }
             toastManager.add(
               stackedThreadToast({
                 type: "error",
                 title:
                   clicked === "settle" ? "Failed to settle thread" : "Failed to un-settle thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
+                description: message,
               }),
             );
           }
@@ -3463,14 +3488,27 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                   onBlur={() => void commitRename()}
                 />
               ) : (
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
-                    props.isActive ? "text-foreground" : "text-muted-foreground/70",
-                  )}
-                >
-                  {thread.title}
-                </span>
+                <>
+                  <SourceChannelGlyph
+                    channel={
+                      thread.originSource?.channel ??
+                      thread.participantSummaries?.[0]?.firstChannel ??
+                      null
+                    }
+                  />
+                  <ParticipantStack
+                    environmentId={thread.environmentId}
+                    participants={thread.participantSummaries ?? []}
+                  />
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-sm group-hover/recent-thread:text-foreground",
+                      props.isActive ? "text-foreground" : "text-muted-foreground/70",
+                    )}
+                  >
+                    {thread.title}
+                  </span>
+                </>
               )}
               {hasDraft ? <ComposerDraftDot /> : null}
             </div>
@@ -3583,7 +3621,20 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                   onBlur={() => void commitRename()}
                 />
               ) : (
-                <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+                <>
+                  <SourceChannelGlyph
+                    channel={
+                      thread.originSource?.channel ??
+                      thread.participantSummaries?.[0]?.firstChannel ??
+                      null
+                    }
+                  />
+                  <ParticipantStack
+                    environmentId={thread.environmentId}
+                    participants={thread.participantSummaries ?? []}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs">{thread.title}</span>
+                </>
               )}
               {hasDraft ? <ComposerDraftDot /> : null}
               {prStatus && pr ? (
@@ -5598,7 +5649,11 @@ export default function Sidebar() {
         .downloadUpdate()
         .then((result) => {
           if (result.completed) {
-            showDesktopUpdateDownloadedToast(bridge, result.state);
+            toastManager.add({
+              type: "success",
+              title: "Update downloaded",
+              description: "Restart the app from the update button to install it.",
+            });
           }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);

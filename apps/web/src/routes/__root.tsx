@@ -17,6 +17,7 @@ import { CommandPalette } from "../components/CommandPalette";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { Button } from "../components/ui/button";
@@ -136,6 +137,10 @@ function RootRouteView() {
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+        {/* Claim gate: primary auth OR hosted-static (paired remotes still need identity). */}
+        {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
+          <IdentityClaimGate />
+        ) : null}
         {appShell}
       </AnchoredToastProvider>
     </ToastProvider>

@@ -14,7 +14,9 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  SourceRef,
   ThreadId,
+  ThreadParticipantSummary,
   TurnId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -48,6 +50,10 @@ export const ProjectionThread = Schema.Struct({
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
   deletedAt: Schema.NullOr(IsoDateTime),
+  /** First user-message SourceRef; null/absent on legacy threads. */
+  originSource: Schema.optional(Schema.NullOr(SourceRef)),
+  /** Ordered participant stack data for list UI. */
+  participantSummaries: Schema.optional(Schema.Array(ThreadParticipantSummary)),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;
 
