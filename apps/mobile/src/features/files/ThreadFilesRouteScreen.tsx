@@ -29,10 +29,7 @@ import {
   useAdaptiveWorkspacePaneRole,
   useRegisterWorkspaceInspector,
 } from "../layout/AdaptiveWorkspaceLayout";
-import {
-  createNativeMailSearchToolbarItem,
-  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
-} from "../layout/native-mail-search-toolbar";
+import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { ReviewHighlighterProvider } from "../review/ReviewHighlighterProvider";
 import { ThreadRouteScreen } from "../threads/ThreadRouteScreen";
@@ -357,8 +354,7 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
     );
   }
 
-  const usesCompactMailToolbar =
-    Platform.OS === "ios" && !layout.usesSplitView && NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED;
+  const usesCompactMailToolbar = Platform.OS === "ios" && !layout.usesSplitView;
 
   return (
     <>

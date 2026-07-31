@@ -8,6 +8,7 @@ import {
 } from "./homeListMode";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import { PROJECT_SORT_OPTIONS, THREAD_SORT_OPTIONS } from "./home-list-options";
+import type { OwnershipFilter } from "./home-list-options";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
@@ -43,11 +44,13 @@ export function buildHomeListFilterMenu(props: {
   readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
+  readonly ownershipFilter: OwnershipFilter;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   /**
@@ -91,6 +94,21 @@ export function buildHomeListFilterMenu(props: {
         onPress: () => props.onToggleEnvironment(environment.environmentId),
       })),
     ],
+  });
+
+  items.push({
+    type: "submenu",
+    title: "Ownership",
+    items: [
+      { value: "any", label: "Anyone" },
+      { value: "mine", label: "Mine" },
+      { value: "theirs", label: "Theirs" },
+    ].map((option) => ({
+      type: "action" as const,
+      title: option.label,
+      state: props.ownershipFilter === option.value ? ("on" as const) : ("off" as const),
+      onPress: () => props.onOwnershipFilterChange(option.value as OwnershipFilter),
+    })),
   });
 
   if (props.showProjectFilter !== false && props.projects.length > 0) {
