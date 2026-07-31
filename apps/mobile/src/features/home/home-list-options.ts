@@ -8,6 +8,10 @@ import {
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
 } from "@t3tools/contracts";
 import {
+  DEFAULT_OWNERSHIP_RELATION,
+  type OwnershipRelation,
+} from "@t3tools/client-runtime/state/identity";
+import {
   createContext,
   createElement,
   useCallback,
@@ -30,6 +34,9 @@ import {
 } from "./homeListMode";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 
+export type { OwnershipRelation };
+export { DEFAULT_OWNERSHIP_RELATION };
+
 export interface HomeListOptions {
   /**
    * Multi-select environment filter. Empty means all environments.
@@ -38,6 +45,11 @@ export interface HomeListOptions {
    */
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly ownershipFilter: OwnershipFilter;
+  /**
+   * Sub-filter for mine/theirs: created, participated, or both (default).
+   * Ignored when ownership is "any". Persisted with ownership filter.
+   */
+  readonly ownershipRelation: OwnershipRelation;
   readonly listMode: HomeListMode;
   /** Organization of the Threads list (ignored on Board). */
   readonly threadGrouping: HomeThreadGrouping;
@@ -46,6 +58,34 @@ export interface HomeListOptions {
 }
 
 export type OwnershipFilter = "any" | "mine" | "theirs";
+
+export const OWNERSHIP_FILTERS = [
+  "any",
+  "mine",
+  "theirs",
+] as const satisfies readonly OwnershipFilter[];
+
+export const OWNERSHIP_FILTER_LABELS: Record<OwnershipFilter, string> = {
+  any: "Anyone",
+  mine: "Mine",
+  theirs: "Theirs",
+};
+
+export const OWNERSHIP_RELATIONS = [
+  "both",
+  "created",
+  "participated",
+] as const satisfies readonly OwnershipRelation[];
+
+export const OWNERSHIP_RELATION_LABELS: Record<OwnershipRelation, string> = {
+  both: "Created or participated",
+  created: "Created",
+  participated: "Participated",
+};
+
+export function isOwnershipFilter(value: unknown): value is OwnershipFilter {
+  return value === "any" || value === "mine" || value === "theirs";
+}
 
 export interface ResolvedHomeListOptions extends HomeListOptions {
   readonly projectGroupingMode: SidebarProjectGroupingMode;
@@ -77,6 +117,7 @@ function defaultHomeListOptions(): HomeListOptions {
   return {
     selectedEnvironmentIds: [],
     ownershipFilter: "any",
+    ownershipRelation: DEFAULT_OWNERSHIP_RELATION,
     listMode: DEFAULT_HOME_LIST_MODE,
     threadGrouping: DEFAULT_HOME_THREAD_GROUPING,
     projectSortOrder:
@@ -101,9 +142,9 @@ const HomeListOptionsContext = createContext<HomeListOptionsContextValue | null>
 
 /**
  * Keeps list preferences stable while the app moves between compact and split
- * shells. Optional storedEnvironmentIds / storedThreadGrouping + store
- * callbacks make the env filter and Recent/project/none grouping survive app
- * restarts (device preferences).
+ * shells. Optional stored* + store callbacks make filters survive app restarts
+ * (device preferences). Ownership is included so Mine/Theirs does not reset
+ * on every launch (especially painful on mobile).
  */
 export function HomeListOptionsProvider({
   children,
@@ -120,18 +161,33 @@ export function HomeListOptionsProvider({
    */
   storedThreadGrouping,
   onStoreThreadGrouping,
+  /**
+   * `undefined` = storage not loaded yet (do not hydrate).
+   */
+  storedOwnershipFilter,
+  onStoreOwnershipFilter,
+  storedOwnershipRelation,
+  onStoreOwnershipRelation,
 }: PropsWithChildren<{
   readonly projectGroupingMode: SidebarProjectGroupingMode;
   readonly storedEnvironmentIds?: readonly EnvironmentId[];
   readonly onStoreEnvironmentIds?: (ids: readonly EnvironmentId[]) => void;
   readonly storedThreadGrouping?: HomeThreadGrouping;
   readonly onStoreThreadGrouping?: (grouping: HomeThreadGrouping) => void;
+  readonly storedOwnershipFilter?: OwnershipFilter;
+  readonly onStoreOwnershipFilter?: (filter: OwnershipFilter) => void;
+  readonly storedOwnershipRelation?: OwnershipRelation;
+  readonly onStoreOwnershipRelation?: (relation: OwnershipRelation) => void;
 }>) {
   const [options, setOptions] = useState<HomeListOptions>(defaultHomeListOptions);
   const envFilterHydratedRef = useRef(false);
   const lastPersistedEnvKeyRef = useRef<string | null>(null);
   const threadGroupingHydratedRef = useRef(false);
   const lastPersistedThreadGroupingRef = useRef<HomeThreadGrouping | null>(null);
+  const ownershipFilterHydratedRef = useRef(false);
+  const lastPersistedOwnershipFilterRef = useRef<OwnershipFilter | null>(null);
+  const ownershipRelationHydratedRef = useRef(false);
+  const lastPersistedOwnershipRelationRef = useRef<OwnershipRelation | null>(null);
 
   useEffect(() => {
     if (envFilterHydratedRef.current) return;
@@ -177,6 +233,46 @@ export function HomeListOptionsProvider({
     onStoreThreadGrouping(options.threadGrouping);
   }, [onStoreThreadGrouping, options.threadGrouping]);
 
+  useEffect(() => {
+    if (ownershipFilterHydratedRef.current) return;
+    if (storedOwnershipFilter === undefined) return;
+    setOptions((current) =>
+      current.ownershipFilter === storedOwnershipFilter
+        ? current
+        : { ...current, ownershipFilter: storedOwnershipFilter },
+    );
+    lastPersistedOwnershipFilterRef.current = storedOwnershipFilter;
+    ownershipFilterHydratedRef.current = true;
+  }, [storedOwnershipFilter]);
+
+  useEffect(() => {
+    if (!ownershipFilterHydratedRef.current) return;
+    if (!onStoreOwnershipFilter) return;
+    if (lastPersistedOwnershipFilterRef.current === options.ownershipFilter) return;
+    lastPersistedOwnershipFilterRef.current = options.ownershipFilter;
+    onStoreOwnershipFilter(options.ownershipFilter);
+  }, [onStoreOwnershipFilter, options.ownershipFilter]);
+
+  useEffect(() => {
+    if (ownershipRelationHydratedRef.current) return;
+    if (storedOwnershipRelation === undefined) return;
+    setOptions((current) =>
+      current.ownershipRelation === storedOwnershipRelation
+        ? current
+        : { ...current, ownershipRelation: storedOwnershipRelation },
+    );
+    lastPersistedOwnershipRelationRef.current = storedOwnershipRelation;
+    ownershipRelationHydratedRef.current = true;
+  }, [storedOwnershipRelation]);
+
+  useEffect(() => {
+    if (!ownershipRelationHydratedRef.current) return;
+    if (!onStoreOwnershipRelation) return;
+    if (lastPersistedOwnershipRelationRef.current === options.ownershipRelation) return;
+    lastPersistedOwnershipRelationRef.current = options.ownershipRelation;
+    onStoreOwnershipRelation(options.ownershipRelation);
+  }, [onStoreOwnershipRelation, options.ownershipRelation]);
+
   const value = useMemo(
     () => ({ options, setOptions, projectGroupingMode }),
     [options, projectGroupingMode],
@@ -196,6 +292,7 @@ export function hasCustomHomeListOptions(
   return (
     options.selectedEnvironmentIds.length > 0 ||
     options.ownershipFilter !== "any" ||
+    options.ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
     (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
     options.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||
     options.projectSortOrder !== defaultProjectSortOrder ||
@@ -251,6 +348,12 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     },
     [setOptions],
   );
+  const setOwnershipRelation = useCallback(
+    (value: OwnershipRelation) => {
+      setOptions((current) => ({ ...current, ownershipRelation: value }));
+    },
+    [setOptions],
+  );
   const setThreadGrouping = useCallback(
     (value: HomeThreadGrouping) => {
       setOptions((current) => ({ ...current, threadGrouping: value }));
@@ -275,6 +378,7 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
     setOwnershipFilter,
+    setOwnershipRelation,
     setListMode,
     setThreadGrouping,
     setProjectSortOrder,

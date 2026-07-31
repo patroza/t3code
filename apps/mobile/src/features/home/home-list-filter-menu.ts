@@ -7,8 +7,16 @@ import {
   type HomeThreadGrouping,
 } from "./homeListMode";
 import type { HomeProjectSortOrder } from "./homeThreadList";
-import { PROJECT_SORT_OPTIONS, THREAD_SORT_OPTIONS } from "./home-list-options";
-import type { OwnershipFilter } from "./home-list-options";
+import {
+  OWNERSHIP_FILTER_LABELS,
+  OWNERSHIP_FILTERS,
+  OWNERSHIP_RELATION_LABELS,
+  OWNERSHIP_RELATIONS,
+  PROJECT_SORT_OPTIONS,
+  THREAD_SORT_OPTIONS,
+  type OwnershipFilter,
+  type OwnershipRelation,
+} from "./home-list-options";
 
 export interface HomeListFilterMenuEnvironment {
   readonly environmentId: EnvironmentId;
@@ -45,12 +53,14 @@ export function buildHomeListFilterMenu(props: {
   readonly selectedEnvironmentIds: readonly EnvironmentId[];
   readonly selectedProjectKey: string | null;
   readonly ownershipFilter: OwnershipFilter;
+  readonly ownershipRelation: OwnershipRelation;
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
+  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   /**
@@ -99,17 +109,26 @@ export function buildHomeListFilterMenu(props: {
   items.push({
     type: "submenu",
     title: "Ownership",
-    items: [
-      { value: "any", label: "Anyone" },
-      { value: "mine", label: "Mine" },
-      { value: "theirs", label: "Theirs" },
-    ].map((option) => ({
+    items: OWNERSHIP_FILTERS.map((value) => ({
       type: "action" as const,
-      title: option.label,
-      state: props.ownershipFilter === option.value ? ("on" as const) : ("off" as const),
-      onPress: () => props.onOwnershipFilterChange(option.value as OwnershipFilter),
+      title: OWNERSHIP_FILTER_LABELS[value],
+      state: props.ownershipFilter === value ? ("on" as const) : ("off" as const),
+      onPress: () => props.onOwnershipFilterChange(value),
     })),
   });
+
+  if (props.ownershipFilter === "mine" || props.ownershipFilter === "theirs") {
+    items.push({
+      type: "submenu",
+      title: props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes",
+      items: OWNERSHIP_RELATIONS.map((value) => ({
+        type: "action" as const,
+        title: OWNERSHIP_RELATION_LABELS[value],
+        state: props.ownershipRelation === value ? ("on" as const) : ("off" as const),
+        onPress: () => props.onOwnershipRelationChange(value),
+      })),
+    });
+  }
 
   if (props.showProjectFilter !== false && props.projects.length > 0) {
     items.push({

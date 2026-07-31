@@ -150,6 +150,85 @@ describe("threadMatchesMine", () => {
       }),
     ).toBe(true);
   });
+
+  it("supports created / participated / both relation sub-filters", () => {
+    // Creator only
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "patroza",
+        participantPersonIds: ["julius"],
+        mode: "mine",
+        relation: "created",
+      }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["patroza"],
+        mode: "mine",
+        relation: "created",
+      }),
+    ).toBe(false);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["patroza"],
+        mode: "mine",
+        relation: "participated",
+      }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "patroza",
+        participantPersonIds: [],
+        mode: "mine",
+        relation: "participated",
+      }),
+    ).toBe(false);
+    // Both keeps current default behavior
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["patroza"],
+        mode: "mine",
+        relation: "both",
+      }),
+    ).toBe(true);
+    // Theirs + created: other person started
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["patroza"],
+        mode: "theirs",
+        relation: "created",
+      }),
+    ).toBe(true);
+    // Fully unattributed only under mine + both
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: [],
+        mode: "mine",
+        relation: "created",
+      }),
+    ).toBe(false);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: [],
+        mode: "mine",
+        relation: "both",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("claimPersonIdForEnvironment", () => {
