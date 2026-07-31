@@ -71,6 +71,7 @@ export function HomeRouteScreen() {
     toggleSelectedEnvironmentId,
     clearSelectedEnvironments,
     setOwnershipFilter,
+    setOwnershipRelation,
     setListMode,
     setThreadGrouping,
     setProjectSortOrder,
@@ -91,9 +92,15 @@ export function HomeRouteScreen() {
             (participant) => participant.personId,
           ),
           mode: listOptions.ownershipFilter,
+          relation: listOptions.ownershipRelation,
         }),
       ),
-    [claimPersonIdByEnvironment, listOptions.ownershipFilter, threads],
+    [
+      claimPersonIdByEnvironment,
+      listOptions.ownershipFilter,
+      listOptions.ownershipRelation,
+      threads,
+    ],
   );
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -175,6 +182,7 @@ export function HomeRouteScreen() {
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
           ownershipFilter={listOptions.ownershipFilter}
+          ownershipRelation={listOptions.ownershipRelation}
           hideSettledThreads={hideSettledThreads}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
@@ -184,6 +192,7 @@ export function HomeRouteScreen() {
           onToggleEnvironment={toggleSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onOwnershipFilterChange={setOwnershipFilter}
+          onOwnershipRelationChange={setOwnershipRelation}
           onHideSettledThreadsChange={setHideSettledThreads}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}

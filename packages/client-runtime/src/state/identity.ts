@@ -74,37 +74,70 @@ export function filterPeopleForTypeahead(
 }
 
 /**
+ * Sub-filter for Mine / Theirs: which attribution signal to use.
+ * - `created` — only origin/starter person
+ * - `participated` — only participant person ids
+ * - `both` (default) — origin or any participant
+ */
+export type OwnershipRelation = "created" | "participated" | "both";
+
+export const DEFAULT_OWNERSHIP_RELATION: OwnershipRelation = "both";
+
+export function isOwnershipRelation(value: unknown): value is OwnershipRelation {
+  return value === "created" || value === "participated" || value === "both";
+}
+
+/**
  * Match a thread for Mine / Theirs ownership filters.
  *
- * **Mine** includes:
+ * **Mine** (relation `both`, default) includes:
  * - threads where the session claim person appears on origin or participants
  * - threads with **no person attribution** (no identity tags, channel-only
  *   stamps like `{ channel: "desktop" }`, identity-disabled servers, legacy
  *   threads) — treated as "ours" so filters stay useful offline of a map
  *
- * **Theirs** is only threads that have at least one person tag and do not
- * include the claim person.
+ * **Mine** with `created` / `participated` only matches that signal (and does
+ * not pull in fully unattributed threads).
+ *
+ * **Theirs** is only threads that have at least one person tag in the active
+ * relation set and do not include the claim person.
  */
 export function threadMatchesMine(input: {
   readonly claimPersonId: string | null | undefined;
   readonly originPersonId?: string | null | undefined;
   readonly participantPersonIds?: ReadonlyArray<string> | null | undefined;
   readonly mode: "mine" | "theirs" | "any";
+  /** Defaults to `both` (created or participated). */
+  readonly relation?: OwnershipRelation;
 }): boolean {
   if (input.mode === "any") return true;
 
-  const people = new Set<string>();
+  const relation = input.relation ?? DEFAULT_OWNERSHIP_RELATION;
   const origin = input.originPersonId?.trim().toLowerCase() ?? "";
-  if (origin.length > 0) people.add(origin);
+  const participants = new Set<string>();
   for (const id of input.participantPersonIds ?? []) {
     const personId = id?.trim().toLowerCase() ?? "";
-    if (personId.length > 0) people.add(personId);
+    if (personId.length > 0) participants.add(personId);
   }
-  const unattributed = people.size === 0;
 
-  // No person tags (channel-only source, identity off, pre-attribution history).
-  if (unattributed) {
-    return input.mode === "mine";
+  // Fully unattributed (no origin, no participants) stays under Mine only for
+  // the default "both" relation so created/participated refinements stay precise.
+  const fullyUnattributed = origin.length === 0 && participants.size === 0;
+  if (fullyUnattributed) {
+    return input.mode === "mine" && relation === "both";
+  }
+
+  const people = new Set<string>();
+  if (relation === "created" || relation === "both") {
+    if (origin.length > 0) people.add(origin);
+  }
+  if (relation === "participated" || relation === "both") {
+    for (const personId of participants) people.add(personId);
+  }
+
+  // Relation-specific empty (e.g. "created" with participants only) is not a match.
+  if (people.size === 0) {
+    return false;
   }
 
   const claimId = input.claimPersonId?.trim().toLowerCase() ?? "";
