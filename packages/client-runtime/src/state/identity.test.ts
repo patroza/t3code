@@ -63,7 +63,7 @@ describe("filterPeopleForTypeahead", () => {
 });
 
 describe("threadMatchesMine", () => {
-  it("filters mine vs theirs", () => {
+  it("filters mine vs theirs when threads are person-attributed", () => {
     expect(
       threadMatchesMine({
         claimPersonId: "patroza",
@@ -87,26 +87,66 @@ describe("threadMatchesMine", () => {
     ).toBe(true);
   });
 
-  it("excludes both mine and theirs when there is no claim for the env", () => {
+  it("treats unattributed threads as mine (legacy / channel-only / identity off)", () => {
+    // No origin or participants — old threads, { channel: "desktop" } only, etc.
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: [],
+        mode: "mine",
+      }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: "patroza",
+        originPersonId: null,
+        participantPersonIds: [],
+        mode: "theirs",
+      }),
+    ).toBe(false);
+    // Identity-disabled env: no claim, no person tags → Mine still shows work.
     expect(
       threadMatchesMine({
         claimPersonId: null,
-        originPersonId: "patroza",
+        originPersonId: undefined,
+        participantPersonIds: undefined,
+        mode: "mine",
+      }),
+    ).toBe(true);
+    expect(
+      threadMatchesMine({
+        claimPersonId: null,
+        originPersonId: undefined,
+        mode: "theirs",
+      }),
+    ).toBe(false);
+  });
+
+  it("treats attributed threads without a session claim as theirs", () => {
+    expect(
+      threadMatchesMine({
+        claimPersonId: null,
+        originPersonId: "julius",
         mode: "mine",
       }),
     ).toBe(false);
     expect(
       threadMatchesMine({
         claimPersonId: null,
-        originPersonId: "patroza",
+        originPersonId: "julius",
         mode: "theirs",
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("includes participant-only matches as mine", () => {
     expect(
       threadMatchesMine({
-        claimPersonId: null,
-        originPersonId: "patroza",
-        mode: "any",
+        claimPersonId: "patroza",
+        originPersonId: "julius",
+        participantPersonIds: ["patroza"],
+        mode: "mine",
       }),
     ).toBe(true);
   });
