@@ -43,6 +43,8 @@ import {
   VcsStatusInput,
   VcsStatusResult,
   VcsStatusStreamEvent,
+  VcsResolveBranchChangeRequestInput,
+  VcsResolveBranchChangeRequestResult,
   WorktreeCleanupInput,
   WorktreeCleanupPreviewInput,
   WorktreeCleanupPreviewResult,
@@ -56,7 +58,9 @@ import {
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
 } from "./review.ts";
+import { AiUsageSnapshot } from "./aiUsage.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
+import { ServerHostResourceSnapshot } from "./hostResources.ts";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
@@ -123,6 +127,9 @@ import {
   PreviewReportStatusInput,
   PreviewResizeInput,
   PreviewSessionSnapshot,
+  PreviewPortResolveRequest,
+  PreviewPortResolution,
+  PreviewPortUnreachableError,
 } from "./preview.ts";
 import {
   PreviewAutomationError,
@@ -197,8 +204,6 @@ export const WS_METHODS = {
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
-  vcsPreviewWorktreeCleanup: "vcs.previewWorktreeCleanup",
-  vcsCleanupThreadWorktree: "vcs.cleanupThreadWorktree",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
@@ -275,6 +280,13 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  // Fork-only methods
+  vcsResolveBranchChangeRequest: "vcs.resolveBranchChangeRequest",
+  vcsPreviewWorktreeCleanup: "vcs.previewWorktreeCleanup",
+  vcsCleanupThreadWorktree: "vcs.cleanupThreadWorktree",
+  previewResolvePort: "preview.resolvePort",
+  serverGetHostResourceSnapshot: "server.getHostResourceSnapshot",
+  subscribeAiUsage: "subscribeAiUsage",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -372,6 +384,15 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
   {
     payload: ServerProcessResourceHistoryInput,
     success: ServerProcessResourceHistoryResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsServerGetHostResourceSnapshotRpc = Rpc.make(
+  WS_METHODS.serverGetHostResourceSnapshot,
+  {
+    payload: Schema.Struct({}),
+    success: ServerHostResourceSnapshot,
     error: EnvironmentAuthorizationError,
   },
 );
@@ -559,6 +580,15 @@ export const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsResolveBranchChangeRequestRpc = Rpc.make(
+  WS_METHODS.vcsResolveBranchChangeRequest,
+  {
+    payload: VcsResolveBranchChangeRequestInput,
+    success: VcsResolveBranchChangeRequestResult,
+    error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsVcsPreviewWorktreeCleanupRpc = Rpc.make(WS_METHODS.vcsPreviewWorktreeCleanup, {
   payload: WorktreeCleanupPreviewInput,
   success: WorktreeCleanupPreviewResult,
@@ -681,6 +711,12 @@ export const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
 export const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus, {
   payload: PreviewReportStatusInput,
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewResolvePortRpc = Rpc.make(WS_METHODS.previewResolvePort, {
+  payload: PreviewPortResolveRequest,
+  success: PreviewPortResolution,
+  error: Schema.Union([PreviewPortUnreachableError, EnvironmentAuthorizationError]),
 });
 
 export const WsPreviewAutomationConnectRpc = Rpc.make(WS_METHODS.previewAutomationConnect, {
@@ -817,6 +853,13 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
   stream: true,
 });
 
+export const WsSubscribeAiUsageRpc = Rpc.make(WS_METHODS.subscribeAiUsage, {
+  payload: Schema.Struct({}),
+  success: AiUsageSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
@@ -846,6 +889,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
+  WsServerGetHostResourceSnapshotRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerSignalProcessRpc,
@@ -875,6 +919,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsResolveBranchChangeRequestRpc,
   WsVcsPreviewWorktreeCleanupRpc,
   WsVcsCleanupThreadWorktreeRpc,
   WsVcsCreateRefRpc,
@@ -898,6 +943,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewCloseRpc,
   WsPreviewListRpc,
   WsPreviewReportStatusRpc,
+  WsPreviewResolvePortRpc,
   WsPreviewAutomationConnectRpc,
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationFocusHostRpc,
@@ -906,6 +952,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
+  WsSubscribeAiUsageRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationDispatchCommandRpc,
