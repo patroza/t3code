@@ -175,7 +175,7 @@ are logged and never block the turn.
 - Allowlist projects when configured (`T3CODE_JIRA_ALLOWED_PROJECTS`).
 - **Identity map trust gate** (when `T3_IDENTITY_MAP_PATH` has people):
   - **Trusted** — Jira `accountId` appears on a map person (`jira.accountId` / `jiraAccountId`) → full agent turn (same as today, including auto-create when enabled).
-  - **Untrusted** — map on but actor missing/unmapped → **chat context only** (no agent). Posts a note into the unique chat thread linked to the issue (`links.json` + bot token). Requires exactly one active chat link with that issue key; never auto-creates. Jira reply is an **inline thread reply** under the mention (or that mention’s parent when nested); copy says “identity map” / “chat”, not product internals.
+  - **Untrusted** — map on but actor missing/unmapped → no agent run. Jira reply is a short **not authorized** note (inline @ reply; no product jargon). If a unique chat thread is already linked, also file the prompt as context there; never auto-creates.
   - Map **off** / empty → legacy full access for all mentioners (backward compatible).
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see

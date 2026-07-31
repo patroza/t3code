@@ -64,16 +64,13 @@ const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const CREATE_FAILED_RESPONSE =
   "Could not create a chat thread for this Jira issue. Check server logs or link an existing thread.";
-const CONTEXT_UNLINKED_RESPONSE =
-  "Your Jira account is not in the identity map, so this is context-only — and there is no chat thread linked to this issue yet. A trusted operator needs to open a chat-linked thread first; then untrusted mentions can post context there.";
-const CONTEXT_AMBIGUOUS_RESPONSE =
-  "Your Jira account is not in the identity map (context-only), but multiple chat threads are linked to this issue, so the bot could not pick which one to use.";
+/** Untrusted-actor replies: short, no product jargon; @-mention is applied separately in ADF. */
+const CONTEXT_UNAUTHORIZED_RESPONSE =
+  "You're not currently authorized to run agent work from Jira. Please ask a team member who is authorized to take this forward.";
 const CONTEXT_NOTED_RESPONSE =
-  "Noted as **context only** on the linked chat thread (no agent run). Your Jira account is not in the identity map; a trusted operator can act on it.";
+  "Thanks — noted for the team. You're not currently authorized to run agent work from Jira, so this was filed as context only. An authorized teammate can pick it up.";
 const CONTEXT_FAILED_RESPONSE =
-  "Could not post context to the linked chat thread. Ask a trusted operator to check the bot config.";
-const CONTEXT_NO_LINKS_PATH_RESPONSE =
-  "Your Jira account is not in the identity map (context-only), but chat links are not configured on this server.";
+  "You're not currently authorized to run agent work from Jira, and I couldn't file this as context either. Please ping an authorized teammate.";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
 function jiraSourceRef(
@@ -537,12 +534,12 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Untrusted actors: Discord context only (no agent, no T3 transcript write).
-    // Requires a unique Discord-linked issue in links.json. Never auto-creates.
+    // Untrusted actors: optional chat context note only (no agent). Never auto-creates.
+    // Requires a unique chat-linked issue in links.json when filing context.
     if (trust.mode === "context-only") {
       const linksPath = config.discordLinksPath;
       if (linksPath === null || linksPath.length === 0) {
-        yield* finishDelivery(acknowledged, CONTEXT_NO_LINKS_PATH_RESPONSE, "rejected");
+        yield* finishDelivery(acknowledged, CONTEXT_UNAUTHORIZED_RESPONSE, "rejected");
         return;
       }
       const linksRaw = yield* fileSystem
@@ -552,12 +549,8 @@ const make = Effect.gen(function* () {
         issueKey: input.invocation.issueKey,
         linksJson: linksRaw,
       });
-      if (discordLink._tag === "unlinked") {
-        yield* finishDelivery(acknowledged, CONTEXT_UNLINKED_RESPONSE, "rejected");
-        return;
-      }
-      if (discordLink._tag === "ambiguous") {
-        yield* finishDelivery(acknowledged, CONTEXT_AMBIGUOUS_RESPONSE, "rejected");
+      if (discordLink._tag === "unlinked" || discordLink._tag === "ambiguous") {
+        yield* finishDelivery(acknowledged, CONTEXT_UNAUTHORIZED_RESPONSE, "rejected");
         return;
       }
 
