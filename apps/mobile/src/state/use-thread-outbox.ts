@@ -7,6 +7,29 @@ import { appAtomRegistry } from "./atom-registry";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
 
+/**
+ * Stable empty map so an empty outbox does not allocate a new Map on every
+ * shell tick (that was enough to keep ThreadOutboxDrainWorker re-rendering).
+ */
+const EMPTY_THREAD_OUTBOX_SHELL_STATUSES: ReadonlyMap<EnvironmentId, EnvironmentShellStatus> =
+  new Map();
+
+let cachedThreadOutboxShellStatuses: ReadonlyMap<EnvironmentId, EnvironmentShellStatus> =
+  EMPTY_THREAD_OUTBOX_SHELL_STATUSES;
+let cachedThreadOutboxShellStatusesKey = "";
+
+function shellStatusesFingerprint(
+  statuses: ReadonlyMap<EnvironmentId, EnvironmentShellStatus>,
+): string {
+  if (statuses.size === 0) {
+    return "";
+  }
+  return [...statuses.entries()]
+    .map(([environmentId, status]) => `${environmentId}:${status}`)
+    .sort()
+    .join("|");
+}
+
 const threadOutboxShellStatusesAtom = Atom.make(
   (get): ReadonlyMap<EnvironmentId, EnvironmentShellStatus> => {
     const statuses = new Map<EnvironmentId, EnvironmentShellStatus>();
@@ -16,6 +39,17 @@ const threadOutboxShellStatusesAtom = Atom.make(
         statuses.set(environmentId, get(environmentShell.stateValueAtom(environmentId)).status);
       }
     }
+    if (statuses.size === 0) {
+      cachedThreadOutboxShellStatuses = EMPTY_THREAD_OUTBOX_SHELL_STATUSES;
+      cachedThreadOutboxShellStatusesKey = "";
+      return EMPTY_THREAD_OUTBOX_SHELL_STATUSES;
+    }
+    const key = shellStatusesFingerprint(statuses);
+    if (key === cachedThreadOutboxShellStatusesKey) {
+      return cachedThreadOutboxShellStatuses;
+    }
+    cachedThreadOutboxShellStatusesKey = key;
+    cachedThreadOutboxShellStatuses = statuses;
     return statuses;
   },
 ).pipe(Atom.withLabel("mobile:thread-outbox:shell-statuses"));
