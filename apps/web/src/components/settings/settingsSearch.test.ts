@@ -45,7 +45,12 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    expect(searchSettings("work")).toEqual([]);
+    // "work" is not a substring of "word wrap". Full catalog includes Tim's
+    // "Worktree remove confirmation" (and not Word wrap).
+    expect(
+      searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
+    ).toEqual([]);
+    expect(searchSettings("work").map((item) => item.id)).toEqual(["worktree-remove-confirmation"]);
   });
 
   it("keeps catalog order for multiple title matches", () => {
