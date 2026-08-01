@@ -27,6 +27,22 @@ describe("mobile surface existence (anti stack-drop)", () => {
     );
   });
 
+  it("renders settled threads as slim history rows in the classic thread lists", () => {
+    const listItems = readSrc("features/threads/thread-list-items.tsx");
+
+    // The settled branch must stay wired into the shared row renderer: a
+    // whole-file conflict resolve that keeps the helper but drops the branch
+    // would silently restore full-size settled rows.
+    expect(listItems).toContain('testID="thread-list-row-settled"');
+    expect(listItems).toMatch(/isSettled \? \(\s*settledRowContent\(close\)/);
+    expect(listItems).toContain("resolveSettledRowTimestamp");
+    // Slim chrome: dimmed favicon, one muted title line, no status pill.
+    expect(listItems).toMatch(
+      /testID="thread-list-row-settled"[\s\S]*?text-foreground-muted[\s\S]*?<\/Pressable>/,
+    );
+    expect(listItems).toMatch(/settledRowContent[\s\S]*?opacity-40[\s\S]*?ProjectFavicon/);
+  });
+
   it("keys markdown nodes uniquely even when parser spans collide", () => {
     const nodeKey = NodeFS.readFileSync(
       NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),
