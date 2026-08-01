@@ -229,6 +229,10 @@ function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
 
+function terminalProcessLabel(count: number): string {
+  return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
+}
+
 function SidebarV2ThreadTooltip({
   thread,
   projectTitle,
@@ -558,6 +562,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const modelLabel = selectedModel
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
+
+  const runningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
+  const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
+  const terminalProcessCount = runningTerminalIds.length;
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
