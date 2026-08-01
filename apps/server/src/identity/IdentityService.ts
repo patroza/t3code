@@ -4,7 +4,9 @@
 /**
  * Closed-set identity map + per-session claims.
  *
- * Map: T3_IDENTITY_MAP_PATH only (explicit). Missing/empty → feature off.
+ * Map: T3_IDENTITY_MAP_PATH only (explicit). Missing/empty at startup → feature
+ * off. Once enabled the file is re-checked on a TTL, so staged edits apply
+ * without a restart; a bad or empty re-read never disables an enabled map.
  * Claims: `layerPersisted` (server) stores them in SQLite via
  * SessionIdentityClaimRepository with the Ref as a read-through cache, so they
  * survive a restart. The residual-free `layer` (CLI / tests) is Ref-only.
@@ -15,6 +17,7 @@
  * v1 trust: interactive claim is map membership only (trusted-team ops).
  */
 import * as NodeFS from "node:fs";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -147,6 +150,109 @@ function loadPeopleFromEnv(): ReadonlyArray<IdentityMapPerson> {
   }
 }
 
+/** How long a loaded map is served before the file is re-checked. */
+export const IDENTITY_MAP_RELOAD_TTL_MS = 60_000;
+
+type MapSnapshot = {
+  readonly people: ReadonlyArray<IdentityMapPerson>;
+  readonly byUsername: ReadonlyMap<string, IdentityMapPerson>;
+  readonly byPersonId: ReadonlyMap<string, IdentityMapPerson>;
+  readonly enabled: boolean;
+  /**
+   * False while we are serving a stale snapshot because the last re-read failed
+   * (missing, truncated, or unparseable file). Callers must not take destructive
+   * action — notably evicting persisted claims — off an unhealthy snapshot.
+   */
+  readonly healthy: boolean;
+};
+
+type IdentityMapSource = { readonly current: Effect.Effect<MapSnapshot> };
+
+function toSnapshot(people: ReadonlyArray<IdentityMapPerson>, healthy: boolean): MapSnapshot {
+  return {
+    people,
+    byUsername: new Map(people.map((person) => [person.username, person] as const)),
+    byPersonId: new Map(people.map((person) => [person.personId, person] as const)),
+    enabled: people.length > 0,
+    healthy,
+  };
+}
+
+/** Cheap change detector: avoids re-parsing an untouched file every TTL. */
+function fingerprintFromEnv(): string | null {
+  const configured = process.env.T3_IDENTITY_MAP_PATH?.trim();
+  if (configured === undefined || configured.length === 0) return null;
+  try {
+    const stat = NodeFS.statSync(configured);
+    return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * File-backed map with a TTL re-check, so operators can edit the staged map and
+ * have it apply without a server restart.
+ *
+ * Polls rather than watching: the map is delivered over virtiofs from the host,
+ * where inotify propagation is not something to depend on.
+ *
+ * Two safety rules, both about not letting a bad read do damage:
+ * - a reload that yields no people never disables an already-enabled map, since
+ *   `enabled === false` turns the operate gate off entirely. Emptying the file
+ *   is not the documented way to disable; removing T3_IDENTITY_MAP_PATH is.
+ * - a failed reload keeps serving the last good snapshot, marked unhealthy, and
+ *   retries on the next TTL (the fingerprint is left unadvanced).
+ */
+function makeFileSource(options?: { readonly ttlMs?: number }): IdentityMapSource {
+  const ttlMs = options?.ttlMs ?? IDENTITY_MAP_RELOAD_TTL_MS;
+
+  let snapshot = toSnapshot(loadPeopleFromEnv(), true);
+  let fingerprint = fingerprintFromEnv();
+  let checkedAt: number | null = null;
+  let degraded = false;
+
+  const current = Effect.gen(function* () {
+    const at = yield* Clock.currentTimeMillis;
+    if (checkedAt === null) {
+      checkedAt = at;
+      return snapshot;
+    }
+    if (at - checkedAt < ttlMs) return snapshot;
+    checkedAt = at;
+
+    const nextFingerprint = fingerprintFromEnv();
+    if (nextFingerprint !== null && nextFingerprint === fingerprint) return snapshot;
+
+    const people = loadPeopleFromEnv();
+    if (people.length === 0 && snapshot.enabled) {
+      if (!degraded) {
+        yield* Effect.logError(
+          "Identity map re-read produced no people; keeping the previous map and retrying",
+        );
+        degraded = true;
+      }
+      snapshot = { ...snapshot, healthy: false };
+      return snapshot;
+    }
+
+    const changed = people.length !== snapshot.people.length || !snapshot.healthy;
+    fingerprint = nextFingerprint;
+    degraded = false;
+    snapshot = toSnapshot(people, true);
+    if (changed) {
+      yield* Effect.logInfo("Identity map reloaded", { people: people.length });
+    }
+    return snapshot;
+  });
+
+  return { current };
+}
+
+function staticSource(people: ReadonlyArray<IdentityMapPerson>): IdentityMapSource {
+  return { current: Effect.succeed(toSnapshot(people, true)) };
+}
+
 function toPublicPeople(people: ReadonlyArray<IdentityMapPerson>) {
   return people.map((person) => {
     const pub = toIdentityPersonPublic(person);
@@ -165,14 +271,7 @@ type ClaimStore = {
   readonly remove: (sessionId: AuthSessionId) => Effect.Effect<boolean>;
 };
 
-function makeService(
-  people: ReadonlyArray<IdentityMapPerson>,
-  store: ClaimStore,
-): IdentityService["Service"] {
-  const byUsername = new Map(people.map((person) => [person.username, person] as const));
-  const byPersonId = new Map(people.map((person) => [person.personId, person] as const));
-  const enabled = people.length > 0;
-
+function makeService(source: IdentityMapSource, store: ClaimStore): IdentityService["Service"] {
   const toPublicClaim = (record: ClaimRecord): SessionIdentityClaim => ({
     sessionId: record.sessionId,
     personId: record.personId,
@@ -183,13 +282,15 @@ function makeService(
 
   return {
     getSnapshot: () =>
-      Effect.succeed({
-        enabled,
-        claimRequired: enabled,
-        people: toPublicPeople(people),
-      }),
+      source.current.pipe(
+        Effect.map((snapshot) => ({
+          enabled: snapshot.enabled,
+          claimRequired: snapshot.enabled,
+          people: toPublicPeople(snapshot.people),
+        })),
+      ),
 
-    listMapPeople: () => Effect.succeed(people),
+    listMapPeople: () => source.current.pipe(Effect.map((snapshot) => snapshot.people)),
 
     getSessionClaim: (sessionId) =>
       store.get(sessionId).pipe(
@@ -200,7 +301,8 @@ function makeService(
 
     claim: (sessionId, input) =>
       Effect.gen(function* () {
-        if (!enabled) {
+        const snapshot = yield* source.current;
+        if (!snapshot.enabled) {
           return yield* new IdentityError({
             code: "identity_map_disabled",
             message: "Identity map is not configured; claims are disabled.",
@@ -209,8 +311,8 @@ function makeService(
 
         const person =
           "personId" in input
-            ? (byPersonId.get(input.personId) ?? null)
-            : (byUsername.get(input.username) ?? null);
+            ? (snapshot.byPersonId.get(input.personId) ?? null)
+            : (snapshot.byUsername.get(input.username) ?? null);
         if (person === null) {
           return yield* new IdentityError({
             code: "identity_unknown_person",
@@ -237,7 +339,8 @@ function makeService(
 
     requireOperateClaim: (sessionId, options) =>
       Effect.gen(function* () {
-        if (!enabled) return null;
+        const snapshot = yield* source.current;
+        if (!snapshot.enabled) return null;
         // Integration bots: one auth session, many platform actors — not interactive claim.
         if (options?.clientDeviceType === "bot") {
           return null;
@@ -250,8 +353,16 @@ function makeService(
               "Choose who you are (identity claim) before operating on this environment. Map membership only — trusted-team ops.",
           });
         }
-        if (!byPersonId.has(existing.personId) || !byUsername.has(existing.username)) {
-          yield* store.remove(sessionId);
+        if (
+          !snapshot.byPersonId.has(existing.personId) ||
+          !snapshot.byUsername.has(existing.username)
+        ) {
+          // Deliberately does not delete the persisted claim. Refusing operate is
+          // the gate; deleting is only cleanup, and it is not reversible. Now that
+          // the map reloads under the server, a half-written file can parse as a
+          // valid map with a subset of people — deleting off that would destroy
+          // good claims. Membership is re-checked on every operate anyway, so a
+          // stale row grants nothing.
           return yield* new IdentityError({
             code: "identity_unknown_person",
             message: "Your identity claim is no longer in the server map. Claim again.",
@@ -261,9 +372,13 @@ function makeService(
       }),
 
     resolveByJiraAccountId: (accountId) =>
-      Effect.succeed(enabled ? resolvePersonByJiraAccountId(people, accountId) : null),
+      source.current.pipe(
+        Effect.map((snapshot) =>
+          snapshot.enabled ? resolvePersonByJiraAccountId(snapshot.people, accountId) : null,
+        ),
+      ),
 
-    isMapEnabled: () => Effect.succeed(enabled),
+    isMapEnabled: () => source.current.pipe(Effect.map((snapshot) => snapshot.enabled)),
   };
 }
 
@@ -290,14 +405,16 @@ function makeMemoryStore(claimsRef: Ref.Ref<Map<string, ClaimRecord>>): ClaimSto
 
 export const make: Effect.Effect<IdentityService["Service"]> = Effect.gen(function* () {
   const claimsRef = yield* Ref.make(new Map<string, ClaimRecord>());
-  const people = loadPeopleFromEnv();
+  const source = makeFileSource();
+  const people = (yield* source.current).people;
   if (people.length > 0) {
     yield* Effect.logInfo("Identity map loaded", {
       path: process.env.T3_IDENTITY_MAP_PATH ?? "",
       people: people.length,
+      reloadTtlMs: IDENTITY_MAP_RELOAD_TTL_MS,
     });
   }
-  return makeService(people, makeMemoryStore(claimsRef));
+  return makeService(source, makeMemoryStore(claimsRef));
 });
 
 /** Residual-free in-memory layer (CLI / tests without SQL). */
@@ -313,11 +430,13 @@ export const layerPersisted = Layer.effect(
     const claimsRef = yield* Ref.make(new Map<string, ClaimRecord>());
     const memory = makeMemoryStore(claimsRef);
     const repository = yield* SessionIdentityClaimRepository;
-    const people = loadPeopleFromEnv();
+    const source = makeFileSource();
+    const people = (yield* source.current).people;
     if (people.length > 0) {
       yield* Effect.logInfo("Identity map loaded", {
         path: process.env.T3_IDENTITY_MAP_PATH ?? "",
         people: people.length,
+        reloadTtlMs: IDENTITY_MAP_RELOAD_TTL_MS,
       });
     }
 
@@ -353,7 +472,7 @@ export const layerPersisted = Layer.effect(
         }),
     };
 
-    return makeService(people, store);
+    return makeService(source, store);
   }),
 ).pipe(Layer.provide(sessionIdentityClaimRepositoryLayer));
 
@@ -363,6 +482,9 @@ export const layerWithPeople = (people: ReadonlyArray<IdentityMapPerson>) =>
     IdentityService,
     Effect.gen(function* () {
       const claimsRef = yield* Ref.make(new Map<string, ClaimRecord>());
-      return makeService(people, makeMemoryStore(claimsRef));
+      return makeService(staticSource(people), makeMemoryStore(claimsRef));
     }),
   );
+
+/** Test seam: file-backed source with an injectable clock and TTL. */
+export const makeFileSourceForTest = makeFileSource;
