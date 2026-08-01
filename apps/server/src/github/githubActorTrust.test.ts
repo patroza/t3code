@@ -43,7 +43,7 @@ describe("resolvePersonByGitHubActor", () => {
 });
 
 describe("classifyGitHubActorTrust", () => {
-  it("allows full access when the identity map is disabled", () => {
+  it("denies agent access when the identity map is disabled (fail-closed)", () => {
     expect(
       classifyGitHubActorTrust({
         identityMapEnabled: false,
@@ -51,7 +51,7 @@ describe("classifyGitHubActorTrust", () => {
         actorLogin: "stranger",
         people: [],
       }),
-    ).toEqual({ mode: "full", person: null, reason: "identity_map_disabled" });
+    ).toEqual({ mode: "denied", person: null, reason: "identity_map_disabled" });
   });
 
   it("trusts mapped github accounts for full agent turns", () => {
