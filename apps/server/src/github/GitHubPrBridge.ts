@@ -1218,9 +1218,9 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    // When the closed-set identity map is on, map membership is required in
-    // addition to the GitHub permission floor. Public-repo write / outside
-    // collaborators cannot drive the host unless listed.
+    // Closed-set identity map is required for agent turns (fail-closed when the
+    // map is off/empty). Public-repo write / outside collaborators cannot drive
+    // the host unless listed; permission floor alone is never enough.
     const mapEnabled = yield* identity.isMapEnabled();
     const mapPeople = yield* identity.listMapPeople();
     const trust = classifyGitHubActorTrust({
