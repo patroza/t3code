@@ -1096,7 +1096,19 @@ export const make = Effect.gen(function* () {
       (yield* readConfigValueNullable(cwd, `remote.${preferredRemoteName}.url`)) ??
       (yield* readConfigValueNullable(cwd, "remote.origin.url"));
 
-    return remoteUrl ? detectSourceControlProviderFromGitRemoteUrl(remoteUrl) : null;
+    if (!remoteUrl) {
+      return null;
+    }
+
+    const provider = detectSourceControlProviderFromGitRemoteUrl(remoteUrl);
+    if (!provider) {
+      return null;
+    }
+
+    const repositoryNameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+    return repositoryNameWithOwner
+      ? { ...provider, repositoryUrl: `${provider.baseUrl}/${repositoryNameWithOwner}` }
+      : provider;
   });
 
   const resolveRemoteRepositoryContext = Effect.fn("resolveRemoteRepositoryContext")(function* (

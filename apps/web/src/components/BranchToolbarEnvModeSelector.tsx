@@ -91,7 +91,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         className="min-w-0 shrink font-medium"
         aria-label="Workspace"
       >
-        {effectiveEnvMode === "worktree" ? (
+        {workspaceTarget === "worktree" ? (
           <FolderGit2Icon className="size-3" />
         ) : workspaceTarget === "current-worktree" ? (
           <FolderGitIcon className="size-3" />

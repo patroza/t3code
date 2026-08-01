@@ -5,12 +5,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import ProjectionQueuedMessages from "./036_ProjectionQueuedMessages.ts";
+import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("039_RepairProjectionThreadTitleRegeneration", (it) => {
-  it.effect("repairs a database with the pre-restack migration 35", () =>
+layer("039_040_RepairRestackedProjectionThreads", (it) => {
+  it.effect("repairs a database with the pre-restack migration ledger", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
@@ -25,7 +25,7 @@ layer("039_RepairProjectionThreadTitleRegeneration", (it) => {
           (38, 'ProjectionThreadSourceAttribution')
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 39 });
+      yield* runMigrations({ toMigrationInclusive: 40 });
 
       const columns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)
@@ -33,6 +33,7 @@ layer("039_RepairProjectionThreadTitleRegeneration", (it) => {
       const names = new Set(columns.map((column) => column.name));
       assert.ok(names.has("title_regeneration_request_id"));
       assert.ok(names.has("title_regeneration_started_at"));
+      assert.ok(names.has("pinned_at"));
 
       const migrations = yield* sql<{
         readonly migration_id: number;
@@ -49,6 +50,7 @@ layer("039_RepairProjectionThreadTitleRegeneration", (it) => {
         { migration_id: 37, name: "ProjectionThreadSourceAttribution" },
         { migration_id: 38, name: "ProjectionThreadSourceAttribution" },
         { migration_id: 39, name: "RepairProjectionThreadTitleRegeneration" },
+        { migration_id: 40, name: "RepairProjectionThreadsPinned" },
       ]);
     }),
   );

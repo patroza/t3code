@@ -43,7 +43,6 @@ const clientSettings: ClientSettings = {
     },
   ],
   preferredOpenWith: { type: "custom", id: OpenWithEntryId.make("terminal") },
-  glassOpacity: 80,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",

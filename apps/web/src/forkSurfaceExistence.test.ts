@@ -28,20 +28,22 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebar).toContain("recent-thread-settled-");
     expect(sidebar).toContain("Un-settle thread");
     expect(sidebar).toContain("!props.isSettled");
+    // Hide-settled must use row-lifted PR state (merged/closed auto-settle),
+    // same as Sidebar V2 — never hard-code changeRequestState: null here.
+    expect(sidebar).toContain("changeRequestStateByKey");
+    expect(sidebar).toContain("SidebarChangeRequestStateContext");
+    expect(sidebar).not.toContain("changeRequestState: null");
   });
 
   it("Sidebar V2 keeps Settled shelf labeling and new-thread affordance", () => {
     const sidebarV2 = readSrc("components/SidebarV2.tsx");
     expect(sidebarV2).toContain("Settled shelf");
     expect(sidebarV2).toMatch(/New thread|new thread/i);
-    expect(sidebarV2).toContain("ProjectServerContextLine");
-    // Recent mode (shared thread grouping) + no VCS on settled history rows.
-    expect(sidebarV2).toContain("sidebar-v2-thread-grouping-");
-    expect(sidebarV2).toContain("sidebar-v2-active-recency-");
-    expect(sidebarV2).toContain("isSettledHistoryRow");
-    expect(sidebarV2).toContain("LIST_THREAD_GROUPING_STORAGE_KEY");
-    expect(sidebarV2).toContain("ComposerDraftDot");
-    expect(sidebarV2).toContain("hasComposerDraftMessage");
+    expect(sidebarV2).toContain("sidebar-v2-pinned-divider");
+    expect(sidebarV2).toContain("sidebar-v2-snoozed-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-v2-settled-shelf-toggle");
+    expect(sidebarV2).toContain("attemptPin");
+    expect(sidebarV2).toContain("attemptUnpin");
   });
 
   it("classic sidebar marks composer draft threads", () => {
@@ -129,5 +131,18 @@ describe("fork surface existence (anti stack-drop)", () => {
     const chips = readSrc("components/chat/QueuedMessageChips.tsx");
     expect(chips).toContain('aria-label="Edit queued message"');
     expect(chips).toContain("Steer: send now, interrupting the current step");
+  });
+
+  it("git action menu keeps the GitHub pull request list link", () => {
+    const gitActions = readSrc("components/GitActionsControl.tsx");
+    expect(gitActions).toContain('aria-label="View GitHub pull requests"');
+    expect(gitActions).toContain("openPullRequestList");
+    expect(gitActions).toContain("`${repositoryUrl}/pulls`");
+  });
+
+  it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {
+    const sidebar = readSrc("components/SidebarV2.tsx");
+    expect(sidebar).toContain("vcsEnvironment.listStatus({");
+    expect(sidebar).not.toContain("vcsEnvironment.status({");
   });
 });

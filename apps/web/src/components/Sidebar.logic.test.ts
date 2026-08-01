@@ -264,6 +264,7 @@ describe("buildSidebarV2ThreadContextMenuItems", () => {
       { id: "rename", label: "Rename thread" },
       { id: "mark-unread", label: "Mark unread" },
       { id: "copy-path", label: "Copy path", icon: "copy" },
+      { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
       { id: "delete", label: "Delete", destructive: true, icon: "trash" },
     ]);
   });
@@ -1293,6 +1294,51 @@ describe("isThreadSettledForDisplay", () => {
         changeRequestState: null,
       }),
     ).toBe(true);
+  });
+
+  it("auto-settles on merged/closed PR when the server supports settlement", () => {
+    const serverConfigs = {
+      get(_environmentId: string) {
+        return {
+          environment: {
+            capabilities: { threadSettlement: true },
+          },
+        };
+      },
+    };
+    // Activity well past the queued-turn grace window so PR auto-settle is
+    // not blocked by a just-sent message without a turn.
+    const activeThread = {
+      ...baseThread,
+      settledOverride: null,
+      settledAt: null,
+      latestUserMessageAt: "2026-04-01T00:00:00.000Z",
+    };
+
+    expect(
+      isThreadSettledForDisplay(activeThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: null,
+        changeRequestState: "merged",
+      }),
+    ).toBe(true);
+    expect(
+      isThreadSettledForDisplay(activeThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: null,
+        changeRequestState: "closed",
+      }),
+    ).toBe(true);
+    expect(
+      isThreadSettledForDisplay(activeThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: null,
+        changeRequestState: null,
+      }),
+    ).toBe(false);
   });
 });
 

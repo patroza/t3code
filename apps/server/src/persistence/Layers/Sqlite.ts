@@ -65,7 +65,7 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
 }, Layer.unwrap);
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
-  setup(true),
+  setup(false),
   makeRuntimeSqliteLayer({ filename: ":memory:" }),
 );
 
