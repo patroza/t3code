@@ -38,7 +38,6 @@ import {
   ServerIcon,
   SquareKanbanIcon,
   SquarePenIcon,
-  TerminalIcon,
   Trash2Icon,
   Undo2Icon,
 } from "lucide-react";
@@ -142,8 +141,6 @@ import {
   prStatusIndicator,
   resolveThreadPr,
   settledPrHoverColorClass,
-  terminalStatusFromRunningIds,
-  type TerminalStatusIndicator,
 } from "./ThreadStatusIndicators";
 import {
   resolveSnoozePresets,
@@ -159,7 +156,6 @@ import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../aiU
 import { useAiUsageSnapshot } from "../hooks/useAiUsageSnapshot";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
 import { primaryServerProvidersAtom } from "../state/server";
-import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { CommandDialogTrigger } from "./ui/command";
 import { Button } from "./ui/button";
@@ -274,10 +270,6 @@ function WorkingDuration(props: { startedAt: string | null }) {
   );
 }
 
-function terminalProcessLabel(count: number): string {
-  return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
-}
-
 function SidebarV2ThreadTooltip({
   thread,
   projectTitle,
@@ -287,8 +279,9 @@ function SidebarV2ThreadTooltip({
   modelInstanceId,
   modelLabel,
   branchMismatch,
-  terminalStatus,
-  terminalProcessCount,
+  usageDotClass,
+  usageRingColor,
+  threadUsage,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string | null;
@@ -301,8 +294,9 @@ function SidebarV2ThreadTooltip({
     threadBranch: string;
     currentBranch: string;
   } | null;
-  terminalStatus: TerminalStatusIndicator | null;
-  terminalProcessCount: number;
+  usageDotClass: string | undefined;
+  usageRingColor: string | undefined;
+  threadUsage: ReturnType<typeof resolveDriverUsage>;
 }) {
   return (
     <TooltipPopup
@@ -310,9 +304,9 @@ function SidebarV2ThreadTooltip({
       align="start"
       sideOffset={4}
       variant="glass"
-      className="max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0"
+      className="max-w-80 text-left whitespace-normal"
     >
-      <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
+      <div className="flex min-w-0 max-w-80 flex-col gap-2 px-0.5 py-1.5">
         <div className="min-w-0 truncate text-xs leading-none font-medium text-foreground">
           {thread.title}
         </div>
@@ -353,19 +347,15 @@ function SidebarV2ThreadTooltip({
                 driverKind={driverKind}
                 displayName={thread.session?.providerName ?? modelInstanceId}
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
+                {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
               />
               <div className="min-w-0 truncate text-foreground/75">{modelLabel}</div>
             </div>
           ) : null}
-          {terminalStatus ? (
-            <div className="flex min-w-0 items-center gap-2">
-              <TerminalIcon
-                aria-hidden
-                className={cn("size-3 shrink-0", terminalStatus.colorClass)}
-              />
-              <div className="min-w-0 truncate text-foreground/75">
-                {terminalProcessLabel(terminalProcessCount)}
-              </div>
+          {threadUsage ? (
+            <div className="min-w-0 text-foreground/75">
+              <AiUsageStats item={threadUsage.item} compact className="min-w-0" />
             </div>
           ) : null}
           {thread.session?.lastError ? (
@@ -2930,7 +2920,7 @@ export default function SidebarV2() {
                       }
                       snoozeWakeLabelText={
                         section === "snoozed" && thread.snoozedUntil != null
-                          ? snoozeWakeLabel(thread.snoozedUntil, new Date())
+                          ? snoozeWakeLabel(thread.snoozedUntil, { now: snoozeNow })
                           : null
                       }
                       // All sections: a woken thread can classify straight
