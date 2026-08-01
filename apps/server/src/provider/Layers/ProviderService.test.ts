@@ -383,7 +383,10 @@ it.effect("ProviderServiceLive bounds a provider that wedges during shutdown", (
     );
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const providerLayer = Layer.mergeAll(
-      makeProviderServiceLive({ shutdownGracePeriod: "50 millis" }).pipe(
+      makeProviderServiceLive({
+        shutdownInterruptGracePeriod: "0 millis",
+        shutdownGracePeriod: "50 millis",
+      }).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -424,7 +427,10 @@ it.effect("graceful shutdown preserves recovery intent only for working sessions
     );
     const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
     const codex = makeFakeCodexAdapter();
-    const providerLayer = makeProviderServiceLive({ shutdownGracePeriod: "50 millis" }).pipe(
+    const providerLayer = makeProviderServiceLive({
+      shutdownInterruptGracePeriod: "0 millis",
+      shutdownGracePeriod: "50 millis",
+    }).pipe(
       Layer.provide(
         Layer.succeed(
           ProviderAdapterRegistry.ProviderAdapterRegistry,
@@ -464,6 +470,15 @@ it.effect("graceful shutdown preserves recovery intent only for working sessions
       input: "keep working",
       interactionMode: "plan",
     });
+    const armedRows = yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      return yield* repository.list();
+    }).pipe(Effect.provide(runtimeRepositoryLayer));
+    const armedRunning = armedRows.find((row) => row.threadId === runningThreadId);
+    assert.equal(
+      readProviderRestartRecoveryMarker(armedRunning?.runtimePayload)?.interruptedProviderTurnId,
+      asTurnId(`turn-${String(runningThreadId)}`),
+    );
     codex.updateSession(runningThreadId, (session) => ({
       ...session,
       status: "running",
@@ -504,6 +519,85 @@ it.effect("graceful shutdown preserves recovery intent only for working sessions
       readProviderRestartRecoveryMarker(byThreadId.get(stoppedThreadId)?.runtimePayload),
     );
     assert.equal(byThreadId.get(runningThreadId)?.status, "stopped");
+    // Working sessions must receive cooperative interrupt before hard stopAll.
+    assert.isTrue(codex.interruptTurn.mock.calls.length >= 2);
+    assert.deepEqual(codex.interruptTurn.mock.calls[0]?.[0], runningThreadId);
+
+    NodeFS.rmSync(tempDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("graceful shutdown recovers live bindings missing from adapter listSessions", () =>
+  Effect.gen(function* () {
+    const tempDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3-provider-recovery-orphan-binding-"),
+    );
+    const dbPath = NodePath.join(tempDir, "runtime.sqlite");
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(persistenceLayer),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const codex = makeFakeCodexAdapter();
+    // Adapter has no live sessions — models mid-teardown / empty listSessions.
+    codex.listSessions.mockImplementation(() => Effect.succeed([]));
+    const providerLayer = makeProviderServiceLive({
+      shutdownInterruptGracePeriod: "0 millis",
+      shutdownGracePeriod: "50 millis",
+    }).pipe(
+      Layer.provide(
+        Layer.succeed(
+          ProviderAdapterRegistry.ProviderAdapterRegistry,
+          makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
+        ),
+      ),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+    const scope = yield* Scope.make();
+    const services = yield* Layer.build(
+      Layer.mergeAll(providerLayer, runtimeRepositoryLayer, directoryLayer),
+    ).pipe(Scope.provide(scope));
+    yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+
+    const orphanThreadId = asThreadId("thread-persisted-running-only");
+    const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory.pipe(
+      Effect.provide(services),
+    );
+    yield* directory.upsert({
+      threadId: orphanThreadId,
+      provider: CODEX_DRIVER,
+      providerInstanceId: codexInstanceId,
+      status: "running",
+      resumeCursor: { threadId: "provider-orphan" },
+      runtimePayload: {
+        activeTurnId: asTurnId("provider-turn-orphan"),
+      },
+    });
+
+    codex.stopAll.mockImplementation(() => Effect.void);
+    const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* advanceTestClock(50);
+    yield* Fiber.join(closeFiber);
+
+    const rows = yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      return yield* repository.list();
+    }).pipe(Effect.provide(runtimeRepositoryLayer));
+    const orphan = rows.find((row) => row.threadId === orphanThreadId);
+    assert.isDefined(orphan);
+    assert.equal(orphan?.status, "stopped");
+    const marker = readProviderRestartRecoveryMarker(orphan?.runtimePayload);
+    assert.equal(marker?.interruptedProviderTurnId, asTurnId("provider-turn-orphan"));
 
     NodeFS.rmSync(tempDir, { recursive: true, force: true });
   }).pipe(Effect.provide(NodeServices.layer)),
@@ -1421,7 +1515,33 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.activeTurnId, `turn-${String(session.threadId)}`);
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
+          assert.equal(
+            readProviderRestartRecoveryMarker(runtimePayload)?.interruptedProviderTurnId,
+            asTurnId(`turn-${String(session.threadId)}`),
+          );
         }
+      }
+
+      yield* Effect.yieldNow;
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-runtime-status-completed"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId: session.threadId,
+        turnId: asTurnId(`turn-${String(session.threadId)}`),
+        status: "completed",
+      });
+      yield* Effect.yieldNow;
+      yield* advanceTestClock(50);
+      const completedRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(completedRuntime), true);
+      if (Option.isSome(completedRuntime)) {
+        assert.isUndefined(
+          readProviderRestartRecoveryMarker(completedRuntime.value.runtimePayload),
+        );
       }
     }),
   );
