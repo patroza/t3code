@@ -25,6 +25,8 @@ export interface ShowcaseIosDevice {
   readonly simulatorDeviceType?: string;
   /** Appearance used when the CLI does not pass --appearance. */
   readonly appearance: ShowcaseAppearance;
+  /** Orientation applied by the capture harness. Defaults to portrait. */
+  readonly orientation?: "portrait" | "landscape";
   readonly scenes: ReadonlyArray<ShowcaseScene>;
   readonly storeAsset: ShowcaseStoreAssetSpec;
 }
