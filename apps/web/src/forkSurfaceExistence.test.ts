@@ -28,20 +28,22 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebar).toContain("recent-thread-settled-");
     expect(sidebar).toContain("Un-settle thread");
     expect(sidebar).toContain("!props.isSettled");
+    // Hide-settled must use row-lifted PR state (merged/closed auto-settle),
+    // same as Sidebar V2 — never hard-code changeRequestState: null here.
+    expect(sidebar).toContain("changeRequestStateByKey");
+    expect(sidebar).toContain("SidebarChangeRequestStateContext");
+    expect(sidebar).not.toContain("changeRequestState: null");
   });
 
   it("Sidebar V2 keeps Settled shelf labeling and new-thread affordance", () => {
     const sidebarV2 = readSrc("components/SidebarV2.tsx");
     expect(sidebarV2).toContain("Settled shelf");
     expect(sidebarV2).toMatch(/New thread|new thread/i);
-    expect(sidebarV2).toContain("ProjectServerContextLine");
-    // Recent mode (shared thread grouping) + no VCS on settled history rows.
-    expect(sidebarV2).toContain("sidebar-v2-thread-grouping-");
-    expect(sidebarV2).toContain("sidebar-v2-active-recency-");
-    expect(sidebarV2).toContain("isSettledHistoryRow");
-    expect(sidebarV2).toContain("LIST_THREAD_GROUPING_STORAGE_KEY");
-    expect(sidebarV2).toContain("ComposerDraftDot");
-    expect(sidebarV2).toContain("hasComposerDraftMessage");
+    expect(sidebarV2).toContain("sidebar-v2-pinned-divider");
+    expect(sidebarV2).toContain("sidebar-v2-snoozed-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-v2-settled-shelf-toggle");
+    expect(sidebarV2).toContain("attemptPin");
+    expect(sidebarV2).toContain("attemptUnpin");
   });
 
   it("classic sidebar marks composer draft threads", () => {
@@ -125,9 +127,51 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain('aria-label": "provider usage status"');
   });
 
+  it("Sidebar V2 grouping changes ordering and headers without changing its row surface", () => {
+    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const webGrouping = readSrc("components/listEnvironmentFilter.ts");
+    const mobileGrouping = readSrc("../../mobile/src/features/home/homeListMode.ts");
+    const orderingContract = readSrc("../../../docs/sidebar-v2.md");
+    expect(sidebarV2).toContain("sidebar-v2-thread-grouping-${grouping}");
+    expect(sidebarV2).toContain('data-testid="sidebar-v2-thread-grouping"');
+    expect(sidebarV2).toMatch(/size="icon"\s+type="button"\s+aria-label={`Thread ordering:/);
+    expect(sidebarV2).toContain('aria-label="Filter threads by project"');
+    expect(sidebarV2).toContain('grouping !== "none"');
+    expect(sidebarV2).toContain('threadGrouping !== "recency"');
+    expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebarV2(active))");
+    expect(sidebarV2).toContain("sidebar-v2-${section}-recency-${group.id}");
+    expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
+    expect(webGrouping).toContain('project: "Group by default"');
+    expect(mobileGrouping).toContain('project: "Group by default"');
+    expect(orderingContract).toContain("Do not make `project` group V2 rows by project");
+    expect(orderingContract).toContain("pinned cards remain above active cards");
+    expect(orderingContract).toContain("Recency headers may partition");
+
+    const mobileHome = readSrc("../../mobile/src/features/home/HomeScreen.tsx");
+    const mobileSidebar = readSrc("../../mobile/src/features/threads/ThreadNavigationSidebar.tsx");
+    for (const source of [mobileHome, mobileSidebar]) {
+      expect(source).toContain('threadGrouping === "recency"');
+      expect(source).toContain("orderByRecency:");
+      expect(source).toContain("groupByRecency:");
+    }
+  });
+
   it("queued message chips keep edit + steer labels", () => {
     const chips = readSrc("components/chat/QueuedMessageChips.tsx");
     expect(chips).toContain('aria-label="Edit queued message"');
     expect(chips).toContain("Steer: send now, interrupting the current step");
+  });
+
+  it("git action menu keeps the GitHub pull request list link", () => {
+    const gitActions = readSrc("components/GitActionsControl.tsx");
+    expect(gitActions).toContain('aria-label="View GitHub pull requests"');
+    expect(gitActions).toContain("openPullRequestList");
+    expect(gitActions).toContain("`${repositoryUrl}/pulls`");
+  });
+
+  it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {
+    const sidebar = readSrc("components/SidebarV2.tsx");
+    expect(sidebar).toContain("vcsEnvironment.listStatus({");
+    expect(sidebar).not.toContain("vcsEnvironment.status({");
   });
 });

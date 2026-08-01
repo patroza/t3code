@@ -69,10 +69,11 @@ export function isWebListMode(value: unknown): value is WebListMode {
  * across the beta toggle.
  *
  * - `recency`: activity order + day buckets on the active list
- * - `project`: classic nests by project; V2 keeps its static creation spine
+ * - `project`: classic nests by project; V2 exposes Default and keeps upstream order
  * - `none`: activity order, flat (no day headers)
  *
- * Custom user groups are intentionally out of scope for the first cut.
+ * Full compatibility contract: docs/sidebar-v2.md. Custom user groups are
+ * intentionally out of scope for the first cut.
  */
 export type WebThreadGrouping = "recency" | "project" | "none";
 
@@ -84,7 +85,9 @@ export const WEB_THREAD_GROUPINGS = [
 
 export const WEB_THREAD_GROUPING_LABELS: Record<WebThreadGrouping, string> = {
   recency: "Group by recency",
-  project: "Group by project",
+  // `project` is the persisted legacy value. In Sidebar V1 it still renders
+  // project groups; Sidebar V2 interprets it as untouched upstream ordering.
+  project: "Group by default",
   none: "Group by nothing",
 };
 

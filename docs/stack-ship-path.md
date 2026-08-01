@@ -213,6 +213,9 @@ Rules:
    the same side — but **never** whole-file `ours`/`theirs` on shared product paths
    (`ChatView`, VCS drivers, contracts RPC, etc.). Those need a real 3-way product merge.
 4. Product-facing recovery belongs in product-named commits, not permanent tip-only `fix(stack)`.
+5. Before green-gating Tim or candidates, rewrite every new or changed non-upstream migration into
+   the fork migration manifest and ledger. Preserve upstream migration IDs/names exactly; see
+   [fork-stack.md](./fork-stack.md#migration-namespaces-during-provenance-imports).
 
 While a slow path is in flight, the **default** is still: do not block unrelated product PRs unless
 you intentionally freeze merges for a cutover window.
@@ -318,7 +321,9 @@ Tip-only lock fixes on **product** layers are process failures. Generated integr
 1. Schedule a **slow path** rebuild; do not mix with unrelated feature landings if avoidable.
 2. Stop the line per layer; product 3-way merges for conflicts (no blind whole-file product
    `ours`/`theirs`).
-3. Rebase **all** registered overlays; compose; CI; then resume normal fast path.
+3. Audit migration diffs in every imported/replayed commit. Rewrite Tim/candidate/overlay migrations
+   into `ForkMigrations.ts`; upstream-only migrations remain unchanged in `Migrations.ts`.
+4. Rebase **all** registered overlays; compose; CI; then resume normal fast path.
 
 ---
 

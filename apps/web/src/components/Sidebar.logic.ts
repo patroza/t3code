@@ -213,6 +213,7 @@ export type SidebarV2ThreadContextMenuAction =
   | "regenerate-title"
   | "mark-unread"
   | "copy-path"
+  | "copy-thread-id"
   | "copy-branch"
   | "delete";
 
@@ -281,6 +282,7 @@ export function buildSidebarV2ThreadContextMenuItems(input: {
       : []),
     { id: "mark-unread", label: "Mark unread" },
     { id: "copy-path", label: "Copy path", icon: "copy" },
+    { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
     ...(input.branch ? ([{ id: "copy-branch", label: "Copy branch", icon: "copy" }] as const) : []),
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
@@ -437,8 +439,8 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
 }
 
 /**
- * Shared settled classification for display surfaces (sidebar v2, board), so
- * they always agree on what is settled. Threads on servers without the
+ * Shared settled classification for display surfaces (sidebar v1/v2, board),
+ * so they always agree on what is settled. Threads on servers without the
  * settlement capability (old server, or descriptor not loaded yet) never
  * classify as settled: the user could neither un-settle nor pin them, so
  * auto-settling them would strand rows in a tail with no working affordances.

@@ -6,6 +6,10 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   scopeProjectRef,
@@ -27,6 +31,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListIcon,
   MessageSquareIcon,
   PinIcon,
   PlusIcon,
@@ -143,8 +148,11 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { AiUsageStats } from "./chat/AiUsageStats";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../aiUsageState";
+import { useAiUsageSnapshot } from "../hooks/useAiUsageSnapshot";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
 import { primaryServerProvidersAtom } from "../state/server";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
@@ -167,6 +175,15 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  DEFAULT_WEB_THREAD_GROUPING,
+  LIST_THREAD_GROUPING_STORAGE_KEY,
+  WEB_THREAD_GROUPING_LABELS,
+  WEB_THREAD_GROUPINGS,
+  WebThreadGroupingSchema,
+  type WebThreadGrouping,
+} from "./listEnvironmentFilter";
 
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -239,6 +256,9 @@ function SidebarV2ThreadTooltip({
   modelInstanceId,
   modelLabel,
   branchMismatch,
+  usageDotClass,
+  usageRingColor,
+  threadUsage,
   terminalStatus,
   terminalProcessCount,
 }: {
@@ -253,6 +273,9 @@ function SidebarV2ThreadTooltip({
     threadBranch: string;
     currentBranch: string;
   } | null;
+  usageDotClass?: string | undefined;
+  usageRingColor?: string | undefined;
+  threadUsage?: ReturnType<typeof resolveDriverUsage> | undefined;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
 }) {
@@ -305,8 +328,15 @@ function SidebarV2ThreadTooltip({
                 driverKind={driverKind}
                 displayName={thread.session?.providerName ?? modelInstanceId}
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
+                {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
               />
               <div className="min-w-0 truncate text-foreground/75">{modelLabel}</div>
+            </div>
+          ) : null}
+          {threadUsage ? (
+            <div className="min-w-0 text-foreground/75">
+              <AiUsageStats item={threadUsage.item} compact className="min-w-0" />
             </div>
           ) : null}
           {terminalStatus ? (
@@ -530,7 +560,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
     (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
@@ -564,6 +594,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const modelLabel = selectedModel
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
+  const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
+  const threadUsage = useMemo(
+    () => resolveDriverUsage(aiUsageSnapshot, driverKind, thread.modelSelection.model),
+    [aiUsageSnapshot, driverKind, thread.modelSelection.model],
+  );
+  const usageDotClass = threadUsage ? usageDotFillClass(threadUsage.marker) : undefined;
+  const usageRingColor = threadUsage ? usageDotRingColor(threadUsage.marker) : undefined;
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
@@ -578,6 +615,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
+      usageDotClass={usageDotClass}
+      usageRingColor={usageRingColor}
+      threadUsage={threadUsage}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
     />
@@ -1044,11 +1084,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center opacity-60">
+                  <span
+                    className="inline-flex shrink-0 items-center opacity-60"
+                    {...(usageDotClass ? { "aria-label": "provider usage status" } : {})}
+                  >
                     <ProviderInstanceIcon
                       driverKind={driverKind}
                       displayName={thread.session?.providerName ?? modelInstanceId}
                       iconClassName="size-3.5"
+                      {...(usageDotClass ? { statusDotClassName: usageDotClass } : {})}
+                      {...(usageRingColor ? { statusDotRingColor: usageRingColor } : {})}
                     />
                   </span>
                 ) : null}
@@ -1090,7 +1135,7 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const gitStatus = useEnvironmentQuery(
     (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
+      ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd: gitCwd },
         })
@@ -1183,6 +1228,11 @@ export default function SidebarV2() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const [threadGrouping, setThreadGrouping] = useLocalStorage(
+    LIST_THREAD_GROUPING_STORAGE_KEY,
+    DEFAULT_WEB_THREAD_GROUPING,
+    WebThreadGroupingSchema,
+  );
   const {
     settleThread,
     unsettleThread,
@@ -1234,6 +1284,24 @@ export default function SidebarV2() {
         stackedThreadToast({
           type: "error",
           title: "Failed to copy branch",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
+  const { copyToClipboard: copyThreadId } = useCopyToClipboard<{ threadId: string }>({
+    onCopy: ({ threadId }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ID copied",
+        description: threadId,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -1346,6 +1414,18 @@ export default function SidebarV2() {
         ),
       ),
     [projectGroups],
+  );
+  const orderForThreadGrouping = useCallback(
+    (ordered: EnvironmentThreadShell[]) => {
+      if (threadGrouping !== "recency") return ordered;
+      return ordered.toSorted(
+        (left, right) =>
+          firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt, right.createdAt) -
+            firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt, left.createdAt) ||
+          left.id.localeCompare(right.id),
+      );
+    },
+    [threadGrouping],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -1623,10 +1703,10 @@ export default function SidebarV2() {
         }
       }
       return {
-        // Same static creation order as the inbox: a pin freezes prominence,
-        // it does not introduce a new ordering scheme.
-        pinnedThreads: sortThreadsForSidebarV2(pinned),
-        activeThreads: sortThreadsForSidebarV2(active),
+        // Default is upstream's static creation order. Recency is the one
+        // explicit alternative; neither mode changes cards or sections.
+        pinnedThreads: orderForThreadGrouping(sortThreadsForSidebarV2(pinned)),
+        activeThreads: orderForThreadGrouping(sortThreadsForSidebarV2(active)),
         // Soonest wake first: "what comes back next" is the shelf's question.
         snoozedThreads: snoozed.toSorted(
           (left, right) =>
@@ -1640,6 +1720,7 @@ export default function SidebarV2() {
       autoSettleAfterDays,
       changeRequestStateByKey,
       nowMinute,
+      orderForThreadGrouping,
       scopedProjectKeys,
       serverConfigs,
       snoozeWakeTick,
@@ -2473,6 +2554,9 @@ export default function SidebarV2() {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
             return;
+          case "copy-thread-id":
+            copyThreadId(thread.id, { threadId: thread.id });
+            return;
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -2514,6 +2598,7 @@ export default function SidebarV2() {
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      copyThreadId,
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
@@ -2751,6 +2836,40 @@ export default function SidebarV2() {
             </div>
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        type="button"
+                        aria-label={`Thread ordering: ${WEB_THREAD_GROUPING_LABELS[threadGrouping]}`}
+                        data-testid="sidebar-v2-thread-grouping"
+                      />
+                    }
+                  >
+                    {threadGrouping === "project" ? <ListIcon /> : <ClockIcon />}
+                  </MenuTrigger>
+                  <MenuPopup align="start">
+                    <MenuRadioGroup
+                      value={threadGrouping}
+                      onValueChange={(value) => setThreadGrouping(value as WebThreadGrouping)}
+                    >
+                      {WEB_THREAD_GROUPINGS.filter((grouping) => grouping !== "none").map(
+                        (grouping) => (
+                          <MenuRadioItem
+                            key={grouping}
+                            value={grouping}
+                            closeOnClick
+                            data-testid={`sidebar-v2-thread-grouping-${grouping}`}
+                          >
+                            {grouping === "project" ? <ListIcon /> : <ClockIcon />}
+                            {WEB_THREAD_GROUPING_LABELS[grouping]}
+                          </MenuRadioItem>
+                        ),
+                      )}
+                    </MenuRadioGroup>
+                  </MenuPopup>
+                </Menu>
                 <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                   <MenuTrigger
                     render={
@@ -2993,6 +3112,34 @@ export default function SidebarV2() {
                       />
                     );
                   };
+                  const appendRecencyRows = (
+                    items: ReactNode[],
+                    rows: readonly EnvironmentThreadShell[],
+                    section: "active" | "settled",
+                  ) => {
+                    const groups = groupSortedThreadsByRecency(
+                      rows,
+                      new Date(`${nowMinute}:00.000Z`),
+                    );
+                    if (threadGrouping !== "recency" || !shouldShowRecencySectionHeaders(groups)) {
+                      for (const thread of rows) items.push(renderThreadRow(thread, section));
+                      return;
+                    }
+                    for (const group of groups) {
+                      items.push(
+                        <li
+                          key={`recency-${section}-${group.id}`}
+                          data-testid={`sidebar-v2-${section}-recency-${group.id}`}
+                          className="list-none px-2.5 pb-1 pt-3 text-[11px] font-medium text-sidebar-muted-foreground/55"
+                        >
+                          {group.label}
+                        </li>,
+                      );
+                      for (const thread of group.threads) {
+                        items.push(renderThreadRow(thread, section));
+                      }
+                    }
+                  };
                   // Pinned block: full cards above the inbox, closed by a
                   // thin divider (the pin glyphs carry the meaning, so no
                   // header text). Vanishes entirely at count 0.
@@ -3009,9 +3156,7 @@ export default function SidebarV2() {
                       />,
                     );
                   }
-                  for (const thread of activeThreads) {
-                    items.push(renderThreadRow(thread, "active"));
-                  }
+                  appendRecencyRows(items, activeThreads, "active");
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when
@@ -3051,6 +3196,7 @@ export default function SidebarV2() {
                       items.push(renderThreadRow(thread, "snoozed"));
                     }
                   }
+                  // Settled shelf: upstream Sidebar V2 history below the active inbox.
                   if (settledThreads.length > 0) {
                     items.push(
                       <li
@@ -3082,9 +3228,7 @@ export default function SidebarV2() {
                       </li>,
                     );
                   }
-                  for (const thread of renderedSettledThreads) {
-                    items.push(renderThreadRow(thread, "settled"));
-                  }
+                  appendRecencyRows(items, renderedSettledThreads, "settled");
                   return items;
                 })()}
                 {settledShelfExpanded && hiddenSettledCount > 0 ? (

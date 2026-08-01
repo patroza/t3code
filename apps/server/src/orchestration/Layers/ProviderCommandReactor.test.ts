@@ -645,7 +645,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-1"),
@@ -684,7 +684,7 @@ describe("ProviderCommandReactor", () => {
   it("replays a persisted pending turn start exactly once on startup", async () => {
     const harness = await createHarness({ deferReactorStart: true });
     const now = "2026-01-01T00:00:00.000Z";
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.interaction-mode.set",
         commandId: CommandId.make("cmd-plan-before-pending"),
