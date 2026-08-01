@@ -6351,7 +6351,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           projectionSnapshotQuery: {
-            getSnapshotSequence: () => Effect.succeed({ snapshotSequence }),
             getThreadDetailSnapshot: () =>
               Effect.gen(function* () {
                 yield* Effect.sleep("25 millis");
@@ -6363,6 +6362,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
           },
           orchestrationEngine: {
+            // #5147 bounds thread resume with engine head (THREAD_RESUME_MAX_GAP), not
+            // projection getSnapshotSequence / subscriptionReplayLimit from #3510.
+            latestSequence: Effect.succeed(snapshotSequence),
             streamDomainEvents: Stream.fromPubSub(liveEvents),
             readEvents: () => {
               replayCalls += 1;
