@@ -211,8 +211,14 @@ function ThreadNavigationSidebarPane(
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const headerIsOverContentRef = useRef(false);
   const sidebarScrollGesture = useMemo(() => Gesture.Native(), []);
-  const { archiveThread, confirmDeleteThread, settleThread, unsettleThread } =
-    useThreadListActions();
+  const {
+    archiveThread,
+    confirmDeleteThread,
+    settleThread,
+    snoozeThread,
+    unsnoozeThread,
+    unsettleThread,
+  } = useThreadListActions();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const pendingTasks = usePendingNewTasks();
@@ -1068,7 +1074,7 @@ function ThreadNavigationSidebarPane(
       ) {
         return false;
       }
-      return homeListItemsAreEqual(previous, item);
+      return homeListItemsAreEqual(previous as never, item as never);
     },
     [],
   );
@@ -1122,7 +1128,12 @@ function ThreadNavigationSidebarPane(
             <ThreadListV2Row
               thread={thread}
               variant={item.item.variant}
+              snoozed={item.item.snoozed}
               showSettledDivider={item.item.showSettledDivider}
+              snoozePresetMinute={nowMinute}
+              snoozeSupported={snoozeEnvironmentIds.has(item.item.thread.environmentId)}
+              onSnoozeThread={snoozeThread}
+              onUnsnoozeThread={unsnoozeThread}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}
               providerDriver={
