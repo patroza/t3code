@@ -1,10 +1,11 @@
 /**
  * GitHub actor trust relative to the closed-set identity map.
  *
- * When the map is off, collaborator permission alone gates agent turns
- * (legacy behaviour). When the map is on, the actor must also resolve to a
+ * Fail-closed: no configured map (or empty map) is treated like an unmapped
+ * actor — no agent turns. When the map is on, the actor must resolve to a
  * mapped person (github id or login) — so public-repo write access or
- * outside collaborators cannot drive the host unless listed.
+ * outside collaborators cannot drive the host unless listed. Collaborator
+ * permission floor is still enforced separately before this gate.
  */
 import {
   findPersonByGithubId,
@@ -50,7 +51,7 @@ export function resolvePersonByGitHubActor(
 /**
  * Classify a GitHub mention actor for agent execution.
  *
- * - Map off → full (permission floor still enforced separately)
+ * - Map off / empty → denied (no agent; same as unmapped)
  * - Map on + id/login in map → full
  * - Map on + unmapped/missing → denied (no agent turn)
  */
@@ -61,7 +62,7 @@ export function classifyGitHubActorTrust(input: {
   readonly people: ReadonlyArray<IdentityMapPerson>;
 }): GitHubActorTrustDecision {
   if (!input.identityMapEnabled) {
-    return { mode: "full", person: null, reason: "identity_map_disabled" };
+    return { mode: "denied", person: null, reason: "identity_map_disabled" };
   }
   const login = input.actorLogin?.trim() ?? "";
   const hasId =
