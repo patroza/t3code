@@ -280,6 +280,7 @@ export const makeBridgeHub = (runBridge: BridgeRunner) =>
                 `bridge:${input.discordChannelId}`,
                 "Discord bridge fiber failed",
                 `channel=\`${input.discordChannelId}\` thread=\`${input.t3ThreadId}\`\n${pretty}`,
+                { threadId: input.t3ThreadId, channelId: input.discordChannelId },
               );
               yield* Deferred.succeed(ready, undefined).pipe(Effect.ignore);
             }).pipe(Effect.asVoid),
