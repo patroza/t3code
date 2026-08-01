@@ -124,6 +124,11 @@ interface HomeScreenProps {
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
+  readonly onSnoozeThread: (
+    thread: EnvironmentThreadShell,
+    snoozedUntil: string,
+  ) => Promise<boolean> | void;
+  readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean> | void;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
@@ -816,7 +821,12 @@ export function HomeScreen(props: HomeScreenProps) {
       <ThreadListV2Row
         thread={item.thread}
         variant={item.variant}
+        snoozed={item.snoozed}
         showSettledDivider={item.showSettledDivider}
+        snoozePresetMinute={nowMinute}
+        snoozeSupported={snoozeEnvironmentIds.has(item.thread.environmentId)}
+        onSnoozeThread={props.onSnoozeThread}
+        onUnsnoozeThread={props.onUnsnoozeThread}
         project={
           projectByKey.get(scopedProjectKey(item.thread.environmentId, item.thread.projectId)) ??
           null

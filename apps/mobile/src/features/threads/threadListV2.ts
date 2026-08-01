@@ -181,6 +181,8 @@ export interface ThreadListV2Item {
   /** Snoozed-shelf row: shows the wake countdown and offers Wake. */
   readonly snoozed: boolean;
   readonly isLast: boolean;
+  /** Optional divider flag used by older render paths. */
+  readonly showSettledDivider?: boolean;
 }
 
 export interface ThreadListV2Layout {
