@@ -6391,10 +6391,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(result[0].snapshot.snapshotSequence, snapshotSequence);
         assert.equal(result[0].snapshot.thread.id, defaultThreadId);
       }
-      assert.deepEqual(result[1], { kind: "synchronized" });
-      assert.equal(result[2]?.kind, "event");
-      if (result[2]?.kind === "event") {
-        assert.equal(result[2].event.sequence, snapshotSequence + 1);
+      // Live events buffered during snapshot load are drained via the same
+      // queue as the completion marker, so their relative order is not fixed.
+      // Both must appear after the snapshot; the global replay must not run.
+      const afterSnapshot = Array.from(result).slice(1);
+      assert.ok(
+        afterSnapshot.some((item) => item.kind === "synchronized"),
+        "expected synchronized completion marker after snapshot",
+      );
+      const liveEvent = afterSnapshot.find((item) => item.kind === "event");
+      assert.equal(liveEvent?.kind, "event");
+      if (liveEvent?.kind === "event") {
+        assert.equal(liveEvent.event.sequence, snapshotSequence + 1);
       }
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
   );
