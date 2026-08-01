@@ -26,6 +26,7 @@ import {
   type ProviderSession,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -80,9 +81,17 @@ const isModelSelection = Schema.is(ModelSelection);
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
   /**
+   * After writing restartRecovery markers, wait this long after cooperative
+   * `interruptTurn` on in-flight sessions before hard `adapter.stopAll()`.
+   * Gives providers time to cancel tools / flush before process teardown.
+   * Default `30 seconds` — well under ops' ~150s main-pid SIGTERM reap window
+   * (interrupt grace + stopAll grace must fit inside that).
+   */
+  readonly shutdownInterruptGracePeriod?: Duration.Input;
+  /**
    * Maximum time the server gives all provider adapters, collectively, to
-   * stop during process shutdown. Recovery intent is persisted before this
-   * clock starts.
+   * stop during process shutdown (after the interrupt grace). Recovery intent
+   * is persisted before either clock starts. Default `1 minute`.
    */
   readonly shutdownGracePeriod?: Duration.Input;
 }
@@ -1319,6 +1328,47 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
     }
 
+    // Cooperative interrupt before hard session teardown so running provider
+    // turns receive cancel (tools stop, agents can settle) while markers are
+    // already durable. Sequence under ops SIGTERM reap (~150s):
+    //   markers (fast) → interrupt → interruptGrace (~30s) → stopAll (~60s).
+    const workingSessions = activeSessions.filter(
+      (session) => session.status === "connecting" || session.status === "running",
+    );
+    if (workingSessions.length > 0) {
+      yield* Effect.logInfo("interrupting in-flight provider turns before stopAll", {
+        sessionCount: workingSessions.length,
+      });
+      yield* Effect.forEach(
+        workingSessions,
+        (session) =>
+          interruptTurn({
+            threadId: session.threadId,
+            ...(session.activeTurnId !== null && session.activeTurnId !== undefined
+              ? { turnId: session.activeTurnId }
+              : {}),
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider interrupt during shutdown failed", {
+                threadId: session.threadId,
+                provider: session.provider,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+
+      const interruptGrace = options?.shutdownInterruptGracePeriod ?? "30 seconds";
+      yield* Effect.logInfo("waiting for cooperative interrupt grace before stopAll", {
+        interruptGrace: String(interruptGrace),
+        sessionCount: workingSessions.length,
+      });
+      // Interruptible so a short process timeout can still abort shutdown.
+      yield* Effect.sleep(interruptGrace).pipe(Effect.interruptible);
+    }
+
+    const stopAllGrace = options?.shutdownGracePeriod ?? "1 minute";
     const adapterStops = yield* Effect.forEach(
       currentAdapters,
       ([instanceId, adapter]) =>
@@ -1332,11 +1382,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // interruptibility here so the timeout can release a provider whose
       // protocol drain never completes.
       Effect.interruptible,
-      Effect.timeoutOption(options?.shutdownGracePeriod ?? "1 minute"),
+      Effect.timeoutOption(stopAllGrace),
     );
     if (Option.isNone(adapterStops)) {
       yield* Effect.logWarning("provider shutdown grace period elapsed", {
-        timeout: String(options?.shutdownGracePeriod ?? "1 minute"),
+        timeout: String(stopAllGrace),
         sessionCount: activeSessions.length,
         recoveryCount: recoveryByThreadId.size,
       });
