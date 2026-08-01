@@ -550,7 +550,7 @@ describe("ProviderCommandReactor", () => {
         readonly messageId: MessageId;
         readonly requestedAt: string;
       }) =>
-        Effect.runPromise(
+        harnessRuntime.runPromise(
           turnRepository.replacePendingTurnStart({
             threadId: row.threadId,
             messageId: row.messageId,
