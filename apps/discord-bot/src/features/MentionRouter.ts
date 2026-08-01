@@ -89,7 +89,7 @@ import {
   looksLikeSentryContext,
   type DiscordMessageLike,
 } from "../presentation/threadContext.ts";
-import { IdentityMapStore } from "../identityMap.ts";
+import { classifyDiscordAgentAccess, IdentityMapStore } from "../identityMap.ts";
 import { discordSourceHint } from "../t3/sourceHint.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
@@ -812,6 +812,30 @@ const make = (botConfig: DiscordBotConfig) =>
 
     const startBridgedTurnUnlocked = (input: BridgedTurnInput) =>
       Effect.gen(function* () {
+        // Fail-closed identity gate: empty map or unmapped requester → no agent turn.
+        // Applies to @mentions, slash /ask, and automatic thread-talk continues.
+        const access = classifyDiscordAgentAccess({
+          people: identityMap.list(),
+          discordId: input.mentionMessage?.author?.id ?? null,
+          discordUsername: input.mentionMessage?.author?.username ?? null,
+          discordDisplayName: input.mentionMessage?.author?.displayName ?? null,
+        });
+        if (!access.allowed) {
+          yield* Effect.logWarning("Rejected Discord agent turn from unmapped identity", {
+            discordThreadId: input.discordThreadId,
+            authorId: input.mentionMessage?.author?.id ?? null,
+            authorUsername: input.mentionMessage?.author?.username ?? null,
+            reason: access.reason,
+          });
+          yield* rest.createMessage(input.discordThreadId, {
+            content: access.userMessage,
+            ...(typeof input.mentionMessage?.id === "string"
+              ? { message_reference: { message_id: input.mentionMessage.id } }
+              : {}),
+          });
+          return;
+        }
+
         // Only --provider / --model count as an explicit model change. Bare mentions must
         // NOT re-apply bot defaults (codex/gpt-5.4) on continue — Grok (and others) refuse
         // mid-thread model switches with "cannot switch models after the conversation has started".

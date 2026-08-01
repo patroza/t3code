@@ -13,6 +13,7 @@ import {
   parseIdentityMapDocument,
   parseSimpleIdentityYaml,
   resolveGitHubCoAuthorEmail,
+  classifyDiscordAgentAccess,
   resolveParticipantIdentity,
 } from "./identityMap.ts";
 
@@ -170,6 +171,36 @@ describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
     });
     expect(resolved.person).toBeNull();
     expect(resolved.unmappedReason).toContain("not present");
+  });
+
+  it("fail-closes Discord agent access when the map is empty", () => {
+    const denied = classifyDiscordAgentAccess({
+      people: [],
+      discordId: "95218063095377920",
+    });
+    expect(denied.allowed).toBe(false);
+    if (!denied.allowed) {
+      expect(denied.reason).toBe("identity_map_empty");
+      expect(denied.userMessage.toLowerCase()).toContain("not authorized");
+    }
+  });
+
+  it("allows mapped Discord requesters and denies unmapped ones", () => {
+    const allowed = classifyDiscordAgentAccess({
+      people,
+      discordId: "95218063095377920",
+      discordUsername: "patroza",
+    });
+    expect(allowed.allowed).toBe(true);
+    if (allowed.allowed) expect(allowed.person.name).toBe("Patrick Roza");
+
+    const denied = classifyDiscordAgentAccess({
+      people,
+      discordId: "999",
+      discordUsername: "stranger",
+    });
+    expect(denied.allowed).toBe(false);
+    if (!denied.allowed) expect(denied.reason).toBe("unmapped_discord_actor");
   });
 
   it("builds compact cab bodies (no Co-authored-by prefix, no who when mapped)", () => {
