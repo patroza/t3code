@@ -47,14 +47,14 @@ describe("resolvePersonByJiraAccountId", () => {
 });
 
 describe("classifyJiraActorTrust", () => {
-  it("allows full access when the identity map is disabled", () => {
+  it("denies agent access when the identity map is disabled (fail-closed)", () => {
     expect(
       classifyJiraActorTrust({
         identityMapEnabled: false,
         actorAccountId: "stranger",
         people: [],
       }),
-    ).toEqual({ mode: "full", person: null, reason: "identity_map_disabled" });
+    ).toEqual({ mode: "context-only", person: null, reason: "identity_map_disabled" });
   });
 
   it("trusts mapped Jira account ids for full agent turns", () => {
