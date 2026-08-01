@@ -32,9 +32,12 @@ const COOLDOWN_MS = 10 * 60 * 1000;
 const FATAL_COOLDOWN_MS = 2 * 60 * 1000;
 /**
  * Session last_error fatals used to re-post every 2m per thread after restarts.
- * Longer window + signature keys keep real provider failures visible without spam.
+ * Sticky projection rows never clear, so cooldown alone re-pages the same failure
+ * forever (e.g. a week-old "Invalid params" every 30m). Age-gate + matching
+ * cooldown: page once while the row is still fresh, then drop it.
  */
-const SESSION_ERROR_FATAL_COOLDOWN_MS = 30 * 60 * 1000;
+export const SESSION_ERROR_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const SESSION_ERROR_FATAL_COOLDOWN_MS = SESSION_ERROR_MAX_AGE_MS;
 /** Cap distinct session-error posts per watchdog tick. */
 const SESSION_ERROR_ALERT_MAX = 5;
 /** Leave headroom below Discord's 2,000-character message-content limit. */
@@ -223,11 +226,12 @@ export interface HostSnapshot {
     readonly threadId: string;
     readonly lastError: string;
     readonly status?: string | null;
+    readonly updatedAt?: string | null;
   }>;
   readonly failedUnits: ReadonlyArray<string>;
 }
 
-export type SessionLastErrorKind = "ignore" | "fatal";
+export type SessionLastErrorKind = "ignore" | "stale" | "fatal";
 
 /**
  * Operational recover text that must not page as FATAL.
@@ -243,15 +247,41 @@ export function isExpectedSessionLastError(lastError: string): boolean {
 }
 
 /**
+ * Age of a projection_thread_sessions.updated_at value, or null if unparseable.
+ * Sticky last_error rows keep their original timestamp; use this to drop ancient noise.
+ */
+export function sessionErrorAgeMs(
+  updatedAt: string | null | undefined,
+  nowMs: number,
+): number | null {
+  if (updatedAt == null || updatedAt.trim() === "") return null;
+  const parsed = Date.parse(updatedAt);
+  if (Number.isNaN(parsed)) return null;
+  return Math.max(0, nowMs - parsed);
+}
+
+/**
  * Classify a session last_error for the ops watchdog.
  * - ignore: expected recover / empty
- * - fatal: real provider / process / hard session failure
+ * - stale: real failure text, but too old to re-page (sticky projection row)
+ * - fatal: real provider / process / hard session failure still worth paging
  */
 export function classifySessionLastError(input: {
   readonly lastError: string;
   readonly status?: string | null | undefined;
+  readonly updatedAt?: string | null | undefined;
+  readonly nowMs?: number;
+  readonly maxAgeMs?: number;
 }): SessionLastErrorKind {
   if (isExpectedSessionLastError(input.lastError)) return "ignore";
+  // Age-gate only when the caller supplied both updatedAt and nowMs (projection path).
+  // Pure text-only classification (unit tests) skips the gate — no Date.now() here.
+  if (input.updatedAt !== undefined && input.nowMs !== undefined) {
+    const maxAgeMs = input.maxAgeMs ?? SESSION_ERROR_MAX_AGE_MS;
+    const ageMs = sessionErrorAgeMs(input.updatedAt, input.nowMs);
+    // null/unparseable timestamps: treat as stale so a bad row cannot page forever.
+    if (ageMs === null || ageMs > maxAgeMs) return "stale";
+  }
   // Prefer true error rows; still allow non-empty last_error on other statuses when
   // the text is not an expected recover (e.g. ACP spawn failure left on interrupted).
   if (input.status === "error" || input.status === "interrupted" || input.status == null) {
@@ -264,32 +294,46 @@ export function classifySessionLastError(input: {
 
 /**
  * Filter + cap session errors for Discord posting.
- * Groups ignored recoveries for optional summary; never emits them as FATAL lines.
+ * Groups ignored recoveries / stale stickies for optional summary; never emits them as FATAL.
  */
 export function selectSessionErrorsForAlert(
   errors: ReadonlyArray<{
     readonly threadId: string;
     readonly lastError: string;
     readonly status?: string | null | undefined;
+    readonly updatedAt?: string | null | undefined;
   }>,
   maxFatals: number = SESSION_ERROR_ALERT_MAX,
+  timing?: { readonly nowMs: number; readonly maxAgeMs?: number },
 ): {
   readonly fatals: ReadonlyArray<{ readonly threadId: string; readonly lastError: string }>;
   readonly ignoredRecoveryCount: number;
+  readonly ignoredStaleCount: number;
 } {
   let ignoredRecoveryCount = 0;
+  let ignoredStaleCount = 0;
   const fatals: Array<{ threadId: string; lastError: string }> = [];
+  const maxAgeMs = timing?.maxAgeMs ?? SESSION_ERROR_MAX_AGE_MS;
   for (const entry of errors) {
-    const kind = classifySessionLastError(entry);
+    const kind = classifySessionLastError({
+      lastError: entry.lastError,
+      status: entry.status,
+      updatedAt: entry.updatedAt,
+      ...(timing !== undefined ? { nowMs: timing.nowMs, maxAgeMs } : {}),
+    });
     if (kind === "ignore") {
       ignoredRecoveryCount += 1;
+      continue;
+    }
+    if (kind === "stale") {
+      ignoredStaleCount += 1;
       continue;
     }
     if (fatals.length < Math.max(0, maxFatals)) {
       fatals.push({ threadId: entry.threadId, lastError: entry.lastError });
     }
   }
-  return { fatals, ignoredRecoveryCount };
+  return { fatals, ignoredRecoveryCount, ignoredStaleCount };
 }
 
 /** Stable-ish key so identical failure text across threads shares one cooldown bucket. */
@@ -559,22 +603,30 @@ export function listSessionErrors(dbPath: string): ReadonlyArray<{
   threadId: string;
   lastError: string;
   status: string | null;
+  updatedAt: string | null;
 }> {
   const parsed = querySqliteJson(
     dbPath,
     `
 cur = db.execute(
-  "SELECT thread_id, last_error, status FROM projection_thread_sessions "
+  "SELECT thread_id, last_error, status, updated_at FROM projection_thread_sessions "
   "WHERE last_error IS NOT NULL AND TRIM(last_error) != '' "
   "ORDER BY updated_at DESC LIMIT 40"
 )
 print(json.dumps([
-  {"threadId": r[0], "lastError": r[1] or "", "status": r[2]}
+  {"threadId": r[0], "lastError": r[1] or "", "status": r[2], "updatedAt": r[3]}
   for r in cur
 ]))
 `,
   );
-  return (parsed as Array<{ threadId: string; lastError: string; status: string | null }>) ?? [];
+  return (
+    (parsed as Array<{
+      threadId: string;
+      lastError: string;
+      status: string | null;
+      updatedAt: string | null;
+    }>) ?? []
+  );
 }
 
 function listFailedSystemdUnits(): ReadonlyArray<string> {
@@ -937,8 +989,15 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- session last_error (real fatals only; skip orphan-restart recover spam) ---
-        const sessionSelection = selectSessionErrorsForAlert(snap.sessionErrors);
+        // --- session last_error (fresh real fatals only; skip recover + sticky stale) ---
+        const sessionSelection = selectSessionErrorsForAlert(
+          snap.sessionErrors,
+          SESSION_ERROR_ALERT_MAX,
+          {
+            nowMs,
+            maxAgeMs: SESSION_ERROR_MAX_AGE_MS,
+          },
+        );
         for (const err of sessionSelection.fatals) {
           const delivery = sessionErrorAlertDelivery(err.threadId, err.lastError);
           yield* postAlert(
@@ -948,11 +1007,13 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
             delivery.files,
           );
         }
-        // Expected recoveries are intentionally not posted — high volume after restarts
-        // and already covered by Wake Required UX when work was actually mid-turn.
-        if (sessionSelection.ignoredRecoveryCount > 0) {
-          yield* Effect.logDebug("Skipped expected session last_error recoveries", {
-            count: sessionSelection.ignoredRecoveryCount,
+        // Expected recoveries and sticky multi-day last_error rows are intentionally not
+        // posted — recoveries are high volume after restarts; stickies re-page forever
+        // without an age gate (see SESSION_ERROR_MAX_AGE_MS).
+        if (sessionSelection.ignoredRecoveryCount > 0 || sessionSelection.ignoredStaleCount > 0) {
+          yield* Effect.logDebug("Skipped non-actionable session last_error rows", {
+            recoveryCount: sessionSelection.ignoredRecoveryCount,
+            staleCount: sessionSelection.ignoredStaleCount,
           });
         }
 
