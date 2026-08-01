@@ -6,6 +6,21 @@ export function threadSortValue(thread: EnvironmentThreadShell): number {
   return Number.isNaN(candidate) ? 0 : candidate;
 }
 
+/**
+ * The timestamp a settled row labels by: the settle stamp when the server
+ * recorded one (explicit settles), otherwise last activity. Mirrors the
+ * settled-shelf sort in HomeScreen / ThreadNavigationSidebar (and web's
+ * `resolveSettledTimestamp`) so a shelf reads in the order it is sorted.
+ */
+export function resolveSettledRowTimestamp(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "settledAt" | "latestUserMessageAt" | "updatedAt" | "createdAt"
+  >,
+): string {
+  return thread.settledAt ?? thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt;
+}
+
 export type ThreadStatusKind =
   | "pending-approval"
   | "awaiting-input"
