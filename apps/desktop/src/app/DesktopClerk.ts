@@ -83,7 +83,7 @@ export function createDesktopClerkBridge(stateDir: string, isDevelopment: boolea
 
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  yield* Effect.acquireRelease(
+  const bridge = yield* Effect.acquireRelease(
     Effect.try({
       try: () => createDesktopClerkBridge(environment.stateDir, environment.isDevelopment),
       catch: (cause) =>
