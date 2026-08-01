@@ -254,6 +254,7 @@ export const rehydrateBridges = (source: "boot" | "reconnect") =>
                 `rehydrate:${link.discordThreadId}`,
                 "Bridge rehydrate failed",
                 `source=\`${source}\` channel=\`${link.discordThreadId}\` thread=\`${link.t3ThreadId}\`\n${pretty}`,
+                { threadId: link.t3ThreadId, channelId: link.discordThreadId },
               );
             }).pipe(Effect.asVoid),
           ),
