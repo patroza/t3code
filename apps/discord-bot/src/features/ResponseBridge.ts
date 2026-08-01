@@ -16,6 +16,7 @@ import {
   formatTurnResponseStatsLine,
 } from "@t3tools/shared/turnResponseStats";
 import { Discord, DiscordConfig, DiscordREST, UI } from "dfx";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -4615,6 +4616,7 @@ export const runBridge = (
                 `thread=\`${input.t3ThreadId}\``,
                 formatAlertCause(cause),
               ].join("\n"),
+              { threadId: input.t3ThreadId, channelId: input.discordChannelId },
             );
           }).pipe(Effect.asVoid),
         ),
@@ -4757,6 +4759,7 @@ export const runBridge = (
             `phase=\`${phase}\``,
             pretty,
           ].join("\n"),
+          { threadId: input.t3ThreadId, channelId: input.discordChannelId },
         );
       }).pipe(Effect.asVoid);
 
@@ -5308,6 +5311,7 @@ export const runBridge = (
                 `failureCount=${failureCount}`,
                 pretty,
               ].join("\n"),
+              { threadId: input.t3ThreadId, channelId: input.discordChannelId },
             );
           }
           // Do not advance lastDeliveredSequence — delivery lag keeps HTTP reconcile on.
@@ -5433,6 +5437,7 @@ export const runBridge = (
                         `thread=\`${input.t3ThreadId}\``,
                         pretty,
                       ].join("\n"),
+                      { threadId: input.t3ThreadId, channelId: input.discordChannelId },
                     );
                   }).pipe(Effect.asVoid),
                 ),
@@ -5565,6 +5570,7 @@ export const runBridge = (
                 `mode=\`${mode}\``,
                 pretty,
               ].join("\n"),
+              { threadId: input.t3ThreadId, channelId: input.discordChannelId },
             );
           }).pipe(Effect.asVoid),
         ),
@@ -5621,7 +5627,15 @@ export const runBridge = (
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             // Follower retries internally; this is only if the outer effect is interrupted
-            // or fails without recovery.
+            // or fails without recovery. Bot restart / fiber cancel is interrupt-only —
+            // expected, high volume; do not page #omegent-alerts.
+            if (Cause.hasInterruptsOnly(cause)) {
+              yield* Effect.logInfo("Bridge subscribeThread interrupted (no alert)", {
+                discordChannelId: input.discordChannelId,
+                t3ThreadId: input.t3ThreadId,
+              });
+              return;
+            }
             const pretty = formatAlertCause(cause);
             yield* Effect.logError("Bridge subscribeThread exited", {
               discordChannelId: input.discordChannelId,
@@ -5632,6 +5646,7 @@ export const runBridge = (
               `subscribe:${input.t3ThreadId}`,
               "T3 thread subscription exited",
               `channel=\`${input.discordChannelId}\` thread=\`${input.t3ThreadId}\`\n${pretty}`,
+              { threadId: input.t3ThreadId, channelId: input.discordChannelId },
             );
           }).pipe(Effect.asVoid),
         ),
