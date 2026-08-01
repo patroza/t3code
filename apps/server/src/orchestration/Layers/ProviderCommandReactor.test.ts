@@ -545,6 +545,20 @@ describe("ProviderCommandReactor", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       readTurns: (threadId: ThreadId) =>
         Effect.runPromise(turnRepository.listByThreadId({ threadId })),
+      replacePendingTurnStart: (row: {
+        readonly threadId: ThreadId;
+        readonly messageId: MessageId;
+        readonly requestedAt: string;
+      }) =>
+        Effect.runPromise(
+          turnRepository.replacePendingTurnStart({
+            threadId: row.threadId,
+            messageId: row.messageId,
+            sourceProposedPlanThreadId: null,
+            sourceProposedPlanId: null,
+            requestedAt: row.requestedAt,
+          }),
+        ),
       settleSession,
       startSession,
       sendTurn,
@@ -646,6 +660,35 @@ describe("ProviderCommandReactor", () => {
     await harness.startReactor();
     await harness.drain();
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("abandons a ghost pending turn start when its event cannot be recovered", async () => {
+    // Regression: a pending-start row with no matching turn-start-requested event
+    // used to stick forever, so every follow-up was message-queued and Discord
+    // stayed on Working… with no drain path (Protect Agents / 77ff9acd).
+    const harness = await createHarness({ deferReactorStart: true });
+    const threadId = ThreadId.make("thread-1");
+    const ghostMessageId = asMessageId("ghost-missing-user-message");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.replacePendingTurnStart({
+      threadId,
+      messageId: ghostMessageId,
+      requestedAt: now,
+    });
+    const pendingBefore = (await harness.readTurns(threadId)).filter(
+      (turn) => turn.turnId === null && turn.state === "pending",
+    );
+    expect(pendingBefore).toHaveLength(1);
+    expect(pendingBefore[0]?.pendingMessageId).toBe(String(ghostMessageId));
+
+    await harness.startReactor();
+    await harness.drain();
+
+    const pendingAfter = (await harness.readTurns(threadId)).filter(
+      (turn) => turn.turnId === null && turn.state === "pending",
+    );
+    expect(pendingAfter).toEqual([]);
   });
 
   it("continues an interrupted running turn without replaying its user message", async () => {
