@@ -5,7 +5,9 @@
  * Closed-set identity map + per-session claims.
  *
  * Map: T3_IDENTITY_MAP_PATH only (explicit). Missing/empty → feature off.
- * Claims: process-local Ref (re-claim after restart). Persistence later.
+ * Claims: `layerPersisted` (server) stores them in SQLite via
+ * SessionIdentityClaimRepository with the Ref as a read-through cache, so they
+ * survive a restart. The residual-free `layer` (CLI / tests) is Ref-only.
  *
  * Layer residual is empty so it can sit on the server graph without polluting
  * CLI typecheck (SqlClient / ServerConfig leakage).
