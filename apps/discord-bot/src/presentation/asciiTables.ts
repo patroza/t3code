@@ -84,7 +84,7 @@ function isTableRowLine(line: string): boolean {
   // Require a pipe that actually separates content (not a lone `|`).
   if (!trimmed.includes("|")) return false;
   // Reject pure fence markers.
-  if (/^```/.test(trimmed)) return false;
+  if (trimmed.startsWith("```")) return false;
   return true;
 }
 
