@@ -479,6 +479,76 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Abandon a pending turn start that can never adopt (missing user message,
+   * missing persisted event, etc.). Without this, the SQL pending-start row +
+   * in-memory `pendingTurnStart` flag stay forever, so every follow-up is
+   * `message-queued` and the queue never drains (Discord stuck on Working…).
+   *
+   * `thread.session.set` with a settled status clears the pending-start flag
+   * in the event-sourced read model and deletes the pending SQL placeholder
+   * (see ProjectionPipeline session-set handling). We then attempt a queue
+   * drain so any messages that piled up while stuck can run.
+   */
+  const abandonUnadoptablePendingTurnStart = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly createdAt: string;
+    readonly reason: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return;
+    }
+    const session = thread.session;
+    // Prefer ready over error: this is an orchestration glitch, not a live
+    // provider failure. Keep stopped sessions stopped.
+    const nextStatus = session?.status === "stopped" ? "stopped" : "ready";
+    yield* setThreadSession({
+      threadId: input.threadId,
+      session: {
+        ...(session ?? {
+          threadId: input.threadId,
+          providerName: null,
+          providerInstanceId: thread.modelSelection.instanceId,
+          runtimeMode: thread.runtimeMode,
+        }),
+        status: nextStatus,
+        activeTurnId: null,
+        // Do not sticky-page this internal failure via lastError forever.
+        lastError: nextStatus === "stopped" ? (session?.lastError ?? null) : null,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+    // Belt-and-suspenders if session was already ready (session-set may no-op
+    // some paths) — always clear the pending SQL placeholder.
+    yield* projectionTurnRepository
+      .deletePendingTurnStartByThreadId({
+        threadId: input.threadId,
+      })
+      .pipe(Effect.catch(() => Effect.void));
+
+    yield* Effect.logWarning("Abandoned unadoptable pending turn start", {
+      threadId: input.threadId,
+      reason: input.reason,
+    });
+
+    // Drain any follow-ups that queued while the ghost pending start blocked.
+    // May no-op (empty queue / already busy); next natural completion retries.
+    yield* serverCommandId("queue-drain-after-abandon").pipe(
+      Effect.flatMap((commandId) =>
+        orchestrationEngine
+          .dispatch({
+            type: "thread.queue.drain",
+            commandId,
+            threadId: input.threadId,
+            createdAt: input.createdAt,
+          })
+          .pipe(Effect.catchTag("OrchestrationCommandInvariantError", () => Effect.void)),
+      ),
+    );
+  });
+
   const resolveProject = Effect.fnUntraced(function* (projectId: ProjectId) {
     return yield* projectionSnapshotQuery
       .getProjectShellById(projectId)
@@ -1151,13 +1221,21 @@ const make = Effect.gen(function* () {
 
     const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
     if (!message || message.role !== "user") {
+      const detail = `User message '${event.payload.messageId}' was not found for turn start request.`;
       yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.start.failed",
         summary: "Provider turn start failed",
-        detail: `User message '${event.payload.messageId}' was not found for turn start request.`,
+        detail,
         turnId: null,
         createdAt: event.payload.createdAt,
+      });
+      // Without abandon, the pending-start placeholder remains forever and
+      // every Discord follow-up is queued with no drain path (Working… forever).
+      yield* abandonUnadoptablePendingTurnStart({
+        threadId: event.payload.threadId,
+        createdAt: event.payload.createdAt,
+        reason: detail,
       });
       return;
     }
@@ -2055,13 +2133,20 @@ const make = Effect.gen(function* () {
             `${pending.threadId}\u0000${pending.messageId}\u0000${pending.requestedAt}`,
           );
           if (event === undefined) {
+            const createdAt = DateTime.formatIso(yield* DateTime.now);
+            const detail = `Persisted turn start event for user message '${pending.messageId}' could not be found.`;
             yield* appendProviderFailureActivity({
               threadId: pending.threadId,
               kind: "provider.turn.start.failed",
               summary: "Provider turn start recovery failed",
-              detail: `Persisted turn start event for user message '${pending.messageId}' could not be found.`,
+              detail,
               turnId: null,
-              createdAt: DateTime.formatIso(yield* DateTime.now),
+              createdAt,
+            });
+            yield* abandonUnadoptablePendingTurnStart({
+              threadId: pending.threadId,
+              createdAt,
+              reason: detail,
             });
             yield* increment(providerTurnRecoveriesTotal, {
               outcome: "failed",
