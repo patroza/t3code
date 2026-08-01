@@ -33,6 +33,7 @@ import {
   ServerIcon,
   SquareKanbanIcon,
   SquarePenIcon,
+  TerminalIcon,
   Trash2Icon,
   Undo2Icon,
   XIcon,
@@ -131,6 +132,8 @@ import {
   prStatusIndicator,
   resolveThreadPr,
   settledPrHoverColorClass,
+  terminalStatusFromRunningIds,
+  type TerminalStatusIndicator,
 } from "./ThreadStatusIndicators";
 import {
   resolveSnoozePresets,
@@ -143,6 +146,7 @@ import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
 import { primaryServerProvidersAtom } from "../state/server";
+import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import {
@@ -217,6 +221,10 @@ function WorkingDuration(props: { startedAt: string | null }) {
   return <span className="tabular-nums">{formatWorkingDurationLabel(Date.now() - startedMs)}</span>;
 }
 
+function terminalProcessLabel(count: number): string {
+  return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
+}
+
 function SidebarV2ThreadTooltip({
   thread,
   projectTitle,
@@ -226,6 +234,8 @@ function SidebarV2ThreadTooltip({
   modelInstanceId,
   modelLabel,
   branchMismatch,
+  terminalStatus,
+  terminalProcessCount,
 }: {
   thread: SidebarThreadSummary;
   projectTitle: string | null;
@@ -238,6 +248,8 @@ function SidebarV2ThreadTooltip({
     threadBranch: string;
     currentBranch: string;
   } | null;
+  terminalStatus: TerminalStatusIndicator | null;
+  terminalProcessCount: number;
 }) {
   return (
     <TooltipPopup
@@ -290,6 +302,17 @@ function SidebarV2ThreadTooltip({
                 iconClassName="size-3 shrink-0 grayscale opacity-60"
               />
               <div className="min-w-0 truncate text-foreground/75">{modelLabel}</div>
+            </div>
+          ) : null}
+          {terminalStatus ? (
+            <div className="flex min-w-0 items-center gap-2">
+              <TerminalIcon
+                aria-hidden
+                className={cn("size-3 shrink-0", terminalStatus.colorClass)}
+              />
+              <div className="min-w-0 truncate text-foreground/75">
+                {terminalProcessLabel(terminalProcessCount)}
+              </div>
             </div>
           ) : null}
           {thread.session?.lastError ? (
@@ -526,6 +549,13 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
 
+  const runningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
+  const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
+  const terminalProcessCount = runningTerminalIds.length;
+
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
 
@@ -539,6 +569,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       modelInstanceId={modelInstanceId}
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
+      terminalStatus={terminalStatus}
+      terminalProcessCount={terminalProcessCount}
     />
   );
 
