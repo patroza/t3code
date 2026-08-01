@@ -130,7 +130,7 @@ export const make = Effect.gen(function* () {
       // forwarded to the running app. In a secondary instance the bridge has
       // already begun quitting the app; app.quit() is asynchronous, so stop
       // bootstrap here before whenReady can fire.
-      if (!bridge.isPrimaryInstance) {
+      if (!(bridge as { readonly isPrimaryInstance?: boolean }).isPrimaryInstance) {
         yield* electronApp.quit;
         return yield* Effect.interrupt;
       }
