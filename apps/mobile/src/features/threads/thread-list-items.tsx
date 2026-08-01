@@ -7,7 +7,7 @@ import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
 import { memo, useCallback, useMemo, type ComponentProps } from "react";
-import { Pressable, useColorScheme, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, useColorScheme, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Svg, { Circle, Path } from "react-native-svg";
 
@@ -28,7 +28,7 @@ import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
-import { resolveThreadStatus } from "./threadPresentation";
+import { resolveSettledRowTimestamp, resolveThreadStatus } from "./threadPresentation";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import {
   hasUsageMarker,
@@ -48,6 +48,12 @@ export type ThreadListVariant = "compact" | "sidebar";
 /** Left inset that aligns compact secondary rows with the title column. */
 export const THREAD_LIST_COMPACT_INSET = HOME_HORIZONTAL_INSET;
 const SIDEBAR_ROW_RADIUS = 12;
+
+const MONO_FONT = Platform.select({
+  ios: "Menlo",
+  android: "monospace",
+  default: "monospace",
+});
 
 function pullRequestTintColor(
   state: ThreadPr["state"],
@@ -551,6 +557,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
+  // Settled rows label by when the work ENDED, matching the shelf sort.
+  const settledTimestamp = relativeTime(resolveSettledRowTimestamp(thread));
   const threadAccessibilityLabel = pr ? `${thread.title}, ${pr.accessibilityLabel}` : thread.title;
   const subtitleParts = [props.projectTitle, props.environmentLabel, thread.branch].filter(
     (part): part is string => Boolean(part),
@@ -654,8 +662,111 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       </View>
     ) : null;
 
+  // Project-grouped lists already show a favicon in the group header, so the
+  // slim row only leads with one where it also carries project context
+  // (recency / flat / Needs attention) — the same rule the subtitle uses.
+  const showSettledFavicon = Boolean(props.projectTitle) && props.projectCwd !== null;
+
+  /**
+   * Settled threads are history, not inbox: they collapse to a single dimmed
+   * line so the active work above stays scannable. Status pill, subtitle,
+   * PR badge, provider icon and chevron all drop — a settled row is a title,
+   * a time, and a way back in. Matches the Thread List v2 settled tail
+   * (thread-list-v2-items.tsx) and web's settled shelf (Sidebar.tsx), so
+   * settled history reads the same in every list mode on every client.
+   */
+  const settledRowContent = (close: () => void) => (
+    <Pressable
+      accessibilityHint="Opens the settled thread. Swipe left for archive and delete actions."
+      accessibilityLabel={threadAccessibilityLabel}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      className={compact ? "bg-screen" : undefined}
+      onHoverIn={compact ? undefined : () => setHovered(true)}
+      onHoverOut={compact ? undefined : () => setHovered(false)}
+      onPressIn={() => {
+        prefetchEnvironmentThread(thread.environmentId, thread.id);
+      }}
+      onPress={() => {
+        close();
+        onSelectThread(thread);
+      }}
+      style={
+        compact
+          ? ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
+          : ({ pressed }) => ({
+              backgroundColor: selected
+                ? selectedBackgroundColor
+                : pressed || hovered
+                  ? effectivePressedBackground
+                  : backgroundColor,
+              borderRadius: SIDEBAR_ROW_RADIUS,
+              cursor: "pointer",
+            })
+      }
+    >
+      <View
+        className="min-h-[44px] flex-row items-center gap-2.5 py-2"
+        style={{
+          paddingLeft: compact ? THREAD_LIST_COMPACT_INSET : 12,
+          paddingRight: compact ? 18 : 12,
+        }}
+        testID="thread-list-row-settled"
+      >
+        {showSettledFavicon ? (
+          <View className="opacity-40">
+            <ProjectFavicon
+              environmentId={thread.environmentId}
+              size={15}
+              projectTitle={props.projectTitle ?? ""}
+              workspaceRoot={props.projectCwd}
+            />
+          </View>
+        ) : null}
+        <View className="min-w-0 flex-1">
+          <View className="flex-row items-center gap-1.5">
+            <Text
+              className={cn(
+                "min-w-0 flex-1 text-base",
+                selected ? "text-user-bubble-foreground" : "text-foreground-muted",
+              )}
+              numberOfLines={1}
+            >
+              {thread.title}
+            </Text>
+            {hasDraft ? (
+              <View
+                accessibilityLabel="Unsent draft"
+                className="size-1.5 shrink-0 rounded-full bg-blue-500"
+              />
+            ) : null}
+          </View>
+          {props.searchMatch ? (
+            <ThreadSearchMatchExcerpt
+              compact={compact}
+              match={props.searchMatch}
+              query={props.searchQuery ?? ""}
+              selected={selected}
+            />
+          ) : null}
+        </View>
+        <Text
+          className={cn(
+            "text-sm tabular-nums",
+            selected ? "text-user-bubble-foreground-muted" : "text-foreground-tertiary",
+          )}
+          style={{ fontFamily: MONO_FONT }}
+        >
+          {settledTimestamp}
+        </Text>
+      </View>
+    </Pressable>
+  );
+
   const rowContent = (close: () => void) =>
-    compact ? (
+    isSettled ? (
+      settledRowContent(close)
+    ) : compact ? (
       <Pressable
         accessibilityHint="Swipe left for archive and delete actions"
         accessibilityLabel={threadAccessibilityLabel}
