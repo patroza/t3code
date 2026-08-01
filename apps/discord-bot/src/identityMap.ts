@@ -455,6 +455,56 @@ export function resolveParticipantIdentity(input: {
   };
 }
 
+export type DiscordAgentAccessDecision =
+  | { readonly allowed: true; readonly person: PersonIdentity }
+  | {
+      readonly allowed: false;
+      readonly reason: "identity_map_empty" | "unmapped_discord_actor" | "missing_discord_actor";
+      /** Short user-facing Discord reply (no map jargon). */
+      readonly userMessage: string;
+    };
+
+/**
+ * Fail-closed agent gate for Discord requesters.
+ *
+ * - Empty / unloaded map → deny everyone (same as unmapped)
+ * - Requester Discord id/username not in map → deny
+ * - Mapped → allow
+ */
+export function classifyDiscordAgentAccess(input: {
+  readonly people: ReadonlyArray<PersonIdentity>;
+  readonly discordId?: string | null | undefined;
+  readonly discordUsername?: string | null | undefined;
+  readonly discordDisplayName?: string | null | undefined;
+}): DiscordAgentAccessDecision {
+  if (input.people.length === 0) {
+    return {
+      allowed: false,
+      reason: "identity_map_empty",
+      userMessage:
+        "You're not authorized to run agent work from Discord. An operator needs to configure the identity map before anyone can use the agent.",
+    };
+  }
+  const resolved = resolveParticipantIdentity({
+    role: "requester",
+    discordId: input.discordId,
+    discordUsername: input.discordUsername,
+    discordDisplayName: input.discordDisplayName,
+    people: input.people,
+  });
+  if (resolved.person === null) {
+    const missingActor =
+      (input.discordId?.trim() ?? "") === "" && (input.discordUsername?.trim() ?? "") === "";
+    return {
+      allowed: false,
+      reason: missingActor ? "missing_discord_actor" : "unmapped_discord_actor",
+      userMessage:
+        "You're not authorized to run agent work from Discord. Ask an operator to add your Discord account to the allowlist.",
+    };
+  }
+  return { allowed: true, person: resolved.person };
+}
+
 /**
  * Build the agent-facing attribution block for commits/PRs.
  * Bot already resolved the identity map — inject cab bodies only (no lookup, no
