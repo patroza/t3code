@@ -698,12 +698,46 @@ function alertTraceDelivery(content: string, filename: string, trace: string): A
   };
 }
 
-export function fatalAlertDelivery(title: string, trace: string): AlertTraceDelivery {
-  return alertTraceDelivery(`**FATAL: ${title}**`, "fatal-trace.txt", trace);
+/** Identity lines shown in the short Discord alert body (not only the attachment). */
+export type AlertIdentity = {
+  readonly threadId?: string;
+  readonly channelId?: string;
+};
+
+function alertIdentityLines(identity?: AlertIdentity): ReadonlyArray<string> {
+  if (identity === undefined) return [];
+  const lines: string[] = [];
+  if (identity.threadId !== undefined && identity.threadId.trim() !== "") {
+    lines.push(`thread=\`${identity.threadId}\``);
+  }
+  if (identity.channelId !== undefined && identity.channelId.trim() !== "") {
+    lines.push(`channel=\`${identity.channelId}\``);
+  }
+  return lines;
 }
 
-export function bridgeAlertDelivery(title: string, trace: string): AlertTraceDelivery {
-  return alertTraceDelivery(`**BRIDGE: ${title}**`, "bridge-trace.txt", trace);
+export function fatalAlertDelivery(
+  title: string,
+  trace: string,
+  identity?: AlertIdentity,
+): AlertTraceDelivery {
+  return alertTraceDelivery(
+    [`**FATAL: ${title}**`, ...alertIdentityLines(identity)].join("\n"),
+    "fatal-trace.txt",
+    trace,
+  );
+}
+
+export function bridgeAlertDelivery(
+  title: string,
+  trace: string,
+  identity?: AlertIdentity,
+): AlertTraceDelivery {
+  return alertTraceDelivery(
+    [`**BRIDGE: ${title}**`, ...alertIdentityLines(identity)].join("\n"),
+    "bridge-trace.txt",
+    trace,
+  );
 }
 
 export function sessionErrorAlertDelivery(threadId: string, trace: string): AlertTraceDelivery {
@@ -744,14 +778,19 @@ export function formatAlertCause(cause: unknown, maxLen?: number): string {
  * or channel unset. Does not require DiscordREST in the caller — uses the
  * watchdog-held poster.
  */
-export const postFatalAlert = (key: string, title: string, detail: string) =>
+export const postFatalAlert = (
+  key: string,
+  title: string,
+  detail: string,
+  identity?: AlertIdentity,
+) =>
   Effect.gen(function* () {
     const p = poster;
     if (p === null) {
-      yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail });
+      yield* Effect.logError(`Fatal (no alerts channel): ${title}`, { detail, ...identity });
       return;
     }
-    const delivery = fatalAlertDelivery(title, detail);
+    const delivery = fatalAlertDelivery(title, detail, identity);
     yield* p(`fatal:${key}`, delivery.content, FATAL_COOLDOWN_MS, delivery.files);
   });
 
@@ -760,14 +799,19 @@ export const postFatalAlert = (key: string, title: string, detail: string) =>
  * stream/heartbeat Discord errors, and other bridge soft-failures that leave
  * Discord threads desynced while T3 still advances.
  */
-export const postBridgeAlert = (key: string, title: string, detail: string) =>
+export const postBridgeAlert = (
+  key: string,
+  title: string,
+  detail: string,
+  identity?: AlertIdentity,
+) =>
   Effect.gen(function* () {
     const p = poster;
     if (p === null) {
-      yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail });
+      yield* Effect.logError(`Bridge alert (no alerts channel): ${title}`, { detail, ...identity });
       return;
     }
-    const delivery = bridgeAlertDelivery(title, detail);
+    const delivery = bridgeAlertDelivery(title, detail, identity);
     yield* p(`bridge:${key}`, delivery.content, BRIDGE_ALERT_COOLDOWN_MS, delivery.files);
   });
 

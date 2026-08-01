@@ -161,6 +161,26 @@ describe("Discord alert content", () => {
       expect(new TextDecoder().decode(delivery.files[0]?.data)).toBe(trace);
     }
   });
+
+  it("puts t3 thread id on the short fatal/bridge Discord message", () => {
+    const trace = "stack goes in the attachment";
+    const threadId = "44c2ab99-729b-4999-83cc-3a4dd04432e0";
+    const channelId = "1532989230219919520";
+    const fatal = fatalAlertDelivery("T3 thread subscription exited", trace, {
+      threadId,
+      channelId,
+    });
+    expect(fatal.content).toContain("**FATAL: T3 thread subscription exited**");
+    expect(fatal.content).toContain(`thread=\`${threadId}\``);
+    expect(fatal.content).toContain(`channel=\`${channelId}\``);
+    expect(fatal.content).not.toContain(trace);
+    expect(new TextDecoder().decode(fatal.files[0]?.data)).toBe(trace);
+
+    const bridge = bridgeAlertDelivery("Working heartbeat failed", trace, { threadId });
+    expect(bridge.content).toContain("**BRIDGE: Working heartbeat failed**");
+    expect(bridge.content).toContain(`thread=\`${threadId}\``);
+    expect(bridge.content).not.toContain("channel=");
+  });
 });
 
 describe("session last_error alert classification", () => {
