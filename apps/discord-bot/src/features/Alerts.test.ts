@@ -20,8 +20,10 @@ import {
   isExpectedSessionLastError,
   listSessionErrors,
   selectSessionErrorsForAlert,
+  sessionErrorAgeMs,
   sessionErrorAlertDelivery,
   sessionErrorAlertKey,
+  SESSION_ERROR_MAX_AGE_MS,
   trackSustainedHotProcesses,
   type ProcInfo,
   type ProcSustainState,
@@ -114,7 +116,12 @@ describe("Discord alert content", () => {
 
       expect(trace.length).toBeGreaterThan(300);
       expect(listSessionErrors(dbPath)).toEqual([
-        { threadId: "thread-1", lastError: trace, status: "error" },
+        {
+          threadId: "thread-1",
+          lastError: trace,
+          status: "error",
+          updatedAt: "2026-07-28T00:00:00Z",
+        },
       ]);
     } finally {
       NodeFS.rmSync(tempDir, { recursive: true, force: true });
@@ -199,8 +206,50 @@ describe("session last_error alert classification", () => {
       1,
     );
     expect(selected.ignoredRecoveryCount).toBe(2);
+    expect(selected.ignoredStaleCount).toBe(0);
     expect(selected.fatals).toHaveLength(1);
     expect(selected.fatals[0]?.threadId).toBe("t3");
+  });
+
+  it("drops sticky last_error rows older than the max age window", () => {
+    const nowMs = Date.parse("2026-08-01T07:30:00.000Z");
+    const selected = selectSessionErrorsForAlert(
+      [
+        {
+          // The live spam: 10-day-old Invalid params still status=error.
+          threadId: "2d9ccf35-a36a-41bc-a762-523f5e423f41",
+          lastError: "Error: Invalid params\n    at decodeJsonError (...)",
+          status: "error",
+          updatedAt: "2026-07-21T15:11:34.330Z",
+        },
+        {
+          threadId: "fresh-1",
+          lastError: "ProviderAdapterProcessError: Failed to spawn ACP process for command: grok",
+          status: "error",
+          updatedAt: "2026-08-01T07:00:00.000Z",
+        },
+      ],
+      5,
+      { nowMs, maxAgeMs: SESSION_ERROR_MAX_AGE_MS },
+    );
+    expect(selected.ignoredStaleCount).toBe(1);
+    expect(selected.fatals).toEqual([
+      {
+        threadId: "fresh-1",
+        lastError: "ProviderAdapterProcessError: Failed to spawn ACP process for command: grok",
+      },
+    ]);
+    expect(
+      classifySessionLastError({
+        lastError: "Error: Invalid params",
+        status: "error",
+        updatedAt: "2026-07-21T15:11:34.330Z",
+        nowMs,
+      }),
+    ).toBe("stale");
+    expect(sessionErrorAgeMs("2026-07-21T15:11:34.330Z", nowMs)).toBeGreaterThan(
+      SESSION_ERROR_MAX_AGE_MS,
+    );
   });
 
   it("shares cooldown keys across threads with the same failure signature", () => {
