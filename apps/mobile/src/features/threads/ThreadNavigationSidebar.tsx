@@ -48,6 +48,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { BoardScreen } from "../board/BoardScreen";
 import {
+  DEFAULT_OWNERSHIP_FILTER,
   hasCustomHomeListOptions,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
@@ -1413,7 +1414,7 @@ function ThreadNavigationSidebarPane(
   // light the "customized" state (sort options are hidden).
   const filterCustomized =
     options.selectedEnvironmentIds.length > 0 ||
-    options.ownershipFilter !== "any" ||
+    options.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
     options.ownershipRelation !== "both" ||
     selectedProjectKey !== null ||
     options.threadGrouping !== "project" ||

@@ -1421,7 +1421,7 @@ export default function SidebarV2() {
       const raw = window.localStorage.getItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
       if (isOwnershipRelation(raw)) return raw;
     } catch {
-      // ignore
+      return DEFAULT_OWNERSHIP_RELATION;
     }
     return DEFAULT_OWNERSHIP_RELATION;
   });

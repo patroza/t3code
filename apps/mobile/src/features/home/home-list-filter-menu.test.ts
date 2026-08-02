@@ -10,7 +10,7 @@ function baseProps(
     projects: [],
     selectedEnvironmentIds: [],
     selectedProjectKey: null,
-    ownershipFilter: "any",
+    ownershipFilter: "mine",
     ownershipRelation: "both",
     projectSortOrder: "updated_at",
     threadSortOrder: "updated_at",
