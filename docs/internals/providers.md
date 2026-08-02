@@ -56,8 +56,7 @@ Provider output comes back as internal commands such as `thread.message.assistan
 ## Server-side workers
 
 Provider work flows through three queue-backed workers. All three are built with
-`makeDrainableWorker` from [`DrainableWorker.ts`][worker] and expose `drain` for deterministic test
-synchronization.
+drainable worker primitives and expose `drain` for deterministic test synchronization.
 
 1. [`ProviderRuntimeIngestion`][ingest] consumes provider runtime streams and emits orchestration
    commands.
@@ -65,6 +64,11 @@ synchronization.
    calls.
 3. [`CheckpointReactor`][checkpoint] captures workspace checkpoints on turn start and completion, and
    performs reverts.
+
+Provider commands use lazy per-thread FIFO lanes. Commands remain ordered within one thread, while
+different threads run concurrently so a stalled provider cannot block unrelated conversations. A
+lane is created only when work arrives and is removed as soon as it becomes idle; historical threads
+do not allocate lanes. Deleting a thread interrupts and removes any active lane.
 
 ### Buffered assistant delivery
 
