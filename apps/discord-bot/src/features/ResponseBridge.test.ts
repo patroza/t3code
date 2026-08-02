@@ -61,6 +61,7 @@ import {
   resolveDiscordThreadTitleBadges,
   resolveDiscordTitlePrEvidence,
   resolveSettledDiscordThreadTitleUpgrade,
+  resolveSilentDiscordThreadPrBadge,
   resolveTemporaryDiscordThreadTitleBadge,
   resolveThreadChangeRequestLookupCwds,
   mergeStickyTitlePr,
@@ -68,6 +69,7 @@ import {
   planDiscordThreadTitleApply,
   shouldApplyDiscordThreadPrBadge,
   shouldApplyDiscordThreadTitleBadge,
+  shouldDeferInitializedPrWhileBusy,
   shouldConvertWorkingTipsToWakeUp,
   summarizeExternalUserInput,
   threadTitleChangeRequestState,
@@ -2094,6 +2096,143 @@ describe("resolveSettledDiscordThreadTitleUpgrade", () => {
         cachedPr: { state: "open", hasFailingChecks: false },
       }),
     ).toBe("🔀 ⏳ Empasa pickup carrier rollout");
+  });
+
+  it("does not thrash-rename ⏳ → ▫️ ⏳ while still busy after no-PR is confirmed", () => {
+    // Turn start painted activity-only; VCS later confirms no PR. Second rename to
+    // ▫️ ⏳ is pure channel noise — settle will paint ▫️ when busy clears.
+    expect(
+      resolveSettledDiscordThreadTitleUpgrade({
+        thread: {
+          title: "for pr 2101, i wish we could push freely to draft PRs",
+          branch: "t3-discord/pr-2101-draft-pushes",
+          worktreePath: "/var/lib/t3/worktrees/t3code/t3-discord-6c17cdca",
+          messages: [assistantMessage()],
+          session: { status: "running", activeTurnId: "turn-1" } as never,
+          latestTurn: {
+            turnId: "turn-1" as never,
+            state: "running",
+            completedAt: null,
+          } as never,
+        },
+        mirroredThreadTitle: "⏳ for pr 2101, i wish we could push freely to draft PRs",
+        attemptedThreadTitle: "⏳ for pr 2101, i wish we could push freely to draft PRs",
+        cachedPr: null,
+        canApplyNoPrBadge: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("still paints ▫️ ⏳ in one shot when busy starts on a plain title with no-PR known", () => {
+    expect(
+      resolveSettledDiscordThreadTitleUpgrade({
+        thread: {
+          title: "for pr 2101, i wish we could push freely to draft PRs",
+          branch: "t3-discord/pr-2101-draft-pushes",
+          worktreePath: "/var/lib/t3/worktrees/t3code/t3-discord-6c17cdca",
+          messages: [assistantMessage()],
+          session: { status: "running", activeTurnId: "turn-1" } as never,
+          latestTurn: {
+            turnId: "turn-1" as never,
+            state: "running",
+            completedAt: null,
+          } as never,
+        },
+        mirroredThreadTitle: "for pr 2101, i wish we could push freely to draft PRs",
+        attemptedThreadTitle: "for pr 2101, i wish we could push freely to draft PRs",
+        cachedPr: null,
+        canApplyNoPrBadge: true,
+      }),
+    ).toBe("▫️ ⏳ for pr 2101, i wish we could push freely to draft PRs");
+  });
+
+  it("still upgrades ⏳ → 🔀 ⏳ mid-turn when a real PR appears", () => {
+    expect(
+      resolveSettledDiscordThreadTitleUpgrade({
+        thread: {
+          title: "Empasa pickup carrier rollout",
+          branch: "t3-discord/empasa-pickup-carrier",
+          worktreePath: "/var/lib/t3/worktrees/scanner/t3-discord-c434b753",
+          messages: [assistantMessage()],
+          session: { status: "running", activeTurnId: "turn-1" } as never,
+          latestTurn: {
+            turnId: "turn-1" as never,
+            state: "running",
+            completedAt: null,
+          } as never,
+        },
+        mirroredThreadTitle: "⏳ Empasa pickup carrier rollout",
+        attemptedThreadTitle: "⏳ Empasa pickup carrier rollout",
+        cachedPr: { state: "open", hasFailingChecks: false },
+      }),
+    ).toBe("🔀 ⏳ Empasa pickup carrier rollout");
+  });
+});
+
+describe("shouldDeferInitializedPrWhileBusy / resolveSilentDiscordThreadPrBadge", () => {
+  it("defers only the no-PR badge while busy is unchanged", () => {
+    expect(
+      shouldDeferInitializedPrWhileBusy({
+        currentPr: null,
+        nextPr: "initialized",
+        currentActivity: "busy",
+        nextActivity: "busy",
+      }),
+    ).toBe(true);
+    expect(
+      resolveSilentDiscordThreadPrBadge({
+        currentPr: null,
+        nextPr: "initialized",
+        currentActivity: "busy",
+        nextActivity: "busy",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not defer when painting dual badges from a plain title", () => {
+    expect(
+      shouldDeferInitializedPrWhileBusy({
+        currentPr: null,
+        nextPr: "initialized",
+        currentActivity: null,
+        nextActivity: "busy",
+      }),
+    ).toBe(false);
+    expect(
+      resolveSilentDiscordThreadPrBadge({
+        currentPr: null,
+        nextPr: "initialized",
+        currentActivity: null,
+        nextActivity: "busy",
+      }),
+    ).toBe("initialized");
+  });
+
+  it("does not defer real PR upgrades or settle (busy → idle)", () => {
+    expect(
+      shouldDeferInitializedPrWhileBusy({
+        currentPr: null,
+        nextPr: "open",
+        currentActivity: "busy",
+        nextActivity: "busy",
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeferInitializedPrWhileBusy({
+        currentPr: null,
+        nextPr: "initialized",
+        currentActivity: "busy",
+        nextActivity: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveSilentDiscordThreadPrBadge({
+        currentPr: null,
+        nextPr: "initialized",
+        currentActivity: "busy",
+        nextActivity: null,
+      }),
+    ).toBe("initialized");
   });
 });
 

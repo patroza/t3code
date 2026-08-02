@@ -1554,6 +1554,53 @@ export function shouldApplyDiscordThreadPrBadge(
 }
 
 /**
+ * Silence: never thrash-rename `⏳ Title` → `▫️ ⏳ Title` mid-turn.
+ *
+ * Busy is painted first (before VCS confirms no PR). Adding only the no-PR ▫️
+ * badge while still busy is a second channel-name system message with no user
+ * value — settle can compose ▫️ and clear ⏳ in one rename.
+ *
+ * Real PR upgrades (🔀 / ❌ / ✔️ / ✖️) still apply mid-turn.
+ */
+export function shouldDeferInitializedPrWhileBusy(input: {
+  readonly currentPr: DiscordThreadPrBadgeState;
+  readonly nextPr: DiscordThreadPrBadgeState;
+  readonly currentActivity: DiscordThreadActivityBadgeState;
+  readonly nextActivity: DiscordThreadActivityBadgeState;
+}): boolean {
+  return (
+    input.nextPr === "initialized" &&
+    input.currentPr === null &&
+    input.currentActivity === "busy" &&
+    input.nextActivity === "busy"
+  );
+}
+
+/**
+ * PR column after demotion guards + mid-busy ▫️ silence.
+ */
+export function resolveSilentDiscordThreadPrBadge(input: {
+  readonly currentPr: DiscordThreadPrBadgeState;
+  readonly nextPr: DiscordThreadPrBadgeState;
+  readonly currentActivity: DiscordThreadActivityBadgeState;
+  readonly nextActivity: DiscordThreadActivityBadgeState;
+}): DiscordThreadPrBadgeState {
+  const prAllowed = shouldApplyDiscordThreadPrBadge(input.currentPr, input.nextPr);
+  const appliedPr = prAllowed ? input.nextPr : input.currentPr;
+  if (
+    shouldDeferInitializedPrWhileBusy({
+      currentPr: input.currentPr,
+      nextPr: appliedPr,
+      currentActivity: input.currentActivity,
+      nextActivity: input.nextActivity,
+    })
+  ) {
+    return input.currentPr;
+  }
+  return appliedPr;
+}
+
+/**
  * @deprecated Dual-slot: use `shouldApplyDiscordThreadPrBadge` for PR; activity always applies.
  * Kept for older tests that still pass exclusive states.
  */
@@ -1618,12 +1665,19 @@ export function resolveSettledDiscordThreadTitleUpgrade(input: {
       : parseDiscordThreadTitleBadges(input.attemptedThreadTitle);
 
   // Sticky PR: refuse demotion; keep current PR column when next would weaken it.
+  // Also silence mid-busy ▫️-only upgrades (⏳ Title → ▫️ ⏳ Title thrash).
   const prAllowed = shouldApplyDiscordThreadPrBadge(currentBadges.pr, prState);
-  const appliedPr = prAllowed ? prState : currentBadges.pr;
+  const appliedPr = resolveSilentDiscordThreadPrBadge({
+    currentPr: currentBadges.pr,
+    nextPr: prState,
+    currentActivity: currentBadges.activity,
+    nextActivity: activity,
+  });
 
   // Demotion refused and activity unchanged → leave the mirrored title alone
   // (preserves ❌ 🔀 etc. without re-decorating from a null PR cache).
-  if (!prAllowed && activity === currentBadges.activity) {
+  // Same for deferred ▫️ while still busy: nothing to rename until settle.
+  if (appliedPr === currentBadges.pr && activity === currentBadges.activity) {
     return null;
   }
 
@@ -4370,7 +4424,14 @@ export const runBridge = (
                   ? mirroredBadges
                   : parseDiscordThreadTitleBadges(latest.attemptedThreadTitle);
               const prAllowed = shouldApplyDiscordThreadPrBadge(currentBadges.pr, effectivePrState);
-              const appliedPr = prAllowed ? effectivePrState : currentBadges.pr;
+              // Silence mid-busy ▫️-only upgrades so VCS "no PR" does not second-rename
+              // after the busy paint (⏳ → ▫️ ⏳ thrash). Settle composes both later.
+              const appliedPr = resolveSilentDiscordThreadPrBadge({
+                currentPr: currentBadges.pr,
+                nextPr: effectivePrState,
+                currentActivity: currentBadges.activity,
+                nextActivity: activityAfterLookup,
+              });
 
               // Still nothing actionable (no PR column, no activity, nothing mirrored).
               if (appliedPr === null && activityAfterLookup === null && currentBadges.pr === null) {
@@ -4383,6 +4444,16 @@ export const runBridge = (
                   activity: activityAfterLookup,
                 });
                 yield* commitComputedTitle(null, "pending-retry-deferred");
+                return;
+              }
+
+              // Deferred ▫️ while still busy and activity already matches → no rename.
+              if (
+                appliedPr === currentBadges.pr &&
+                activityAfterLookup === currentBadges.activity &&
+                latest.mirroredThreadTitle !== null
+              ) {
+                yield* commitComputedTitle(null, "silence-defer-initialized-while-busy");
                 return;
               }
 
