@@ -565,9 +565,27 @@ export const ServerLifecycleStreamReadyEvent = Schema.Struct({
 });
 export type ServerLifecycleStreamReadyEvent = typeof ServerLifecycleStreamReadyEvent.Type;
 
+export const ServerLifecycleWebVersionPayload = Schema.Struct({
+  // Identity of the served web bundle (a hash of index.html). Clients compare
+  // the value they booted with against later broadcasts to detect that the
+  // server's static assets were hot-swapped underneath them.
+  webVersion: TrimmedNonEmptyString,
+});
+export type ServerLifecycleWebVersionPayload = typeof ServerLifecycleWebVersionPayload.Type;
+
+export const ServerLifecycleStreamWebVersionChangedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  sequence: NonNegativeInt,
+  type: Schema.Literal("webVersionChanged"),
+  payload: ServerLifecycleWebVersionPayload,
+});
+export type ServerLifecycleStreamWebVersionChangedEvent =
+  typeof ServerLifecycleStreamWebVersionChangedEvent.Type;
+
 export const ServerLifecycleStreamEvent = Schema.Union([
   ServerLifecycleStreamWelcomeEvent,
   ServerLifecycleStreamReadyEvent,
+  ServerLifecycleStreamWebVersionChangedEvent,
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 
