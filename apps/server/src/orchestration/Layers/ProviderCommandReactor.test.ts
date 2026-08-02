@@ -172,6 +172,7 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    readonly interruptTurnEffect?: ProviderServiceShape["interruptTurn"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -257,7 +258,7 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-1"),
       }),
     );
-    const interruptTurn = vi.fn((_: unknown) => Effect.void);
+    const interruptTurn = vi.fn(input?.interruptTurnEffect ?? ((_: unknown) => Effect.void));
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
     const stopSession = vi.fn((input: unknown) =>
@@ -3295,6 +3296,78 @@ describe("ProviderCommandReactor", () => {
       const readModel = await harness.readModel();
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       return thread?.session?.status === "ready" && thread.session.activeTurnId === null;
+    });
+  });
+
+  it("isolates a hung provider interrupt so another thread starts immediately", async () => {
+    const harness = await createHarness({
+      interruptTurnEffect: () => Effect.never,
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    const secondThreadId = ThreadId.make("thread-2");
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+
+    await harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("cmd-create-thread-after-hung-interrupt"),
+      threadId: secondThreadId,
+      projectId: asProjectId("project-1"),
+      title: "Independent thread",
+      modelSelection,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-running-session-before-hung-interrupt"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
+        threadId: ThreadId.make("thread-1"),
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: asTurnId("turn-hung-interrupt"),
+        lastError: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.make("cmd-hung-interrupt"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-hung-interrupt"),
+      createdAt: now,
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-start-after-hung-interrupt"),
+      threadId: secondThreadId,
+      message: {
+        messageId: asMessageId("message-after-hung-interrupt"),
+        role: "user",
+        text: "this thread must still start",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const interrupted = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return interrupted?.session?.status === "ready";
+    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 1_000);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: secondThreadId,
     });
   });
 
