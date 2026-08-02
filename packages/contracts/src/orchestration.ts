@@ -198,6 +198,17 @@ export const ProjectScript = Schema.Struct({
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
   /**
+   * When true, the script runs (and must exit 0) before a worktree is removed.
+   * Absent/undefined means false so older stored scripts keep decoding.
+   */
+  runOnWorktreeRemove: Schema.optional(Schema.Boolean),
+  /**
+   * When true, the script runs when T3 observes the branch change request
+   * transition to merged (status poll), independent of worktree removal.
+   * Absent/undefined means false so older stored scripts keep decoding.
+   */
+  runOnPrMerged: Schema.optional(Schema.Boolean),
+  /**
    * URL to open in the in-app browser preview when this script runs (or
    * when the user explicitly requests a preview). Optional; only honored on
    * the desktop build.
