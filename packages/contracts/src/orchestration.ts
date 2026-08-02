@@ -203,9 +203,9 @@ export const ProjectScript = Schema.Struct({
    */
   runOnWorktreeRemove: Schema.optional(Schema.Boolean),
   /**
-   * When true, the script runs (and must exit 0) when a worktree is removed
-   * while its change request is already merged. Absent/undefined means false
-   * so older stored scripts keep decoding.
+   * When true, the script runs when T3 observes the branch change request
+   * transition to merged (status poll), independent of worktree removal.
+   * Absent/undefined means false so older stored scripts keep decoding.
    */
   runOnPrMerged: Schema.optional(Schema.Boolean),
   /**

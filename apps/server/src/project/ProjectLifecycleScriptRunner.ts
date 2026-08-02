@@ -50,6 +50,9 @@ export interface ProjectLifecycleScriptRunnerInput {
   readonly projectId?: string;
   readonly projectCwd?: string;
   readonly worktreePath: string;
+  /** Optional PR metadata for pr-merged lifecycle env. */
+  readonly prNumber?: number;
+  readonly prUrl?: string;
 }
 
 export class ProjectLifecycleScriptOperationError extends Schema.TaggedErrorClass<ProjectLifecycleScriptOperationError>()(
@@ -134,35 +137,50 @@ export const make = Effect.gen(function* () {
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.projectCwd === undefined ? {} : { projectCwd: input.projectCwd }),
     };
-    const projectById = input.projectId
-      ? yield* projectionSnapshotQuery.getProjectShellById(ProjectId.make(input.projectId)).pipe(
-          Effect.map(Option.getOrUndefined),
-          Effect.mapError(
-            (cause) =>
-              new ProjectLifecycleScriptOperationError({
-                ...errorContext,
-                operation: "resolveProject",
-                cause,
-              }),
-          ),
-        )
-      : null;
-    if (projectById) {
-      return projectById;
+    const mapResolveError = (cause: unknown) =>
+      new ProjectLifecycleScriptOperationError({
+        ...errorContext,
+        operation: "resolveProject",
+        cause,
+      });
+
+    if (input.projectId) {
+      const projectById = yield* projectionSnapshotQuery
+        .getProjectShellById(ProjectId.make(input.projectId))
+        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(mapResolveError));
+      if (projectById) {
+        return projectById;
+      }
     }
-    if (!input.projectCwd) {
+
+    const candidateRoots = [input.projectCwd, input.worktreePath].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    );
+    for (const root of candidateRoots) {
+      const projectByRoot = yield* projectionSnapshotQuery
+        .getActiveProjectByWorkspaceRoot(root)
+        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(mapResolveError));
+      if (projectByRoot) {
+        return projectByRoot;
+      }
+    }
+
+    // Status cwd is often a worktree path that is not the project workspace root.
+    // Resolve via thread shells that link this path.
+    const shell = yield* projectionSnapshotQuery
+      .getShellSnapshot()
+      .pipe(Effect.mapError(mapResolveError));
+    const thread = shell.threads.find(
+      (entry) => entry.worktreePath !== null && entry.worktreePath === input.worktreePath,
+    );
+    if (!thread) {
       return null;
     }
-    return yield* projectionSnapshotQuery.getActiveProjectByWorkspaceRoot(input.projectCwd).pipe(
-      Effect.map(Option.getOrUndefined),
-      Effect.mapError(
-        (cause) =>
-          new ProjectLifecycleScriptOperationError({
-            ...errorContext,
-            operation: "resolveProject",
-            cause,
-          }),
-      ),
+    return (
+      shell.projects.find((project) => project.id === thread.projectId) ??
+      (yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.map(Option.getOrUndefined), Effect.mapError(mapResolveError)))
     );
   });
 
@@ -191,6 +209,8 @@ export const make = Effect.gen(function* () {
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
       lifecycle,
+      prNumber: input.prNumber,
+      prUrl: input.prUrl,
     });
     const env: NodeJS.ProcessEnv = {
       ...hostEnvironment,

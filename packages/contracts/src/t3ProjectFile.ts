@@ -50,7 +50,7 @@ export const T3ProjectFileScript = Schema.Struct({
   runOnPrMerged: Schema.optionalKey(
     Schema.Boolean.annotate({
       description:
-        "When true, the script runs automatically when a worktree is removed while its pull/merge request is already merged. Removal waits for the script to exit; a non-zero exit blocks removal.",
+        "When true, the script runs automatically when T3 observes the branch change request transition to merged (independent of worktree removal). Runs in the status cwd (worktree or project root).",
     }),
   ),
   previewUrl: Schema.optionalKey(

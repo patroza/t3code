@@ -52,13 +52,23 @@ export function projectLifecycleRuntimeEnv(input: {
   project: { cwd: string };
   worktreePath: string;
   lifecycle: ProjectLifecycleKind;
+  prNumber?: number | null;
+  prUrl?: string | null;
   extraEnv?: Record<string, string>;
 }): Record<string, string> {
+  const prEnv: Record<string, string> = {};
+  if (input.prNumber !== undefined && input.prNumber !== null) {
+    prEnv.T3CODE_PR_NUMBER = String(input.prNumber);
+  }
+  if (input.prUrl !== undefined && input.prUrl !== null && input.prUrl.trim().length > 0) {
+    prEnv.T3CODE_PR_URL = input.prUrl.trim();
+  }
   return projectScriptRuntimeEnv({
     project: input.project,
     worktreePath: input.worktreePath,
     extraEnv: {
       T3CODE_LIFECYCLE: input.lifecycle,
+      ...prEnv,
       ...(input.extraEnv ?? {}),
     },
   });

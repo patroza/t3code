@@ -601,7 +601,7 @@ export default function ProjectScriptsControl({
                 />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
-                <span>Also run when removing a worktree whose PR is merged</span>
+                <span>Run automatically when the PR/MR merges</span>
                 <Switch
                   checked={runOnPrMerged}
                   onCheckedChange={(checked) => setRunOnPrMerged(Boolean(checked))}

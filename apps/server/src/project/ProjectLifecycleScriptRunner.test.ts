@@ -35,11 +35,48 @@ const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationPro
   deletedAt: null,
 });
 
-const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject | null) =>
+const makeProjectionSnapshotQueryLayer = (
+  project: OrchestrationProject | null,
+  options?: { readonly worktreePath?: string },
+) =>
   Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
     getCommandReadModel: () => Effect.die("unused"),
     getSnapshot: () => Effect.die("unused"),
-    getShellSnapshot: () => Effect.die("unused"),
+    getShellSnapshot: () =>
+      Effect.succeed({
+        snapshotSequence: 1,
+        projects: project ? [project] : [],
+        threads:
+          project && options?.worktreePath
+            ? [
+                {
+                  id: "thread-1" as never,
+                  projectId: project.id,
+                  title: "Thread",
+                  modelSelection: {
+                    instanceId: "codex" as never,
+                    model: "gpt",
+                  },
+                  runtimeMode: "full-access" as never,
+                  interactionMode: "default" as never,
+                  branch: null,
+                  worktreePath: options.worktreePath,
+                  latestTurn: null,
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                  updatedAt: "2026-01-01T00:00:00.000Z",
+                  archivedAt: null,
+                  settledOverride: null,
+                  settledAt: null,
+                  session: null,
+                  latestUserMessageAt: null,
+                  hasPendingApprovals: false,
+                  hasPendingUserInput: false,
+                  hasActionableProposedPlan: false,
+                },
+              ]
+            : [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
     getArchivedShellSnapshot: () => Effect.die("unused"),
     getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
     getCounts: () => Effect.die("unused"),
@@ -64,9 +101,10 @@ const makeProcessRunnerLayer = (run: ProcessRunner.ProcessRunner["Service"]["run
 const testLayer = (
   project: OrchestrationProject | null,
   run: ProcessRunner.ProcessRunner["Service"]["run"],
+  options?: { readonly worktreePath?: string },
 ) =>
   ProjectLifecycleScriptRunner.layer.pipe(
-    Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
+    Layer.provideMerge(makeProjectionSnapshotQueryLayer(project, options)),
     Layer.provideMerge(makeProcessRunnerLayer(run)),
   );
 
@@ -197,15 +235,54 @@ describe("ProjectLifecycleScriptRunner", () => {
       const result = yield* runner.runPrMerged({
         projectCwd: "/repo/project",
         worktreePath: "/repo/worktrees/a",
+        prNumber: 42,
+        prUrl: "https://github.com/org/repo/pull/42",
       });
       expect(result.status).toBe("completed");
       expect(run).toHaveBeenCalledWith(
         expect.objectContaining({
           env: expect.objectContaining({
             T3CODE_LIFECYCLE: "pr-merged",
+            T3CODE_PR_NUMBER: "42",
+            T3CODE_PR_URL: "https://github.com/org/repo/pull/42",
           }),
         }),
       );
     }).pipe(Effect.provide(testLayer(project, run)));
   });
+
+  it.effect(
+    "resolves the project via thread worktree path when cwd is not the workspace root",
+    () => {
+      const run = vi.fn(() => Effect.succeed(okProcessOutput()));
+      const project = makeProject([
+        {
+          id: "merged",
+          name: "On merge",
+          command: "echo reaped",
+          icon: "configure",
+          runOnWorktreeCreate: false,
+          runOnPrMerged: true,
+        },
+      ]);
+      const worktreePath = "/repo/worktrees/a";
+
+      return Effect.gen(function* () {
+        const runner = yield* ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner;
+        const result = yield* runner.runPrMerged({
+          worktreePath,
+        });
+        expect(result.status).toBe("completed");
+        expect(run).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cwd: worktreePath,
+            env: expect.objectContaining({
+              T3CODE_PROJECT_ROOT: "/repo/project",
+              T3CODE_WORKTREE_PATH: worktreePath,
+            }),
+          }),
+        );
+      }).pipe(Effect.provide(testLayer(project, run, { worktreePath })));
+    },
+  );
 });
