@@ -1,16 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  prMergedProjectScript,
+  projectLifecyclePrEnv,
+  projectLifecycleRuntimeEnv,
   projectScriptCwd,
   projectScriptRuntimeEnv,
   setupProjectScript,
+  worktreeRemoveProjectScript,
 } from "@t3tools/shared/projectScripts";
 
 import {
   buildProjectScript,
+  clearConflictingLifecycleFlags,
   commandForProjectScript,
   nextProjectScriptId,
   primaryProjectScript,
   projectScriptIdFromCommand,
+  projectScriptMenuLabel,
 } from "./projectScripts";
 
 describe("projectScripts helpers", () => {
@@ -21,6 +27,8 @@ describe("projectScripts helpers", () => {
         command: "pnpm dev",
         icon: "debug",
         runOnWorktreeCreate: false,
+        runOnWorktreeRemove: false,
+        runOnPrMerged: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -42,6 +50,8 @@ describe("projectScripts helpers", () => {
         command: "pnpm test",
         icon: "test",
         runOnWorktreeCreate: false,
+        runOnWorktreeRemove: false,
+        runOnPrMerged: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -51,6 +61,29 @@ describe("projectScripts helpers", () => {
       command: "pnpm test",
       icon: "test",
       runOnWorktreeCreate: false,
+    });
+  });
+
+  it("includes lifecycle flags only when enabled", () => {
+    expect(
+      buildProjectScript("teardown", {
+        name: "Teardown",
+        command: "pkill -f something || true",
+        icon: "configure",
+        runOnWorktreeCreate: false,
+        runOnWorktreeRemove: true,
+        runOnPrMerged: true,
+        previewUrl: null,
+        autoOpenPreview: false,
+      }),
+    ).toEqual({
+      id: "teardown",
+      name: "Teardown",
+      command: "pkill -f something || true",
+      icon: "configure",
+      runOnWorktreeCreate: false,
+      runOnWorktreeRemove: true,
+      runOnPrMerged: true,
     });
   });
 
@@ -67,7 +100,7 @@ describe("projectScripts helpers", () => {
     expect(nextProjectScriptId("!!!", [])).toBe("script");
   });
 
-  it("resolves primary and setup scripts", () => {
+  it("resolves primary and lifecycle scripts", () => {
     const scripts = [
       {
         id: "setup",
@@ -75,6 +108,22 @@ describe("projectScripts helpers", () => {
         command: "bun install",
         icon: "configure" as const,
         runOnWorktreeCreate: true,
+      },
+      {
+        id: "teardown",
+        name: "Teardown",
+        command: "echo cleanup",
+        icon: "configure" as const,
+        runOnWorktreeCreate: false,
+        runOnWorktreeRemove: true,
+      },
+      {
+        id: "merged",
+        name: "On merge",
+        command: "echo merged",
+        icon: "configure" as const,
+        runOnWorktreeCreate: false,
+        runOnPrMerged: true,
       },
       {
         id: "test",
@@ -87,6 +136,28 @@ describe("projectScripts helpers", () => {
 
     expect(primaryProjectScript(scripts)?.id).toBe("test");
     expect(setupProjectScript(scripts)?.id).toBe("setup");
+    expect(worktreeRemoveProjectScript(scripts)?.id).toBe("teardown");
+    expect(prMergedProjectScript(scripts)?.id).toBe("merged");
+    expect(projectScriptMenuLabel(scripts[1]!)).toBe("Teardown (teardown)");
+  });
+
+  it("clears conflicting lifecycle flags from other scripts", () => {
+    const existing = {
+      id: "old-teardown",
+      name: "Old teardown",
+      command: "echo old",
+      icon: "configure" as const,
+      runOnWorktreeCreate: false,
+      runOnWorktreeRemove: true,
+      runOnPrMerged: true,
+    };
+    const cleared = clearConflictingLifecycleFlags(existing, {
+      runOnWorktreeCreate: false,
+      runOnWorktreeRemove: true,
+      runOnPrMerged: false,
+    });
+    expect(cleared.runOnWorktreeRemove).toBeUndefined();
+    expect(cleared.runOnPrMerged).toBe(true);
   });
 
   it("builds default runtime env for scripts", () => {
@@ -99,6 +170,41 @@ describe("projectScripts helpers", () => {
       T3CODE_PROJECT_ROOT: "/repo",
       T3CODE_WORKTREE_PATH: "/repo/worktree-a",
     });
+  });
+
+  it("exports associated PR metadata as lifecycle env vars", () => {
+    expect(
+      projectLifecyclePrEnv({
+        number: 12,
+        url: "https://github.com/org/repo/pull/12",
+        title: "Fix",
+        baseRef: "main",
+        headRef: "feature/fix",
+        state: "open",
+      }),
+    ).toEqual({
+      T3CODE_PR: "https://github.com/org/repo/pull/12",
+      T3CODE_PR_NUMBER: "12",
+      T3CODE_PR_URL: "https://github.com/org/repo/pull/12",
+      T3CODE_PR_TITLE: "Fix",
+      T3CODE_PR_BASE_REF: "main",
+      T3CODE_PR_HEAD_REF: "feature/fix",
+      T3CODE_PR_STATE: "open",
+    });
+
+    const lifecycleEnv = projectLifecycleRuntimeEnv({
+      project: { cwd: "/repo" },
+      worktreePath: "/repo/wt",
+      lifecycle: "worktree-remove",
+      pr: {
+        number: 12,
+        url: "https://github.com/org/repo/pull/12",
+        state: "merged",
+      },
+    });
+    expect(lifecycleEnv.T3CODE_PR).toBe("https://github.com/org/repo/pull/12");
+    expect(lifecycleEnv.T3CODE_LIFECYCLE).toBe("worktree-remove");
+    expect(lifecycleEnv.T3CODE_PR_STATE).toBe("merged");
   });
 
   it("allows overriding runtime env values", () => {
