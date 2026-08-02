@@ -27,6 +27,7 @@ import {
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
 import {
+  DEFAULT_OWNERSHIP_FILTER,
   hasCustomHomeListOptions,
   OWNERSHIP_FILTER_LABELS,
   OWNERSHIP_FILTERS,
@@ -116,7 +117,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
-    props.ownershipFilter !== "any" ||
+    props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
     props.ownershipRelation !== "both" ||
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&
@@ -448,7 +449,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const useSolidBoardHeader = isBoardMode && NATIVE_LIQUID_GLASS_SUPPORTED;
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
-    props.ownershipFilter !== "any" ||
+    props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
     props.ownershipRelation !== "both" ||
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&

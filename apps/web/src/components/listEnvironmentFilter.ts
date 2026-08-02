@@ -110,6 +110,35 @@ export const LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY = "t3code:list:hide-settled-
 export const DEFAULT_HIDE_SETTLED_RECENT = true;
 export const DEFAULT_HIDE_SETTLED_PROJECTS = false;
 
+/**
+ * Mine / Theirs ownership filter shared by Sidebar v1 and v2 (and the same
+ * localStorage keys so switching sidebars keeps the selection).
+ * Default is Mine so the inbox focuses on work you started or joined.
+ */
+export const SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY = "t3.sidebar.ownershipFilter";
+export const SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY = "t3.sidebar.ownershipRelation";
+export type SidebarOwnershipFilter = "any" | "mine" | "theirs";
+export const DEFAULT_SIDEBAR_OWNERSHIP_FILTER: SidebarOwnershipFilter = "mine";
+export const SIDEBAR_OWNERSHIP_FILTERS = ["any", "mine", "theirs"] as const;
+export const SIDEBAR_OWNERSHIP_FILTER_LABELS: Record<SidebarOwnershipFilter, string> = {
+  any: "Anyone",
+  mine: "Mine",
+  theirs: "Theirs",
+};
+export const SIDEBAR_OWNERSHIP_RELATIONS = ["both", "created", "participated"] as const;
+export const SIDEBAR_OWNERSHIP_RELATION_LABELS = {
+  both: "Created or participated",
+  created: "Created",
+  participated: "Participated",
+} as const;
+
+export function parseSidebarOwnershipFilter(
+  raw: string | null | undefined,
+): SidebarOwnershipFilter {
+  if (raw === "any" || raw === "mine" || raw === "theirs") return raw;
+  return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
+}
+
 /** Sidebar V2: show Last Hour / Yesterday / … under Settled when multi-bucket. */
 export const SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY =
   "t3code:sidebar-v2:settled-recency-headers:v1";
