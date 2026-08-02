@@ -116,6 +116,22 @@ Control settings**.
    az login
    ```
 
+### Worktree lifecycle scripts
+
+Project scripts can run automatically around git worktrees (configure them in the project scripts menu, or check them into `t3.json`):
+
+- **Run on worktree creation** – starts after a new worktree thread is created (setup / install).
+- **Run before worktree removal** – runs **before** `git worktree remove`. T3 waits for the script to exit; a non-zero exit **blocks** removal so process/data reaping can finish safely.
+- **Run when removing a worktree whose PR is merged** – same wait-for-exit behavior, additionally when the worktree’s change request is already merged at removal time.
+
+Lifecycle scripts run in the worktree directory with:
+
+- `T3CODE_PROJECT_ROOT` – main project workspace
+- `T3CODE_WORKTREE_PATH` – worktree being created or removed
+- `T3CODE_LIFECYCLE` – `worktree-remove` or `pr-merged` for teardown hooks
+
+Use teardown scripts to stop dev servers, drop temporary databases, or otherwise reap worktree-local resources.
+
 ---
 
 ## Requirements & Troubleshooting

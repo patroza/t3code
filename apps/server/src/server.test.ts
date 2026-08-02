@@ -107,6 +107,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as ProjectLifecycleScriptRunner from "./project/ProjectLifecycleScriptRunner.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -539,6 +540,12 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(vcsDriverRegistryLayer),
       Layer.provideMerge(gitVcsDriverLayer),
       Layer.provideMerge(gitManagerLayer),
+      Layer.provide(
+        Layer.mock(ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner)({
+          runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+          runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+        }),
+      ),
     );
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),

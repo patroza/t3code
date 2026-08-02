@@ -31,6 +31,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -135,10 +136,40 @@ function nonRepositoryListRefs(): VcsListRefsResult {
   };
 }
 
+function lifecycleScriptToGitCommandError(
+  operation: string,
+  input: VcsRemoveWorktreeInput,
+  error: ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunnerError,
+): GitCommandError {
+  if (error._tag === "ProjectLifecycleScriptFailedError") {
+    const detailParts = [
+      error.message,
+      error.stderr.trim().length > 0 ? error.stderr.trim() : null,
+      error.stdout.trim().length > 0 ? error.stdout.trim() : null,
+    ].filter((part): part is string => part !== null);
+    return new GitCommandError({
+      operation,
+      command: `lifecycle:${error.lifecycle}`,
+      cwd: input.path,
+      exitCode: error.exitCode ?? undefined,
+      detail: detailParts.join("\n"),
+      cause: error,
+    });
+  }
+  return new GitCommandError({
+    operation,
+    command: `lifecycle:${error.lifecycle}`,
+    cwd: input.path,
+    detail: error.message,
+    cause: error,
+  });
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const lifecycleScriptRunner = yield* ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner;
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
@@ -322,7 +353,45 @@ export const make = Effect.gen(function* () {
       ),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
+        Effect.andThen(
+          Effect.gen(function* () {
+            const lifecycleInput = {
+              projectCwd: input.cwd,
+              worktreePath: input.path,
+            };
+            // Teardown must finish successfully before the worktree directory is removed.
+            yield* lifecycleScriptRunner
+              .runWorktreeRemove(lifecycleInput)
+              .pipe(
+                Effect.mapError((error) =>
+                  lifecycleScriptToGitCommandError(
+                    "GitWorkflowService.removeWorktree",
+                    input,
+                    error,
+                  ),
+                ),
+              );
+
+            const remote = yield* gitManager
+              .remoteStatus({ cwd: input.path })
+              .pipe(Effect.catch(() => Effect.succeed(null)));
+            if (remote?.pr?.state === "merged") {
+              yield* lifecycleScriptRunner
+                .runPrMerged(lifecycleInput)
+                .pipe(
+                  Effect.mapError((error) =>
+                    lifecycleScriptToGitCommandError(
+                      "GitWorkflowService.removeWorktree",
+                      input,
+                      error,
+                    ),
+                  ),
+                );
+            }
+
+            yield* git.removeWorktree(input);
+          }),
+        ),
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(

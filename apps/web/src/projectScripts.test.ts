@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  prMergedProjectScript,
   projectScriptCwd,
   projectScriptRuntimeEnv,
   setupProjectScript,
+  worktreeRemoveProjectScript,
 } from "@t3tools/shared/projectScripts";
 
 import {
   buildProjectScript,
+  clearConflictingLifecycleFlags,
   commandForProjectScript,
   nextProjectScriptId,
   primaryProjectScript,
   projectScriptIdFromCommand,
+  projectScriptMenuLabel,
 } from "./projectScripts";
 
 describe("projectScripts helpers", () => {
@@ -21,6 +25,8 @@ describe("projectScripts helpers", () => {
         command: "pnpm dev",
         icon: "debug",
         runOnWorktreeCreate: false,
+        runOnWorktreeRemove: false,
+        runOnPrMerged: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -42,6 +48,8 @@ describe("projectScripts helpers", () => {
         command: "pnpm test",
         icon: "test",
         runOnWorktreeCreate: false,
+        runOnWorktreeRemove: false,
+        runOnPrMerged: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -51,6 +59,29 @@ describe("projectScripts helpers", () => {
       command: "pnpm test",
       icon: "test",
       runOnWorktreeCreate: false,
+    });
+  });
+
+  it("includes lifecycle flags only when enabled", () => {
+    expect(
+      buildProjectScript("teardown", {
+        name: "Teardown",
+        command: "pkill -f something || true",
+        icon: "configure",
+        runOnWorktreeCreate: false,
+        runOnWorktreeRemove: true,
+        runOnPrMerged: true,
+        previewUrl: null,
+        autoOpenPreview: false,
+      }),
+    ).toEqual({
+      id: "teardown",
+      name: "Teardown",
+      command: "pkill -f something || true",
+      icon: "configure",
+      runOnWorktreeCreate: false,
+      runOnWorktreeRemove: true,
+      runOnPrMerged: true,
     });
   });
 
@@ -67,7 +98,7 @@ describe("projectScripts helpers", () => {
     expect(nextProjectScriptId("!!!", [])).toBe("script");
   });
 
-  it("resolves primary and setup scripts", () => {
+  it("resolves primary and lifecycle scripts", () => {
     const scripts = [
       {
         id: "setup",
@@ -75,6 +106,22 @@ describe("projectScripts helpers", () => {
         command: "bun install",
         icon: "configure" as const,
         runOnWorktreeCreate: true,
+      },
+      {
+        id: "teardown",
+        name: "Teardown",
+        command: "echo cleanup",
+        icon: "configure" as const,
+        runOnWorktreeCreate: false,
+        runOnWorktreeRemove: true,
+      },
+      {
+        id: "merged",
+        name: "On merge",
+        command: "echo merged",
+        icon: "configure" as const,
+        runOnWorktreeCreate: false,
+        runOnPrMerged: true,
       },
       {
         id: "test",
@@ -87,6 +134,28 @@ describe("projectScripts helpers", () => {
 
     expect(primaryProjectScript(scripts)?.id).toBe("test");
     expect(setupProjectScript(scripts)?.id).toBe("setup");
+    expect(worktreeRemoveProjectScript(scripts)?.id).toBe("teardown");
+    expect(prMergedProjectScript(scripts)?.id).toBe("merged");
+    expect(projectScriptMenuLabel(scripts[1]!)).toBe("Teardown (teardown)");
+  });
+
+  it("clears conflicting lifecycle flags from other scripts", () => {
+    const existing = {
+      id: "old-teardown",
+      name: "Old teardown",
+      command: "echo old",
+      icon: "configure" as const,
+      runOnWorktreeCreate: false,
+      runOnWorktreeRemove: true,
+      runOnPrMerged: true,
+    };
+    const cleared = clearConflictingLifecycleFlags(existing, {
+      runOnWorktreeCreate: false,
+      runOnWorktreeRemove: true,
+      runOnPrMerged: false,
+    });
+    expect(cleared.runOnWorktreeRemove).toBeUndefined();
+    expect(cleared.runOnPrMerged).toBe(true);
   });
 
   it("builds default runtime env for scripts", () => {

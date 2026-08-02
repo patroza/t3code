@@ -35,3 +35,31 @@ export function projectScriptRuntimeEnv(
 export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
   return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
 }
+
+export function worktreeRemoveProjectScript(
+  scripts: readonly ProjectScript[],
+): ProjectScript | null {
+  return scripts.find((script) => script.runOnWorktreeRemove === true) ?? null;
+}
+
+export function prMergedProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
+  return scripts.find((script) => script.runOnPrMerged === true) ?? null;
+}
+
+export type ProjectLifecycleKind = "worktree-remove" | "pr-merged";
+
+export function projectLifecycleRuntimeEnv(input: {
+  project: { cwd: string };
+  worktreePath: string;
+  lifecycle: ProjectLifecycleKind;
+  extraEnv?: Record<string, string>;
+}): Record<string, string> {
+  return projectScriptRuntimeEnv({
+    project: input.project,
+    worktreePath: input.worktreePath,
+    extraEnv: {
+      T3CODE_LIFECYCLE: input.lifecycle,
+      ...(input.extraEnv ?? {}),
+    },
+  });
+}
