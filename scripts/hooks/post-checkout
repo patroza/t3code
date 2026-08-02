@@ -1,0 +1,95 @@
+#!/bin/sh
+# Prepare a linked git worktree after `git worktree add`.
+#
+# Canonical hook: scripts/install-git-hooks.mjs installs this into the shared
+# hooks dir (core.hooksPath) on EVERY host via `pnpm install`, so a raw
+# `git worktree add` sets up node_modules identically on smart and the t3vm
+# guest -- not only when a worktree is created through the T3 app / t3.json.
+#
+# Strategy (metadata-safe):
+#   1. Copy *small* gitignored seeds from .worktreeinclude (CLAUDE.md, .nuxt, …)
+#      via reflink/hardlink when available. NEVER clone node_modules -- that
+#      creates millions of inodes per worktree on btrfs.
+#   2. Populate node_modules with `pnpm install --frozen-lockfile --prefer-offline`
+#      against the shared store (hardlinks -> one inode per package file).
+#
+# Idempotent: never overwrites existing seed paths; pnpm is safe to re-run.
+
+# Host-agnostic: pick up pnpm/mise from the invoking user's home on either host.
+PATH="$HOME/.local/bin:$HOME/.local/share/pnpm:$HOME/.local/share/mise/shims:/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH
+
+# In the main worktree, git-dir == common-dir; in linked worktrees they differ.
+git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd) || exit 0
+[ "$git_dir" = "$common_dir" ] && exit 0
+
+main_wt=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+wt_root=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -n "$main_wt" ] && [ -n "$wt_root" ] && [ "$main_wt" != "$wt_root" ] || exit 0
+
+# Effective include: repo .worktreeinclude if present, else nothing to seed-copy.
+include=""
+if [ -f "$main_wt/.worktreeinclude" ]; then
+  include="$main_wt/.worktreeinclude"
+fi
+
+# Probe once: reflink (CoW fs) > hard link (same fs) > plain copy (cross-device).
+probe="$main_wt/.git-hook-clone-probe.$$"
+probe_dst="$wt_root/.clone-probe.$$"
+: >"$probe"
+if cp --reflink=always "$probe" "$probe_dst" 2>/dev/null; then
+  clone() { cp -a --reflink=always "$1" "$2"; }
+elif ln "$probe" "$probe_dst" 2>/dev/null; then
+  clone() { cp -al "$1" "$2"; }
+else
+  clone() { cp -a "$1" "$2"; }
+fi
+rm -f "$probe" "$probe_dst"
+
+# True if path is node_modules or under one (never clone these).
+is_node_modules_path() {
+  case "/$1/" in
+    */node_modules/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ -n "$include" ] && [ -f "$include" ]; then
+  git -C "$main_wt" ls-files --others --ignored --exclude-from="$include" --directory |
+    while IFS= read -r rel; do
+      rel=${rel%/}
+      [ -n "$rel" ] || continue
+      is_node_modules_path "$rel" && continue
+      src="$main_wt/$rel"
+      dst="$wt_root/$rel"
+      [ -e "$dst" ] && continue
+      [ -e "$src" ] || continue
+      mkdir -p "$(dirname "$dst")"
+      if [ -d "$src" ]; then
+        clone "$src" "$dst"
+      else
+        cp "$src" "$dst"
+      fi
+    done
+fi
+
+# Shared-store hardlink install: fast when the store is warm, no inode clone storm.
+[ -f "$wt_root/package.json" ] || exit 0
+[ -f "$wt_root/pnpm-lock.yaml" ] || {
+  echo "post-checkout: package.json without pnpm-lock.yaml; skip install" >&2
+  exit 0
+}
+command -v pnpm >/dev/null 2>&1 || {
+  echo "post-checkout: pnpm not on PATH; node_modules not installed" >&2
+  exit 0
+}
+
+export CI=1
+echo "post-checkout: pnpm install (hardlink from store) in $wt_root" >&2
+cd "$wt_root" || exit 1
+exec pnpm install \
+  --frozen-lockfile \
+  --prefer-offline \
+  --config.package-import-method=hardlink \
+  --config.confirmModulesPurge=false
