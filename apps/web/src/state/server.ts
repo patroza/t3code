@@ -75,6 +75,20 @@ export const primaryServerSettingsAtom = Atom.make(
   (get): ServerSettings => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,
 ).pipe(Atom.withLabel("web-primary-server-settings"));
 
+/**
+ * Latest served web-bundle version reported by the primary server, or null
+ * before the first lifecycle event. The web update banner compares this against
+ * the version present when the client booted.
+ */
+export const primaryServerWebVersionAtom = Atom.make((get): string | null => {
+  const environmentId = get(primaryEnvironmentIdAtom);
+  if (environmentId === null) {
+    return null;
+  }
+  const target = { environmentId, input: {} };
+  return Option.getOrNull(AsyncResult.value(get(serverEnvironment.webVersion(target))));
+}).pipe(Atom.withLabel("web-primary-server-web-version"));
+
 export const primaryServerProvidersAtom = Atom.make(
   (get): ReadonlyArray<ServerProvider> =>
     get(primaryServerConfigAtom)?.providers ?? EMPTY_SERVER_PROVIDERS,
