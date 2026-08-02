@@ -48,27 +48,77 @@ export function prMergedProjectScript(scripts: readonly ProjectScript[]): Projec
 
 export type ProjectLifecycleKind = "worktree-remove" | "pr-merged";
 
+/** Change request (PR/MR) associated with a lifecycle run, when known. */
+export interface ProjectLifecyclePrAssociation {
+  readonly number: number;
+  readonly url: string;
+  readonly title?: string | null;
+  readonly baseRef?: string | null;
+  readonly headRef?: string | null;
+  readonly state?: string | null;
+}
+
+/**
+ * Env for the linked PR/MR. `T3CODE_PR` is the primary handle (URL preferred).
+ */
+export function projectLifecyclePrEnv(
+  pr: ProjectLifecyclePrAssociation | null | undefined,
+): Record<string, string> {
+  if (!pr) {
+    return {};
+  }
+  const url = pr.url.trim();
+  const env: Record<string, string> = {
+    T3CODE_PR: url.length > 0 ? url : String(pr.number),
+    T3CODE_PR_NUMBER: String(pr.number),
+  };
+  if (url.length > 0) {
+    env.T3CODE_PR_URL = url;
+  }
+  const title = pr.title?.trim();
+  if (title) {
+    env.T3CODE_PR_TITLE = title;
+  }
+  const baseRef = pr.baseRef?.trim();
+  if (baseRef) {
+    env.T3CODE_PR_BASE_REF = baseRef;
+  }
+  const headRef = pr.headRef?.trim();
+  if (headRef) {
+    env.T3CODE_PR_HEAD_REF = headRef;
+  }
+  const state = pr.state?.trim();
+  if (state) {
+    env.T3CODE_PR_STATE = state;
+  }
+  return env;
+}
+
 export function projectLifecycleRuntimeEnv(input: {
   project: { cwd: string };
   worktreePath: string;
   lifecycle: ProjectLifecycleKind;
+  pr?: ProjectLifecyclePrAssociation | null;
+  /** @deprecated Prefer `pr`. */
   prNumber?: number | null;
+  /** @deprecated Prefer `pr`. */
   prUrl?: string | null;
   extraEnv?: Record<string, string>;
 }): Record<string, string> {
-  const prEnv: Record<string, string> = {};
-  if (input.prNumber !== undefined && input.prNumber !== null) {
-    prEnv.T3CODE_PR_NUMBER = String(input.prNumber);
-  }
-  if (input.prUrl !== undefined && input.prUrl !== null && input.prUrl.trim().length > 0) {
-    prEnv.T3CODE_PR_URL = input.prUrl.trim();
-  }
+  const pr =
+    input.pr ??
+    (input.prNumber !== undefined && input.prNumber !== null
+      ? {
+          number: input.prNumber,
+          url: input.prUrl?.trim() ?? "",
+        }
+      : null);
   return projectScriptRuntimeEnv({
     project: input.project,
     worktreePath: input.worktreePath,
     extraEnv: {
       T3CODE_LIFECYCLE: input.lifecycle,
-      ...prEnv,
+      ...projectLifecyclePrEnv(pr),
       ...(input.extraEnv ?? {}),
     },
   });

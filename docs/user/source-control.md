@@ -129,7 +129,10 @@ Lifecycle scripts receive:
 - `T3CODE_PROJECT_ROOT` – main project workspace
 - `T3CODE_WORKTREE_PATH` – worktree path (or project root when not on a worktree)
 - `T3CODE_LIFECYCLE` – `worktree-remove` or `pr-merged`
-- `T3CODE_PR_NUMBER` / `T3CODE_PR_URL` – set for `pr-merged` when known
+- Linked PR/MR (when known for that worktree/branch):
+  - `T3CODE_PR` – primary handle (URL preferred)
+  - `T3CODE_PR_NUMBER`, `T3CODE_PR_URL`, `T3CODE_PR_TITLE`
+  - `T3CODE_PR_BASE_REF`, `T3CODE_PR_HEAD_REF`, `T3CODE_PR_STATE`
 
 Use teardown / merge scripts to stop dev servers, drop temporary databases, or otherwise reap worktree-local resources.
 

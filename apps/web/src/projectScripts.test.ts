@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   prMergedProjectScript,
+  projectLifecyclePrEnv,
+  projectLifecycleRuntimeEnv,
   projectScriptCwd,
   projectScriptRuntimeEnv,
   setupProjectScript,
@@ -168,6 +170,41 @@ describe("projectScripts helpers", () => {
       T3CODE_PROJECT_ROOT: "/repo",
       T3CODE_WORKTREE_PATH: "/repo/worktree-a",
     });
+  });
+
+  it("exports associated PR metadata as lifecycle env vars", () => {
+    expect(
+      projectLifecyclePrEnv({
+        number: 12,
+        url: "https://github.com/org/repo/pull/12",
+        title: "Fix",
+        baseRef: "main",
+        headRef: "feature/fix",
+        state: "open",
+      }),
+    ).toEqual({
+      T3CODE_PR: "https://github.com/org/repo/pull/12",
+      T3CODE_PR_NUMBER: "12",
+      T3CODE_PR_URL: "https://github.com/org/repo/pull/12",
+      T3CODE_PR_TITLE: "Fix",
+      T3CODE_PR_BASE_REF: "main",
+      T3CODE_PR_HEAD_REF: "feature/fix",
+      T3CODE_PR_STATE: "open",
+    });
+
+    const lifecycleEnv = projectLifecycleRuntimeEnv({
+      project: { cwd: "/repo" },
+      worktreePath: "/repo/wt",
+      lifecycle: "worktree-remove",
+      pr: {
+        number: 12,
+        url: "https://github.com/org/repo/pull/12",
+        state: "merged",
+      },
+    });
+    expect(lifecycleEnv.T3CODE_PR).toBe("https://github.com/org/repo/pull/12");
+    expect(lifecycleEnv.T3CODE_LIFECYCLE).toBe("worktree-remove");
+    expect(lifecycleEnv.T3CODE_PR_STATE).toBe("merged");
   });
 
   it("allows overriding runtime env values", () => {

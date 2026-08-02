@@ -235,16 +235,27 @@ describe("ProjectLifecycleScriptRunner", () => {
       const result = yield* runner.runPrMerged({
         projectCwd: "/repo/project",
         worktreePath: "/repo/worktrees/a",
-        prNumber: 42,
-        prUrl: "https://github.com/org/repo/pull/42",
+        pr: {
+          number: 42,
+          url: "https://github.com/org/repo/pull/42",
+          title: "Ship it",
+          baseRef: "main",
+          headRef: "feature/x",
+          state: "merged",
+        },
       });
       expect(result.status).toBe("completed");
       expect(run).toHaveBeenCalledWith(
         expect.objectContaining({
           env: expect.objectContaining({
             T3CODE_LIFECYCLE: "pr-merged",
+            T3CODE_PR: "https://github.com/org/repo/pull/42",
             T3CODE_PR_NUMBER: "42",
             T3CODE_PR_URL: "https://github.com/org/repo/pull/42",
+            T3CODE_PR_TITLE: "Ship it",
+            T3CODE_PR_BASE_REF: "main",
+            T3CODE_PR_HEAD_REF: "feature/x",
+            T3CODE_PR_STATE: "merged",
           }),
         }),
       );

@@ -271,8 +271,14 @@ export const make = Effect.gen(function* () {
         .runPrMerged({
           projectCwd: cwd,
           worktreePath: cwd,
-          prNumber: pr.number,
-          prUrl: pr.url,
+          pr: {
+            number: pr.number,
+            url: pr.url,
+            title: pr.title,
+            baseRef: pr.baseRef,
+            headRef: pr.headRef,
+            state: pr.state,
+          },
         })
         .pipe(
           Effect.tap((result) =>

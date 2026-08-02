@@ -13,6 +13,7 @@ import {
   prMergedProjectScript,
   projectLifecycleRuntimeEnv,
   type ProjectLifecycleKind,
+  type ProjectLifecyclePrAssociation,
   worktreeRemoveProjectScript,
 } from "@t3tools/shared/projectScripts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -50,9 +51,8 @@ export interface ProjectLifecycleScriptRunnerInput {
   readonly projectId?: string;
   readonly projectCwd?: string;
   readonly worktreePath: string;
-  /** Optional PR metadata for pr-merged lifecycle env. */
-  readonly prNumber?: number;
-  readonly prUrl?: string;
+  /** Linked/associated PR or MR for this lifecycle run, when known. */
+  readonly pr?: ProjectLifecyclePrAssociation | null;
 }
 
 export class ProjectLifecycleScriptOperationError extends Schema.TaggedErrorClass<ProjectLifecycleScriptOperationError>()(
@@ -209,8 +209,7 @@ export const make = Effect.gen(function* () {
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
       lifecycle,
-      prNumber: input.prNumber,
-      prUrl: input.prUrl,
+      pr: input.pr,
     });
     const env: NodeJS.ProcessEnv = {
       ...hostEnvironment,

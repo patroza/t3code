@@ -735,7 +735,12 @@ describe("VcsStatusBroadcaster", () => {
       localInvalidationCalls: 0,
       remoteInvalidationCalls: 0,
     };
-    const prMergedCalls: Array<{ cwd: string; prNumber?: number }> = [];
+    const prMergedCalls: Array<{
+      cwd: string;
+      prNumber?: number;
+      prUrl?: string;
+      prTitle?: string;
+    }> = [];
 
     return Effect.gen(function* () {
       const prMergedRan = yield* Deferred.make<void>();
@@ -749,7 +754,9 @@ describe("VcsStatusBroadcaster", () => {
               Effect.gen(function* () {
                 prMergedCalls.push({
                   cwd: input.worktreePath,
-                  prNumber: input.prNumber,
+                  prNumber: input.pr?.number,
+                  prUrl: input.pr?.url,
+                  prTitle: input.pr?.title ?? undefined,
                 });
                 yield* Deferred.succeed(prMergedRan, undefined).pipe(Effect.ignore);
                 return { status: "no-script" as const };
@@ -797,7 +804,12 @@ describe("VcsStatusBroadcaster", () => {
         yield* broadcaster.refreshStatus("/repo");
         yield* Deferred.await(prMergedRan);
         assert.equal(prMergedCalls.length, 1);
-        assert.deepStrictEqual(prMergedCalls[0], { cwd: "/repo", prNumber: 2978 });
+        assert.deepStrictEqual(prMergedCalls[0], {
+          cwd: "/repo",
+          prNumber: 2978,
+          prUrl: "https://github.com/pingdotgg/t3code/pull/2978",
+          prTitle: "[codex] Rewrite client connection architecture",
+        });
 
         // Stay merged — do not re-fire.
         yield* broadcaster.refreshStatus("/repo");

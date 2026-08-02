@@ -355,12 +355,28 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
         Effect.andThen(
           Effect.gen(function* () {
+            // Prefer the PR associated with the worktree branch (status cwd = worktree path).
+            const associatedPr = yield* gitManager.remoteStatus({ cwd: input.path }).pipe(
+              Effect.map((remote) => remote.pr),
+              Effect.catch(() => Effect.succeed(null)),
+            );
+
             // Teardown must finish successfully before the worktree directory is removed.
             // PR-merged lifecycle is a separate trigger (status transition), not part of remove.
             yield* lifecycleScriptRunner
               .runWorktreeRemove({
                 projectCwd: input.cwd,
                 worktreePath: input.path,
+                pr: associatedPr
+                  ? {
+                      number: associatedPr.number,
+                      url: associatedPr.url,
+                      title: associatedPr.title,
+                      baseRef: associatedPr.baseRef,
+                      headRef: associatedPr.headRef,
+                      state: associatedPr.state,
+                    }
+                  : null,
               })
               .pipe(
                 Effect.mapError((error) =>
