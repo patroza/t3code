@@ -1,11 +1,24 @@
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   assertOverlaysReadyForCompose,
   planOverlayRebase,
+  tryResolveThreadListItemsImportConflict,
   type OverlayRebaseResult,
 } from "./rebase-integration-overlays.ts";
 import { StackError } from "./rebase-pr-stack.ts";
+
+function writeConflictedThreadListItems(repoDir: string, contents: string): string {
+  const relativePath = "apps/mobile/src/features/threads/thread-list-items.tsx";
+  const absolutePath = NodePath.join(repoDir, relativePath);
+  NodeFS.mkdirSync(NodePath.dirname(absolutePath), { recursive: true });
+  NodeFS.writeFileSync(absolutePath, contents, "utf8");
+  return absolutePath;
+}
 
 describe("planOverlayRebase", () => {
   it("skips when fork/changes is already an ancestor of the overlay tip", () => {
@@ -52,6 +65,47 @@ describe("planOverlayRebase", () => {
         mergeBaseWithNewBase: null,
       }).action,
     ).toBe("error");
+  });
+});
+
+describe("tryResolveThreadListItemsImportConflict", () => {
+  it("merges identity + settled-row imports from a known conflict block", () => {
+    const repoDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "overlay-import-"));
+    NodeChildProcess.spawnSync("git", ["init", "--quiet"], { cwd: repoDir });
+    const absolutePath = writeConflictedThreadListItems(
+      repoDir,
+      [
+        'import { foo } from "./foo";',
+        "<<<<<<< HEAD",
+        'import { resolveSettledRowTimestamp, resolveThreadStatus } from "./threadPresentation";',
+        "=======",
+        'import { ThreadIdentityLeading } from "../identity/ParticipantStack";',
+        'import { resolveThreadStatus } from "./threadPresentation";',
+        ">>>>>>> identity",
+        "export const x = 1;",
+        "",
+      ].join("\n"),
+    );
+
+    expect(tryResolveThreadListItemsImportConflict(repoDir)).toBe(true);
+    const resolved = NodeFS.readFileSync(absolutePath, "utf8");
+    expect(resolved).toContain(
+      'import { ThreadIdentityLeading } from "../identity/ParticipantStack";',
+    );
+    expect(resolved).toContain(
+      'import { resolveSettledRowTimestamp, resolveThreadStatus } from "./threadPresentation";',
+    );
+    expect(resolved).not.toContain("<<<<<<<");
+    expect(resolved).not.toContain(">>>>>>>");
+  });
+
+  it("leaves unrelated conflict markers alone", () => {
+    const repoDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "overlay-import-"));
+    writeConflictedThreadListItems(
+      repoDir,
+      ["<<<<<<< HEAD", "a", "=======", "b", ">>>>>>> other", ""].join("\n"),
+    );
+    expect(tryResolveThreadListItemsImportConflict(repoDir)).toBe(false);
   });
 });
 
