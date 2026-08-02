@@ -100,6 +100,9 @@ Follow-up work runs asynchronously in queue-backed workers built on [`DrainableW
 count reaches zero, so a test can await "queue empty and current item finished" instead of sleeping.
 Each of the three services exposes `drain` for exactly this.
 
+`ProviderCommandReactor` uses the keyed variant: FIFO within a thread and concurrent across threads.
+Its lanes are lazy and ephemeral, so only threads with active or queued commands consume a lane.
+
 Runtime receipts are a test-only mechanism. `RuntimeReceiptBusLive` in
 [`RuntimeReceiptBus.ts`][receipts] publishes nothing; only the test layer is PubSub-backed. Do not
 build production behavior on receipts.
