@@ -1,0 +1,7 @@
+# Agent-only ship gate (humans: no-op). See scripts/agent-pre-push.mjs.
+# Draft / no PR: free agent push. Ready PR: vp check + typecheck + tests.
+# Publish: pnpm pr:ready (not raw gh pr ready). Agent gh shim: .tools/bin/gh.
+#
+# Humans: SKIP_AGENT_PREPUSH=1 git push
+# Agents: never SKIP_AGENT_PREPUSH / never --no-verify
+pnpm exec node scripts/agent-pre-push.mjs
