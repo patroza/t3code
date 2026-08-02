@@ -41,10 +41,16 @@ assert_scope apps/discord-bot/src/main.ts $'deploy=true\ndiscord=true\nserver=fa
 assert_scope apps/vscode/src/extension.ts $'deploy=true\ndiscord=false\nserver=false\nvscode=true\nmobile=false\ndesktop=false'
 assert_scope apps/mobile/src/App.tsx $'deploy=true\ndiscord=false\nserver=false\nvscode=false\nmobile=true\ndesktop=false'
 assert_scope apps/desktop/src/main.ts $'deploy=true\ndiscord=false\nserver=false\nvscode=false\nmobile=false\ndesktop=true'
-assert_scope apps/server/src/server.ts $'deploy=true\ndiscord=false\nserver=true\nvscode=false\nmobile=false\ndesktop=false'
-assert_scope apps/web/src/App.tsx $'deploy=true\ndiscord=false\nserver=true\nvscode=false\nmobile=false\ndesktop=true'
-assert_scope packages/client-runtime/src/index.ts $'deploy=true\ndiscord=true\nserver=true\nvscode=true\nmobile=true\ndesktop=true'
-assert_scope pnpm-lock.yaml $'deploy=true\ndiscord=true\nserver=true\nvscode=true\nmobile=true\ndesktop=true'
-assert_scope docs/deployment.md $'deploy=false\ndiscord=false\nserver=false\nvscode=false\nmobile=false\ndesktop=false'
+# Server process code changed -> must restart, not hot-swap.
+assert_scope apps/server/src/server.ts $'deploy=true\ndiscord=false\nserver=true\nvscode=false\nmobile=false\ndesktop=false\nweb_hot_swap=false'
+# Web-only change -> server target affected purely via its served bundle, so it
+# is hot-swappable (assets replaced on the running server); desktop still rebuilds.
+assert_scope apps/web/src/App.tsx $'deploy=true\ndiscord=false\nserver=true\nvscode=false\nmobile=false\ndesktop=true\nweb_hot_swap=true'
+# Cross-boundary packages force a full restart, so no hot-swap.
+assert_scope packages/client-runtime/src/index.ts $'deploy=true\ndiscord=true\nserver=true\nvscode=true\nmobile=true\ndesktop=true\nweb_hot_swap=false'
+assert_scope pnpm-lock.yaml $'deploy=true\ndiscord=true\nserver=true\nvscode=true\nmobile=true\ndesktop=true\nweb_hot_swap=false'
+# Discord-only change never touches the server, so no web hot-swap either.
+assert_scope apps/discord-bot/src/handler.ts $'deploy=true\nserver=false\nweb_hot_swap=false'
+assert_scope docs/deployment.md $'deploy=false\ndiscord=false\nserver=false\nvscode=false\nmobile=false\ndesktop=false\nweb_hot_swap=false'
 
 echo "deployment classifier tests passed"

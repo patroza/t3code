@@ -41,6 +41,12 @@ printf 'Changed paths: %d runtime, %d non-runtime\n' \
   "${#runtime_paths[@]}" "${#non_runtime_paths[@]}"
 
 server=false
+# server_code tracks whether the SERVER PROCESS's own code (not just the web
+# bundle it serves) changed. apps/web changes leave server=true but keep the
+# server hot-swappable: the running process serves dist/client live from disk,
+# so new assets can be swapped in without a restart. Only a true server_code
+# change forces a process restart.
+server_code=false
 discord=false
 vscode=false
 mobile=false
@@ -48,6 +54,7 @@ desktop=false
 
 select_all() {
   server=true
+  server_code=true
   discord=true
   vscode=true
   mobile=true
@@ -70,10 +77,13 @@ for path in "${runtime_paths[@]}"; do
       ;;
     apps/server/*)
       server=true
+      server_code=true
       ;;
     apps/web/*)
       # The web application is served by both standalone servers and packaged
-      # desktop clients.
+      # desktop clients. It changes the served bundle but not the server process
+      # code, so the server can be hot-swapped (assets replaced on disk) rather
+      # than restarted. Desktop bundles its own copy, so it still rebuilds.
       server=true
       desktop=true
       ;;
@@ -95,6 +105,14 @@ if [[ "${server}" == "true" || "${discord}" == "true" || "${vscode}" == "true" |
   deploy=true
 fi
 
+# The server target is affected purely through its served web bundle (no server
+# process code changed), so ops can hot-swap dist/client on the running server
+# instead of restarting it. Desktop, if flagged, still rebuilds independently.
+web_hot_swap=false
+if [[ "${server}" == "true" && "${server_code}" == "false" ]]; then
+  web_hot_swap=true
+fi
+
 if [[ "${deploy}" == "true" ]]; then
   printf 'Runtime-affecting paths:\n'
   printf '  %s\n' "${runtime_paths[@]}"
@@ -104,6 +122,7 @@ fi
 
 printf 'deploy=%s\n' "${deploy}"
 printf 'server=%s\n' "${server}"
+printf 'web_hot_swap=%s\n' "${web_hot_swap}"
 printf 'discord=%s\n' "${discord}"
 printf 'vscode=%s\n' "${vscode}"
 printf 'mobile=%s\n' "${mobile}"
