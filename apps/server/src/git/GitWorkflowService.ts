@@ -152,6 +152,7 @@ function lifecycleScriptToGitCommandError(
       command: `lifecycle:${error.lifecycle}`,
       cwd: input.path,
       exitCode: error.exitCode ?? undefined,
+      failureKind: "unknown",
       detail: detailParts.join("\n"),
       cause: error,
     });
@@ -160,6 +161,7 @@ function lifecycleScriptToGitCommandError(
     operation,
     command: `lifecycle:${error.lifecycle}`,
     cwd: input.path,
+    failureKind: "unknown",
     detail: error.message,
     cause: error,
   });
@@ -357,8 +359,8 @@ export const make = Effect.gen(function* () {
           Effect.gen(function* () {
             // Prefer the PR associated with the worktree branch (status cwd = worktree path).
             const associatedPr = yield* gitManager.remoteStatus({ cwd: input.path }).pipe(
-              Effect.map((remote) => remote.pr),
-              Effect.catch(() => Effect.succeed(null)),
+              Effect.map((remote) => remote?.pr ?? null),
+              Effect.orElseSucceed(() => null),
             );
 
             // Teardown must finish successfully before the worktree directory is removed.

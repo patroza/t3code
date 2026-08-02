@@ -41,6 +41,7 @@ const makeProjectionSnapshotQueryLayer = (
 ) =>
   Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
     getCommandReadModel: () => Effect.die("unused"),
+    getThreadActivitiesPage: () => Effect.die("unused"),
     getSnapshot: () => Effect.die("unused"),
     getShellSnapshot: () =>
       Effect.succeed({
@@ -90,9 +91,11 @@ const makeProjectionSnapshotQueryLayer = (
     getThreadCheckpointContext: () => Effect.die("unused"),
     getFullThreadDiffContext: () => Effect.die("unused"),
     getThreadShellById: () => Effect.die("unused"),
+    getSessionStopContextById: () => Effect.die("unused"),
     getThreadDetailById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
     searchThreads: () => Effect.succeed({ matches: [] }),
+    getThreadLifecycleById: () => Effect.die("unused"),
   });
 
 const makeProcessRunnerLayer = (run: ProcessRunner.ProcessRunner["Service"]["run"]) =>

@@ -754,9 +754,13 @@ describe("VcsStatusBroadcaster", () => {
               Effect.gen(function* () {
                 prMergedCalls.push({
                   cwd: input.worktreePath,
-                  prNumber: input.pr?.number,
-                  prUrl: input.pr?.url,
-                  prTitle: input.pr?.title ?? undefined,
+                  ...(input.pr
+                    ? {
+                        prNumber: input.pr.number,
+                        prUrl: input.pr.url,
+                        ...(input.pr.title ? { prTitle: input.pr.title } : {}),
+                      }
+                    : {}),
                 });
                 yield* Deferred.succeed(prMergedRan, undefined).pipe(Effect.ignore);
                 return { status: "no-script" as const };

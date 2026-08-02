@@ -536,16 +536,19 @@ const buildAppUnderTest = (options?: {
         Layer.provide(T3ProjectFileLoader.layer),
       ),
     );
+    const projectLifecycleScriptRunnerLayer = Layer.mock(
+      ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner,
+    )({
+      runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+      runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+    });
     const gitWorkflowLayer = GitWorkflowService.layer.pipe(
       Layer.provideMerge(vcsDriverRegistryLayer),
       Layer.provideMerge(gitVcsDriverLayer),
       Layer.provideMerge(gitManagerLayer),
-      Layer.provide(
-        Layer.mock(ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner)({
-          runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
-          runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
-        }),
-      ),
+      // Merge so VcsStatusBroadcaster (which also depends on this service) can
+      // be provided from the same gitWorkflowLayer output.
+      Layer.provideMerge(projectLifecycleScriptRunnerLayer),
     );
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),

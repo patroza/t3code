@@ -209,7 +209,7 @@ export const make = Effect.gen(function* () {
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
       lifecycle,
-      pr: input.pr,
+      pr: input.pr ?? null,
     });
     const env: NodeJS.ProcessEnv = {
       ...hostEnvironment,
