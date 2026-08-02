@@ -1372,6 +1372,30 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
+  it.effect("keeps the notification consumer alive after the session starter fiber exits", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-session-notification-scope");
+      const wrapperPath = yield* Effect.promise(() => makeMockGrokWrapper());
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      const starter = yield* adapter
+        .startSession({
+          threadId,
+          provider: ProviderDriverKind.make("grok"),
+          cwd: process.cwd(),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* Fiber.join(starter);
+
+      yield* adapter
+        .sendTurn({ threadId, input: "survive the starter fiber", attachments: [] })
+        .pipe(Effect.timeout("5 seconds"));
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("continues streaming events when native notification logging fails", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-native-log-failure");
