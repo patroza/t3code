@@ -23,6 +23,7 @@ import type {
 import { mergeGitStatusParts } from "@t3tools/shared/git";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 /**
@@ -163,6 +164,27 @@ export function remoteRefreshFailureDelay(
   return Duration.max(configuredInterval, cappedBackoff);
 }
 
+/**
+ * True only when we observed an open PR on this cwd and it later became merged.
+ * Skips first-seen already-merged PRs so server restarts / initial polls do not re-fire.
+ */
+export function didChangeRequestBecomeMerged(
+  previous: VcsStatusRemoteResult | null | undefined,
+  next: VcsStatusRemoteResult | null,
+): boolean {
+  if (next?.pr?.state !== "merged") {
+    return false;
+  }
+  if (previous?.pr?.state !== "open") {
+    return false;
+  }
+  return previous.pr.number === next.pr.number;
+}
+
+function prMergedLifecycleKey(cwd: string, prNumber: number): string {
+  return `${cwd}::${prNumber}`;
+}
+
 export class VcsStatusBroadcaster extends Context.Service<
   VcsStatusBroadcaster,
   {
@@ -192,6 +214,7 @@ const normalizeCwd = (cwd: string) =>
 
 export const make = Effect.gen(function* () {
   const workflow = yield* GitWorkflowService.GitWorkflowService;
+  const lifecycleScriptRunner = yield* ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner;
   const fs = yield* FileSystem.FileSystem;
   const changesPubSub = yield* Effect.acquireRelease(
     PubSub.unbounded<VcsStatusChange>(),
@@ -212,12 +235,73 @@ export const make = Effect.gen(function* () {
    * this so remotes never pile up on top of an in-flight sweep.
    */
   const listSweepMutex = yield* Semaphore.make(1);
+  // One fire per cwd+PR number for this server process.
+  const prMergedLifecycleFiredRef = yield* Ref.make(new Set<string>());
 
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")(function* (
     cwd: string,
   ) {
     return yield* Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd) ?? null));
   });
+
+  const maybeRunPrMergedLifecycle = Effect.fn("VcsStatusBroadcaster.maybeRunPrMergedLifecycle")(
+    function* (
+      cwd: string,
+      previousRemote: VcsStatusRemoteResult | null | undefined,
+      nextRemote: VcsStatusRemoteResult | null,
+    ) {
+      if (!didChangeRequestBecomeMerged(previousRemote, nextRemote) || !nextRemote?.pr) {
+        return;
+      }
+      const pr = nextRemote.pr;
+      const fireKey = prMergedLifecycleKey(cwd, pr.number);
+      const shouldFire = yield* Ref.modify(prMergedLifecycleFiredRef, (fired) => {
+        if (fired.has(fireKey)) {
+          return [false, fired] as const;
+        }
+        const next = new Set(fired);
+        next.add(fireKey);
+        return [true, next] as const;
+      });
+      if (!shouldFire) {
+        return;
+      }
+
+      yield* lifecycleScriptRunner
+        .runPrMerged({
+          projectCwd: cwd,
+          worktreePath: cwd,
+          pr: {
+            number: pr.number,
+            url: pr.url,
+            title: pr.title,
+            baseRef: pr.baseRef,
+            headRef: pr.headRef,
+            state: pr.state,
+          },
+        })
+        .pipe(
+          Effect.tap((result) =>
+            result.status === "completed"
+              ? Effect.logInfo("VcsStatusBroadcaster pr-merged lifecycle completed", {
+                  cwd,
+                  prNumber: pr.number,
+                  scriptId: result.scriptId,
+                  scriptName: result.scriptName,
+                })
+              : Effect.void,
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("VcsStatusBroadcaster pr-merged lifecycle failed", {
+              cwd,
+              prNumber: pr.number,
+              cause: error,
+            }),
+          ),
+          Effect.forkIn(broadcasterScope),
+        );
+    },
+  );
 
   const updateCachedLocalStatus = Effect.fn("VcsStatusBroadcaster.updateCachedLocalStatus")(
     function* (cwd: string, local: VcsStatusLocalResult, options?: { publish?: boolean }) {
@@ -255,15 +339,23 @@ export const make = Effect.gen(function* () {
         fingerprint: fingerprintStatusPart(remote),
         value: remote,
       } satisfies CachedValue<VcsStatusRemoteResult | null>;
-      const shouldPublish = yield* Ref.modify(cacheRef, (cache) => {
+      const { previousRemote, shouldPublish } = yield* Ref.modify(cacheRef, (cache) => {
         const previous = cache.get(cwd) ?? { local: null, remote: null };
         const nextCache = new Map(cache);
         nextCache.set(cwd, {
           ...previous,
           remote: nextRemote,
         });
-        return [previous.remote?.fingerprint !== nextRemote.fingerprint, nextCache] as const;
+        return [
+          {
+            previousRemote: previous.remote?.value,
+            shouldPublish: previous.remote?.fingerprint !== nextRemote.fingerprint,
+          },
+          nextCache,
+        ] as const;
       });
+
+      yield* maybeRunPrMergedLifecycle(cwd, previousRemote, remote);
 
       if (options?.publish && shouldPublish) {
         yield* PubSub.publish(changesPubSub, {
@@ -293,7 +385,7 @@ export const make = Effect.gen(function* () {
       fingerprint: fingerprintStatusPart(remote),
       value: remote,
     } satisfies CachedValue<VcsStatusRemoteResult | null>;
-    const shouldPublish = yield* Ref.modify(cacheRef, (cache) => {
+    const { previousRemote, shouldPublish } = yield* Ref.modify(cacheRef, (cache) => {
       const previous = cache.get(cwd) ?? { local: null, remote: null };
       const nextCache = new Map(cache);
       nextCache.set(cwd, {
@@ -301,11 +393,17 @@ export const make = Effect.gen(function* () {
         remote: nextRemote,
       });
       return [
-        previous.local?.fingerprint !== nextLocal.fingerprint ||
-          previous.remote?.fingerprint !== nextRemote.fingerprint,
+        {
+          previousRemote: previous.remote?.value,
+          shouldPublish:
+            previous.local?.fingerprint !== nextLocal.fingerprint ||
+            previous.remote?.fingerprint !== nextRemote.fingerprint,
+        },
         nextCache,
       ] as const;
     });
+
+    yield* maybeRunPrMergedLifecycle(cwd, previousRemote, remote);
 
     if (options?.publish && shouldPublish) {
       yield* PubSub.publish(changesPubSub, {

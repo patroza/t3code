@@ -6,8 +6,16 @@ import { VcsRepositoryDetectionError } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+
+const lifecycleScriptRunnerMock = Layer.mock(
+  ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner,
+)({
+  runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+  runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+});
 
 function makeLayer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
@@ -20,6 +28,7 @@ function makeLayer(input: {
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provide(Layer.mock(GitManager.GitManager)({})),
+    Layer.provide(lifecycleScriptRunnerMock),
   );
 }
 
@@ -100,6 +109,7 @@ describe("GitWorkflowService", () => {
           status,
         }),
       ),
+      Layer.provide(lifecycleScriptRunnerMock),
     );
 
     return Effect.gen(function* () {

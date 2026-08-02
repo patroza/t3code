@@ -26,6 +26,14 @@ import { GitManagerError } from "@t3tools/contracts";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as ProjectLifecycleScriptRunner from "../project/ProjectLifecycleScriptRunner.ts";
+
+const lifecycleScriptRunnerMock = Layer.mock(
+  ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner,
+)({
+  runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+  runPrMerged: () => Effect.succeed({ status: "no-script" as const }),
+});
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
@@ -79,6 +87,7 @@ function makeTestLayer(state: {
   return VcsStatusBroadcaster.layer.pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(makeBackgroundPolicyLayer(() => true)),
+    Layer.provide(lifecycleScriptRunnerMock),
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
         localStatus: () =>
@@ -221,6 +230,7 @@ describe("VcsStatusBroadcaster", () => {
     const testLayer = VcsStatusBroadcaster.layer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () =>
@@ -329,6 +339,7 @@ describe("VcsStatusBroadcaster", () => {
     const testLayer = VcsStatusBroadcaster.layer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: (input) =>
@@ -492,6 +503,7 @@ describe("VcsStatusBroadcaster", () => {
     const testLayer = VcsStatusBroadcaster.layer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () =>
@@ -696,6 +708,120 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(Layer.merge(makeTestLayer(state), TestClock.layer())));
   });
 
+  it("detects open→merged PR transitions only", () => {
+    const open = remoteStatusWithPr;
+    const merged = {
+      ...remoteStatusWithPr,
+      pr: { ...remoteStatusWithPr.pr!, state: "merged" as const },
+    };
+    assert.isTrue(VcsStatusBroadcaster.didChangeRequestBecomeMerged(open, merged));
+    assert.isFalse(VcsStatusBroadcaster.didChangeRequestBecomeMerged(null, merged));
+    assert.isFalse(VcsStatusBroadcaster.didChangeRequestBecomeMerged(merged, merged));
+    assert.isFalse(VcsStatusBroadcaster.didChangeRequestBecomeMerged(open, open));
+    assert.isFalse(
+      VcsStatusBroadcaster.didChangeRequestBecomeMerged(open, {
+        ...merged,
+        pr: { ...merged.pr!, number: 9999 },
+      }),
+    );
+  });
+
+  it.effect("runs pr-merged lifecycle once when remote status transitions open→merged", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: remoteStatusWithPr as VcsStatusRemoteResult | null,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+    const prMergedCalls: Array<{
+      cwd: string;
+      prNumber?: number;
+      prUrl?: string;
+      prTitle?: string;
+    }> = [];
+
+    return Effect.gen(function* () {
+      const prMergedRan = yield* Deferred.make<void>();
+      const testLayer = VcsStatusBroadcaster.layer.pipe(
+        Layer.provideMerge(NodeServices.layer),
+        Layer.provide(makeBackgroundPolicyLayer(() => true)),
+        Layer.provide(
+          Layer.mock(ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner)({
+            runWorktreeRemove: () => Effect.succeed({ status: "no-script" as const }),
+            runPrMerged: (input) =>
+              Effect.gen(function* () {
+                prMergedCalls.push({
+                  cwd: input.worktreePath,
+                  ...(input.pr
+                    ? {
+                        prNumber: input.pr.number,
+                        prUrl: input.pr.url,
+                        ...(input.pr.title ? { prTitle: input.pr.title } : {}),
+                      }
+                    : {}),
+                });
+                yield* Deferred.succeed(prMergedRan, undefined).pipe(Effect.ignore);
+                return { status: "no-script" as const };
+              }),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(GitWorkflowService.GitWorkflowService)({
+            localStatus: () =>
+              Effect.sync(() => {
+                state.localStatusCalls += 1;
+                return state.currentLocalStatus;
+              }),
+            remoteStatus: () =>
+              Effect.sync(() => {
+                state.remoteStatusCalls += 1;
+                return state.currentRemoteStatus;
+              }),
+            invalidateLocalStatus: () =>
+              Effect.sync(() => {
+                state.localInvalidationCalls += 1;
+              }),
+            invalidateRemoteStatus: () =>
+              Effect.sync(() => {
+                state.remoteInvalidationCalls += 1;
+              }),
+            invalidateStatus: () =>
+              Effect.sync(() => {
+                state.localInvalidationCalls += 1;
+                state.remoteInvalidationCalls += 1;
+              }),
+          }),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        yield* broadcaster.refreshStatus("/repo");
+        assert.equal(prMergedCalls.length, 0);
+
+        state.currentRemoteStatus = {
+          ...remoteStatusWithPr,
+          pr: { ...remoteStatusWithPr.pr!, state: "merged" },
+        };
+        yield* broadcaster.refreshStatus("/repo");
+        yield* Deferred.await(prMergedRan);
+        assert.equal(prMergedCalls.length, 1);
+        assert.deepStrictEqual(prMergedCalls[0], {
+          cwd: "/repo",
+          prNumber: 2978,
+          prUrl: "https://github.com/pingdotgg/t3code/pull/2978",
+          prTitle: "[codex] Rewrite client connection architecture",
+        });
+
+        // Stay merged — do not re-fire.
+        yield* broadcaster.refreshStatus("/repo");
+        assert.equal(prMergedCalls.length, 1);
+      }).pipe(Effect.provide(testLayer));
+    });
+  });
+
   it("backs off remote refresh failures exponentially and honors larger configured intervals", () => {
     assert.equal(
       Duration.toMillis(VcsStatusBroadcaster.remoteRefreshFailureDelay(1, Duration.seconds(1))),
@@ -752,6 +878,7 @@ describe("VcsStatusBroadcaster", () => {
     const testLayer = VcsStatusBroadcaster.layer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => false)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () =>
@@ -805,6 +932,7 @@ describe("VcsStatusBroadcaster", () => {
     const testLayer = VcsStatusBroadcaster.layer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () =>
