@@ -140,50 +140,6 @@ function rebaseInProgress(repoDir: string): boolean {
 const OVERLAY_REBASE_OURS_PATHS = new Set(["apps/mobile/app.config.ts"]);
 
 /**
- * Identity overlay brings participation UI; fork/changes brings settled-row
- * timestamps. Git often conflicts only on the import block — keep both.
- */
-const THREAD_LIST_ITEMS_PATH = "apps/mobile/src/features/threads/thread-list-items.tsx";
-const THREAD_LIST_ITEMS_IMPORT_CONFLICT =
-  /<<<<<<<[^\n]*\n(?:import[^\n]+\n)*=======\n(?:import[^\n]+\n)*>>>>>>>[^\n]*\n/;
-const THREAD_LIST_ITEMS_MERGED_IMPORTS = `import { ThreadIdentityLeading } from "../identity/ParticipantStack";
-import { resolveSettledRowTimestamp, resolveThreadStatus } from "./threadPresentation";
-`;
-
-/**
- * Resolve a known import-only conflict in mobile thread list rows.
- * Returns true when the file was rewritten and staged.
- */
-export function tryResolveThreadListItemsImportConflict(repoDir: string): boolean {
-  const absolutePath = NodePath.join(repoDir, THREAD_LIST_ITEMS_PATH);
-  if (!NodeFS.existsSync(absolutePath)) {
-    return false;
-  }
-  const contents = NodeFS.readFileSync(absolutePath, "utf8");
-  if (!contents.includes("<<<<<<<") || !THREAD_LIST_ITEMS_IMPORT_CONFLICT.test(contents)) {
-    return false;
-  }
-  // Only auto-resolve when both sides of the known import pair are present.
-  if (
-    !contents.includes("ThreadIdentityLeading") ||
-    !contents.includes("resolveSettledRowTimestamp") ||
-    !contents.includes("resolveThreadStatus")
-  ) {
-    return false;
-  }
-  const resolved = contents.replace(
-    THREAD_LIST_ITEMS_IMPORT_CONFLICT,
-    THREAD_LIST_ITEMS_MERGED_IMPORTS,
-  );
-  if (resolved.includes("<<<<<<<") || resolved === contents) {
-    return false;
-  }
-  NodeFS.writeFileSync(absolutePath, resolved, "utf8");
-  run("git", ["add", "--", THREAD_LIST_ITEMS_PATH], repoDir, { allowFailure: true });
-  return true;
-}
-
-/**
  * Rebase every registered integration overlay onto current origin/fork/changes.
  * Force-with-lease pushes when `push` is true.
  */
@@ -287,7 +243,6 @@ export function rebaseIntegrationOverlays(
       // Auto-resolve known product-base drift files by keeping fork/changes
       // ("ours" during rebase). Overlay product should not fight mobile
       // runtimeVersion / OTA policy from the changes layer.
-      // Also apply path-specific merges (identity + settled-row imports).
       while (rebaseResult.status !== 0 && rebaseInProgress(repoDir)) {
         const conflictPaths = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], {
           allowFailure: true,
@@ -295,31 +250,18 @@ export function rebaseIntegrationOverlays(
           .split("\n")
           .map((line) => line.trim())
           .filter((line) => line.length > 0);
-        if (conflictPaths.length === 0) {
+        const autoResolvable =
+          conflictPaths.length > 0 &&
+          conflictPaths.every((path) => OVERLAY_REBASE_OURS_PATHS.has(path));
+        if (!autoResolvable) {
           break;
         }
-
-        const resolvedPaths: string[] = [];
-        let unresolved = false;
         for (const path of conflictPaths) {
-          if (OVERLAY_REBASE_OURS_PATHS.has(path)) {
-            run("git", ["checkout", "--ours", "--", path], repoDir);
-            run("git", ["add", "--", path], repoDir);
-            resolvedPaths.push(`${path} (ours)`);
-            continue;
-          }
-          if (path === THREAD_LIST_ITEMS_PATH && tryResolveThreadListItemsImportConflict(repoDir)) {
-            resolvedPaths.push(`${path} (identity+settled imports)`);
-            continue;
-          }
-          unresolved = true;
-          break;
-        }
-        if (unresolved || resolvedPaths.length === 0) {
-          break;
+          run("git", ["checkout", "--ours", "--", path], repoDir);
+          run("git", ["add", "--", path], repoDir);
         }
         console.log(
-          `  #${overlay.number} ${overlay.branch}: auto-resolved: ${resolvedPaths.join(", ")}`,
+          `  #${overlay.number} ${overlay.branch}: auto-resolved (keep ${manifest.forkChangesBranch}): ${conflictPaths.join(", ")}`,
         );
         rebaseResult = run("git", ["-c", "commit.gpgsign=false", "rebase", "--continue"], repoDir, {
           allowFailure: true,
