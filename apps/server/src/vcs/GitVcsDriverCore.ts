@@ -25,6 +25,7 @@ import {
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
   type VcsRef,
+  type VcsWorktreePreparation,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
@@ -49,6 +50,12 @@ const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
 const REVIEW_UNTRACKED_DIFF_MAX_OUTPUT_BYTES = 80_000;
 const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 120_000;
+const WORKTREE_PREPARATION_DETAIL_MAX_CHARS = 8_000;
+const DETERMINISTIC_WORKTREE_PREPARATION_FAILURES = [
+  "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH",
+  "ERR_PNPM_OUTDATED_LOCKFILE",
+  "ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE",
+] as const;
 /**
  * Align with remote status cache TTL so automatic pollers do not re-fetch upstream
  * more often than we recompute remote status.
@@ -60,6 +67,22 @@ const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
  * reconnect/VCS storms was thrashing host memory and delaying RPC pongs.
  */
 const GIT_PROCESS_CONCURRENCY = 8;
+
+function worktreePreparationDetail(input: {
+  readonly stderr: string;
+  readonly stdout: string;
+  readonly fallback: string;
+}): string {
+  const output = [input.stderr.trim(), input.stdout.trim()].filter(Boolean).join("\n");
+  const detail = output.length > 0 ? output : input.fallback;
+  return detail.length <= WORKTREE_PREPARATION_DETAIL_MAX_CHARS
+    ? detail
+    : detail.slice(-WORKTREE_PREPARATION_DETAIL_MAX_CHARS);
+}
+
+function isDeterministicWorktreePreparationFailure(detail: string): boolean {
+  return DETERMINISTIC_WORKTREE_PREPARATION_FAILURES.some((marker) => detail.includes(marker));
+}
 
 const STATUS_UPSTREAM_REFRESH_FAILURE_BASE_COOLDOWN = Duration.seconds(30);
 const STATUS_UPSTREAM_REFRESH_FAILURE_MAX_COOLDOWN = Duration.minutes(15);
@@ -2841,9 +2864,92 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
+    const preparationEnv = input.deferDependencyInstall
+      ? { T3CODE_DEFER_DEPENDENCY_INSTALL: "1" }
+      : undefined;
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
+      ...(preparationEnv === undefined ? {} : { env: preparationEnv }),
     });
+
+    // A relative core.hooksPath is resolved from the worktree where `git
+    // worktree add` was launched. That checkout may be stale and not contain
+    // the hook which exists in the newly-created worktree. Explicitly run the
+    // target worktree's native post-checkout hook and await it before returning.
+    const postCheckoutHook = path.join(worktreePath, ".githooks", "post-checkout");
+    const hasPostCheckoutHook = yield* fileSystem.exists(postCheckoutHook).pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitCommandError({
+            operation: "GitVcsDriver.createWorktree.prepare",
+            command: "inspect .githooks/post-checkout",
+            cwd: worktreePath,
+            failureKind: "unknown",
+            detail: "Failed to inspect the target worktree preparation hook.",
+            cause,
+          }),
+      ),
+    );
+    let preparation: VcsWorktreePreparation = { _tag: "ready", attempts: 0 };
+    if (hasPostCheckoutHook) {
+      const checkedOutRef = (yield* runGitStdout(
+        "GitVcsDriver.createWorktree.resolveHead",
+        worktreePath,
+        ["rev-parse", "HEAD"],
+      )).trim();
+      const hookArgs = [
+        "-c",
+        "core.hooksPath=.githooks",
+        "hook",
+        "run",
+        "post-checkout",
+        "--",
+        checkedOutRef,
+        checkedOutRef,
+        "1",
+      ];
+      const runPreparation = (attempts: number) =>
+        executeGit("GitVcsDriver.createWorktree.prepare", worktreePath, hookArgs, {
+          allowNonZeroExit: true,
+          env: {
+            ...preparationEnv,
+            T3CODE_WORKTREE_PREPARATION_STRICT: "1",
+          },
+        }).pipe(
+          Effect.map((result) =>
+            result.exitCode === 0
+              ? { _tag: "ready" as const, attempts }
+              : {
+                  _tag: "degraded" as const,
+                  attempts,
+                  command: "git hook run post-checkout",
+                  detail: worktreePreparationDetail({
+                    stderr: result.stderr,
+                    stdout: result.stdout,
+                    fallback: "The post-checkout preparation hook exited unsuccessfully.",
+                  }),
+                  ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+                },
+          ),
+          Effect.catch((error) =>
+            Effect.succeed({
+              _tag: "degraded" as const,
+              attempts,
+              command: "git hook run post-checkout",
+              detail: error.message,
+              ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
+            }),
+          ),
+        );
+
+      preparation = yield* runPreparation(1);
+      if (
+        preparation._tag === "degraded" &&
+        !isDeterministicWorktreePreparationFailure(preparation.detail)
+      ) {
+        preparation = yield* runPreparation(2);
+      }
+    }
 
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
@@ -2864,6 +2970,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         path: worktreePath,
         refName: targetBranch,
       },
+      preparation,
     };
   });
 

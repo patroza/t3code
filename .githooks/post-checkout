@@ -1,0 +1,168 @@
+#!/bin/sh
+# Reconcile packages after branch checkout and prepare linked git worktrees.
+#
+# Canonical hook: scripts/install-git-hooks.mjs installs this into the shared
+# hooks dir (core.hooksPath) on EVERY host via `pnpm install`, so a raw
+# `git worktree add` sets up node_modules identically on smart and the t3vm
+# guest -- not only when a worktree is created through the T3 app / t3.json.
+#
+# Strategy (metadata-safe):
+#   1. Drop TypeScript project emit (dist / tsbuildinfo) so composite/incremental
+#      builds never typecheck against foreign-tree .d.ts after a branch switch.
+#   2. Copy *small* gitignored seeds from .worktreeinclude (CLAUDE.md, .nuxt, …)
+#      via reflink/hardlink when available. NEVER clone node_modules -- that
+#      creates millions of inodes per worktree on btrfs.
+#   3. Populate node_modules with `pnpm install --frozen-lockfile --prefer-offline`
+#      against the shared store (hardlinks -> one inode per package file).
+#
+# Idempotent: never overwrites existing seed paths; pnpm is safe to re-run.
+
+# Host-agnostic: pick up pnpm/mise from the invoking user's home on either host.
+PATH="$HOME/.local/bin:$HOME/.local/share/pnpm:$HOME/.local/share/mise/shims:/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH
+
+# post-checkout also runs after file-only checkouts; those do not change packages.
+[ "${3:-0}" = "1" ] || exit 0
+
+main_wt=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+wt_root=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -n "$wt_root" ] || exit 0
+
+# --- TS build-cache wipe (every branch / worktree checkout) -----------------
+#
+# Composite/incremental emit (and leftover dist from builds) can outlive a
+# branch switch. Foreign .tsbuildinfo / .d.ts produce phantom type errors that
+# vanish after clean rebuild — same class as macs-holding/scanner#1495 / #2166
+# and typescript-go incremental gaps (#2666, #4664, #4262).
+# Workaround until upstream invalidation is solid; see .githooks/README.md.
+#
+clean_ts_project_emit() {
+  root=$1
+  removed=0
+
+  for d in \
+    "$root"/apps/*/dist \
+    "$root"/apps/*/dist-electron \
+    "$root"/packages/*/dist
+  do
+    [ -e "$d" ] || continue
+    rm -rf "$d"
+    removed=1
+  done
+
+  if [ -d "$root" ]; then
+    # Prune by basename so nested apps/*/node_modules are skipped too.
+    tsbuild_files=$(
+      find "$root" \
+        \( -name node_modules -o -name .git -o -name .vite-plus \) -prune -o \
+        -type f -name '*.tsbuildinfo' -print 2>/dev/null || true
+    )
+    if [ -n "$tsbuild_files" ]; then
+      printf '%s\n' "$tsbuild_files" | while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rm -f "$f"
+      done
+      removed=1
+    fi
+  fi
+
+  if [ "$removed" = 1 ]; then
+    echo "post-checkout: cleared TypeScript project emit (dist / tsbuildinfo) under $root" >&2
+    echo "post-checkout: workaround for tsgo/tsc stale incremental cache after tree switch — see .githooks/README.md (remove when upstream fixed)" >&2
+  fi
+}
+
+clean_ts_project_emit "$wt_root"
+
+if [ -n "$main_wt" ] && [ "$main_wt" != "$wt_root" ]; then
+  # Effective include: repo .worktreeinclude if present, else nothing to seed-copy.
+  include=""
+  if [ -f "$main_wt/.worktreeinclude" ]; then
+    include="$main_wt/.worktreeinclude"
+  fi
+
+# Probe once: reflink (CoW fs) > hard link (same fs) > plain copy (cross-device).
+probe="$main_wt/.git-hook-clone-probe.$$"
+probe_dst="$wt_root/.clone-probe.$$"
+: >"$probe"
+if cp --reflink=always "$probe" "$probe_dst" 2>/dev/null; then
+  clone() { cp -a --reflink=always "$1" "$2"; }
+elif ln "$probe" "$probe_dst" 2>/dev/null; then
+  clone() { cp -al "$1" "$2"; }
+else
+  clone() { cp -a "$1" "$2"; }
+fi
+rm -f "$probe" "$probe_dst"
+
+# True if path is node_modules or under one (never clone these).
+is_node_modules_path() {
+  case "/$1/" in
+    */node_modules/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ -n "$include" ] && [ -f "$include" ]; then
+  git -C "$main_wt" ls-files --others --ignored --exclude-from="$include" --directory |
+    while IFS= read -r rel; do
+      rel=${rel%/}
+      [ -n "$rel" ] || continue
+      is_node_modules_path "$rel" && continue
+      src="$main_wt/$rel"
+      dst="$wt_root/$rel"
+      [ -e "$dst" ] && continue
+      [ -e "$src" ] || continue
+      mkdir -p "$(dirname "$dst")"
+      if [ -d "$src" ]; then
+        clone "$src" "$dst"
+      else
+        cp "$src" "$dst"
+      fi
+    done
+fi
+fi
+
+# T3 can hand dependency installation to its asynchronous worktree setup
+# terminal. Keep the metadata cleanup and seed copy above synchronous so the
+# checkout is structurally ready, but let the UI become responsive before a
+# potentially slow package install finishes.
+if [ "${T3CODE_DEFER_DEPENDENCY_INSTALL:-0}" = "1" ]; then
+  echo "post-checkout: dependency installation deferred to T3 workspace initialization" >&2
+  exit 0
+fi
+
+# Shared-store hardlink install: fast when the store is warm, no inode clone storm.
+[ -f "$wt_root/package.json" ] || exit 0
+[ -f "$wt_root/pnpm-lock.yaml" ] || {
+  echo "post-checkout: package.json without pnpm-lock.yaml; skip install" >&2
+  exit 0
+}
+state_file="$wt_root/node_modules/.pnpm-checkout-state"
+state=$(cksum "$wt_root/package.json" "$wt_root/pnpm-lock.yaml" | cksum | awk '{print $1 ":" $2}')
+if [ -f "$wt_root/node_modules/.modules.yaml" ] && [ "$(cat "$state_file" 2>/dev/null)" = "$state" ]; then
+  exit 0
+fi
+command -v pnpm >/dev/null 2>&1 || {
+  echo "post-checkout: pnpm not on PATH; node_modules not installed" >&2
+  exit 0
+}
+
+export CI=1
+echo "post-checkout: pnpm install (hardlink from store) in $wt_root" >&2
+cd "$wt_root" || exit 1
+if pnpm install \
+    --frozen-lockfile \
+    --prefer-offline \
+    --config.package-import-method=hardlink \
+    --config.confirmModulesPurge=false
+then
+  printf '%s\n' "$state" >"$state_file"
+else
+  status=$?
+  echo "post-checkout: dependency preparation failed (exit $status); worktree remains usable but degraded" >&2
+  echo "post-checkout: fix the lockfile/configuration or rerun this hook after transient failures clear" >&2
+  # Native Git invokes this hook inside `git worktree add`; dependency setup
+  # must not turn an already-created worktree into a structural Git failure.
+  [ "${T3CODE_WORKTREE_PREPARATION_STRICT:-0}" = "1" ] && exit "$status"
+  exit 0
+fi

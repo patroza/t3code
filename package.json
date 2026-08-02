@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "node scripts/clean-tsgo-backups.mjs && effect-tsgo patch && vp config --no-agent",
+    "prepare": "node scripts/clean-tsgo-backups.mjs && effect-tsgo patch && vp config --no-agent && node scripts/install-git-hooks.mjs",
+    "pr:ready": "node scripts/agent-pr-ready.mjs",
+    "test:agent-gate": "vp test run scripts/agent-pre-push.test.mjs",
     "dev": "node scripts/dev-runner.ts dev",
     "dev:share": "node scripts/dev-runner.ts dev --share",
     "dev:server": "node scripts/dev-runner.ts dev:server",
@@ -55,6 +57,7 @@
     "@oxlint/plugins": "^1.63.0",
     "@types/node": "catalog:",
     "@typescript/native-preview": "catalog:",
+    "lint-staged": "^16.4.0",
     "vite-plus": "catalog:"
   },
   "engines": {
