@@ -150,8 +150,10 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
     (“Per-layer full CI after stack rebase”).
   - Fix **all** failures on that layer, commit, force-with-lease push if the layer is shared, then
     and only then advance.
-  - Same stop-the-line rule for feature / overlay-child PRs after `pnpm fork:stack update`: rebase
-    onto the fixed parent, run the full pre-push gate on the feature tip, then push/merge.
+  - Feature / overlay-child PRs after `pnpm fork:stack update`: rebase onto the fixed parent, then
+    let the automated agent ship gate validate the tip — a ready-PR push runs it, or publish with
+    `pnpm pr:ready`. Only stack-layer rewrites (protected `fork/*` tips, not PR pushes) run the
+    fuller per-layer manual gate below.
 - **Conflict resolutions (required when stack hits conflicts):** do **not** only hand-resolve and
   resume. Update `.github/pr-stack.json` `conflictResolutions` so the next sync auto-applies the
   same side. Prefer durable `commit: "*"` + path policies; exact SHAs go stale after every rewrite.
@@ -190,30 +192,36 @@ When implementation work for a user request is done (code, docs, config — not 
    - Ordinary features → **`fork/changes`** (never `main`, never `fork/integration`).
    - Client overlay work → the **registered overlay branch** (`fork/discord`, `fork/vscode`, `fork/identity`, or
      `t3-discord/f7d37879-desktop-deeplinks`), not a duplicate of that work in `fork/changes`.
-3. **Keep the PR mergeable** before saying “updated the PR” or finishing:
-   - **Mandatory pre-push gate** (see Task Completion Requirements): run **locally every job Fork
-     CI will run on this tip** — at minimum **`vp check`** and the **full monorepo typecheck** —
-     fix every failure (including pre-existing breakage your tip inherits from the base), then
-     push. Do not use Fork CI as the first formatter, linter, or typechecker. Scoped package
-     typecheck alone is **not** enough.
-   - **Same bar for overlay-child PRs.** Base = overlay does **not** relax the gate. Compose
-     success, draft-lock green, or “the permanent overlay PR was green last week” is **not** a
-     substitute for running Check on **this** tip.
-   - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>`
+3. **Let the agent ship gate own validation** before saying “updated the PR” or finishing (see
+   _Task Completion Requirements → Agent ship gate_):
+   - **Every agent push is gated.** Draft / no-PR pays the **static** half (`vp check` +
+     `vpr typecheck`). Ready PRs and publish pay the **full** gate (+ `vp run test`). Do **not**
+     hand-run those as routine validation — the hook owns them and caches the SHA (focused, scoped
+     proof while iterating is still fine).
+   - **Publishing always runs the full ship gate** (`vp check` → `vpr typecheck` → `vp run test`),
+     and only a failing gate stops it. `pnpm pr:ready` is the explicit path; raw `gh pr ready` is not
+     refused — the `.tools/bin/gh` shim runs the same gate first and then lets the command through.
+     Either way the checks run, so there is no way to publish around them and nothing to remember.
+     The husky `pre-push` hook enforces the gate on every agent push and fails closed when PR state
+     can’t be resolved.
+   - **Same gate for overlay-child PRs.** Base = overlay does **not** relax it; the gate keys off the
+     PR’s ready state, not its base. Compose success or draft-lock green is **not** the gate.
+   - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>` to
+     rebase/retarget; the ensuing push runs the appropriate gate scope.
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
    - `baseRefName` must be `fork/changes` for ordinary features or the intended overlay/parent
      branch for a dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be
      `UNSTABLE` while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
-   - If the PR is **open** → re-run the mandatory pre-push gate, update that branch (prefer
-     `fork:stack update --push`), and push.
+   - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push; the
+     gate re-runs for that HEAD (static if draft, full if ready).
    - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
      Start a new branch, re-apply unmerged work, and open a **new PR** against the same intended
      base (`fork/changes` or the overlay).
 5. Never assume an earlier PR in the session is still open.
-6. **Never merge or request merge** (and never tell a bot to merge) while local `vp check` /
-   full typecheck are red or were skipped. GitHub required checks on `fork/changes` and every
-   registered overlay base are a backstop — **local green first** is still mandatory.
+6. **Never merge or request merge** (and never tell a bot to merge) a PR that has not passed the ship
+   gate — publish through `pnpm pr:ready` first. GitHub required checks on `fork/changes` and every
+   registered overlay base are the backstop; the ship gate is what runs first.
 
 ## Discord-originated commits (REQUIRED)
 
@@ -230,7 +238,7 @@ GitHub multi-author avatars (`bot & human`) come from commit trailers, not from 
 
 When Discord work produces commits (or is clearly intended to land):
 
-0. **Always open a PR — do not wait for perfect green.** Create the PR as soon as there is something to review or track. If full lint / typecheck / focused tests / `vp check` are not finished yet, open it as a **draft**. Convert to ready for review / merge **only** after those gates pass locally. A missing PR while work sits only on a remote branch is incomplete handoff. **Draft is for tracking, not for merging:** do not squash-merge, rebase-merge, or instruct a bot to merge a draft or any tip that has not passed the local gate.
+0. **Always open a PR — do not wait for perfect green.** Create the PR as a **draft** as soon as the first meaningful commit gives reviewers something to inspect, and push freely while it stays draft. A missing PR while work sits only on a remote branch is incomplete handoff. **Publish only when done, with `pnpm pr:ready`** — it runs the agent ship gate, then undrafts. **Draft is for tracking, not for merging:** do not squash-merge, rebase-merge, or instruct a bot to merge a draft or any tip that has not passed the ship gate.
 
 When opening or updating a PR from a Discord thread:
 
@@ -248,91 +256,96 @@ Prefer the thread starter’s Discord id/display name from turn context. Do not 
 
 ## Task Completion Requirements
 
-### Mandatory pre-push / PR handoff gate (no exceptions)
+### Agent ship gate (static on every push, full on ready / publish)
 
-**Whatever Fork CI runs for this tip, the agent must run locally first.** Fork CI is a safety net,
-not the first formatter, linter, or typechecker. This applies to **every** implementation base:
+Publish validation is **automated**. Agents do **not** hand-run the linter/typechecker/tests as a
+routine pre-handoff ritual — the ship gate runs them once, at the right moment, and caches the
+result. **No agent push is free:** draft / no-PR still pays the static half; ready and
+`pnpm pr:ready` pay the full gate.
 
-| PR base                                                                                | Local gate required before ready / merge? | GitHub required checks                                    |
-| -------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------- |
-| `fork/changes`                                                                         | **Yes** — full gate below                 | Check, Test, Mobile Native Static Analysis, Release Smoke |
-| Registered overlay (`fork/discord`, `fork/vscode`, `fork/identity`, desktop deeplinks) | **Yes — identical**                       | Same as `fork/changes`                                    |
-| Dependent feature based on another feature branch                                      | **Yes** on the child tip after rebase     | Same when retargeted to a protected base                  |
+**Mechanism** (`scripts/agent-pre-push.mjs`, `scripts/agent-pr-ready.mjs`, `scripts/lib/*.mjs`):
 
-**Before every `git push` that is intended as ready work, `fork:stack update --push`, non-draft PR
-open, ready-for-review conversion, merge / merge-request, or “handoff / done” claim**, the agent
-**must** run the local gates that mirror Fork CI’s **Check** job (and Test pieces you changed),
-fix all failures, then push.
+- Husky `pre-push` is the agent ship gate. It is a **no-op for humans** and only fires for coding
+  agents (detected via `GROK_AGENT` / `T3_AGENT` / `AI_AGENT` / `CLAUDECODE` / Cursor / Codex env
+  markers). Humans opt out per push with `SKIP_AGENT_PREPUSH=1` — **agents never set that flag** and
+  never use `git push --no-verify`.
+- When it runs, the gate mirrors the CI JS quality path, in order:
+  1. **`vp check`** — format + lint (the Fork CI **Check** JS path) — **every agent push**
+  2. **`vpr typecheck`** — workspace TypeScript — **every agent push**
+  3. **`vp run test`** — unit tests — **ready PR / publish only**
+     Cargo, mobile native, desktop packaging, and Release Smoke stay **CI-only** — do not hand-run them
+     for ordinary PR handoff.
+- It **skips when the HEAD SHA is already cached** in `.run/agent-ship-gate.json` (static vs complete
+  stages), so a draft push and the publish step never double-run the work already paid for that
+  commit. Force with `AGENT_SHIP_GATE_FORCE=1`.
 
-**Always open a PR for Discord/agent work that produces commits** (see _Discord-originated pull
-requests_). **Draft PR exception:** you may open/update a **draft** PR earlier for tracking once
-commits exist, co-author trailers are correct, and focused tests for the changed behavior have been
-run — even if full monorepo typecheck / root `vp check` are still in progress. Do not claim the work
-is ready, mark the PR non-draft, or merge until the full gate below passes.
+**When it runs:**
 
-#### Why integration keeps failing on “obvious” lint
+| Branch PR state        | Agent push                                  |
+| ---------------------- | ------------------------------------------- |
+| No open PR             | **static** (`vp check` + `vpr typecheck`)   |
+| **Draft** PR           | **static** (unit tests deferred to publish) |
+| **Ready** PR           | **full** ship gate on every push            |
+| PR state can’t resolve | **full** ship gate (**fail closed**)        |
 
-These are process failures, not surprises:
+This is identical for `fork/changes`, every registered overlay base (`fork/discord`, `fork/vscode`,
+`fork/identity`, desktop deeplinks), and dependent / overlay-child PRs — the gate keys off the PR’s
+**ready state**, not its base. Overlay Compose success or Managed-PR draft-lock green is **not** the
+gate.
 
-1. Child PR base was an overlay and agents treated Compose / permanent-overlay PR green as enough.
-2. Local `vp check` was skipped (“CI will catch it” / only scoped package checks).
-3. Compose rebuilds `fork/integration` **without** re-running lint — the first hard fail is
-   integration Fork CI.
+**Publish path:** `pnpm pr:ready` — runs the **full** ship gate, then marks the open draft PR ready.
+Raw `gh pr ready` (and the ready-for-review APIs) reach the same place: the `.tools/bin/gh` policy
+shim runs the ship gate first and passes the command through when it is green, so publishing is
+gated rather than forbidden and a red gate is the only thing that stops it. `AGENT_PR_SHIP=1` marks
+a gate already passed — `pr:ready` sets it for its own undraft call so the gate runs once, not twice.
+`.envrc` puts `$REPO/.tools/bin` first on `PATH` so the shim wins over system `gh`, and sets
+`GH_REPO` to the fork so bare `gh pr` commands target it instead of gh's upstream-parent default
+(explicit `--repo` still overrides); `scripts/install-git-hooks.mjs` installs both the hooks and the
+shim on `prepare`.
 
-If a PR’s checks panel shows only Compose / draft-lock and **no** Check job, that is **not** a
-clean PR — fix tooling or still run the local gate; do not merge.
+**Agent workflow:**
 
-Run from the repository root, in order (mirror of `.github/workflows/fork-ci.yml`):
+- **Open the draft immediately** once a PR is in scope (user asked, or Discord/turn rules require it)
+  and the first meaningful commit is useful to review. Keep committing and pushing while it is a
+  draft — each push pays the **static** gate only (cached per HEAD SHA).
+- **Publish when the work is done — do not leave a finished PR in draft.** The moment implementation
+  is complete and verified, run `pnpm pr:ready` to run the full ship gate and mark the PR ready; this
+  is the immediate next action, before handoff notes, so full CI can start. Draft is only for
+  work-in-progress. Do **not** run lint / check / typecheck / tests separately first — the gate owns
+  JS validation and caches the passing SHA.
+- **Mid-loop feedback only:** while drafting, focused proof is fine — `vp test run <files>` for tests
+  you touched, targeted lint/typecheck for the scope you changed. That is edit-loop signal, not a
+  second gate.
+- Fork product / UI changes still **must** ship an existence or behavior assertion that fails if the
+  surface is dropped (not only pure helpers) — see `apps/web/src/forkSurfaceExistence.test.ts` and
+  [docs/fork-stack.md](./docs/fork-stack.md) (“Product conflicts”). The gate’s `vp run test` then
+  actually exercises it.
+- Backend / contracts / runtime behavior changes **must** land with focused tests for the changed
+  behavior; the gate’s `vp run test` runs them.
 
-1. **`vp check`** — exact formatter/linter gate used by Fork CI **Check** (includes
-   `t3code/namespace-node-imports` and friends). A focused format/lint while iterating is fine; it
-   is **not** a substitute for this root command before ready handoff.
-2. **Full monorepo typecheck** (matches Fork CI):
+Pre-commit: husky runs `pnpm lint-staged` — `vp fmt` on all staged files plus `vp lint --fix` on
+staged code files (format + lint on commit; typecheck stays in the ship gate; unit tests on ready /
+publish). If the hook rewrites files, stage those rewrites, commit, and push again.
 
-   ```bash
-   ELECTRON_SKIP_BINARY_DOWNLOAD=1 vp run -r --cache --log labeled typecheck
-   ```
+**Explicitly forbidden:**
 
-   Equivalent: `vp run typecheck` / root `pnpm` typecheck script that runs recursive package
-   typechecks. **Scoped** typecheck of only the package you edited is allowed **while iterating**,
-   but **before ready handoff you must run the full recursive typecheck**. Failures in packages you
-   did not touch still block: your tip inherits the base; fix or land a fix on the tip so CI is green.
-
-3. **Desktop Check pieces when the tip can break them** (Fork CI **Check** also runs these): after
-   desktop or preload-adjacent changes, run `vp run --cache build:desktop` and the preload verify
-   steps from `.github/workflows/fork-ci.yml`. When in doubt on a stack layer rewrite, run them.
-4. **Focused tests for behavior you changed** (not always the full workspace suite — see stack
-   rule below):
-   - `vp test run <test-files>` for built-in Vite+ tests, or the package’s `test` script when that
-     is what the package uses.
-   - Backend / contracts / runtime behavior changes **must** include and run focused tests for the
-     changed behavior.
-   - Fork product / UI changes **must** include an existence or behavior assertion that fails if
-     the surface is dropped (not only pure helpers). See `apps/web/src/forkSurfaceExistence.test.ts`
-     and [docs/fork-stack.md](./docs/fork-stack.md) (“Product conflicts”).
-5. **Do not push a ready (non-draft) handoff** if steps 1–2 fail, or if required steps 3–4 fail.
-   Fix first.
-
-**Ordinary feature PRs (based on `fork/changes` or an overlay):** full-workspace `vp run test` is
-optional unless the user asks or the change clearly needs the whole suite. **Do not** skip steps
-1–2 to save time on ready handoff. **Stack layer rewrites** still require full Test (below).
-
-**Explicitly forbidden before ready handoff / merge:**
-
-- Ready/non-draft push after only unit tests, only scoped package typecheck, or only a partial lint.
-- Marking a PR ready for review knowing typecheck or `vp check` was skipped or red.
-- Treating “CI will catch it”, “compose will catch it”, or “integration CI will catch it” as a
-  substitute for local gates.
-- Merging an overlay-child PR because Compose or Managed PR draft lock is green while Check never
-  ran or is red.
-- Advancing a stack rewrite to the next layer while the current layer is red (see below).
-- Leaving Discord/agent work with commits but **no** PR (use draft until gates finish).
-
-While iterating mid-task (not yet ready), keep feedback loops small: format/lint the files you
-touch, typecheck the packages you edit, run the smallest relevant tests. **The bar rises to the
-full pre-push gate the moment you mark ready, merge, or claim done.**
+- `git push --no-verify` / `git commit --no-verify`, or setting `SKIP_AGENT_PREPUSH` (human escape
+  hatch only).
+- Raw `gh pr ready` / the ready-for-review API to undraft — always `pnpm pr:ready`.
+- Merging or requesting merge (including telling a bot to merge) a draft or any tip that has not
+  passed the ship gate.
+- Treating Compose, Managed-PR draft-lock, or “integration CI will catch it” as a substitute for
+  publishing through the gate. If a PR’s checks panel shows only Compose / draft-lock and **no**
+  Check job, it has not been through the gate — publish with `pnpm pr:ready`.
+- Leaving Discord/agent work with commits but **no** PR (open a draft; draft pushes pay static).
+- Leaving a **finished** PR in draft. Draft is for work-in-progress only; when the work is done,
+  publish it with `pnpm pr:ready` — a completed PR sitting in draft is an incomplete handoff.
 
 ### Per-layer stack CI (stop the line — no exceptions)
+
+The automated agent ship gate covers **PR pushes**. Stack-layer rewrites push protected `fork/*`
+tips directly — they are **not** PR pushes, so the husky gate does not fire and this fuller manual
+gate is mandatory instead.
 
 When rebasing, replaying, conflict-resolving, or otherwise rewriting **any** fork stack layer
 (`fork/tim`, `fork/candidates`, `fork/changes`, an integration overlay, or composed
@@ -375,9 +388,9 @@ main (upstream mirror — do not hand-edit product fixes)
 - **Never** stack “green later” commits, push a known-red parent, or compose `fork/integration`
   from layers that have not each passed the full gate.
 - **Never** treat “the next layer will fix typecheck/lint/tests” as acceptable progress.
-- Feature PRs and overlay children: after rebasing onto a parent, the **child tip** must also pass
-  the ordinary pre-push gate (and stack-layer full test gate if you are rewriting stack automation
-  itself) before push.
+- Feature PRs and overlay children: after rebasing onto a parent, the **child tip** goes through the
+  automated agent ship gate (ready-PR push or `pnpm pr:ready`) — plus this stack-layer full test gate
+  if you are rewriting stack automation itself.
 
 Full narrative and examples: [docs/fork-stack.md](./docs/fork-stack.md)
 (“Per-layer full CI after stack rebase”).
