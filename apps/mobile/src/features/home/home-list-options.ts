@@ -113,10 +113,13 @@ export const THREAD_SORT_OPTIONS: ReadonlyArray<{
   { value: "created_at", label: "Created at" },
 ];
 
+/** Default ownership filter: Mine (created or participated, plus unattributed). */
+export const DEFAULT_OWNERSHIP_FILTER: OwnershipFilter = "mine";
+
 function defaultHomeListOptions(): HomeListOptions {
   return {
     selectedEnvironmentIds: [],
-    ownershipFilter: "any",
+    ownershipFilter: DEFAULT_OWNERSHIP_FILTER,
     ownershipRelation: DEFAULT_OWNERSHIP_RELATION,
     listMode: DEFAULT_HOME_LIST_MODE,
     threadGrouping: DEFAULT_HOME_THREAD_GROUPING,
@@ -291,7 +294,7 @@ export function hasCustomHomeListOptions(
       : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER;
   return (
     options.selectedEnvironmentIds.length > 0 ||
-    options.ownershipFilter !== "any" ||
+    options.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
     options.ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
     (options.selectedProjectKey !== null && options.selectedProjectKey !== undefined) ||
     options.threadGrouping !== DEFAULT_HOME_THREAD_GROUPING ||

@@ -4,11 +4,15 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { hasCustomHomeListOptions, type HomeListOptions } from "./home-list-options";
+import {
+  DEFAULT_OWNERSHIP_FILTER,
+  hasCustomHomeListOptions,
+  type HomeListOptions,
+} from "./home-list-options";
 
 const defaults: HomeListOptions = {
   selectedEnvironmentIds: [],
-  ownershipFilter: "any",
+  ownershipFilter: DEFAULT_OWNERSHIP_FILTER,
   ownershipRelation: "both",
   listMode: "threads",
   threadGrouping: "project",
@@ -37,7 +41,7 @@ describe("home list options", () => {
   });
 
   it("marks ownership filters as customized", () => {
-    expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "mine" })).toBe(true);
+    expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "any" })).toBe(true);
     expect(hasCustomHomeListOptions({ ...defaults, ownershipFilter: "theirs" })).toBe(true);
     expect(hasCustomHomeListOptions({ ...defaults, ownershipRelation: "created" })).toBe(true);
   });
