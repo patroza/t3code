@@ -29,6 +29,7 @@ import {
   applyServerConfigProjection,
   makeEnvironmentServerConfigState,
   isLegacyUpdateHandoffLoss,
+  projectServerWebVersion,
   projectServerWelcome,
   resolveServerConfigValue,
   resolveServerUpdateProgressResult,
@@ -208,6 +209,30 @@ describe("server state projection", () => {
 
     expect(Option.getOrThrow(afterReady)).toBe(welcome);
     expect(emitted).toEqual([]);
+  });
+
+  it("tracks the latest web version and ignores non-web lifecycle events", () => {
+    const [seeded, seededEmit] = projectServerWebVersion(Option.none(), {
+      type: "webVersionChanged",
+      payload: { webVersion: "v1" },
+    });
+    expect(Option.getOrThrow(seeded)).toBe("v1");
+    expect(seededEmit).toEqual(["v1"]);
+
+    // A welcome in the same stream must not clear or emit a web version.
+    const [afterWelcome, welcomeEmit] = projectServerWebVersion(seeded, {
+      type: "welcome",
+      payload: {},
+    });
+    expect(Option.getOrThrow(afterWelcome)).toBe("v1");
+    expect(welcomeEmit).toEqual([]);
+
+    const [afterSwap, swapEmit] = projectServerWebVersion(afterWelcome, {
+      type: "webVersionChanged",
+      payload: { webVersion: "v2" },
+    });
+    expect(Option.getOrThrow(afterSwap)).toBe("v2");
+    expect(swapEmit).toEqual(["v2"]);
   });
 
   it("prefers an active session config over cache until a live event arrives", () => {

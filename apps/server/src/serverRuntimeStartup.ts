@@ -35,6 +35,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { runWebVersionWatcher } from "./webVersionWatcher.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -333,6 +334,9 @@ export const make = Effect.gen(function* () {
   const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
   const orphanSessionRecovery = yield* OrphanSessionRecovery.OrphanSessionRecovery;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+  // Broadcast when the served web bundle is hot-swapped on disk so clients can
+  // offer a reload without a server restart.
+  yield* Effect.forkScoped(runWebVersionWatcher(lifecycleEvents));
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const crypto = yield* Crypto.Crypto;
