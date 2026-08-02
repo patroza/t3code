@@ -5,12 +5,15 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_HIDE_SETTLED_PROJECTS,
   DEFAULT_HIDE_SETTLED_RECENT,
+  DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
   DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
   DEFAULT_WEB_LIST_MODE,
   DEFAULT_WEB_THREAD_GROUPING,
   LIST_HIDE_SETTLED_PROJECTS_STORAGE_KEY,
   LIST_HIDE_SETTLED_RECENT_STORAGE_KEY,
+  parseSidebarOwnershipFilter,
+  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WebListModeSchema,
@@ -90,5 +93,20 @@ describe("hide-settled and Sidebar V2 settled shelf defaults", () => {
     expect(SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY).toBe(
       "t3code:sidebar-v2:settled-shelf-expanded:v1",
     );
+  });
+});
+
+describe("sidebar ownership filter prefs", () => {
+  it("defaults to Mine and shares storage key across v1/v2", () => {
+    expect(DEFAULT_SIDEBAR_OWNERSHIP_FILTER).toBe("mine");
+    expect(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY).toBe("t3.sidebar.ownershipFilter");
+  });
+
+  it("parses stored values and falls back to Mine", () => {
+    expect(parseSidebarOwnershipFilter("any")).toBe("any");
+    expect(parseSidebarOwnershipFilter("mine")).toBe("mine");
+    expect(parseSidebarOwnershipFilter("theirs")).toBe("theirs");
+    expect(parseSidebarOwnershipFilter(null)).toBe("mine");
+    expect(parseSidebarOwnershipFilter("nope")).toBe("mine");
   });
 });

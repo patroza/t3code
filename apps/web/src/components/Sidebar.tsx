@@ -243,6 +243,7 @@ import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings"
 import {
   DEFAULT_HIDE_SETTLED_PROJECTS,
   DEFAULT_HIDE_SETTLED_RECENT,
+  DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
   DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
   DEFAULT_WEB_LIST_MODE,
@@ -258,6 +259,12 @@ import {
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
   ListProjectFilterSchema,
+  SIDEBAR_OWNERSHIP_FILTER_LABELS,
+  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_FILTERS,
+  SIDEBAR_OWNERSHIP_RELATION_LABELS,
+  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_RELATIONS,
   SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_LIST_MODE_LABELS,
@@ -272,13 +279,23 @@ import {
   isWebListMode,
   isWebThreadGrouping,
   matchesEnvironmentFilter,
+  parseSidebarOwnershipFilter,
   resolveSelectedEnvironmentIds,
   toggleEnvironmentId,
   usesFlatThreadGrouping,
   usesProjectThreadGrouping,
+  type SidebarOwnershipFilter,
   type WebListMode,
   type WebThreadGrouping,
 } from "./listEnvironmentFilter";
+import {
+  claimPersonIdForEnvironment,
+  DEFAULT_OWNERSHIP_RELATION,
+  isOwnershipRelation,
+  threadMatchesMine,
+  type OwnershipRelation,
+} from "@t3tools/client-runtime/state/identity";
+import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
 import {
   groupSortedThreadsByRecency,
   shouldShowRecencySectionHeaders,
@@ -1208,6 +1225,9 @@ interface SidebarProjectItemProps {
   unsettleThread: ReturnType<typeof useThreadActions>["unsettleThread"];
   hideSettledThreads: boolean;
   settledThreadKeys: ReadonlySet<string>;
+  ownershipFilter: SidebarOwnershipFilter;
+  ownershipRelation: OwnershipRelation;
+  claimPersonIdByEnvironment: ReadonlyMap<string, string | null | undefined>;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1233,6 +1253,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     unsettleThread,
     hideSettledThreads,
     settledThreadKeys,
+    ownershipFilter,
+    ownershipRelation,
+    claimPersonIdByEnvironment,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -1318,15 +1341,33 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   });
   const openPrLink = useOpenPrLink();
   const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
+  const ownershipMatchedThreads = useMemo(
+    () =>
+      sidebarThreads.filter((thread) =>
+        threadMatchesMine({
+          claimPersonId: claimPersonIdForEnvironment(
+            claimPersonIdByEnvironment,
+            thread.environmentId,
+          ),
+          originPersonId: thread.originSource?.personId ?? null,
+          participantPersonIds: (thread.participantSummaries ?? []).map(
+            (participant) => participant.personId,
+          ),
+          mode: ownershipFilter,
+          relation: ownershipRelation,
+        }),
+      ),
+    [claimPersonIdByEnvironment, ownershipFilter, ownershipRelation, sidebarThreads],
+  );
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
-        sidebarThreads.map(
+        ownershipMatchedThreads.map(
           (thread) =>
             [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
         ),
       ),
-    [sidebarThreads],
+    [ownershipMatchedThreads],
   );
   // Keep a ref so callbacks can read the latest map without appearing in
   // dependency arrays (avoids invalidating every thread-row memo on each
@@ -1336,14 +1377,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const projectThreads = useMemo(
     () =>
       hideSettledThreads
-        ? sidebarThreads.filter(
+        ? ownershipMatchedThreads.filter(
             (thread) =>
               !settledThreadKeys.has(
                 scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
               ),
           )
-        : sidebarThreads,
-    [hideSettledThreads, settledThreadKeys, sidebarThreads],
+        : ownershipMatchedThreads,
+    [hideSettledThreads, ownershipMatchedThreads, settledThreadKeys],
   );
   const projectPreferenceKeys = useMemo(() => projectExpansionPreferenceKeys(project), [project]);
   const projectExpanded = useUiStateStore((state) =>
@@ -2980,6 +3021,11 @@ interface SidebarProjectsContentProps {
   }[];
   selectedProjectFilterKey: string | null;
   onSelectedProjectFilterKeyChange: (key: string | null) => void;
+  ownershipFilter: SidebarOwnershipFilter;
+  onOwnershipFilterChange: (filter: SidebarOwnershipFilter) => void;
+  ownershipRelation: OwnershipRelation;
+  onOwnershipRelationChange: (relation: OwnershipRelation) => void;
+  claimPersonIdByEnvironment: ReadonlyMap<string, string | null | undefined>;
   hideSettledThreads: boolean;
   onHideSettledThreadsChange: (hide: boolean) => void;
   settledThreadKeys: ReadonlySet<string>;
@@ -4254,6 +4300,11 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     projectFilterOptions,
     selectedProjectFilterKey,
     onSelectedProjectFilterKeyChange,
+    ownershipFilter,
+    onOwnershipFilterChange,
+    ownershipRelation,
+    onOwnershipRelationChange,
+    claimPersonIdByEnvironment,
     hideSettledThreads,
     onHideSettledThreadsChange,
     settledThreadKeys,
@@ -4292,6 +4343,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     selectedProjectFilterKey !== null ||
     threadGrouping !== DEFAULT_WEB_THREAD_GROUPING ||
     hideSettledThreads !== defaultHideSettled ||
+    ownershipFilter !== DEFAULT_SIDEBAR_OWNERSHIP_FILTER ||
+    ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
     (showFlatOrRecencyList &&
       settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS);
 
@@ -4663,6 +4716,60 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   ) : null}
 
                   <MenuSeparator />
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      Ownership
+                    </div>
+                    <MenuRadioGroup
+                      value={ownershipFilter}
+                      onValueChange={(value) => {
+                        if (value !== "any" && value !== "mine" && value !== "theirs") return;
+                        onOwnershipFilterChange(value);
+                      }}
+                    >
+                      {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
+                        <MenuRadioItem
+                          key={value}
+                          value={value}
+                          closeOnClick={false}
+                          className="min-h-7 py-1 sm:text-xs"
+                          data-testid={`sidebar-v1-ownership-filter-${value}`}
+                        >
+                          {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
+                        </MenuRadioItem>
+                      ))}
+                    </MenuRadioGroup>
+                  </MenuGroup>
+                  {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuGroup>
+                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                          {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                        </div>
+                        <MenuRadioGroup
+                          value={ownershipRelation}
+                          onValueChange={(value) => {
+                            if (!isOwnershipRelation(value)) return;
+                            onOwnershipRelationChange(value);
+                          }}
+                        >
+                          {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
+                            <MenuRadioItem
+                              key={value}
+                              value={value}
+                              closeOnClick={false}
+                              className="min-h-7 py-1 sm:text-xs"
+                              data-testid={`sidebar-v1-ownership-relation-${value}`}
+                            >
+                              {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
+                            </MenuRadioItem>
+                          ))}
+                        </MenuRadioGroup>
+                      </MenuGroup>
+                    </>
+                  ) : null}
+                  <MenuSeparator />
                   <MenuCheckboxItem
                     checked={hideSettledThreads}
                     closeOnClick={false}
@@ -4816,6 +4923,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                           unsettleThread={unsettleThread}
                           hideSettledThreads={hideSettledThreads}
                           settledThreadKeys={settledThreadKeys}
+                          ownershipFilter={ownershipFilter}
+                          ownershipRelation={ownershipRelation}
+                          claimPersonIdByEnvironment={claimPersonIdByEnvironment}
                           threadJumpLabelByKey={EMPTY_THREAD_JUMP_LABELS}
                           attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                           expandThreadListForProject={expandThreadListForProject}
@@ -4851,6 +4961,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   unsettleThread={unsettleThread}
                   hideSettledThreads={hideSettledThreads}
                   settledThreadKeys={settledThreadKeys}
+                  ownershipFilter={ownershipFilter}
+                  ownershipRelation={ownershipRelation}
+                  claimPersonIdByEnvironment={claimPersonIdByEnvironment}
                   archiveThread={archiveThread}
                   deleteThread={deleteThread}
                   threadJumpLabelByKey={EMPTY_THREAD_JUMP_LABELS}
@@ -4985,6 +5098,40 @@ export default function Sidebar() {
     DEFAULT_HIDE_SETTLED_PROJECTS,
     ListHideSettledSchema,
   );
+  const [ownershipFilter, setOwnershipFilter] = useState<SidebarOwnershipFilter>(() => {
+    try {
+      return parseSidebarOwnershipFilter(
+        window.localStorage.getItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY),
+      );
+    } catch {
+      return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
+    }
+  });
+  const handleOwnershipFilterChange = useCallback((filter: SidebarOwnershipFilter) => {
+    setOwnershipFilter(filter);
+    try {
+      window.localStorage.setItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY, filter);
+    } catch {
+      // ignore
+    }
+  }, []);
+  const [ownershipRelation, setOwnershipRelation] = useState<OwnershipRelation>(() => {
+    try {
+      const raw = window.localStorage.getItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
+      if (isOwnershipRelation(raw)) return raw;
+    } catch {
+      // ignore
+    }
+    return DEFAULT_OWNERSHIP_RELATION;
+  });
+  const handleOwnershipRelationChange = useCallback((relation: OwnershipRelation) => {
+    setOwnershipRelation(relation);
+    try {
+      window.localStorage.setItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY, relation);
+    } catch {
+      // ignore
+    }
+  }, []);
   const hideSettledThreads = usesProjectThreadGrouping(storedThreadGrouping)
     ? hideSettledProjects
     : hideSettledRecent;
@@ -5010,6 +5157,7 @@ export default function Sidebar() {
       ),
     [availableEnvironmentIds, storedEnvironmentFilter],
   );
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
   const environmentFilterOptions = useMemo(
     () =>
       environments.map((environment) => ({
@@ -5265,9 +5413,27 @@ export default function Sidebar() {
       sidebarThreads.filter(
         (thread) =>
           thread.archivedAt === null &&
-          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
+          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
+          threadMatchesMine({
+            claimPersonId: claimPersonIdForEnvironment(
+              claimPersonIdByEnvironment,
+              thread.environmentId,
+            ),
+            originPersonId: thread.originSource?.personId ?? null,
+            participantPersonIds: (thread.participantSummaries ?? []).map(
+              (participant) => participant.personId,
+            ),
+            mode: ownershipFilter,
+            relation: ownershipRelation,
+          }),
       ),
-    [selectedEnvironmentIds, sidebarThreads],
+    [
+      claimPersonIdByEnvironment,
+      ownershipFilter,
+      ownershipRelation,
+      selectedEnvironmentIds,
+      sidebarThreads,
+    ],
   );
   const sortedProjects = useMemo(() => {
     const sortableProjects = sidebarProjects.map((project) => ({
@@ -5412,7 +5578,19 @@ export default function Sidebar() {
           (threadsByProjectKey.get(project.projectKey) ?? []).filter(
             (thread) =>
               thread.archivedAt === null &&
-              matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
+              matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
+              threadMatchesMine({
+                claimPersonId: claimPersonIdForEnvironment(
+                  claimPersonIdByEnvironment,
+                  thread.environmentId,
+                ),
+                originPersonId: thread.originSource?.personId ?? null,
+                participantPersonIds: (thread.participantSummaries ?? []).map(
+                  (participant) => participant.personId,
+                ),
+                mode: ownershipFilter,
+                relation: ownershipRelation,
+              }),
           ),
           sidebarThreadSortOrder,
         );
@@ -5445,6 +5623,9 @@ export default function Sidebar() {
         );
       }),
     [
+      claimPersonIdByEnvironment,
+      ownershipFilter,
+      ownershipRelation,
       sidebarThreadSortOrder,
       sidebarThreadPreviewCount,
       expandedThreadListsByProject,
@@ -5778,6 +5959,11 @@ export default function Sidebar() {
             projectFilterOptions={projectFilterOptions}
             selectedProjectFilterKey={selectedProjectFilterKey}
             onSelectedProjectFilterKeyChange={setStoredProjectFilter}
+            ownershipFilter={ownershipFilter}
+            onOwnershipFilterChange={handleOwnershipFilterChange}
+            ownershipRelation={ownershipRelation}
+            onOwnershipRelationChange={handleOwnershipRelationChange}
+            claimPersonIdByEnvironment={claimPersonIdByEnvironment}
             hideSettledThreads={hideSettledThreads}
             onHideSettledThreadsChange={handleHideSettledThreadsChange}
             settledThreadKeys={settledThreadKeys}

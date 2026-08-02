@@ -199,7 +199,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   return preferences;
 }
 
-/** Resolve stored ownership filter; default anyone when never chosen. */
+/** Resolve stored ownership filter; default Mine when never chosen. */
 export function resolveOwnershipFilter(preferences: Preferences): "any" | "mine" | "theirs" {
   if (
     preferences.ownershipFilter === "any" ||
@@ -208,7 +208,7 @@ export function resolveOwnershipFilter(preferences: Preferences): "any" | "mine"
   ) {
     return preferences.ownershipFilter;
   }
-  return "any";
+  return "mine";
 }
 
 /** Resolve mine/theirs relation sub-filter; default both. */

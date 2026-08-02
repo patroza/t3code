@@ -195,6 +195,7 @@ import {
 } from "./ui/menu";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import {
+  DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
   DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
   DEFAULT_WEB_THREAD_GROUPING,
@@ -204,6 +205,13 @@ import {
   LIST_THREAD_GROUPING_STORAGE_KEY,
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
+  parseSidebarOwnershipFilter,
+  SIDEBAR_OWNERSHIP_FILTER_LABELS,
+  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_FILTERS,
+  SIDEBAR_OWNERSHIP_RELATION_LABELS,
+  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+  SIDEBAR_OWNERSHIP_RELATIONS,
   SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_THREAD_GROUPING_LABELS,
@@ -216,6 +224,7 @@ import {
   resolveSelectedEnvironmentIds,
   toggleEnvironmentId,
   usesFlatThreadGrouping,
+  type SidebarOwnershipFilter,
   type WebThreadGrouping,
 } from "./listEnvironmentFilter";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
@@ -1329,18 +1338,18 @@ export default function SidebarV2() {
       ),
     [availableEnvironmentIds, storedEnvironmentFilter],
   );
-  const [ownershipFilter, setOwnershipFilter] = useState<"any" | "mine" | "theirs">(() => {
+  const [ownershipFilter, setOwnershipFilter] = useState<SidebarOwnershipFilter>(() => {
     try {
-      const raw = window.localStorage.getItem("t3.sidebar.ownershipFilter");
-      if (raw === "mine" || raw === "theirs" || raw === "any") return raw;
+      return parseSidebarOwnershipFilter(
+        window.localStorage.getItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY),
+      );
     } catch {
-      // ignore
+      return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
     }
-    return "any";
   });
   const [ownershipRelation, setOwnershipRelation] = useState<OwnershipRelation>(() => {
     try {
-      const raw = window.localStorage.getItem("t3.sidebar.ownershipRelation");
+      const raw = window.localStorage.getItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
       if (isOwnershipRelation(raw)) return raw;
     } catch {
       // ignore
@@ -1355,7 +1364,7 @@ export default function SidebarV2() {
     storedThreadGrouping !== DEFAULT_WEB_THREAD_GROUPING ||
     settledRecencyHeadersEnabled !== DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS ||
     settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED ||
-    ownershipFilter !== "any" ||
+    ownershipFilter !== DEFAULT_SIDEBAR_OWNERSHIP_FILTER ||
     ownershipRelation !== DEFAULT_OWNERSHIP_RELATION;
   const orderedProjects = useMemo(
     () =>
@@ -2831,19 +2840,13 @@ export default function SidebarV2() {
                         if (value !== "any" && value !== "mine" && value !== "theirs") return;
                         setOwnershipFilter(value);
                         try {
-                          window.localStorage.setItem("t3.sidebar.ownershipFilter", value);
+                          window.localStorage.setItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY, value);
                         } catch {
                           // ignore
                         }
                       }}
                     >
-                      {(
-                        [
-                          ["any", "Anyone"],
-                          ["mine", "Mine"],
-                          ["theirs", "Theirs"],
-                        ] as const
-                      ).map(([value, label]) => (
+                      {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
                         <MenuRadioItem
                           key={value}
                           value={value}
@@ -2851,7 +2854,7 @@ export default function SidebarV2() {
                           className="min-h-7 py-1 sm:text-xs"
                           data-testid={`sidebar-v2-ownership-filter-${value}`}
                         >
-                          {label}
+                          {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
                         </MenuRadioItem>
                       ))}
                     </MenuRadioGroup>
@@ -2869,19 +2872,16 @@ export default function SidebarV2() {
                             if (!isOwnershipRelation(value)) return;
                             setOwnershipRelation(value);
                             try {
-                              window.localStorage.setItem("t3.sidebar.ownershipRelation", value);
+                              window.localStorage.setItem(
+                                SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
+                                value,
+                              );
                             } catch {
                               // ignore
                             }
                           }}
                         >
-                          {(
-                            [
-                              ["both", "Created or participated"],
-                              ["created", "Created"],
-                              ["participated", "Participated"],
-                            ] as const
-                          ).map(([value, label]) => (
+                          {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
                             <MenuRadioItem
                               key={value}
                               value={value}
@@ -2889,7 +2889,7 @@ export default function SidebarV2() {
                               className="min-h-7 py-1 sm:text-xs"
                               data-testid={`sidebar-v2-ownership-relation-${value}`}
                             >
-                              {label}
+                              {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
                             </MenuRadioItem>
                           ))}
                         </MenuRadioGroup>
