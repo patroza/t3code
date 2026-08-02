@@ -3238,7 +3238,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("bounds a hung provider interrupt so later thread starts still run", async () => {
+  it("isolates a hung provider interrupt so another thread starts immediately", async () => {
     const harness = await createHarness({
       interruptTurnEffect: () => Effect.never,
     });
@@ -3304,7 +3304,7 @@ describe("ProviderCommandReactor", () => {
       const interrupted = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       return interrupted?.session?.status === "ready";
     });
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 8_000);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 1_000);
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: secondThreadId,
     });
