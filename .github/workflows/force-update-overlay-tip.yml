@@ -1,0 +1,72 @@
+# One-shot helper for maintainers: force-with-lease an overlay branch tip
+# (e.g. fork/identity after a local conflict resolve) using FORK_STACK_DEPLOY_KEY.
+# Not a product CI gate. Safe to leave; only runs on workflow_dispatch.
+name: Force update overlay tip
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Overlay branch to update (e.g. fork/identity)
+        required: true
+        type: string
+      source_ref:
+        description: Source ref that already contains the rebased tip
+        required: true
+        type: string
+      expected_old_tip:
+        description: Optional expected current tip for force-with-lease (empty = no lease)
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  push-tip:
+    name: Force-update overlay tip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Configure protected stack push key
+        env:
+          FORK_STACK_DEPLOY_KEY: ${{ secrets.FORK_STACK_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FORK_STACK_DEPLOY_KEY}" ]]; then
+            echo "error: FORK_STACK_DEPLOY_KEY secret is required" >&2
+            exit 1
+          fi
+          key_path="${RUNNER_TEMP}/fork-stack-deploy-key"
+          printf '%s\n' "${FORK_STACK_DEPLOY_KEY}" > "${key_path}"
+          chmod 600 "${key_path}"
+          ssh-keyscan -H github.com >> "${RUNNER_TEMP}/github-known-hosts"
+          echo "GIT_SSH_COMMAND=ssh -i ${key_path} -o IdentitiesOnly=yes -o UserKnownHostsFile=${RUNNER_TEMP}/github-known-hosts" >> "${GITHUB_ENV}"
+
+      - name: Fetch source tip and push target branch
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          EXPECTED_OLD_TIP: ${{ inputs.expected_old_tip }}
+        run: |
+          set -euo pipefail
+          git init --quiet
+          git remote add origin "git@github.com:${GITHUB_REPOSITORY}.git"
+          git fetch --quiet --no-tags origin \
+            "+refs/heads/${SOURCE_REF}:refs/remotes/origin/source" \
+            "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/target" || true
+          new_tip="$(git rev-parse refs/remotes/origin/source)"
+          old_tip="$(git rev-parse refs/remotes/origin/target 2>/dev/null || true)"
+          echo "source ${SOURCE_REF} => ${new_tip}"
+          echo "target ${TARGET_BRANCH} currently ${old_tip:-missing}"
+          if [[ -n "${EXPECTED_OLD_TIP}" && -n "${old_tip}" && "${EXPECTED_OLD_TIP}" != "${old_tip}" ]]; then
+            echo "error: expected old tip ${EXPECTED_OLD_TIP} but remote is ${old_tip}" >&2
+            exit 1
+          fi
+          lease_arg=()
+          if [[ -n "${old_tip}" ]]; then
+            lease_arg=( "--force-with-lease=refs/heads/${TARGET_BRANCH}:${old_tip}" )
+          fi
+          git push "${lease_arg[@]}" origin "${new_tip}:refs/heads/${TARGET_BRANCH}"
+          echo "Updated ${TARGET_BRANCH} -> ${new_tip}"
