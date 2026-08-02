@@ -66,6 +66,8 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+
+const PROVIDER_CONTROL_TIMEOUT = Duration.seconds(5);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -1259,30 +1261,38 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    // Clearing the projection here is authoritative: a persisted session may
-    // say "running" even though its provider process disappeared yesterday.
-    // Provider cancellation remains best-effort so Abort always restores a
-    // usable composer without mistaking a quiet, live process for a dead one.
-    yield* providerService
+    // Clear the projection before touching the provider. This state transition
+    // is authoritative and must not depend on a cooperative protocol peer.
+    yield* setThreadSession({
+      threadId: event.payload.threadId,
+      session: {
+        ...thread.session,
+        status: "ready",
+        activeTurnId: null,
+        updatedAt: event.payload.createdAt,
+      },
+      createdAt: event.payload.createdAt,
+    });
+
+    // Provider cancellation is best-effort and bounded. Some protocol peers
+    // never answer cancellation; an interruptible timeout releases this
+    // thread's command lane even in that case.
+    const interruptResult = yield* providerService
       .interruptTurn({ threadId: event.payload.threadId })
       .pipe(
+        Effect.interruptible,
+        Effect.timeoutOption(PROVIDER_CONTROL_TIMEOUT),
         Effect.catchCause((cause) =>
-          Effect.logWarning("provider turn interrupt failed", { cause }),
+          Effect.logWarning("provider turn interrupt failed", {
+            threadId: event.payload.threadId,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(Option.some(undefined))),
         ),
       );
-
-    const latestThread = yield* resolveThread(event.payload.threadId);
-    const session = latestThread?.session;
-    if (session && session.status !== "stopped") {
-      yield* setThreadSession({
+    if (Option.isNone(interruptResult)) {
+      yield* Effect.logWarning("provider turn interrupt timed out", {
         threadId: event.payload.threadId,
-        session: {
-          ...session,
-          status: "ready",
-          activeTurnId: null,
-          updatedAt: event.payload.createdAt,
-        },
-        createdAt: event.payload.createdAt,
+        timeout: Duration.format(PROVIDER_CONTROL_TIMEOUT),
       });
     }
   });
@@ -1423,10 +1433,7 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    if (context.session && context.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: context.threadId });
-    }
-
+    const shouldStopProvider = context.session && context.session.status !== "stopped";
     yield* setThreadSession({
       threadId: context.threadId,
       session: {
@@ -1443,6 +1450,25 @@ const make = Effect.gen(function* () {
       },
       createdAt: now,
     });
+
+    if (shouldStopProvider) {
+      const stopResult = yield* providerService.stopSession({ threadId: context.threadId }).pipe(
+        Effect.interruptible,
+        Effect.timeoutOption(PROVIDER_CONTROL_TIMEOUT),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider session stop failed", {
+            threadId: context.threadId,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.as(Option.some(undefined))),
+        ),
+      );
+      if (Option.isNone(stopResult)) {
+        yield* Effect.logWarning("provider session stop timed out", {
+          threadId: context.threadId,
+          timeout: Duration.format(PROVIDER_CONTROL_TIMEOUT),
+        });
+      }
+    }
   });
 
   const setRecoveryFailureState = Effect.fn("setRecoveryFailureState")(function* (input: {
