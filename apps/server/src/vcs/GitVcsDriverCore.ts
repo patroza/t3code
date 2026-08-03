@@ -2689,7 +2689,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // the hook which exists in the newly-created worktree. Explicitly run the
     // target worktree's native post-checkout hook and await it before returning.
     const postCheckoutHook = path.join(worktreePath, ".githooks", "post-checkout");
-    if (yield* fileSystem.exists(postCheckoutHook)) {
+    const hasPostCheckoutHook = yield* fileSystem.exists(postCheckoutHook).pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitCommandError({
+            operation: "GitVcsDriver.createWorktree.prepare",
+            command: "inspect .githooks/post-checkout",
+            cwd: worktreePath,
+            failureKind: "unknown",
+            detail: "Failed to inspect the target worktree preparation hook.",
+            cause,
+          }),
+      ),
+    );
+    if (hasPostCheckoutHook) {
       const checkedOutRef = (yield* runGitStdout(
         "GitVcsDriver.createWorktree.resolveHead",
         worktreePath,
