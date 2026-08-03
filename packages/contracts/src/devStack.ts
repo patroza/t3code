@@ -12,8 +12,8 @@ import * as Schema from "effect/Schema";
  * is declared per repository under `devStacks` in `t3.json`, because it is a
  * property of the repository rather than of one running instance.
  *
- * The producer side of this contract currently lives in macs-scanner's
- * `scripts/lib/agent-e2e-stack.mjs`.
+ * Repositories write these entries themselves, from whatever starts the servers.
+ * T3 only reads them.
  */
 export const DEV_STACK_SCHEMA_VERSION = "dev-stack/1";
 

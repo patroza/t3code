@@ -9,14 +9,14 @@ import {
   resolvePolicy,
 } from "./DevStackPolicy.ts";
 
-const ROOT = "/var/lib/t3/worktrees/scanner/feature";
+const ROOT = "/workspaces/example/feature";
 
 const entry = (processes: DevStackEntry["processes"]): DevStackEntry => ({
   schema: DEV_STACK_SCHEMA_VERSION,
-  project: "scanner",
+  project: "example",
   worktree: "bdb56cccb27eb374",
   root: ROOT,
-  instance: "empasa",
+  instance: "primary",
   processes,
 });
 
