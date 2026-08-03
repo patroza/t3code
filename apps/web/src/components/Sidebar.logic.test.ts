@@ -1294,6 +1294,51 @@ describe("isThreadSettledForDisplay", () => {
       }),
     ).toBe(true);
   });
+
+  it("auto-settles on merged/closed PR when the server supports settlement", () => {
+    const serverConfigs = {
+      get(_environmentId: string) {
+        return {
+          environment: {
+            capabilities: { threadSettlement: true },
+          },
+        };
+      },
+    };
+    // Activity well past the queued-turn grace window so PR auto-settle is
+    // not blocked by a just-sent message without a turn.
+    const activeThread = {
+      ...baseThread,
+      settledOverride: null,
+      settledAt: null,
+      latestUserMessageAt: "2026-04-01T00:00:00.000Z",
+    };
+
+    expect(
+      isThreadSettledForDisplay(activeThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: null,
+        changeRequestState: "merged",
+      }),
+    ).toBe(true);
+    expect(
+      isThreadSettledForDisplay(activeThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: null,
+        changeRequestState: "closed",
+      }),
+    ).toBe(true);
+    expect(
+      isThreadSettledForDisplay(activeThread, {
+        serverConfigs,
+        now,
+        autoSettleAfterDays: null,
+        changeRequestState: null,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("groupSettledThreadsByRecencyForSidebarV2", () => {

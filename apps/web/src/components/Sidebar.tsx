@@ -37,7 +37,7 @@ import { hasComposerDraftMessage, useComposerDraftStore } from "../composerDraft
 import { ProjectFavicon, ProjectFaviconFallback } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
-import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, memo, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   DndContext,
@@ -294,6 +294,20 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
+
+/**
+ * Active sidebar rows report resolved PR state upward so hide-settled /
+ * settled-shelf classification can auto-settle merged/closed PRs the same way
+ * Sidebar V2 and the board do. Settled history rows skip reporting.
+ */
+type SidebarChangeRequestStateReporter = (
+  threadKey: string,
+  state: "open" | "closed" | "merged" | null,
+) => void;
+const noopSidebarChangeRequestStateReporter: SidebarChangeRequestStateReporter = () => {};
+const SidebarChangeRequestStateContext = React.createContext<SidebarChangeRequestStateReporter>(
+  noopSidebarChangeRequestStateReporter,
+);
 
 /**
  * Reveal provider details while Command/Control is held when the compact
@@ -576,6 +590,13 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     gitStatus: gitStatus.data ?? null,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  // Lift PR state so parent hide-settled / shelf classification can auto-settle
+  // merged/closed PRs (matches Sidebar V2 row reporting).
+  const onChangeRequestState = useContext(SidebarChangeRequestStateContext);
+  const prState = pr?.state ?? null;
+  useEffect(() => {
+    onChangeRequestState(threadKey, prState);
+  }, [onChangeRequestState, prState, threadKey]);
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
@@ -3065,7 +3086,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     environment !== null && isDesktopLocalConnectionTarget(environment.entry.target);
   const gitCwd = thread.worktreePath ?? project.workspaceRoot;
   // Settled shelf rows match Sidebar V2 history: no list VCS subscription
-  // (PR auto-settle is out of scope here; badges aren't live on history).
+  // (PR auto-settle already applied or isn't needed; badges aren't live on history).
   const gitStatus = useEnvironmentQuery(
     !props.isSettled && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
       ? vcsEnvironment.listStatus({
@@ -3079,6 +3100,13 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     gitStatus: gitStatus.data ?? null,
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  // Report PR state for partition; settled history keeps last reported value.
+  const onChangeRequestState = useContext(SidebarChangeRequestStateContext);
+  const prState = pr?.state ?? null;
+  useEffect(() => {
+    if (props.isSettled) return;
+    onChangeRequestState(threadKey, prState);
+  }, [onChangeRequestState, prState, props.isSettled, threadKey]);
   const threadModelPresentation = useMemo(
     () =>
       resolveThreadModelPresentation(
@@ -5261,23 +5289,45 @@ export default function Sidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
+  // PR states stream in per-row (rows own the VCS subscriptions); a merged or
+  // closed PR auto-settles its thread on the next classification pass — same
+  // path Sidebar V2 and the board use so hide-settled matches across surfaces.
+  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
+    ReadonlyMap<string, "open" | "closed" | "merged">
+  >(() => new Map());
+  const handleChangeRequestState = useCallback(
+    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
+      setChangeRequestStateByKey((current) => {
+        if ((current.get(threadKey) ?? null) === state) return current;
+        const next = new Map(current);
+        if (state === null) {
+          next.delete(threadKey);
+        } else {
+          next.set(threadKey, state);
+        }
+        return next;
+      });
+    },
+    [],
+  );
   const settledThreadKeys = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     const keys = new Set<string>();
     for (const thread of visibleThreads) {
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       if (
         isThreadSettledForDisplay(thread, {
           serverConfigs,
           now,
           autoSettleAfterDays,
-          changeRequestState: null,
+          changeRequestState: changeRequestStateByKey.get(threadKey) ?? null,
         })
       ) {
-        keys.add(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
+        keys.add(threadKey);
       }
     }
     return keys;
-  }, [autoSettleAfterDays, nowMinute, serverConfigs, visibleThreads]);
+  }, [autoSettleAfterDays, changeRequestStateByKey, nowMinute, serverConfigs, visibleThreads]);
   const selectedProjectFilterKey =
     storedProjectFilter !== null &&
     sortedProjects.some((project) => project.projectKey === storedProjectFilter)
@@ -5672,7 +5722,7 @@ export default function Sidebar() {
   }, []);
 
   return (
-    <>
+    <SidebarChangeRequestStateContext.Provider value={handleChangeRequestState}>
       {prewarmedSidebarThreadRefs.map((threadRef) => (
         <SidebarThreadDetailPrewarmer key={scopedThreadKey(threadRef)} threadRef={threadRef} />
       ))}
@@ -5739,6 +5789,6 @@ export default function Sidebar() {
           <SidebarChromeFooter />
         </>
       )}
-    </>
+    </SidebarChangeRequestStateContext.Provider>
   );
 }
