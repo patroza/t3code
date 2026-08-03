@@ -263,6 +263,7 @@ describe("buildSidebarV2ThreadContextMenuItems", () => {
       { id: "rename", label: "Rename thread" },
       { id: "mark-unread", label: "Mark unread" },
       { id: "copy-path", label: "Copy path", icon: "copy" },
+      { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
       { id: "delete", label: "Delete", destructive: true, icon: "trash" },
     ]);
   });
