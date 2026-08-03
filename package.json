@@ -57,7 +57,6 @@
     "@oxlint/plugins": "^1.63.0",
     "@types/node": "catalog:",
     "@typescript/native-preview": "catalog:",
-    "husky": "^9.1.7",
     "lint-staged": "^16.4.0",
     "vite-plus": "catalog:"
   },
