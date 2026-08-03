@@ -19,6 +19,7 @@ export * from "./vcs.ts";
 export * from "./sourceControl.ts";
 export * from "./orchestration.ts";
 export * from "./t3ProjectFile.ts";
+export * from "./devStack.ts";
 export * from "./editor.ts";
 export * from "./openWith.ts";
 export * from "./project.ts";
