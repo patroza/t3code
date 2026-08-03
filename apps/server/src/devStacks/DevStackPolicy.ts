@@ -1,5 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import type { DevStackEntry, T3ProjectFileDevStacks } from "@t3tools/contracts";
-import * as path from "node:path";
+import * as NodePath from "node:path";
 
 /**
  * The decision half of the dev stack sweep, kept free of the filesystem, /proc,
@@ -50,7 +51,7 @@ export const entryPortsFor = (
 };
 
 const within = (child: string, parent: string) =>
-  child === parent || child.startsWith(`${parent}${path.sep}`);
+  child === parent || child.startsWith(`${parent}${NodePath.sep}`);
 
 export interface ActivityObservation {
   readonly establishedPorts: ReadonlySet<number>;

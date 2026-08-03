@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDateInEffect:off
 import { DevStackEntry, DEV_STACK_REGISTRY_DIR } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -6,9 +7,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import {
   decide,
@@ -56,22 +57,23 @@ export class DevStackReaper extends Context.Service<
   }
 >()("t3/devStacks/DevStackReaper") {}
 
-const registryRoot = () => path.join(os.tmpdir(), DEV_STACK_REGISTRY_DIR);
+const registryRoot = () => NodePath.join(NodeOS.tmpdir(), DEV_STACK_REGISTRY_DIR);
 
 const seenPathFor = (stackFile: string) => stackFile.replace(/\.json$/u, ".seen");
 
 const listFiles = async (dir: string, suffix: string): Promise<ReadonlyArray<string>> => {
   const out: string[] = [];
-  const projects = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const projects = await NodeFSP.readdir(dir, { withFileTypes: true }).catch(() => []);
   for (const project of projects) {
     if (!project.isDirectory()) continue;
-    const projectDir = path.join(dir, project.name);
-    const worktrees = await fs.readdir(projectDir, { withFileTypes: true }).catch(() => []);
+    const projectDir = NodePath.join(dir, project.name);
+    const worktrees = await NodeFSP.readdir(projectDir, { withFileTypes: true }).catch(() => []);
     for (const worktree of worktrees) {
       if (!worktree.isDirectory()) continue;
-      const worktreeDir = path.join(projectDir, worktree.name);
-      const entries = await fs.readdir(worktreeDir).catch(() => []);
-      for (const name of entries) if (name.endsWith(suffix)) out.push(path.join(worktreeDir, name));
+      const worktreeDir = NodePath.join(projectDir, worktree.name);
+      const entries = await NodeFSP.readdir(worktreeDir).catch(() => []);
+      for (const name of entries)
+        if (name.endsWith(suffix)) out.push(NodePath.join(worktreeDir, name));
     }
   }
   return out;
@@ -91,8 +93,8 @@ const ownedBy = async (pid: number, expectedCwd: string) => {
   if (!alive(pid)) return false;
   try {
     const [actual, expected] = await Promise.all([
-      fs.realpath(`/proc/${pid}/cwd`),
-      fs.realpath(expectedCwd),
+      NodeFSP.realpath(`/proc/${pid}/cwd`),
+      NodeFSP.realpath(expectedCwd),
     ]);
     return actual === expected;
   } catch {
@@ -107,7 +109,7 @@ const ownedBy = async (pid: number, expectedCwd: string) => {
 const establishedLocalPorts = async (): Promise<ReadonlySet<number>> => {
   const ports = new Set<number>();
   for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
-    const text = await fs.readFile(file, "utf8").catch(() => "");
+    const text = await NodeFSP.readFile(file, "utf8").catch(() => "");
     for (const line of text.split("\n").slice(1)) {
       const fields = line.trim().split(/\s+/u);
       if (fields.length < 4 || fields[3] !== "01") continue;
@@ -124,11 +126,14 @@ const establishedLocalPorts = async (): Promise<ReadonlySet<number>> => {
 const consumerCwds = async (patterns: ReadonlySet<string>): Promise<ReadonlyArray<string>> => {
   if (patterns.size === 0) return [];
   const cwds: string[] = [];
-  const entries = await fs.readdir("/proc").catch(() => []);
+  const entries = await NodeFSP.readdir("/proc").catch(() => []);
   for (const entry of entries) {
     if (!/^\d+$/u.test(entry)) continue;
     try {
-      const cmdline = (await fs.readFile(`/proc/${entry}/cmdline`, "utf8")).replaceAll("\0", " ");
+      const cmdline = (await NodeFSP.readFile(`/proc/${entry}/cmdline`, "utf8")).replaceAll(
+        "\0",
+        " ",
+      );
       let matched = false;
       for (const pattern of patterns) {
         if (cmdline.includes(pattern)) {
@@ -137,7 +142,7 @@ const consumerCwds = async (patterns: ReadonlySet<string>): Promise<ReadonlyArra
         }
       }
       if (!matched) continue;
-      cwds.push(await fs.realpath(`/proc/${entry}/cwd`));
+      cwds.push(await NodeFSP.realpath(`/proc/${entry}/cwd`));
     } catch {
       // Exited mid-scan, or owned by another user. Either way it is not ours.
     }
@@ -165,14 +170,14 @@ const stopGroup = async (pid: number) => {
 
 const releaseLease = async (base: string, pid: number, port: number | undefined) => {
   if (port === undefined) return;
-  const file = path.join(base, "leases", `${port}.json`);
+  const file = NodePath.join(base, "leases", `${port}.json`);
   try {
-    const lease: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+    const lease: unknown = JSON.parse(await NodeFSP.readFile(file, "utf8"));
     if ((lease as { pid?: number }).pid !== pid) return;
   } catch {
     return;
   }
-  await fs.rm(file, { force: true });
+  await NodeFSP.rm(file, { force: true });
 };
 
 /**
@@ -181,9 +186,11 @@ const releaseLease = async (base: string, pid: number, port: number | undefined)
  * stat per stack.
  */
 const isLocked = async (base: string, entry: DevStackEntry) => {
-  const lock = path.join(base, "locks", `${entry.project}-${entry.worktree}-${entry.instance}`);
+  const lock = NodePath.join(base, "locks", `${entry.project}-${entry.worktree}-${entry.instance}`);
   try {
-    const owner: unknown = JSON.parse(await fs.readFile(path.join(lock, "owner.json"), "utf8"));
+    const owner: unknown = JSON.parse(
+      await NodeFSP.readFile(NodePath.join(lock, "owner.json"), "utf8"),
+    );
     const pid = (owner as { pid?: number }).pid;
     return typeof pid === "number" && alive(pid);
   } catch {
@@ -194,12 +201,12 @@ const isLocked = async (base: string, entry: DevStackEntry) => {
 /** Reverse start order, so a frontend stops before the API it points at. */
 const teardown = async (base: string, entry: DevStackEntry, stackFile: string) => {
   for (const process_ of [...entry.processes].reverse()) {
-    if (await ownedBy(process_.pid, path.join(entry.root, process_.cwd)))
+    if (await ownedBy(process_.pid, NodePath.join(entry.root, process_.cwd)))
       await stopGroup(process_.pid);
     await releaseLease(base, process_.pid, process_.port);
   }
-  await fs.rm(stackFile, { force: true });
-  await fs.rm(seenPathFor(stackFile), { force: true });
+  await NodeFSP.rm(stackFile, { force: true });
+  await NodeFSP.rm(seenPathFor(stackFile), { force: true });
 };
 
 export const make = Effect.gen(function* DevStackReaperMake() {
@@ -216,7 +223,9 @@ export const make = Effect.gen(function* DevStackReaperMake() {
   const sweep = Effect.fn("DevStackReaper.sweep")(function* () {
     const startedAt = Date.now();
     const base = registryRoot();
-    const stackFiles = yield* Effect.promise(() => listFiles(path.join(base, "stacks"), ".json"));
+    const stackFiles = yield* Effect.promise(() =>
+      listFiles(NodePath.join(base, "stacks"), ".json"),
+    );
     const summary = { scanned: 0, reaped: 0, pruned: 0, active: 0, skipped: 0 };
     if (stackFiles.length === 0) return { ...summary, durationMs: Date.now() - startedAt };
 
@@ -226,16 +235,15 @@ export const make = Effect.gen(function* DevStackReaperMake() {
     for (const file of stackFiles) {
       summary.scanned++;
       const raw = yield* Effect.promise(() =>
-        fs
-          .readFile(file, "utf8")
+        NodeFSP.readFile(file, "utf8")
           .then(JSON.parse)
           .catch(() => null),
       );
       const decoded = raw === null ? Option.none<DevStackEntry>() : decodeEntry(raw);
       if (Option.isNone(decoded)) {
         // Not a shape we understand. Only bookkeeping is removed; no signals sent.
-        yield* Effect.promise(() => fs.rm(file, { force: true }));
-        yield* Effect.promise(() => fs.rm(seenPathFor(file), { force: true }));
+        yield* Effect.promise(() => NodeFSP.rm(file, { force: true }));
+        yield* Effect.promise(() => NodeFSP.rm(seenPathFor(file), { force: true }));
         summary.pruned++;
         continue;
       }
@@ -262,14 +270,12 @@ export const make = Effect.gen(function* DevStackReaperMake() {
       }
       const anyProcessAlive = entry.processes.some((process_) => alive(process_.pid));
       const rootExists = yield* Effect.promise(() =>
-        fs
-          .stat(entry.root)
+        NodeFSP.stat(entry.root)
           .then(() => true)
           .catch(() => false),
       );
       const lastSeenMs = yield* Effect.promise(() =>
-        fs
-          .stat(seenPathFor(file))
+        NodeFSP.stat(seenPathFor(file))
           .then((stat) => stat.mtimeMs)
           .catch(() => null),
       );
@@ -288,8 +294,8 @@ export const make = Effect.gen(function* DevStackReaperMake() {
         case "StartClock": {
           const when = new Date();
           yield* Effect.promise(async () => {
-            await fs.writeFile(seenPathFor(file), "").catch(() => {});
-            await fs.utimes(seenPathFor(file), when, when).catch(() => {});
+            await NodeFSP.writeFile(seenPathFor(file), "").catch(() => {});
+            await NodeFSP.utimes(seenPathFor(file), when, when).catch(() => {});
           });
           summary.active++;
           break;
