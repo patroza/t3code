@@ -35,6 +35,11 @@ export interface EnabledJiraAppConfig {
   /** When false, unlinked issues still get "not yet linked." Default true. */
   readonly autoCreateThread: boolean;
   /**
+   * Base branch for auto-created Jira worktrees (fetched from origin).
+   * From `T3CODE_JIRA_BASE_BRANCH` (default `main`).
+   */
+  readonly baseBranch: string;
+  /**
    * Emoji id for the acknowledgment reaction on the triggering comment (👀 = 1f440).
    * Empty disables reactions. Best-effort — site/API support varies.
    */
@@ -86,6 +91,7 @@ const configEffect = Effect.gen(function* () {
     autoCreateThread: Config.boolean("T3CODE_JIRA_AUTO_CREATE_THREAD").pipe(
       Config.withDefault(true),
     ),
+    baseBranch: Config.string("T3CODE_JIRA_BASE_BRANCH").pipe(Config.withDefault("main")),
     ackEmojiId: optionalString("T3CODE_JIRA_ACK_EMOJI_ID"),
   });
 
@@ -132,6 +138,7 @@ const configEffect = Effect.gen(function* () {
     defaultProjectId: values.defaultProjectId?.trim() || null,
     projectMap: parseJiraProjectMap(values.projectMap),
     autoCreateThread: values.autoCreateThread,
+    baseBranch: values.baseBranch.trim() || "main",
     ackEmojiId,
   });
 });

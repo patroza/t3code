@@ -1,12 +1,14 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  type EnvironmentId,
   MessageId,
   ProjectId,
   ThreadId,
   type OrchestrationThread,
   type TurnId,
 } from "@t3tools/contracts";
+import { buildAgentAwarenessDeepLink } from "@t3tools/shared/agentAwareness";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -17,6 +19,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 
+import { hostedAppUrlConfig } from "../cloud/publicConfig.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import {
   discoverGitHubTargetTurnId,
   githubFinalAnswerWithStats,
@@ -24,6 +29,7 @@ import {
 } from "../github/GitHubPrBridge.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
 import {
   ThreadWorkItemStore,
@@ -53,13 +59,61 @@ const FAILED_RESPONSE =
 const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const CREATE_FAILED_RESPONSE =
-  "T3 could not create a thread for this Jira issue. Check server logs or link an existing thread.";
+  "T3 could not create a worktree thread for this Jira issue. Check server logs or link an existing thread.";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
 export function formatJiraComment(body: string): string {
   const trimmed = body.trim();
   if (trimmed.length <= MAX_JIRA_COMMENT_LENGTH) return trimmed;
   return `${trimmed.slice(0, MAX_JIRA_COMMENT_LENGTH - 20)}\n\n…(truncated)`;
+}
+
+export function buildJiraT3ThreadUrl(input: {
+  readonly hostedAppUrl: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+}): string {
+  return new URL(
+    buildAgentAwarenessDeepLink({
+      environmentId: input.environmentId as EnvironmentId,
+      threadId: input.threadId as ThreadId,
+    }),
+    input.hostedAppUrl,
+  ).toString();
+}
+
+export function appendJiraT3ThreadLink(
+  body: string,
+  input:
+    | {
+        readonly hostedAppUrl: string;
+        readonly environmentId: string;
+        readonly threadId: string;
+      }
+    | null
+    | undefined,
+): string {
+  const base = body.trimEnd();
+  if (input === null || input === undefined) return base;
+  const url = buildJiraT3ThreadUrl(input);
+  if (base.includes(url)) return base;
+  const footer = `T3 thread: ${url}`;
+  if (base === "") return footer;
+  return `${base}\n\n${footer}`;
+}
+
+/**
+ * Key-first branch for Jira auto-create worktrees so GitHub-for-Jira can link
+ * Development panel entries (e.g. SA-402-t3-a1b2c3d4).
+ */
+export function buildJiraAutoCreateBranchName(issueKey: string, shortId: string): string {
+  const key = issueKey.trim().toUpperCase();
+  const suffix = shortId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "")
+    .slice(0, 8);
+  return suffix.length > 0 ? `${key}-t3-${suffix}` : `${key}-t3`;
 }
 
 function isThreadBusy(thread: OrchestrationThread): boolean {
@@ -89,9 +143,14 @@ const make = Effect.gen(function* () {
   const jira = yield* JiraAppClient;
   const engine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
+  const serverEnvironment = yield* ServerEnvironment;
+  const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const createLock = yield* Semaphore.make(1);
+  const hostedAppUrl = yield* hostedAppUrlConfig;
+  const environmentId = yield* serverEnvironment.getEnvironmentId;
 
   /**
    * Post a bridge response as a **threaded reply** when possible.
@@ -101,7 +160,18 @@ const make = Effect.gen(function* () {
   const postComment = (delivery: StoredJiraDelivery, body: string) =>
     jira.addIssueComment({
       issueKey: delivery.issueKey,
-      body: formatJiraComment(body),
+      body: formatJiraComment(
+        appendJiraT3ThreadLink(
+          body,
+          delivery.threadId === null
+            ? null
+            : {
+                hostedAppUrl,
+                environmentId,
+                threadId: delivery.threadId,
+              },
+        ),
+      ),
       parentCommentId: delivery.replyToCommentId || delivery.sourceCommentId || null,
     });
 
@@ -229,8 +299,9 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * First surface for this issue: create a thread, attach the Jira key, return live detail.
-   * Worktree is null (chat/session first); later PR/Discord surfaces can join via the store.
+   * First surface for this issue: create a dedicated worktree + thread, attach the Jira key.
+   * Never opens on the project main checkout — same isolation as Discord/GitHub create paths.
+   * Later surfaces join via ThreadWorkItemStore.
    */
   const createThreadForIssue = Effect.fn("JiraIssueBridge.createThreadForIssue")(function* (
     invocation: JiraIssueInvocation,
@@ -266,12 +337,55 @@ const make = Effect.gen(function* () {
           invocation.issueSummary?.trim() || `${invocation.issueKey} · Jira` || invocation.issueKey;
         const modelSelection =
           project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+        const branchName = buildJiraAutoCreateBranchName(
+          invocation.issueKey,
+          (yield* crypto.randomUUIDv4).slice(0, 8),
+        );
+        const baseBranch = config.enabled ? config.baseBranch : "main";
 
-        yield* Effect.logInfo("Creating T3 thread for unlinked Jira issue", {
+        yield* Effect.logInfo("Creating T3 worktree thread for unlinked Jira issue", {
           issueKey: invocation.issueKey,
           projectId: project.id,
           threadId,
+          workspaceRoot: project.workspaceRoot,
+          baseBranch,
+          branch: branchName,
         });
+
+        const prepared = yield* Effect.gen(function* () {
+          yield* gitWorkflow.fetchRemote({
+            cwd: project.workspaceRoot,
+            remoteName: "origin",
+          });
+          const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+            cwd: project.workspaceRoot,
+            refName: baseBranch,
+            fallbackRemoteName: "origin",
+          });
+          const worktree = yield* gitWorkflow.createWorktree({
+            cwd: project.workspaceRoot,
+            refName: resolvedRemoteBase.commitSha,
+            newRefName: branchName,
+            baseRefName: baseBranch,
+            path: null,
+          });
+          return {
+            branch: worktree.worktree.refName,
+            worktreePath: worktree.worktree.path,
+          };
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logError("Jira auto-create worktree failed", {
+              issueKey: invocation.issueKey,
+              projectId: project.id,
+              workspaceRoot: project.workspaceRoot,
+              baseBranch,
+              branch: branchName,
+              cause,
+            }).pipe(Effect.as(null)),
+          ),
+        );
+        if (prepared === null) return null;
 
         yield* engine.dispatch({
           type: "thread.create",
@@ -282,10 +396,29 @@ const make = Effect.gen(function* () {
           modelSelection,
           runtimeMode: "full-access",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          branch: null,
-          worktreePath: null,
+          branch: prepared.branch,
+          worktreePath: prepared.worktreePath,
           createdAt,
         });
+
+        yield* projectSetupScriptRunner
+          .runForThread({
+            threadId,
+            projectId: project.id,
+            projectCwd: project.workspaceRoot,
+            worktreePath: prepared.worktreePath,
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Jira-provisioned T3 thread setup script failed", {
+                issueKey: invocation.issueKey,
+                projectId: project.id,
+                threadId,
+                worktreePath: prepared.worktreePath,
+                cause,
+              }),
+            ),
+          );
 
         yield* workItems.appendForThread({
           threadId,
@@ -484,7 +617,7 @@ const make = Effect.gen(function* () {
       }
       const created = yield* createThreadForIssue(input.invocation);
       if (created === null) {
-        yield* finishDelivery(acknowledged, NOT_LINKED_RESPONSE, "rejected");
+        yield* finishDelivery(acknowledged, CREATE_FAILED_RESPONSE, "rejected");
         return;
       }
       thread = created;
