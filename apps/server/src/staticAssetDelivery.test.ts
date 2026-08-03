@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   contentCacheKey,
   isCompressibleContentType,
+  isContentHashedAsset,
   makeStaticCompressionCache,
   negotiateStaticEncoding,
   resolveStaticCacheControl,
@@ -23,6 +24,23 @@ describe("contentCacheKey", () => {
     expect(contentCacheKey(encode("<html>a</html>"))).not.toBe(
       contentCacheKey(encode("<html>b</html>")),
     );
+  });
+});
+
+describe("isContentHashedAsset", () => {
+  it("recognizes vite content-hashed bundle assets", () => {
+    expect(isContentHashedAsset("assets/index-DxV9k2Qp.js")).toBe(true);
+    expect(isContentHashedAsset("/assets/style-a1b2c3d4.css")).toBe(true);
+  });
+
+  it("rejects stable-name files that a hot swap can change in place", () => {
+    // These keep their name across builds, so the compression cache must key
+    // them by content, not path/mtime/size -- otherwise an atomic asset swap
+    // that preserves metadata could serve stale bytes.
+    expect(isContentHashedAsset("index.html")).toBe(false);
+    expect(isContentHashedAsset("favicon.ico")).toBe(false);
+    expect(isContentHashedAsset("manifest.webmanifest")).toBe(false);
+    expect(isContentHashedAsset("assets/logo.svg")).toBe(false);
   });
 });
 
