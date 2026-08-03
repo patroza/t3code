@@ -84,6 +84,29 @@ it("resolveOpenPrState: draft list → draft", () => {
   assert.equal(state.pr?.number, 42);
 });
 
+it("resolveOpenPrState: strips ANSI and shell noise and disables forced color", () => {
+  let seenEnv;
+  const state = resolveOpenPrState({
+    ...pinned(() => ({ status: 0, stdout: "[]", stderr: "" })),
+    env: { FORCE_COLOR: "1", CLICOLOR_FORCE: "1" },
+    runGh: (_args, opts) => {
+      seenEnv = opts.env;
+      return {
+        status: 0,
+        stdout: `direnv: loading\n\u001b[32m${JSON.stringify([
+          { number: 42, isDraft: true, state: "OPEN" },
+        ])}\u001b[0m\n`,
+        stderr: "",
+      };
+    },
+  });
+  assert.equal(state.mode, "draft");
+  assert.equal(seenEnv.FORCE_COLOR, undefined);
+  assert.equal(seenEnv.CLICOLOR_FORCE, undefined);
+  assert.equal(seenEnv.NO_COLOR, "1");
+  assert.equal(seenEnv.GH_FORCE_TTY, "0");
+});
+
 it("resolveOpenPrState: ready list → ready", () => {
   const state = resolveOpenPrState(
     pinned(() => ({
