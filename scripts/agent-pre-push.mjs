@@ -35,6 +35,25 @@ import {
 
 export { isCodingAgent };
 
+/**
+ * The gate shells out to `vp` / `vpr`, which live in the repository's
+ * `node_modules/.bin`. pnpm and husky both put that on PATH, so every historical
+ * caller happened to work and the dependency stayed invisible — until the `gh`
+ * shim started running the gate from a bare process, where `vpr typecheck` died
+ * with "command not found". Make the gate supply its own PATH so it does not
+ * depend on how it was invoked.
+ *
+ * @param {string} root
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {NodeJS.ProcessEnv}
+ */
+const withRepoBin = (root, env) => {
+  const repoBin = NodePath.join(root, "node_modules", ".bin");
+  const current = (env["PATH"] ?? "").split(NodePath.delimiter).filter(Boolean);
+  if (current.some((entry) => NodePath.resolve(entry) === repoBin)) return env;
+  return { ...env, PATH: [repoBin, ...current].join(NodePath.delimiter) };
+};
+
 const run = (label, args, opts = {}) => {
   console.error(`agent ship-gate: ${label}`);
   const result = NodeChildProcess.spawnSync(args[0], args.slice(1), {
@@ -61,7 +80,7 @@ const run = (label, args, opts = {}) => {
  */
 export const runAgentShipGate = async (opts = {}) => {
   const root = opts.root ?? NodeProcess.cwd();
-  const env = opts.env ?? NodeProcess.env;
+  const env = withRepoBin(root, opts.env ?? NodeProcess.env);
   const force = opts.force === true || isShipGateForce(env);
   const headSha = readHeadSha(root);
 
