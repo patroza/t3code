@@ -43,6 +43,7 @@ import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./ht
 import {
   contentCacheKey,
   isCompressibleContentType,
+  isContentHashedAsset,
   makeStaticCompressionCache,
   negotiateStaticEncoding,
   resolveStaticCacheControl,
@@ -389,19 +390,25 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       data,
       contentType,
       cacheControl: resolveStaticCacheControl(staticRelativePath),
-      cacheKey: staticCacheKey(filePath, fileInfo),
+      // Hashed assets carry their content in their name, so metadata keying is
+      // both cheap and correct. Stable-name files (favicon, manifest, ...) can
+      // change content across a hot swap while keeping mtime/size, which would
+      // let the compression cache serve stale bytes -- key those by content,
+      // as index.html already is above.
+      cacheKey: isContentHashedAsset(staticRelativePath)
+        ? staticCacheKey(filePath, fileInfo)
+        : contentCacheKey(data),
       acceptEncoding: request.headers["accept-encoding"],
     });
   }),
 );
 
 /**
- * Identifies a build of a file for the compression cache, without hashing
- * payloads that can run to megabytes. The stat is taken before the bytes are
- * read, so a rebuild landing between the two can only orphan an entry under
- * the superseded key, never publish those bytes under the newer one. Files
- * whose contents change without their name are keyed by content instead; the
- * rest carry a content hash in their filename already.
+ * Identifies a build of a hashed asset for the compression cache without
+ * hashing payloads that can run to megabytes. Only used for files whose name
+ * already carries a content hash (see isContentHashedAsset), so the name
+ * changes whenever the bytes do and metadata keying cannot collide across a
+ * rebuild or hot swap. Stable-name files are keyed by content at the call site.
  */
 function staticCacheKey(filePath: string, info: FileSystem.File.Info): string {
   const mtimeMs = info.mtime.pipe(
