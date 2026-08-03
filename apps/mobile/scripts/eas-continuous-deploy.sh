@@ -64,6 +64,14 @@ fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# EAS CLI mixes human-readable notices into `--json` stdout, so every payload
+# goes through this reader instead of a bare JSON.parse. See scripts/lib/eas-json.mjs.
+EAS_JSON="$ROOT/scripts/lib/eas-json.mjs"
+if [[ ! -f "$EAS_JSON" ]]; then
+  echo "Missing EAS JSON reader at $EAS_JSON" >&2
+  exit 1
+fi
+
 if [[ -z "$MESSAGE" ]]; then
   MESSAGE="EAS continuous deploy $(date -u +%Y-%m-%dT%H:%MZ) ${GITHUB_SHA:-local}"
 fi
@@ -83,20 +91,8 @@ generate_fingerprint() {
   else
     args+=(--build-profile "$PROFILE")
   fi
-  # JSON on stdout; progress on stderr
-  eas "${args[@]}" | node -e '
-    let s = "";
-    process.stdin.on("data", (c) => (s += c));
-    process.stdin.on("end", () => {
-      const j = JSON.parse(s);
-      const hash = j.hash || j.fingerprintHash;
-      if (!hash) {
-        console.error("fingerprint:generate returned no hash:", s.slice(0, 500));
-        process.exit(1);
-      }
-      process.stdout.write(String(hash));
-    });
-  '
+  # JSON on stdout; progress (and stray notices) mixed in — the reader tolerates both
+  eas "${args[@]}" | node "$EAS_JSON" fingerprint-hash
 }
 
 find_matching_build() {
@@ -109,16 +105,7 @@ find_matching_build() {
     --limit 5 \
     --json \
     --non-interactive \
-    | node -e '
-      let s = "";
-      process.stdin.on("data", (c) => (s += c));
-      process.stdin.on("end", () => {
-        const builds = JSON.parse(s || "[]");
-        const ok = new Set(["NEW", "IN_QUEUE", "IN_PROGRESS", "FINISHED"]);
-        const b = builds.find((x) => ok.has(String(x.status || "").toUpperCase().replace(/-/g, "_")));
-        if (b && b.id) process.stdout.write(String(b.id));
-      });
-    '
+    | node "$EAS_JSON" usable-build-id
 }
 
 latest_finished_runtime() {
@@ -130,15 +117,7 @@ latest_finished_runtime() {
     --limit 1 \
     --json \
     --non-interactive \
-    | node -e '
-      let s = "";
-      process.stdin.on("data", (c) => (s += c));
-      process.stdin.on("end", () => {
-        const builds = JSON.parse(s || "[]");
-        const b = builds[0];
-        if (b && b.runtimeVersion) process.stdout.write(String(b.runtimeVersion));
-      });
-    '
+    | node "$EAS_JSON" latest-finished-runtime
 }
 
 publish_update() {
