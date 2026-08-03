@@ -38,11 +38,21 @@ const brotliCompress = NodeUtil.promisify(NodeZlib.brotliCompress);
 
 export type StaticContentEncoding = "br" | "gzip";
 
-export function resolveStaticCacheControl(relativePath: string): string {
+/**
+ * Whether a static file's name already encodes its content (a Vite hashed
+ * asset under `assets/`). Such files are safe to cache forever and safe to key
+ * by path/metadata, because the name changes whenever the bytes do. Every other
+ * served file keeps a stable name across builds, so a hot asset swap that
+ * preserves mtime and size could otherwise let the compression cache serve
+ * stale bytes -- those must be keyed by content instead.
+ */
+export function isContentHashedAsset(relativePath: string): boolean {
   const normalized = relativePath.replaceAll("\\", "/").replace(/^\/+/, "");
-  return normalized.startsWith("assets/") && HASHED_ASSET_PATTERN.test(normalized)
-    ? IMMUTABLE_CACHE_CONTROL
-    : REVALIDATE_CACHE_CONTROL;
+  return normalized.startsWith("assets/") && HASHED_ASSET_PATTERN.test(normalized);
+}
+
+export function resolveStaticCacheControl(relativePath: string): string {
+  return isContentHashedAsset(relativePath) ? IMMUTABLE_CACHE_CONTROL : REVALIDATE_CACHE_CONTROL;
 }
 
 /**
