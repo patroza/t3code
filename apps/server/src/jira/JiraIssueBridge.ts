@@ -1,12 +1,14 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  type EnvironmentId,
   MessageId,
   ProjectId,
   ThreadId,
   type OrchestrationThread,
   type TurnId,
 } from "@t3tools/contracts";
+import { buildAgentAwarenessDeepLink } from "@t3tools/shared/agentAwareness";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -17,6 +19,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 
+import { hostedAppUrlConfig } from "../cloud/publicConfig.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import {
   discoverGitHubTargetTurnId,
   githubFinalAnswerWithStats,
@@ -62,6 +66,40 @@ export function formatJiraComment(body: string): string {
   return `${trimmed.slice(0, MAX_JIRA_COMMENT_LENGTH - 20)}\n\n…(truncated)`;
 }
 
+export function buildJiraT3ThreadUrl(input: {
+  readonly hostedAppUrl: string;
+  readonly environmentId: string;
+  readonly threadId: string;
+}): string {
+  return new URL(
+    buildAgentAwarenessDeepLink({
+      environmentId: input.environmentId as EnvironmentId,
+      threadId: input.threadId as ThreadId,
+    }),
+    input.hostedAppUrl,
+  ).toString();
+}
+
+export function appendJiraT3ThreadLink(
+  body: string,
+  input:
+    | {
+        readonly hostedAppUrl: string;
+        readonly environmentId: string;
+        readonly threadId: string;
+      }
+    | null
+    | undefined,
+): string {
+  const base = body.trimEnd();
+  if (input === null || input === undefined) return base;
+  const url = buildJiraT3ThreadUrl(input);
+  if (base.includes(url)) return base;
+  const footer = `T3 thread: ${url}`;
+  if (base === "") return footer;
+  return `${base}\n\n${footer}`;
+}
+
 function isThreadBusy(thread: OrchestrationThread): boolean {
   const latest = thread.latestTurn;
   if (latest?.state === "running") return true;
@@ -89,9 +127,12 @@ const make = Effect.gen(function* () {
   const jira = yield* JiraAppClient;
   const engine = yield* OrchestrationEngineService;
   const projection = yield* ProjectionSnapshotQuery;
+  const serverEnvironment = yield* ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const createLock = yield* Semaphore.make(1);
+  const hostedAppUrl = yield* hostedAppUrlConfig;
+  const environmentId = yield* serverEnvironment.getEnvironmentId;
 
   /**
    * Post a bridge response as a **threaded reply** when possible.
@@ -101,7 +142,18 @@ const make = Effect.gen(function* () {
   const postComment = (delivery: StoredJiraDelivery, body: string) =>
     jira.addIssueComment({
       issueKey: delivery.issueKey,
-      body: formatJiraComment(body),
+      body: formatJiraComment(
+        appendJiraT3ThreadLink(
+          body,
+          delivery.threadId === null
+            ? null
+            : {
+                hostedAppUrl,
+                environmentId,
+                threadId: delivery.threadId,
+              },
+        ),
+      ),
       parentCommentId: delivery.replyToCommentId || delivery.sourceCommentId || null,
     });
 
