@@ -22,14 +22,26 @@ describe("buildT3ProjectFileJsonSchema", () => {
         {
           description?: string;
           items?: { properties: Record<string, unknown>; required: ReadonlyArray<string> };
+          properties?: Record<string, { description?: string }>;
         }
       >;
       required?: ReadonlyArray<string>;
     };
 
-    expect(Object.keys(schema.properties).sort()).toEqual(["$schema", "iconPath", "scripts"]);
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "$schema",
+      "devStacks",
+      "iconPath",
+      "scripts",
+    ]);
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
+    expect(schema.properties.devStacks?.description).toContain("supervising the dev stacks");
+    expect(Object.keys(schema.properties.devStacks?.properties ?? {}).sort()).toEqual([
+      "consumers",
+      "entryRoles",
+      "idleMinutes",
+    ]);
 
     const script = schema.properties.scripts?.items;
     expect(script?.required).toEqual(["name", "command"]);
