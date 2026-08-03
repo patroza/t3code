@@ -115,6 +115,7 @@ jobs:
           git fetch origin "$WORKFLOW_SHA"
           for path in \
             apps/mobile/scripts/eas-continuous-deploy.sh \
+            apps/mobile/scripts/lib \
             apps/mobile/app.config.ts \
             .easignore; do
             if git cat-file -e "${WORKFLOW_SHA}:${path}" 2>/dev/null; then
