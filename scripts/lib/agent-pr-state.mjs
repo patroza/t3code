@@ -37,6 +37,18 @@ export const classifyPrPayload = (pr) => {
  */
 export const shouldRunShipGateOnPush = (mode) => mode === "ready" || mode === "unknown";
 
+/** Strip ANSI color codes so `gh --json` stays parseable when color is forced. */
+const stripAnsi = (text) => String(text).replace(/\u001b\[[0-9;]*m/g, "");
+
+/** Return the JSON array while ignoring shell integration noise around it. */
+const extractJsonArray = (text) => {
+  const cleaned = stripAnsi(text).trim();
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start === -1 || end === -1 || end < start) return cleaned;
+  return cleaned.slice(start, end + 1);
+};
+
 /**
  * Parse `owner/repo` from a GitHub remote URL (ssh, https, or git protocol).
  * @param {string | null | undefined} url
@@ -66,7 +78,13 @@ export const parseRepoSlug = (url) => {
  */
 export const resolveOpenPrState = (opts = {}) => {
   const cwd = opts.cwd ?? NodeProcess.cwd();
-  const env = opts.env ?? NodeProcess.env;
+  const env = { ...(opts.env ?? NodeProcess.env) };
+  delete env.FORCE_COLOR;
+  delete env.CLICOLOR_FORCE;
+  env.NO_COLOR = "1";
+  env.CLICOLOR = "0";
+  env.GH_FORCE_TTY = "0";
+  env.TERM = "dumb";
   const runGh =
     opts.runGh ??
     ((args, runOpts) => {
@@ -140,8 +158,8 @@ export const resolveOpenPrState = (opts = {}) => {
   }
 
   const status = result.status === null ? 1 : result.status;
-  const stderr = String(result.stderr ?? "");
-  const stdout = String(result.stdout ?? "").trim();
+  const stderr = stripAnsi(result.stderr ?? "").trim();
+  const stdout = extractJsonArray(result.stdout ?? "");
 
   // gh error (auth / network / bad repo): fail closed, run the gate.
   if (status !== 0) {
