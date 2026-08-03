@@ -11,6 +11,8 @@ export const T3_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
 
 const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
+const T3_PROJECT_FILE_MAX_DEV_STACK_CONSUMERS = 20;
+const T3_PROJECT_FILE_MAX_DEV_STACK_ROLES = 10;
 
 // Annotations go on the encoded (string) side so they survive into the
 // published JSON Schema; decoding still trims and re-validates non-emptiness.
@@ -70,6 +72,47 @@ export const T3ProjectFileScript = Schema.Struct({
 });
 export type T3ProjectFileScript = typeof T3ProjectFileScript.Type;
 
+/**
+ * Policy for long-running dev servers a repository starts outside T3's own
+ * process tree (test stacks, preview servers). The live instances themselves are
+ * registered under `$TMPDIR/dev-stacks` in the repo-agnostic `dev-stack/1` format;
+ * this declares how T3 should treat them.
+ *
+ * Policy lives here rather than in each registry entry on purpose: an idle window
+ * is a property of the repository, not of one running instance, and changing it
+ * should apply to instances that are already up on the next sweep instead of only
+ * to ones started afterwards.
+ */
+export const T3ProjectFileDevStacks = Schema.Struct({
+  idleMinutes: Schema.optionalKey(
+    Schema.Number.check(Schema.isGreaterThan(0)).annotate({
+      description:
+        "Minutes a registered dev stack may go without an observed consumer before T3 stops it. Defaults to 20.",
+    }),
+  ),
+  consumers: Schema.optionalKey(
+    Schema.Array(
+      trimmedNonEmpty({ description: "Substring matched against process command lines." }),
+    )
+      .annotate({
+        description:
+          'Processes whose presence inside the worktree counts as the stack being in use, e.g. ["playwright", "vitest"]. Deliberately narrow: a shell sitting in the worktree is not a consumer, and treating it as one would keep every stack alive for the length of a session.',
+      })
+      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_DEV_STACK_CONSUMERS)),
+  ),
+  entryRoles: Schema.optionalKey(
+    Schema.Array(trimmedNonEmpty({ description: "A role name used in the dev-stack registry." }))
+      .annotate({
+        description:
+          'Roles a consumer connects to, most specific first, e.g. ["frontend", "api"]. T3 watches the first role present in an instance. Ordering matters: a frontend usually holds keep-alive connections to its own API, so counting the API port would read the stack as busy for as long as the frontend is up.',
+      })
+      .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_DEV_STACK_ROLES)),
+  ),
+}).annotate({
+  description: "How T3 supervises long-running dev stacks this repository registers.",
+});
+export type T3ProjectFileDevStacks = typeof T3ProjectFileDevStacks.Type;
+
 export const T3ProjectFile = Schema.Struct({
   $schema: Schema.optionalKey(
     Schema.String.annotate({
@@ -91,6 +134,12 @@ export const T3ProjectFile = Schema.Struct({
         description: "Project scripts shared with everyone who opens this repository in T3 Code.",
       })
       .check(Schema.isMaxLength(T3_PROJECT_FILE_MAX_SCRIPTS)),
+  ),
+  devStacks: Schema.optionalKey(
+    T3ProjectFileDevStacks.annotate({
+      description:
+        "Opt in to T3 supervising the dev stacks this repository registers under $TMPDIR/dev-stacks. Omit it and T3 leaves them alone.",
+    }),
   ),
 }).annotate({
   title: "T3 project file",
