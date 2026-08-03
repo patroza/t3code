@@ -178,16 +178,43 @@ it.effect("clones a looked-up repository into the requested destination", () =>
           cwd: parent,
           args: ["clone", CLONE_URLS.url, "t3code"],
         },
+        {
+          cwd: destinationPath,
+          args: ["config", "core.hooksPath", ".githooks"],
+        },
+        {
+          cwd: destinationPath,
+          args: ["checkout", "--force", "HEAD"],
+        },
       ]);
     }).pipe(
       Effect.provide(
         makeLayer({
           git: {
             execute: (input) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 cloneCalls.push({ cwd: input.cwd, args: input.args });
+                if (input.args[0] === "clone") {
+                  yield* fs.makeDirectory(`${destinationPath}/.githooks`, { recursive: true });
+                  yield* fs.writeFileString(
+                    `${destinationPath}/.githooks/post-checkout`,
+                    "#!/bin/sh\n",
+                  );
+                }
                 return processOutput();
-              }),
+              }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new GitCommandError({
+                      operation: input.operation,
+                      command: `git ${input.args.join(" ")}`,
+                      cwd: input.cwd,
+                      failureKind: "unknown",
+                      detail: "Could not create the clone fixture.",
+                      cause,
+                    }),
+                ),
+              ),
           },
         }),
       ),
