@@ -1,6 +1,9 @@
 /**
- * Agent policy for `gh`: block undraft / ready-for-review side channels.
- * Publish must go through `pnpm pr:ready` (sets AGENT_PR_SHIP=1).
+ * Agent policy for `gh`: recognise the invocations that publish a pull request
+ * (undraft / ready-for-review side channels) so the shim can run the ship gate
+ * before letting them through. Publishing is gated, never refused — only a
+ * failing gate stops it. `pnpm pr:ready` sets AGENT_PR_SHIP=1 so its own undraft
+ * call does not re-run the gate it just passed.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -54,22 +57,32 @@ export const stripGhGlobalFlags = (argv) => {
 };
 
 /**
+ * Does this `gh` invocation publish a pull request, and therefore have to pass
+ * the ship gate first?
+ *
+ * Publishing is not refused — it is gated. The shim runs the same gate
+ * `pnpm pr:ready` runs and then lets the command through; only a failing gate
+ * stops it. Refusing outright just moved the work to a command the agent had to
+ * remember, and left repositories without a `pr:ready` equivalent with no route
+ * at all.
+ *
  * @param {string[]} argv  args after the gh binary name
  * @param {NodeJS.ProcessEnv} [env]
- * @returns {{ blocked: boolean, reason?: string }}
+ * @returns {{ required: boolean, reason?: string }}
  */
-export const inspectAgentGhCommand = (argv, env = NodeProcess.env) => {
-  if (isAgentPrShipAllowed(env)) return { blocked: false };
+export const requiresShipGate = (argv, env = NodeProcess.env) => {
+  // Already gated: `pnpm pr:ready` sets this for its own undraft call, so the
+  // gate runs once rather than twice.
+  if (isAgentPrShipAllowed(env)) return { required: false };
 
   const args = stripGhGlobalFlags(argv);
-  if (args.length === 0) return { blocked: false };
+  if (args.length === 0) return { required: false };
 
   // gh pr ready [number]
   if (args[0] === "pr" && args[1] === "ready") {
     return {
-      blocked: true,
-      reason:
-        "agents must not undraft with `gh pr ready` — use `pnpm pr:ready` (runs the ship gate, then marks ready)",
+      required: true,
+      reason: "`gh pr ready` publishes this PR — running the ship gate first",
     };
   }
 
@@ -78,13 +91,13 @@ export const inspectAgentGhCommand = (argv, env = NodeProcess.env) => {
     const joined = args.join(" ");
     if (/ready_for_review/i.test(joined) || /markPullRequestReadyForReview/i.test(joined)) {
       return {
-        blocked: true,
-        reason: "agents must not mark a PR ready via `gh api` — use `pnpm pr:ready`",
+        required: true,
+        reason: "this `gh api` call publishes a PR — running the ship gate first",
       };
     }
   }
 
-  return { blocked: false };
+  return { required: false };
 };
 
 /**
