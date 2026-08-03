@@ -207,6 +207,7 @@ export type SidebarV2ThreadContextMenuAction =
   | "regenerate-title"
   | "mark-unread"
   | "copy-path"
+  | "copy-thread-id"
   | "copy-branch"
   | "delete";
 
@@ -266,6 +267,7 @@ export function buildSidebarV2ThreadContextMenuItems(input: {
       : []),
     { id: "mark-unread", label: "Mark unread" },
     { id: "copy-path", label: "Copy path", icon: "copy" },
+    { id: "copy-thread-id", label: "Copy Thread ID", icon: "copy" },
     ...(input.branch ? ([{ id: "copy-branch", label: "Copy branch", icon: "copy" }] as const) : []),
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
