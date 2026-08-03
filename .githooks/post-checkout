@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prepare a linked git worktree after `git worktree add`.
+# Reconcile packages after branch checkout and prepare linked git worktrees.
 #
 # Canonical hook: scripts/install-git-hooks.mjs installs this into the shared
 # hooks dir (core.hooksPath) on EVERY host via `pnpm install`, so a raw
@@ -19,20 +19,19 @@
 PATH="$HOME/.local/bin:$HOME/.local/share/pnpm:$HOME/.local/share/mise/shims:/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export PATH
 
-# In the main worktree, git-dir == common-dir; in linked worktrees they differ.
-git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
-common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd) || exit 0
-[ "$git_dir" = "$common_dir" ] && exit 0
+# post-checkout also runs after file-only checkouts; those do not change packages.
+[ "${3:-0}" = "1" ] || exit 0
 
 main_wt=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
 wt_root=$(git rev-parse --show-toplevel 2>/dev/null)
-[ -n "$main_wt" ] && [ -n "$wt_root" ] && [ "$main_wt" != "$wt_root" ] || exit 0
+[ -n "$wt_root" ] || exit 0
 
-# Effective include: repo .worktreeinclude if present, else nothing to seed-copy.
-include=""
-if [ -f "$main_wt/.worktreeinclude" ]; then
-  include="$main_wt/.worktreeinclude"
-fi
+if [ -n "$main_wt" ] && [ "$main_wt" != "$wt_root" ]; then
+  # Effective include: repo .worktreeinclude if present, else nothing to seed-copy.
+  include=""
+  if [ -f "$main_wt/.worktreeinclude" ]; then
+    include="$main_wt/.worktreeinclude"
+  fi
 
 # Probe once: reflink (CoW fs) > hard link (same fs) > plain copy (cross-device).
 probe="$main_wt/.git-hook-clone-probe.$$"
@@ -72,6 +71,7 @@ if [ -n "$include" ] && [ -f "$include" ]; then
         cp "$src" "$dst"
       fi
     done
+fi
 fi
 
 # Shared-store hardlink install: fast when the store is warm, no inode clone storm.
