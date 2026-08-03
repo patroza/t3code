@@ -4,8 +4,11 @@
  *
  *   pnpm pr:ready
  *
- * Agents must not call `gh pr ready` directly — the agent gh shim blocks it
- * unless AGENT_PR_SHIP=1 (set only here for the undraft step).
+ * This is the explicit path, not the only one: raw `gh pr ready` also runs the
+ * gate, because the shim runs it before passing the command through. What this
+ * adds is PR-state handling — a clear error when there is no open PR, and gate-
+ * only behaviour when the PR is already ready. AGENT_PR_SHIP=1 below marks the
+ * gate as already passed so the shim does not run it a second time.
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeProcess from "node:process";
