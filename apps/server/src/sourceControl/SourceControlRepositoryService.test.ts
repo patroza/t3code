@@ -1,3 +1,5 @@
+import * as NodeFS from "node:fs";
+
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -192,14 +194,11 @@ it.effect("clones a looked-up repository into the requested destination", () =>
         makeLayer({
           git: {
             execute: (input) =>
-              Effect.gen(function* () {
+              Effect.sync(() => {
                 cloneCalls.push({ cwd: input.cwd, args: input.args });
                 if (input.args[0] === "clone") {
-                  yield* fs.makeDirectory(`${destinationPath}/.githooks`, { recursive: true });
-                  yield* fs.writeFileString(
-                    `${destinationPath}/.githooks/post-checkout`,
-                    "#!/bin/sh\n",
-                  );
+                  NodeFS.mkdirSync(`${destinationPath}/.githooks`, { recursive: true });
+                  NodeFS.writeFileSync(`${destinationPath}/.githooks/post-checkout`, "#!/bin/sh\n");
                 }
                 return processOutput();
               }),
