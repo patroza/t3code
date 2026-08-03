@@ -14,13 +14,16 @@ server state dir) keyed by Jira issue (**join-or-create**):
 
 1. **Exactly one** store hit → continue that thread (Discord import is a migration fallback only).
 2. **Multiple** hits → fail closed with an ambiguous message (never guess).
-3. **Zero** hits → **auto-create** a T3 thread, attach the issue key, and run the turn. Project
-   pick order: `T3CODE_JIRA_PROJECT_MAP` for the Jira project key (e.g. `SA`) →
+3. **Zero** hits → **auto-create** a T3 thread on a **new git worktree** (never the project main
+   checkout), attach the issue key, and run the turn. Project pick order:
+   `T3CODE_JIRA_PROJECT_MAP` for the Jira project key (e.g. `SA`) →
    `T3CODE_JIRA_DEFAULT_PROJECT_ID` → sole shell project when exactly one exists. Disable with
-   `T3CODE_JIRA_AUTO_CREATE_THREAD=false`.
+   `T3CODE_JIRA_AUTO_CREATE_THREAD=false`. Base branch: `T3CODE_JIRA_BASE_BRANCH` (default `main`).
+   Branch names are key-first (`SA-402-t3-<id>`) so GitHub-for-Jira can auto-link.
 
-Does **not** create projects, clone repositories, or invent checkouts (new threads start without a
-worktree; later GitHub/Discord surfaces can join via the same store).
+Does **not** create projects or clone repositories. New threads always get a dedicated worktree
+sibling under the project's worktrees dir (same isolation model as Discord/GitHub create). Later
+surfaces join via the same work-item store.
 
 Agent-side Jira read/write for general tooling remains the shared Jira MCP (`mcp-atlassian`). This
 bridge only owns **inbound webhooks** and **outbound response comments** for mention turns.

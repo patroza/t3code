@@ -7,7 +7,12 @@ import {
   resolveMappedT3ProjectId,
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
-import { formatJiraComment } from "./JiraIssueBridge.ts";
+import {
+  appendJiraT3ThreadLink,
+  buildJiraAutoCreateBranchName,
+  buildJiraT3ThreadUrl,
+  formatJiraComment,
+} from "./JiraIssueBridge.ts";
 import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
   classifyWebhookBodyFailure,
@@ -369,6 +374,12 @@ describe("Jira helpers", () => {
     expect(formatJiraComment("  ok  ")).toBe("ok");
   });
 
+  it("builds key-first auto-create branch names", () => {
+    expect(buildJiraAutoCreateBranchName("sa-402", "A1B2C3D4")).toBe("SA-402-t3-a1b2c3d4");
+    expect(buildJiraAutoCreateBranchName("SA-49", "xx-yy!!zz99extra")).toBe("SA-49-t3-xxyyzz99");
+    expect(buildJiraAutoCreateBranchName("CFG-1", "")).toBe("CFG-1-t3");
+  });
+
   it("parses Jira project → T3 project maps", () => {
     const map = parseJiraProjectMap(
       "SA:scanner, CFG=/var/lib/t3/src/macs/configurator , t3:89a7b0dd-cf9c-46da-b2f0-79e19832ac42",
@@ -421,6 +432,33 @@ describe("Jira helpers", () => {
       "4691a389-ecd7-4495-9dde-b8da07ce229f",
     );
     expect(resolveT3ProjectIdForJiraKey(map, "OTHER", projects)).toBeNull();
+  });
+
+  it("builds and appends a hosted T3 thread link for Jira replies", () => {
+    const url = buildJiraT3ThreadUrl({
+      hostedAppUrl: "https://nightly.app.t3.codes",
+      environmentId: "env-1",
+      threadId: "thread-1",
+    });
+    expect(url).toBe("https://nightly.app.t3.codes/threads/env-1/thread-1");
+    expect(
+      appendJiraT3ThreadLink("Ship it.", {
+        hostedAppUrl: "https://nightly.app.t3.codes",
+        environmentId: "env-1",
+        threadId: "thread-1",
+      }),
+    ).toBe("Ship it.\n\nT3 thread: https://nightly.app.t3.codes/threads/env-1/thread-1");
+  });
+
+  it("does not duplicate the Jira T3 thread link footer", () => {
+    const body = "Ship it.\n\nT3 thread: https://nightly.app.t3.codes/threads/env-1/thread-1";
+    expect(
+      appendJiraT3ThreadLink(body, {
+        hostedAppUrl: "https://nightly.app.t3.codes",
+        environmentId: "env-1",
+        threadId: "thread-1",
+      }),
+    ).toBe(body);
   });
 
   it("bodyMentionsIdentity distinguishes misses", () => {
