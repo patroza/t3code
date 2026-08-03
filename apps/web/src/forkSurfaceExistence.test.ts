@@ -28,6 +28,11 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebar).toContain("recent-thread-settled-");
     expect(sidebar).toContain("Un-settle thread");
     expect(sidebar).toContain("!props.isSettled");
+    // Hide-settled must use row-lifted PR state (merged/closed auto-settle),
+    // same as Sidebar V2 — never hard-code changeRequestState: null here.
+    expect(sidebar).toContain("changeRequestStateByKey");
+    expect(sidebar).toContain("SidebarChangeRequestStateContext");
+    expect(sidebar).not.toContain("changeRequestState: null");
   });
 
   it("Sidebar V2 keeps Settled shelf labeling and new-thread affordance", () => {
