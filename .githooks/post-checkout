@@ -80,6 +80,11 @@ fi
   echo "post-checkout: package.json without pnpm-lock.yaml; skip install" >&2
   exit 0
 }
+state_file="$wt_root/node_modules/.pnpm-checkout-state"
+state=$(cksum "$wt_root/package.json" "$wt_root/pnpm-lock.yaml" | cksum | awk '{print $1 ":" $2}')
+if [ -f "$wt_root/node_modules/.modules.yaml" ] && [ "$(cat "$state_file" 2>/dev/null)" = "$state" ]; then
+  exit 0
+fi
 command -v pnpm >/dev/null 2>&1 || {
   echo "post-checkout: pnpm not on PATH; node_modules not installed" >&2
   exit 0
@@ -88,8 +93,9 @@ command -v pnpm >/dev/null 2>&1 || {
 export CI=1
 echo "post-checkout: pnpm install (hardlink from store) in $wt_root" >&2
 cd "$wt_root" || exit 1
-exec pnpm install \
+pnpm install \
   --frozen-lockfile \
   --prefer-offline \
   --config.package-import-method=hardlink \
-  --config.confirmModulesPurge=false
+  --config.confirmModulesPurge=false || exit $?
+printf '%s\n' "$state" >"$state_file"

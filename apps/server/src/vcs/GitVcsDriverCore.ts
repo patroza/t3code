@@ -2845,6 +2845,43 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       fallbackErrorDetail: "git worktree add failed",
     });
 
+    // A relative core.hooksPath is resolved from the worktree where `git
+    // worktree add` was launched. That checkout may be stale and not contain
+    // the hook which exists in the newly-created worktree. Explicitly run the
+    // target worktree's native post-checkout hook and await it before returning.
+    const postCheckoutHook = path.join(worktreePath, ".githooks", "post-checkout");
+    const hasPostCheckoutHook = yield* fileSystem.exists(postCheckoutHook).pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitCommandError({
+            operation: "GitVcsDriver.createWorktree.prepare",
+            command: "inspect .githooks/post-checkout",
+            cwd: worktreePath,
+            failureKind: "unknown",
+            detail: "Failed to inspect the target worktree preparation hook.",
+            cause,
+          }),
+      ),
+    );
+    if (hasPostCheckoutHook) {
+      const checkedOutRef = (yield* runGitStdout(
+        "GitVcsDriver.createWorktree.resolveHead",
+        worktreePath,
+        ["rev-parse", "HEAD"],
+      )).trim();
+      yield* runGit("GitVcsDriver.createWorktree.prepare", worktreePath, [
+        "-c",
+        "core.hooksPath=.githooks",
+        "hook",
+        "run",
+        "post-checkout",
+        "--",
+        checkedOutRef,
+        checkedOutRef,
+        "1",
+      ]);
+    }
+
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
       const parsedBaseRef = parseRemoteRefWithRemoteNames(

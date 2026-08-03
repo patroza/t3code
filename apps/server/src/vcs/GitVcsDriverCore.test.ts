@@ -1361,6 +1361,52 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.equal(yield* fileSystem.exists(worktreePath), false);
       }),
     );
+
+    it.effect("awaits the target worktree hook when the source checkout has no hooks", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "prepared-worktree",
+        );
+
+        yield* fileSystem.makeDirectory(pathService.join(cwd, ".githooks"));
+        const hookPath = pathService.join(cwd, ".githooks", "post-checkout");
+        yield* fileSystem.writeFileString(
+          hookPath,
+          '#!/bin/sh\nprintf prepared >"$(git rev-parse --show-toplevel)/.prepared"\n',
+        );
+        yield* fileSystem.chmod(hookPath, 0o755);
+        yield* git(cwd, ["add", ".githooks/post-checkout"]);
+        yield* git(cwd, ["commit", "-m", "add native checkout hook"]);
+        const targetRef = yield* git(cwd, ["rev-parse", "HEAD"]);
+
+        // Reproduce T3VM: the common source checkout predates `.githooks`, but
+        // the target ref used for the new worktree contains it.
+        yield* git(cwd, ["checkout", `${targetRef}^`]);
+        yield* git(cwd, ["config", "core.hooksPath", ".githooks"]);
+
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: targetRef,
+          newRefName: "feature/prepared-worktree",
+        });
+
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(worktreePath, ".prepared")),
+          "prepared",
+        );
+        assert.equal(
+          yield* git(worktreePath, ["branch", "--show-current"]),
+          "feature/prepared-worktree",
+        );
+      }),
+    );
   });
 
   describe("remote operations", () => {
