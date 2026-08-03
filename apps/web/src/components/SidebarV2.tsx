@@ -1220,6 +1220,24 @@ export default function SidebarV2() {
       );
     },
   });
+  const { copyToClipboard: copyThreadId } = useCopyToClipboard<{ threadId: string }>({
+    onCopy: ({ threadId }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ID copied",
+        description: threadId,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
   const [projectActionsTarget, setProjectActionsTarget] = useState<SidebarProjectSnapshot | null>(
     null,
   );
@@ -2379,6 +2397,9 @@ export default function SidebarV2() {
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
+          case "copy-thread-id":
+            copyThreadId(thread.id, { threadId: thread.id });
+            return;
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -2416,6 +2437,7 @@ export default function SidebarV2() {
       attemptUnsettle,
       attemptUnsnooze,
       confirmThreadDelete,
+      copyThreadId,
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
