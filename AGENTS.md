@@ -192,10 +192,12 @@ When implementation work for a user request is done (code, docs, config — not 
    - **Push freely while the PR is a draft.** The gate is a no-op on draft / no-PR pushes — use them
      for early sharing and the GitHub Diff UI. Do **not** hand-run `vp check` / `vpr typecheck` /
      `vp run test` as routine draft validation (focused, scoped proof while iterating is still fine).
-   - **Publish with `pnpm pr:ready`, never raw `gh pr ready`.** It runs the ship gate
-     (`vp check` → `vpr typecheck` → `vp run test`) and only then marks the PR ready. The husky
-     `pre-push` hook enforces the same gate automatically on every push to a ready PR and fails
-     closed when PR state can’t be resolved; the `.tools/bin/gh` shim blocks agent `gh pr ready`.
+   - **Publishing always runs the ship gate** (`vp check` → `vpr typecheck` → `vp run test`), and
+     only a failing gate stops it. `pnpm pr:ready` is the explicit path; raw `gh pr ready` is not
+     refused — the `.tools/bin/gh` shim runs the same gate first and then lets the command through.
+     Either way the checks run, so there is no way to publish around them and nothing to remember.
+     The husky `pre-push` hook enforces the same gate on every push to a ready PR and fails closed
+     when PR state can’t be resolved.
    - **Same gate for overlay-child PRs.** Base = overlay does **not** relax it; the gate keys off the
      PR’s ready state, not its base. Compose success or draft-lock green is **not** the gate.
    - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>` to
@@ -283,9 +285,12 @@ This is identical for `fork/changes`, every registered overlay base (`fork/disco
 **ready state**, not its base. Overlay Compose success or Managed-PR draft-lock green is **not** the
 gate.
 
-**Publish path (required):** `pnpm pr:ready` — runs the ship gate, then marks the open draft PR
-ready. Agents must **not** call raw `gh pr ready` (or the ready-for-review API); the `.tools/bin/gh`
-policy shim blocks it unless `AGENT_PR_SHIP=1` (set only by `pr:ready`). `.envrc` puts
+**Publish path:** `pnpm pr:ready` — runs the ship gate, then marks the open draft PR ready. Raw
+`gh pr ready` (and the ready-for-review APIs) reach the same place: the `.tools/bin/gh` policy shim
+runs the ship gate first and passes the command through when it is green, so publishing is gated
+rather than forbidden and a red gate is the only thing that stops it. `AGENT_PR_SHIP=1` marks a gate
+already passed — `pr:ready` sets it for its own undraft call so the gate runs once, not twice.
+`.envrc` puts
 `$REPO/.tools/bin` first on `PATH` so the shim wins over system `gh`, and sets `GH_REPO` to the fork
 so bare `gh pr` commands target it instead of gh's upstream-parent default (explicit `--repo` still
 overrides); `scripts/install-git-hooks.mjs` installs both the hooks and the shim on `prepare`.

@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import { isCodingAgent } from "./agent-pre-push.mjs";
-import { inspectAgentGhCommand, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
+import { requiresShipGate, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
 import {
   classifyPrPayload,
   parseRepoSlug,
@@ -151,26 +151,32 @@ it("resolveOpenPrState: no origin repo → unknown (fail closed)", () => {
   assert.equal(state.mode, "unknown");
 });
 
-it("gh policy: blocks pr ready unless AGENT_PR_SHIP", () => {
-  assert.equal(inspectAgentGhCommand(["pr", "ready"], {}).blocked, true);
-  assert.equal(inspectAgentGhCommand(["pr", "ready", "12"], {}).blocked, true);
-  assert.equal(inspectAgentGhCommand(["pr", "ready"], { AGENT_PR_SHIP: "1" }).blocked, false);
-  assert.equal(inspectAgentGhCommand(["pr", "view"], {}).blocked, false);
-  assert.equal(inspectAgentGhCommand(["pr", "create", "--draft"], {}).blocked, false);
+it("gh policy: pr ready needs the ship gate unless AGENT_PR_SHIP", () => {
+  assert.equal(requiresShipGate(["pr", "ready"], {}).required, true);
+  assert.equal(requiresShipGate(["pr", "ready", "12"], {}).required, true);
+  assert.equal(requiresShipGate(["pr", "ready"], { AGENT_PR_SHIP: "1" }).required, false);
+  assert.equal(requiresShipGate(["pr", "view"], {}).required, false);
+  assert.equal(requiresShipGate(["pr", "create", "--draft"], {}).required, false);
+});
+
+it("gh policy: says the gate is running, not that the command is refused", () => {
+  const reason = requiresShipGate(["pr", "ready"], {}).reason ?? "";
+  assert.equal(reason.includes("ship gate"), true);
+  assert.equal(/must not|blocked|forbidden/i.test(reason), false);
 });
 
 it("gh policy: strips -R before matching pr ready", () => {
   assert.deepEqual(stripGhGlobalFlags(["-R", "o/r", "pr", "ready"]), ["pr", "ready"]);
-  assert.equal(inspectAgentGhCommand(["-R", "pingdotgg/t3code", "pr", "ready"], {}).blocked, true);
+  assert.equal(requiresShipGate(["-R", "pingdotgg/t3code", "pr", "ready"], {}).required, true);
 });
 
-it("gh policy: blocks ready_for_review api paths", () => {
+it("gh policy: ready_for_review api paths need the ship gate", () => {
   assert.equal(
-    inspectAgentGhCommand(["api", "repos/o/r/pulls/1/ready_for_review", "-X", "POST"], {}).blocked,
+    requiresShipGate(["api", "repos/o/r/pulls/1/ready_for_review", "-X", "POST"], {}).required,
     true,
   );
   assert.equal(
-    inspectAgentGhCommand(
+    requiresShipGate(
       [
         "api",
         "graphql",
@@ -178,7 +184,7 @@ it("gh policy: blocks ready_for_review api paths", () => {
         "query=mutation { markPullRequestReadyForReview(input: {}) { clientMutationId } }",
       ],
       {},
-    ).blocked,
+    ).required,
     true,
   );
 });
