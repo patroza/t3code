@@ -7,7 +7,11 @@ import {
   resolveMappedT3ProjectId,
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
-import { formatJiraComment } from "./JiraIssueBridge.ts";
+import {
+  appendJiraT3ThreadLink,
+  buildJiraT3ThreadUrl,
+  formatJiraComment,
+} from "./JiraIssueBridge.ts";
 import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import {
   classifyWebhookBodyFailure,
@@ -421,6 +425,33 @@ describe("Jira helpers", () => {
       "4691a389-ecd7-4495-9dde-b8da07ce229f",
     );
     expect(resolveT3ProjectIdForJiraKey(map, "OTHER", projects)).toBeNull();
+  });
+
+  it("builds and appends a hosted T3 thread link for Jira replies", () => {
+    const url = buildJiraT3ThreadUrl({
+      hostedAppUrl: "https://nightly.app.t3.codes",
+      environmentId: "env-1",
+      threadId: "thread-1",
+    });
+    expect(url).toBe("https://nightly.app.t3.codes/threads/env-1/thread-1");
+    expect(
+      appendJiraT3ThreadLink("Ship it.", {
+        hostedAppUrl: "https://nightly.app.t3.codes",
+        environmentId: "env-1",
+        threadId: "thread-1",
+      }),
+    ).toBe("Ship it.\n\nT3 thread: https://nightly.app.t3.codes/threads/env-1/thread-1");
+  });
+
+  it("does not duplicate the Jira T3 thread link footer", () => {
+    const body = "Ship it.\n\nT3 thread: https://nightly.app.t3.codes/threads/env-1/thread-1";
+    expect(
+      appendJiraT3ThreadLink(body, {
+        hostedAppUrl: "https://nightly.app.t3.codes",
+        environmentId: "env-1",
+        threadId: "thread-1",
+      }),
+    ).toBe(body);
   });
 
   it("bodyMentionsIdentity distinguishes misses", () => {
