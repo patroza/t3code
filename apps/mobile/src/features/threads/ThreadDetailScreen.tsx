@@ -64,7 +64,6 @@ export interface ThreadDetailScreenProps {
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   /** A send made now would be held in the steering queue, not open a turn. */
   readonly sendEntersQueue: boolean;
-  readonly isEditingQueuedMessage: boolean;
   readonly hasMoreOlderActivities: boolean;
   readonly loadingOlderActivities: boolean;
   readonly onLoadOlderActivities: () => void;
@@ -467,7 +466,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 threadSyncPhase={threadSyncPhase}
                 selectedThread={props.selectedThread}
                 serverConfig={props.serverConfig}
-                isEditingQueuedMessage={props.isEditingQueuedMessage}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}
                 bottomInset={composerBottomInset}

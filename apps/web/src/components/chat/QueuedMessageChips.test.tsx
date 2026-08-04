@@ -23,15 +23,16 @@ describe("QueuedMessageChips", () => {
     ).toBe("");
   });
 
-  it("shows queued text plus Steer and Edit affordances", () => {
+  it("shows queued text plus Send now and dequeue-to-edit affordances", () => {
     const html = renderToStaticMarkup(
       <QueuedMessageChips queuedMessages={[makeQueued()]} onSteer={() => {}} onEdit={() => {}} />,
     );
 
     expect(html).toContain("follow up after this turn");
     expect(html).toContain('aria-label="Edit queued message"');
-    expect(html).toContain("Steer: send now, interrupting the current step");
-    expect(html).toContain("Steer");
+    expect(html).toContain('aria-label="Send queued message now"');
+    expect(html).toContain("Send now");
+    expect(html).toContain("Remove from queue and edit in composer");
     expect(html).toContain('data-queued-message-pending="false"');
     expect(html).not.toContain('disabled=""');
   });
