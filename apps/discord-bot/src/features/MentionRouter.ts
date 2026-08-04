@@ -21,6 +21,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { resolveWorktreeBaseBranch } from "../gitDefaultBranch.ts";
 import {
   appendDiscordAttachmentPromptBlock,
   ATTACHMENT_ONLY_PROMPT,
@@ -1314,13 +1315,19 @@ const make = (botConfig: DiscordBotConfig) =>
           stagedAttachments: stagedFiles.saved.length,
         });
 
+        const baseBranch = yield* Effect.tryPromise(() =>
+          resolveWorktreeBaseBranch({
+            workspaceRoot: resolved.project.workspaceRoot,
+            override: input.flags.base ?? botConfig.t3DefaultBaseBranch,
+          }),
+        );
         const { threadId, messageId } = yield* t3.startTurnWithWorktree({
           project: resolved.project,
           prompt: enrichedPrompt,
           titleSeed: input.prompt,
           modelSelection,
           interactionMode: input.flags.plan ? "plan" : "default",
-          baseBranch: input.flags.base ?? botConfig.t3DefaultBaseBranch,
+          baseBranch,
           local: input.flags.local,
           ...(attachments.length > 0 ? { attachments } : {}),
           sourceHint: discordSourceHint({
@@ -1364,7 +1371,7 @@ const make = (botConfig: DiscordBotConfig) =>
             content: input.prompt,
           }),
           modelSelection,
-          baseBranchLabel: input.flags.base ?? botConfig.t3DefaultBaseBranch,
+          baseBranchLabel: baseBranch,
           local: input.flags.local,
           skipChannelRepoLookup: true,
         }).pipe(
@@ -1441,7 +1448,7 @@ const make = (botConfig: DiscordBotConfig) =>
             content: input.prompt,
           }),
           modelSelection,
-          baseBranchLabel: input.flags.base ?? botConfig.t3DefaultBaseBranch,
+          baseBranchLabel: baseBranch,
           local: input.flags.local,
         }).pipe(
           Effect.catch((error) =>

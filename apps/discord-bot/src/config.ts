@@ -18,7 +18,7 @@ export interface DiscordBotConfig {
   readonly t3BearerToken: string | undefined;
   readonly t3DefaultInstanceId: string | undefined;
   readonly t3DefaultModel: string | undefined;
-  readonly t3DefaultBaseBranch: string;
+  readonly t3DefaultBaseBranch: string | undefined;
   readonly t3DefaultRuntimeMode: RuntimeMode;
   readonly dataDir: string;
   readonly webUiBaseUrl: string | undefined;
@@ -110,7 +110,8 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       Config.withDefault(DEFAULT_BOT_MODEL),
     );
     const t3DefaultBaseBranch = yield* Config.string("T3_DEFAULT_BASE_BRANCH").pipe(
-      Config.withDefault("main"),
+      Config.option,
+      Config.map(Option.getOrUndefined),
     );
     const t3DefaultRuntimeMode = yield* Config.schema(
       RuntimeModeConfig,
