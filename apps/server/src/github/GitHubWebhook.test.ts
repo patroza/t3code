@@ -587,6 +587,35 @@ describe("GitHub PR response bridge turn resolution", () => {
     expect(githubFinalAnswerText(thread, "turn-1")).toBe("final plan body");
   });
 
+  it("waits while a follow-up is still server-queued (user message not on the timeline yet)", () => {
+    // Mid-turn GH mentions dispatch thread.turn.start; orchestration parks them as
+    // thread.message-queued until the active turn finishes. bridgeTurn must keep
+    // polling — not treat the still-running previous turn as the delivery target.
+    const thread = threadFixture({
+      messages: [
+        message({ id: "u0", role: "user", text: "prior", turnId: null }),
+        message({ id: "a0", role: "assistant", text: "still working…", turnId: "turn-0" }),
+      ],
+      latestTurn: { turnId: "turn-0", state: "running" },
+      session: { status: "running", activeTurnId: "turn-0" },
+    });
+
+    expect(
+      discoverGitHubTargetTurnId(thread, {
+        userMessageId: "u-queued",
+        previousTurnId: "turn-0",
+        knownTargetTurnId: null,
+      }),
+    ).toBeNull();
+    expect(
+      resolveGitHubBridgeTurnOutcome(thread, {
+        userMessageId: "u-queued",
+        previousTurnId: "turn-0",
+        knownTargetTurnId: null,
+      }),
+    ).toEqual({ _tag: "waiting" });
+  });
+
   it("finalizes a completed target turn even when latestTurn is wiped null", () => {
     const thread = threadFixture({
       messages: [

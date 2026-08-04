@@ -188,6 +188,10 @@ If threading is rejected (invalid parent), the bridge falls back once to a top-l
 Prefer Markdown converted to a minimal ADF document for API v3. Do not @-spam watchers unless the
 agent explicitly mentions users.
 
+**Busy threads:** follow-up mentions always dispatch `thread.turn.start`. Orchestration queues the
+message while a turn is running; the bridge does **not** post an “already working” short-circuit.
+The reply still posts asynchronously when the turn completes (`bridgeTurn` is fork-detached).
+
 ## Testing checklist
 
 1. Unit: mention extraction for plain text, wiki, and ADF; parent comment id; bot/self skip.

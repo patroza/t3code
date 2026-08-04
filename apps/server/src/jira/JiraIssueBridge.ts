@@ -50,8 +50,6 @@ const CREATE_DISABLED_RESPONSE =
   "not yet linked. Auto-create is disabled (T3CODE_JIRA_AUTO_CREATE_THREAD=false); link this issue from Discord/T3 or enable auto-create.";
 const AMBIGUOUS_RESPONSE =
   "Multiple T3 threads are linked to this Jira issue, so the bot could not pick which one to use.";
-const BUSY_RESPONSE =
-  "This T3 thread is already working. Try again after the current turn finishes.";
 const FAILED_RESPONSE =
   "T3 could not complete this request. Check the linked T3 thread for details.";
 const EMPTY_PROMPT_RESPONSE =
@@ -98,16 +96,6 @@ export function appendJiraT3ThreadLink(
   const footer = `T3 thread: ${url}`;
   if (base === "") return footer;
   return `${base}\n\n${footer}`;
-}
-
-function isThreadBusy(thread: OrchestrationThread): boolean {
-  const latest = thread.latestTurn;
-  if (latest?.state === "running") return true;
-  const session = thread.session;
-  if (session === null) return false;
-  return (
-    session.activeTurnId !== null && (session.status === "running" || session.status === "starting")
-  );
 }
 
 export class JiraIssueBridge extends Context.Service<
@@ -551,11 +539,9 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.ignore);
 
-    if (isThreadBusy(thread)) {
-      yield* finishDelivery({ ...acknowledged, threadId: thread.id }, BUSY_RESPONSE, "completed");
-      return;
-    }
-
+    // Always dispatch. When the thread is mid-turn, orchestration queues the
+    // message (thread.message-queued) — do not short-circuit with a busy reply.
+    // Response posting stays async via forkDetach(bridgeTurn) below.
     const commandId = CommandId.make(yield* crypto.randomUUIDv4);
     const messageId = MessageId.make(yield* crypto.randomUUIDv4);
     const processing: StoredJiraDelivery = {

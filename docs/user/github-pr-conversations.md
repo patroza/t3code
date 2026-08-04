@@ -72,8 +72,10 @@ The app:
 4. Acknowledges the source comment with an eyes reaction, starts a turn, and posts the final answer
    (conversation comment or in-thread review reply).
 
-If the chosen T3 thread is already running, the app asks the user to retry instead of queuing. Edited
-comments, mention-free comments, normal issue comments (non-PR), and app-authored comments are ignored.
+If the chosen T3 thread is already running, the mention is still accepted: orchestration queues the
+prompt (`thread.message-queued`) and drains it when the current turn finishes. The bridge keeps the
+eyes reaction and posts the final answer asynchronously after that turn completes. Edited comments,
+mention-free comments, normal issue comments (non-PR), and app-authored comments are ignored.
 
 ## Work-item store
 
@@ -204,7 +206,7 @@ The route returns 404 unless all four required variables are configured.
 | Repository or PR mismatch                      | Exactly `not yet linked/checked out.`                    |
 | Unauthorized repository                        | Silently ignored; no response, no turn                   |
 | Unauthorized actor                             | Neutral authorization response; no link-state disclosure |
-| Thread already running                         | Busy response; no queue and no turn                      |
+| Thread already running                         | Queue prompt; reply when the turn drains and completes   |
 | Duplicate delivery                             | Reuse persisted classification; no new comment or turn   |
 | Turn completes                                 | Replace working/progress comment with final answer       |
 | Turn errors or is interrupted                  | Replace comment with a stable failure response           |

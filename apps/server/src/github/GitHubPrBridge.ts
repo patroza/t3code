@@ -53,8 +53,6 @@ import {
   stackBranchesForMatching,
 } from "./GitHubPullRequestStack.ts";
 
-const BUSY_RESPONSE =
-  "This T3 thread is already working. Try again after the current turn finishes.";
 const FAILED_RESPONSE =
   "T3 could not complete this request. Check the linked T3 thread for details.";
 const PROVISION_NO_PROJECT_RESPONSE =
@@ -154,14 +152,6 @@ export function liveWorktreeRef(
 ): { readonly cwd: string; readonly refName: string } | null {
   if (thread.worktreePath === null || !local.isRepo || local.refName === null) return null;
   return { cwd: thread.worktreePath, refName: local.refName };
-}
-
-function isThreadBusy(thread: OrchestrationThreadShell): boolean {
-  return (
-    thread.latestTurn?.state === "running" ||
-    thread.session?.status === "starting" ||
-    thread.session?.status === "running"
-  );
 }
 
 function assistantMessagesForTurn(
@@ -1318,17 +1308,9 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.ignore);
 
-    if (isThreadBusy(thread)) {
-      yield* Effect.logInfo("GitHub PR invocation matched a busy T3 thread", {
-        deliveryId: input.deliveryId,
-        threadId: thread.id,
-        repository: input.invocation.repository,
-        pullRequestNumber: input.invocation.pullRequestNumber,
-      });
-      yield* finishDelivery({ ...acknowledged, threadId: thread.id }, BUSY_RESPONSE, "completed");
-      return;
-    }
-
+    // Always dispatch. When the thread is mid-turn, orchestration queues the
+    // message (thread.message-queued) — do not short-circuit with a busy reply.
+    // Response posting stays async via forkDetach(bridgeTurn) below.
     const commandId = CommandId.make(yield* crypto.randomUUIDv4);
     const messageId = MessageId.make(yield* crypto.randomUUIDv4);
     const processing: StoredGitHubDelivery = {
