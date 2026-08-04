@@ -296,7 +296,6 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
-
 /**
  * Pure helper for session rows that claimed to be live across a process restart.
  * Only marks **Wake Required** (`interrupted`) when a turn was actually in flight.

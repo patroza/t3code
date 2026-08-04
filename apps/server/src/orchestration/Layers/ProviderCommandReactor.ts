@@ -1939,7 +1939,7 @@ const make = Effect.gen(function* () {
       }
     });
 
-yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
+    yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
 
     // The domain event stream is hot, so work pending before this reactor
     // starts cannot be resumed. Correlated completions only clear the request
