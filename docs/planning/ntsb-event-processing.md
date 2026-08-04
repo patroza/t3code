@@ -52,6 +52,13 @@ Events that do not match one of the triggers above are ignored. Whether adapters
 
 Multiple events from the same external interaction may create T3 threads at the same time. Each thread produces an answer for its own triggering event and sends that answer to the exact response destination associated with that event. Threads may finish in any order; completion order does not change where their answers are sent.
 
+## Consequences
+
+- Each event has isolated T3 context; a thread does not inherit the conversation history of another event.
+- Each response must retain the exact destination associated with its triggering event.
+- Capturing the source snapshot supports reproducibility, but may increase input size, latency, and model cost.
+- High-volume external interactions may create many T3 threads and increase storage and discovery noise.
+
 ## Summary
 
 - An invocation creates an independent T3 thread; it does not target or continue an existing thread.
