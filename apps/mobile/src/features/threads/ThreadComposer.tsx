@@ -673,18 +673,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => providerOptionsConfigurationLabel(providerOptionDescriptors),
     [providerOptionDescriptors],
   );
-  const modelMenuActions = useMemo(
-    () => {
-      const actions = buildModelMenuActions(providerGroups, currentModelSelection);
-      if (!currentUsageNote) return actions;
-      return actions.map((action) =>
-        action.subtitle === undefined
-          ? action
-          : { ...action, subtitle: `${action.subtitle} · ${currentUsageNote}` },
-      );
-    },
-    [providerGroups, currentModelSelection, currentUsageNote],
-  );
+  const modelMenuActions = useMemo(() => {
+    const actions = buildModelMenuActions(providerGroups, currentModelSelection);
+    if (!currentUsageNote) return actions;
+    return actions.map((action) =>
+      action.subtitle === undefined
+        ? action
+        : { ...action, subtitle: `${action.subtitle} · ${currentUsageNote}` },
+    );
+  }, [providerGroups, currentModelSelection, currentUsageNote]);
 
   // ── Options menu ─────────────────────────────────────────
   const optionsMenuActions = useMemo(

@@ -33,6 +33,13 @@ export const VcsRepositoryIdentity = Schema.Struct({
   kind: VcsDriverKind,
   rootPath: TrimmedNonEmptyString,
   metadataPath: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * True when the repository has no working tree of its own (Git: `core.bare`).
+   * Such a repository is still a complete repository — fetch, ref, and worktree
+   * plumbing all work against it — so detection reports it rather than treating
+   * it as "no repository here". `rootPath` is then the metadata directory.
+   */
+  bare: Schema.Boolean,
   freshness: VcsFreshness,
 });
 export type VcsRepositoryIdentity = typeof VcsRepositoryIdentity.Type;
