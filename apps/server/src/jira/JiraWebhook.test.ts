@@ -9,6 +9,7 @@ import {
 } from "./JiraAppConfig.ts";
 import {
   appendJiraT3ThreadLink,
+  buildJiraAutoCreateBranchName,
   buildJiraT3ThreadUrl,
   formatJiraComment,
 } from "./JiraIssueBridge.ts";
@@ -371,6 +372,12 @@ describe("Jira helpers", () => {
     expect(isJiraProjectAllowed(new Set(), "ANY")).toBe(true);
     expect(plainTextToAdf("hello\n\nworld").content).toHaveLength(2);
     expect(formatJiraComment("  ok  ")).toBe("ok");
+  });
+
+  it("builds key-first auto-create branch names", () => {
+    expect(buildJiraAutoCreateBranchName("sa-402", "A1B2C3D4")).toBe("SA-402-t3-a1b2c3d4");
+    expect(buildJiraAutoCreateBranchName("SA-49", "xx-yy!!zz99extra")).toBe("SA-49-t3-xxyyzz99");
+    expect(buildJiraAutoCreateBranchName("CFG-1", "")).toBe("CFG-1-t3");
   });
 
   it("parses Jira project → T3 project maps", () => {
