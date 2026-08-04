@@ -294,6 +294,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  sendEntersSteeringQueue,
   shouldTreatServerThreadAsActive,
   waitForStartedServerThread,
   resolveServerThreadError,
@@ -5074,26 +5075,36 @@ function ChatViewContent(props: ChatViewProps) {
         sizeBytes: image.sizeBytes,
         previewUrl: image.previewUrl,
       }));
-      // Sending always returns to the live edge. The new row becomes the
-      // anchored end-space target so it lands near the top while the response
-      // streams into the reserved space below it.
-      isAtEndRef.current = true;
-      timelineScrollModeRef.current = "anchoring-new-turn";
-      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-      pendingTimelineAnchorRef.current = messageIdForSend;
-      activeTimelineAnchorIndexRef.current = null;
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-      setHasUnreadTimelineActivity(false);
-      setMaintainTimelineAtEnd(true);
-      // LegendList only starts maintaining the end when the viewport is
-      // already there. Move the existing timeline first so submitting from
-      // older history cannot leave the outgoing row below the viewport.
-      void legendListRef.current?.scrollToEnd?.({ animated: false });
-      setTimelineAnchor({
-        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-        messageId: messageIdForSend,
-      });
+      // A send that the server will hold in the steering queue never becomes a
+      // timeline row, so it must not move the viewport at all.
+      if (
+        !sendEntersSteeringQueue({
+          hasBootstrap: isLocalDraftThread || baseBranchForWorktree !== null,
+          sessionStatus: activeThread.session?.status,
+          hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+        })
+      ) {
+        // Sending always returns to the live edge. The new row becomes the
+        // anchored end-space target so it lands near the top while the response
+        // streams into the reserved space below it.
+        isAtEndRef.current = true;
+        timelineScrollModeRef.current = "anchoring-new-turn";
+        liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+        pendingTimelineAnchorRef.current = messageIdForSend;
+        activeTimelineAnchorIndexRef.current = null;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+        setHasUnreadTimelineActivity(false);
+        setMaintainTimelineAtEnd(true);
+        // LegendList only starts maintaining the end when the viewport is
+        // already there. Move the existing timeline first so submitting from
+        // older history cannot leave the outgoing row below the viewport.
+        void legendListRef.current?.scrollToEnd?.({ animated: false });
+        setTimelineAnchor({
+          threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+          messageId: messageIdForSend,
+        });
+      }
       setOptimisticUserMessages((existing) => [
         ...existing,
         {
@@ -5613,23 +5624,33 @@ function ChatViewContent(props: ChatViewProps) {
       beginLocalDispatch({ preparingWorktree: false, messageId: messageIdForSend });
       setThreadError(threadIdForSend, null);
 
-      // Position this sent row once LegendList has measured the anchored tail.
-      isAtEndRef.current = true;
-      timelineScrollModeRef.current = "anchoring-new-turn";
-      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-      pendingTimelineAnchorRef.current = messageIdForSend;
-      activeTimelineAnchorIndexRef.current = null;
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-      setHasUnreadTimelineActivity(false);
-      setMaintainTimelineAtEnd(true);
-      // See the primary send path above: resume from the physical live edge
-      // before the optimistic row is inserted and positioned.
-      void legendListRef.current?.scrollToEnd?.({ animated: false });
-      setTimelineAnchor({
-        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-        messageId: messageIdForSend,
-      });
+      // A follow-up submitted while the plan turn is still running is held in
+      // the steering queue, so it gets no timeline positioning either.
+      if (
+        !sendEntersSteeringQueue({
+          hasBootstrap: false,
+          sessionStatus: activeThread.session?.status,
+          hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+        })
+      ) {
+        // Position this sent row once LegendList has measured the anchored tail.
+        isAtEndRef.current = true;
+        timelineScrollModeRef.current = "anchoring-new-turn";
+        liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+        pendingTimelineAnchorRef.current = messageIdForSend;
+        activeTimelineAnchorIndexRef.current = null;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+        setHasUnreadTimelineActivity(false);
+        setMaintainTimelineAtEnd(true);
+        // See the primary send path above: resume from the physical live edge
+        // before the optimistic row is inserted and positioned.
+        void legendListRef.current?.scrollToEnd?.({ animated: false });
+        setTimelineAnchor({
+          threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+          messageId: messageIdForSend,
+        });
+      }
 
       setOptimisticUserMessages((existing) => [
         ...existing,
