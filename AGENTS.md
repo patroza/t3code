@@ -189,26 +189,27 @@ When implementation work for a user request is done (code, docs, config — not 
      `t3-discord/f7d37879-desktop-deeplinks`), not a duplicate of that work in `fork/changes`.
 3. **Let the agent ship gate own validation** before saying “updated the PR” or finishing (see
    _Task Completion Requirements → Agent ship gate_):
-   - **Push freely while the PR is a draft.** The gate is a no-op on draft / no-PR pushes — use them
-     for early sharing and the GitHub Diff UI. Do **not** hand-run `vp check` / `vpr typecheck` /
-     `vp run test` as routine draft validation (focused, scoped proof while iterating is still fine).
-   - **Publishing always runs the ship gate** (`vp check` → `vpr typecheck` → `vp run test`), and
-     only a failing gate stops it. `pnpm pr:ready` is the explicit path; raw `gh pr ready` is not
+   - **Every agent push is gated.** Draft / no-PR pays the **static** half (`vp check` +
+     `vpr typecheck`). Ready PRs and publish pay the **full** gate (+ `vp run test`). Do **not**
+     hand-run those as routine validation — the hook owns them and caches the SHA (focused, scoped
+     proof while iterating is still fine).
+   - **Publishing always runs the full ship gate** (`vp check` → `vpr typecheck` → `vp run test`),
+     and only a failing gate stops it. `pnpm pr:ready` is the explicit path; raw `gh pr ready` is not
      refused — the `.tools/bin/gh` shim runs the same gate first and then lets the command through.
      Either way the checks run, so there is no way to publish around them and nothing to remember.
-     The husky `pre-push` hook enforces the same gate on every push to a ready PR and fails closed
-     when PR state can’t be resolved.
+     The husky `pre-push` hook enforces the gate on every agent push and fails closed when PR state
+     can’t be resolved.
    - **Same gate for overlay-child PRs.** Base = overlay does **not** relax it; the gate keys off the
      PR’s ready state, not its base. Compose success or draft-lock green is **not** the gate.
    - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>` to
-     rebase/retarget; the ensuing push runs the ship gate when the PR is ready.
+     rebase/retarget; the ensuing push runs the appropriate gate scope.
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
    - `baseRefName` must be `fork/changes` for ordinary features or the intended overlay/parent
      branch for a dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be
      `UNSTABLE` while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
-   - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push; a ready
-     PR re-runs the ship gate automatically, a draft pushes free.
+   - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push; the
+     gate re-runs for that HEAD (static if draft, full if ready).
    - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
      Start a new branch, re-apply unmerged work, and open a **new PR** against the same intended
      base (`fork/changes` or the overlay).
@@ -250,11 +251,12 @@ Prefer the thread starter’s Discord id/display name from turn context. Do not 
 
 ## Task Completion Requirements
 
-### Agent ship gate (draft-free push, gate on ready / publish)
+### Agent ship gate (static on every push, full on ready / publish)
 
 Publish validation is **automated**. Agents do **not** hand-run the linter/typechecker/tests as a
 routine pre-handoff ritual — the ship gate runs them once, at the right moment, and caches the
-result. Push freely while drafting; the gate fires on ready PRs and on `pnpm pr:ready`.
+result. **No agent push is free:** draft / no-PR still pays the static half; ready and
+`pnpm pr:ready` pay the full gate.
 
 **Mechanism** (`scripts/agent-pre-push.mjs`, `scripts/agent-pr-ready.mjs`, `scripts/lib/*.mjs`):
 
@@ -263,48 +265,49 @@ result. Push freely while drafting; the gate fires on ready PRs and on `pnpm pr:
   markers). Humans opt out per push with `SKIP_AGENT_PREPUSH=1` — **agents never set that flag** and
   never use `git push --no-verify`.
 - When it runs, the gate mirrors the CI JS quality path, in order:
-  1. **`vp check`** — format + lint (the Fork CI **Check** JS path)
-  2. **`vpr typecheck`** — workspace TypeScript
-  3. **`vp run test`** — unit tests
+  1. **`vp check`** — format + lint (the Fork CI **Check** JS path) — **every agent push**
+  2. **`vpr typecheck`** — workspace TypeScript — **every agent push**
+  3. **`vp run test`** — unit tests — **ready PR / publish only**
      Cargo, mobile native, desktop packaging, and Release Smoke stay **CI-only** — do not hand-run them
      for ordinary PR handoff.
-- It **skips when the HEAD SHA is already cached** in `.run/agent-ship-gate.json`, so a push and the
-  publish step never double-run for the same commit. Force with `AGENT_SHIP_GATE_FORCE=1`.
+- It **skips when the HEAD SHA is already cached** in `.run/agent-ship-gate.json` (static vs complete
+  stages), so a draft push and the publish step never double-run the work already paid for that
+  commit. Force with `AGENT_SHIP_GATE_FORCE=1`.
 
 **When it runs:**
 
-| Branch PR state        | Agent push                                |
-| ---------------------- | ----------------------------------------- |
-| No open PR             | **free push** (open a draft to share)     |
-| **Draft** PR           | **free push** (review via GitHub Diff UI) |
-| **Ready** PR           | full ship gate on every push              |
-| PR state can’t resolve | full ship gate (**fail closed**)          |
+| Branch PR state        | Agent push                                  |
+| ---------------------- | ------------------------------------------- |
+| No open PR             | **static** (`vp check` + `vpr typecheck`)   |
+| **Draft** PR           | **static** (unit tests deferred to publish) |
+| **Ready** PR           | **full** ship gate on every push            |
+| PR state can’t resolve | **full** ship gate (**fail closed**)        |
 
 This is identical for `fork/changes`, every registered overlay base (`fork/discord`, `fork/vscode`,
 `fork/identity`, desktop deeplinks), and dependent / overlay-child PRs — the gate keys off the PR’s
 **ready state**, not its base. Overlay Compose success or Managed-PR draft-lock green is **not** the
 gate.
 
-**Publish path:** `pnpm pr:ready` — runs the ship gate, then marks the open draft PR ready. Raw
-`gh pr ready` (and the ready-for-review APIs) reach the same place: the `.tools/bin/gh` policy shim
-runs the ship gate first and passes the command through when it is green, so publishing is gated
-rather than forbidden and a red gate is the only thing that stops it. `AGENT_PR_SHIP=1` marks a gate
-already passed — `pr:ready` sets it for its own undraft call so the gate runs once, not twice.
-`.envrc` puts
-`$REPO/.tools/bin` first on `PATH` so the shim wins over system `gh`, and sets `GH_REPO` to the fork
-so bare `gh pr` commands target it instead of gh's upstream-parent default (explicit `--repo` still
-overrides); `scripts/install-git-hooks.mjs` installs both the hooks and the shim on `prepare`.
+**Publish path:** `pnpm pr:ready` — runs the **full** ship gate, then marks the open draft PR ready.
+Raw `gh pr ready` (and the ready-for-review APIs) reach the same place: the `.tools/bin/gh` policy
+shim runs the ship gate first and passes the command through when it is green, so publishing is
+gated rather than forbidden and a red gate is the only thing that stops it. `AGENT_PR_SHIP=1` marks
+a gate already passed — `pr:ready` sets it for its own undraft call so the gate runs once, not twice.
+`.envrc` puts `$REPO/.tools/bin` first on `PATH` so the shim wins over system `gh`, and sets
+`GH_REPO` to the fork so bare `gh pr` commands target it instead of gh's upstream-parent default
+(explicit `--repo` still overrides); `scripts/install-git-hooks.mjs` installs both the hooks and the
+shim on `prepare`.
 
 **Agent workflow:**
 
 - **Open the draft immediately** once a PR is in scope (user asked, or Discord/turn rules require it)
-  and the first meaningful commit is useful to review. Keep committing and pushing freely while it is
-  a draft — no separate validation is expected on draft pushes.
+  and the first meaningful commit is useful to review. Keep committing and pushing while it is a
+  draft — each push pays the **static** gate only (cached per HEAD SHA).
 - **Publish when the work is done — do not leave a finished PR in draft.** The moment implementation
-  is complete and verified, run `pnpm pr:ready` to run the ship gate and mark the PR ready; this is
-  the immediate next action, before handoff notes, so full CI can start. Draft is only for
+  is complete and verified, run `pnpm pr:ready` to run the full ship gate and mark the PR ready; this
+  is the immediate next action, before handoff notes, so full CI can start. Draft is only for
   work-in-progress. Do **not** run lint / check / typecheck / tests separately first — the gate owns
-  the complete JS validation and caches the passing SHA.
+  JS validation and caches the passing SHA.
 - **Mid-loop feedback only:** while drafting, focused proof is fine — `vp test run <files>` for tests
   you touched, targeted lint/typecheck for the scope you changed. That is edit-loop signal, not a
   second gate.
@@ -316,8 +319,8 @@ overrides); `scripts/install-git-hooks.mjs` installs both the hooks and the shim
   behavior; the gate’s `vp run test` runs them.
 
 Pre-commit: husky runs `pnpm lint-staged` — `vp fmt` on all staged files plus `vp lint --fix` on
-staged code files (format + lint on commit; typecheck and tests stay in the ship gate). If the hook
-rewrites files, stage those rewrites, commit, and push again.
+staged code files (format + lint on commit; typecheck stays in the ship gate; unit tests on ready /
+publish). If the hook rewrites files, stage those rewrites, commit, and push again.
 
 **Explicitly forbidden:**
 
@@ -329,7 +332,7 @@ rewrites files, stage those rewrites, commit, and push again.
 - Treating Compose, Managed-PR draft-lock, or “integration CI will catch it” as a substitute for
   publishing through the gate. If a PR’s checks panel shows only Compose / draft-lock and **no**
   Check job, it has not been through the gate — publish with `pnpm pr:ready`.
-- Leaving Discord/agent work with commits but **no** PR (open a draft; pushes stay free).
+- Leaving Discord/agent work with commits but **no** PR (open a draft; draft pushes pay static).
 - Leaving a **finished** PR in draft. Draft is for work-in-progress only; when the work is done,
   publish it with `pnpm pr:ready` — a completed PR sitting in draft is an incomplete handoff.
 

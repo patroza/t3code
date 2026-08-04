@@ -5,11 +5,13 @@ import {
   classifyPrPayload,
   parseRepoSlug,
   resolveOpenPrState,
+  shipGateScopeForPush,
   shouldRunShipGateOnPush,
 } from "./lib/agent-pr-state.mjs";
 import {
   isShipGateForce,
   isShipGateShaCached,
+  isShipGateStaticCached,
   readShipGateCache,
   writeShipGateCache,
 } from "./lib/agent-ship-gate-cache.mjs";
@@ -47,11 +49,18 @@ it("PR payload: draft / ready / closed", () => {
   assert.equal(classifyPrPayload({ isDraft: true, state: "CLOSED" }), "none");
 });
 
-it("ship gate on push: only ready + unknown", () => {
+it("full ship gate on push: only ready + unknown", () => {
   assert.equal(shouldRunShipGateOnPush("none"), false);
   assert.equal(shouldRunShipGateOnPush("draft"), false);
   assert.equal(shouldRunShipGateOnPush("ready"), true);
   assert.equal(shouldRunShipGateOnPush("unknown"), true);
+});
+
+it("push scope: draft/none = static, ready/unknown = full", () => {
+  assert.equal(shipGateScopeForPush("none"), "static");
+  assert.equal(shipGateScopeForPush("draft"), "static");
+  assert.equal(shipGateScopeForPush("ready"), "full");
+  assert.equal(shipGateScopeForPush("unknown"), "full");
 });
 
 const pinned = (runGh) => ({ branch: "feature", repoSlug: "owner/repo", runGh });
@@ -220,19 +229,27 @@ it("ship-gate cache: match / miss / force", () => {
   assert.equal(isShipGateShaCached(other, { sha }), false);
   assert.equal(isShipGateShaCached(null, { sha }), false);
   assert.equal(isShipGateShaCached(sha, null), false);
+  assert.equal(isShipGateStaticCached(sha, { staticSha: sha }), true);
+  assert.equal(isShipGateStaticCached(sha, { sha }), true);
+  assert.equal(isShipGateStaticCached(sha, { staticSha: other }), false);
   assert.equal(isShipGateForce({}), false);
   assert.equal(isShipGateForce({ AGENT_SHIP_GATE_FORCE: "1" }), true);
   assert.equal(isShipGateForce({ AGENT_SHIP_GATE_FORCE: "0" }), false);
 });
 
-it("ship-gate cache: write + read roundtrip", () => {
+it("ship-gate cache: write + read roundtrip (complete)", () => {
   const files = new Map();
   const root = "/tmp/agent-ship-gate-test-root";
   const sha = "c".repeat(40);
   writeShipGateCache(root, sha, {
+    stage: "complete",
     mkdirSync: () => {},
     writeFileSync: (file, data) => {
       files.set(file, data);
+    },
+    readFileSync: (file) => {
+      if (!files.has(file)) throw new Error("ENOENT");
+      return files.get(file);
     },
     now: () => new Date("2026-08-02T00:00:00.000Z"),
   });
@@ -245,6 +262,30 @@ it("ship-gate cache: write + read roundtrip", () => {
       return files.get(file);
     },
   });
-  assert.deepEqual(cache, { sha, validatedAt: "2026-08-02T00:00:00.000Z" });
+  assert.equal(cache?.sha, sha);
+  assert.equal(cache?.staticSha, sha);
+  assert.equal(isShipGateShaCached(sha, cache), true);
+  assert.equal(isShipGateStaticCached(sha, cache), true);
+});
+
+it("ship-gate cache: static does not demote complete", () => {
+  const files = new Map();
+  const root = "/tmp/agent-ship-gate-static-test";
+  const sha = "d".repeat(40);
+  const io = {
+    mkdirSync: () => {},
+    writeFileSync: (file, data) => {
+      files.set(file, data);
+    },
+    readFileSync: (file) => {
+      if (!files.has(file)) throw new Error("ENOENT");
+      return files.get(file);
+    },
+    now: () => new Date("2026-08-02T00:00:00.000Z"),
+  };
+  writeShipGateCache(root, sha, { ...io, stage: "complete" });
+  writeShipGateCache(root, sha, { ...io, stage: "static" });
+  const cache = readShipGateCache(root, io);
+  assert.equal(cache?.sha, sha);
   assert.equal(isShipGateShaCached(sha, cache), true);
 });
