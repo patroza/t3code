@@ -33,4 +33,18 @@ describe("withAgentIdentityAttribution", () => {
   it("leaves unattributed turns unchanged", () => {
     expect(withAgentIdentityAttribution({ message: "hello", people })).toBe("hello");
   });
+
+  it.each([
+    "cab: Patrick Roza <42661+patroza@users.noreply.github.com>",
+    "Co-authored-by: Patrick Roza <42661+patroza@users.noreply.github.com>",
+  ])("does not duplicate existing Discord attribution: %s", (attribution) => {
+    const message = `make the change\n\n${attribution}`;
+    const source: SourceRef = {
+      channel: "discord",
+      personId: PersonId.make("patroza"),
+      username: IdentityUsername.make("patroza"),
+    };
+
+    expect(withAgentIdentityAttribution({ message, source, people })).toBe(message);
+  });
 });
