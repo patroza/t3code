@@ -8,7 +8,7 @@
 apps/desktop/
 apps/vscode/
 apps/discord-bot/
-native/
+/native/
 release/
 release-mock/
 dist-electron/
