@@ -146,10 +146,10 @@ export type ThreadFeedEntry =
 export function deriveQueuedMessageControls(
   deliveryState: "waiting" | "sending" | "queued" | undefined,
   queueSource: "local" | "server" | undefined,
-): { readonly canSteer: boolean; readonly canRemove: boolean } {
+): { readonly canSteer: boolean; readonly canEdit: boolean } {
   return {
     canSteer: deliveryState === "queued" && queueSource === "server",
-    canRemove:
+    canEdit:
       (deliveryState === "queued" && queueSource === "server") ||
       (deliveryState === "waiting" && queueSource === "local"),
   };

@@ -1230,9 +1230,6 @@ function ChatViewContent(props: ChatViewProps) {
   const removeQueuedThreadMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
     reportFailure: false,
   });
-  const updateQueuedThreadMessage = useAtomCommand(threadEnvironment.updateQueuedMessage, {
-    reportFailure: false,
-  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1324,7 +1321,6 @@ function ChatViewContent(props: ChatViewProps) {
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<MessageId | null>(null);
   const [hasUnreadTimelineActivity, setHasUnreadTimelineActivity] = useState(false);
   const [maintainTimelineAtEnd, setMaintainTimelineAtEnd] = useState(true);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -4924,36 +4920,6 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
-    if (editingQueuedMessageId !== null) {
-      const text = promptRef.current.trim();
-      const result =
-        text.length === 0
-          ? await removeQueuedThreadMessage({
-              environmentId,
-              input: { threadId: activeThread.id, messageId: editingQueuedMessageId },
-            })
-          : await updateQueuedThreadMessage({
-              environmentId,
-              input: {
-                threadId: activeThread.id,
-                messageId: editingQueuedMessageId,
-                text,
-              },
-            });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          setThreadError(
-            activeThread.id,
-            error instanceof Error ? error.message : "Failed to edit the queued message.",
-          );
-        }
-        return;
-      }
-      setEditingQueuedMessageId(null);
-      composerRef.current?.restoreDraftAfterQueuedEdit();
-      return;
-    }
     if (!sendCtx?.providerAvailable) return;
     const {
       images: composerImages,
@@ -5461,16 +5427,28 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
-  const onEditQueuedMessage = (messageId: MessageId) => {
+  const onEditQueuedMessage = async (messageId: MessageId) => {
     if (!activeThread) return;
     const queuedMessage = activeThread.queuedMessages.find(
       (message) => message.messageId === messageId,
     );
     if (!queuedMessage) return;
-    if (editingQueuedMessageId !== null) {
-      composerRef.current?.restoreDraftAfterQueuedEdit();
+    const result = await removeQueuedThreadMessage({
+      environmentId,
+      input: { threadId: activeThread.id, messageId },
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error
+            ? error.message
+            : "Failed to remove the queued message for editing.",
+        );
+      }
+      return;
     }
-    setEditingQueuedMessageId(messageId);
     composerRef.current?.recallQueuedMessage(queuedMessage.text);
   };
 
@@ -6472,7 +6450,7 @@ function ChatViewContent(props: ChatViewProps) {
                           queuedMessages={displayQueuedMessages}
                           disabled={Boolean(activeEnvironmentUnavailableState)}
                           onSteer={(messageId) => void onSteerQueuedMessage(messageId)}
-                          onEdit={onEditQueuedMessage}
+                          onEdit={(messageId) => void onEditQueuedMessage(messageId)}
                         />
                       ) : null}
                       <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
@@ -6552,8 +6530,6 @@ function ChatViewContent(props: ChatViewProps) {
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
-                            isEditingQueuedMessage={editingQueuedMessageId !== null}
-                            onQueuedEditCancel={() => setEditingQueuedMessageId(null)}
                             onStartNewThread={handleStartNewThread}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
