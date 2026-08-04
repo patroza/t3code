@@ -135,6 +135,7 @@ function makeLayer(input: {
               kind: "git",
               rootPath: "/repo",
               metadataPath: null,
+              bare: false,
               freshness: {
                 source: "live-local" as const,
                 observedAt: DateTime.makeUnsafe("1970-01-01T00:00:00.000Z"),
