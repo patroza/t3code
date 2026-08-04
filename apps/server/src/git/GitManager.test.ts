@@ -696,6 +696,29 @@ const GitManagerTestLayer = GitVcsDriver.layer.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("status includes the GitHub repository URL for repository actions", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:pingdotgg/codething-mvp.git",
+      ]);
+
+      const { manager } = yield* makeManager();
+      const status = yield* manager.status({ cwd: repoDir });
+
+      expect(status.sourceControlProvider).toEqual({
+        kind: "github",
+        name: "GitHub",
+        baseUrl: "https://github.com",
+        repositoryUrl: "https://github.com/pingdotgg/codething-mvp",
+      });
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

@@ -135,4 +135,11 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chips).toContain('aria-label="Edit queued message"');
     expect(chips).toContain("Steer: send now, interrupting the current step");
   });
+
+  it("git action menu keeps the GitHub pull request list link", () => {
+    const gitActions = readSrc("components/GitActionsControl.tsx");
+    expect(gitActions).toContain('aria-label="View GitHub pull requests"');
+    expect(gitActions).toContain("openPullRequestList");
+    expect(gitActions).toContain("`${repositoryUrl}/pulls`");
+  });
 });
