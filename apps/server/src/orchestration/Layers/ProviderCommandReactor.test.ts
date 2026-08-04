@@ -66,6 +66,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 
@@ -157,6 +158,8 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
     readonly deferReactorStart?: boolean;
+    /** When set, recovery continuations park until this effect succeeds (production shape). */
+    readonly serverActivation?: Effect.Effect<void>;
     readonly providerBindings?: ReadonlyArray<ProviderRuntimeBindingWithMetadata>;
     readonly providerBindingsMap?: Map<ThreadId, ProviderRuntimeBindingWithMetadata>;
     readonly listBindingsEffect?: () => Effect.Effect<
@@ -454,7 +457,12 @@ describe("ProviderCommandReactor", () => {
     const startReactor = async () => {
       if (reactorStarted) return;
       reactorStarted = true;
-      await Effect.runPromise(reactor.start().pipe(Scope.provide(scope!)));
+      const start = reactor.start().pipe(Scope.provide(scope!));
+      await runtime!.runPromise(
+        input?.serverActivation !== undefined
+          ? start.pipe(Effect.provideService(ServerActivation, input.serverActivation))
+          : start,
+      );
     };
     if (input?.deferReactorStart !== true) {
       await startReactor();
@@ -750,7 +758,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("does not finish reactor startup before restart reconciliation completes", async () => {
+  it("does not finish reactor startup before restart recovery claims complete", async () => {
     const reconciliationGate = Effect.runSync(Deferred.make<void>());
     const harness = await createHarness({
       deferReactorStart: true,
@@ -767,6 +775,83 @@ describe("ProviderCommandReactor", () => {
     Effect.runSync(Deferred.succeed(reconciliationGate, undefined));
     await startup;
     expect(startupFinished).toBe(true);
+  });
+
+  it("finishes reactor startup while recovery provider session start is still pending", async () => {
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-recovery",
+    };
+    const threadId = ThreadId.make("thread-1");
+    const activation = Effect.runSync(Deferred.make<void>());
+    const releaseStart = Effect.runSync(Deferred.make<void>());
+    const harness = await createHarness({
+      deferReactorStart: true,
+      threadModelSelection: modelSelection,
+      // Production path: recovery continuations park on ServerActivation.
+      serverActivation: Deferred.await(activation),
+      startSessionEffect: (session) => Deferred.await(releaseStart).pipe(Effect.as(session)),
+      providerBindings: [
+        {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          adapterKey: "codex",
+          runtimeMode: "full-access",
+          status: "stopped",
+          resumeCursor: { threadId: "provider-thread-resume" },
+          runtimePayload: {
+            cwd: "/tmp/persisted-recovery-cwd",
+            modelSelection,
+            interactionMode: "plan",
+            activeTurnId: null,
+            restartRecovery: makeProviderRestartRecoveryMarker({
+              interruptedProviderTurnId: asTurnId("provider-turn-before-restart"),
+              shutdownAt: "2026-01-01T00:00:01.000Z",
+            }),
+          },
+          lastSeenAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-before-restart-hang"),
+        threadId,
+        message: {
+          messageId: asMessageId("running-user-message-hang"),
+          role: "user",
+          text: "original request",
+          attachments: [],
+        },
+        modelSelection,
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    // Claim phase must complete without waiting on activation or provider start.
+    await harness.startReactor();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.providerBindings.get(threadId)?.runtimePayload).toMatchObject({
+      restartRecovery: expect.objectContaining({ version: 1 }),
+      lastRuntimeEvent: "provider.restartRecovery.claimed",
+    });
+
+    Effect.runSync(Deferred.succeed(activation, undefined));
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    Effect.runSync(Deferred.succeed(releaseStart, undefined));
+    await harness.drain();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+    });
   });
 
   it("does not resume settled turns from stale recovery bindings", async () => {
