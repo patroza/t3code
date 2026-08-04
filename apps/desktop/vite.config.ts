@@ -5,6 +5,7 @@ import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const isolatedDesktopTestFiles = [
   "src/app/DesktopClerk.test.ts",
+  "src/app/DesktopPreReadyPlatform.test.ts",
   "src/backend/DesktopNetworkInterfaces.test.ts",
   "src/electron/ElectronApp.test.ts",
   "src/electron/ElectronDialog.test.ts",
