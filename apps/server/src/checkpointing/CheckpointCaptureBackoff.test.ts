@@ -47,6 +47,7 @@ function makeAlwaysTimingOutRegistry(
       kind: "git" as const,
       rootPath: CWD,
       metadataPath: `${CWD}/.git`,
+      bare: false,
       freshness: { source: "cache" as const, checkedAt: 0 },
     },
     driver: { checkpoints } as unknown as VcsDriver.VcsDriver["Service"],

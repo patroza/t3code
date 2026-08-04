@@ -68,6 +68,7 @@ function makeRegistry(input: {
             kind: "git",
             rootPath: "/repo",
             metadataPath: null,
+            bare: false,
             freshness: {
               source: "live-local" as const,
               observedAt: TEST_EPOCH,
