@@ -647,8 +647,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const modelLabel = selectedModel
     ? getTriggerDisplayModelLabel(selectedModel)
     : thread.modelSelection.model;
-<<<<<<< HEAD
-=======
   const aiUsageSnapshot = useAiUsageSnapshot(thread.environmentId);
   const threadUsage = useMemo(
     () => resolveDriverUsage(aiUsageSnapshot, driverKind, thread.modelSelection.model),
@@ -656,7 +654,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   );
   const usageDotClass = threadUsage ? usageDotFillClass(threadUsage.marker) : undefined;
   const usageRingColor = threadUsage ? usageDotRingColor(threadUsage.marker) : undefined;
->>>>>>> 3840c52d5 (feat(web): sidebar, composer, timeline, search, and chrome fork product)
 
   const isRemote =
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
