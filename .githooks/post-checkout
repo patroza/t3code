@@ -7,10 +7,12 @@
 # guest -- not only when a worktree is created through the T3 app / t3.json.
 #
 # Strategy (metadata-safe):
-#   1. Copy *small* gitignored seeds from .worktreeinclude (CLAUDE.md, .nuxt, …)
+#   1. Drop TypeScript project emit (dist / tsbuildinfo) so composite/incremental
+#      builds never typecheck against foreign-tree .d.ts after a branch switch.
+#   2. Copy *small* gitignored seeds from .worktreeinclude (CLAUDE.md, .nuxt, …)
 #      via reflink/hardlink when available. NEVER clone node_modules -- that
 #      creates millions of inodes per worktree on btrfs.
-#   2. Populate node_modules with `pnpm install --frozen-lockfile --prefer-offline`
+#   3. Populate node_modules with `pnpm install --frozen-lockfile --prefer-offline`
 #      against the shared store (hardlinks -> one inode per package file).
 #
 # Idempotent: never overwrites existing seed paths; pnpm is safe to re-run.
@@ -25,6 +27,52 @@ export PATH
 main_wt=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
 wt_root=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$wt_root" ] || exit 0
+
+# --- TS build-cache wipe (every branch / worktree checkout) -----------------
+#
+# Composite/incremental emit (and leftover dist from builds) can outlive a
+# branch switch. Foreign .tsbuildinfo / .d.ts produce phantom type errors that
+# vanish after clean rebuild — same class as macs-holding/scanner#1495 / #2166
+# and typescript-go incremental gaps (#2666, #4664, #4262).
+# Workaround until upstream invalidation is solid; see .githooks/README.md.
+#
+clean_ts_project_emit() {
+  root=$1
+  removed=0
+
+  for d in \
+    "$root"/apps/*/dist \
+    "$root"/apps/*/dist-electron \
+    "$root"/packages/*/dist
+  do
+    [ -e "$d" ] || continue
+    rm -rf "$d"
+    removed=1
+  done
+
+  if [ -d "$root" ]; then
+    # Prune by basename so nested apps/*/node_modules are skipped too.
+    tsbuild_files=$(
+      find "$root" \
+        \( -name node_modules -o -name .git -o -name .vite-plus \) -prune -o \
+        -type f -name '*.tsbuildinfo' -print 2>/dev/null || true
+    )
+    if [ -n "$tsbuild_files" ]; then
+      printf '%s\n' "$tsbuild_files" | while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rm -f "$f"
+      done
+      removed=1
+    fi
+  fi
+
+  if [ "$removed" = 1 ]; then
+    echo "post-checkout: cleared TypeScript project emit (dist / tsbuildinfo) under $root" >&2
+    echo "post-checkout: workaround for tsgo/tsc stale incremental cache after tree switch — see .githooks/README.md (remove when upstream fixed)" >&2
+  fi
+}
+
+clean_ts_project_emit "$wt_root"
 
 if [ -n "$main_wt" ] && [ "$main_wt" != "$wt_root" ]; then
   # Effective include: repo .worktreeinclude if present, else nothing to seed-copy.
