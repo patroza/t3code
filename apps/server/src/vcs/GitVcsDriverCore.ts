@@ -2680,6 +2680,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
+    // Without `newRefName` this checks out an existing branch by name, and git
+    // allows a branch in only one worktree. The recreate paths pass whatever
+    // branch the thread recorded — including the project's default branch, which
+    // a primary clone normally has checked out — so the collision is reachable in
+    // ordinary use. Raw, the failure is `fatal: '<branch>' is already used by
+    // worktree at ...`, which surfaces as an opaque VCS error far from the cause.
+    // Name it here instead, the way preparePullRequestThread already does.
+    if (!input.newRefName) {
+      const worktreeList = yield* executeGit(
+        "GitVcsDriver.createWorktree.worktreeList",
+        input.cwd,
+        ["worktree", "list", "--porcelain", "-z"],
+        { timeoutMs: 30_000, allowNonZeroExit: true, maxOutputBytes: 16 * 1024 * 1024 },
+      );
+      if (worktreeList.exitCode === 0) {
+        const holder = parseWorktreeBranchPaths(worktreeList.stdout).get(input.refName);
+        const normalize = (value: string) => path.normalize(path.resolve(value));
+        if (holder !== undefined && normalize(holder) !== normalize(worktreePath)) {
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.createWorktree",
+            command: "git worktree add",
+            cwd: input.cwd,
+            failureKind: "unknown",
+            detail:
+              `Branch '${input.refName}' is already checked out at ${holder}, and git allows a branch in only one worktree. ` +
+              `Switch that checkout to another branch, or give this thread its own branch.`,
+          });
+        }
+      }
+    }
+
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
     });
