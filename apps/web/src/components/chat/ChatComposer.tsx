@@ -509,7 +509,6 @@ export interface ChatComposerHandle {
   focusAt: (cursor: number) => void;
   insertTextAtEnd: (text: string, options?: { ensureLeadingBoundary?: boolean }) => boolean;
   recallQueuedMessage: (text: string) => void;
-  restoreDraftAfterQueuedEdit: () => void;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
@@ -630,8 +629,6 @@ export interface ChatComposerProps {
 
   // Callbacks
   onSend: (e?: { preventDefault: () => void }) => void;
-  isEditingQueuedMessage?: boolean;
-  onQueuedEditCancel: () => void;
   onStartNewThread: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
@@ -749,8 +746,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerTerminalContextsRef,
     composerElementContextsRef,
     onSend,
-    isEditingQueuedMessage = false,
-    onQueuedEditCancel,
     onStartNewThread,
     onInterrupt,
     onImplementPlanInNewThread,
@@ -1347,7 +1342,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       hasSendableContent:
         !noProviderAvailable &&
         environmentUnavailable === null &&
-        (composerSendState.hasSendableContent || isEditingQueuedMessage),
+        composerSendState.hasSendableContent,
     });
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
@@ -1940,12 +1935,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (activePendingProgress) {
       return activePendingProgress.isLastQuestion && Boolean(activePendingResolvedAnswers);
     }
-    return showPlanFollowUpPrompt || composerSendState.hasSendableContent || isEditingQueuedMessage;
+    return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
   }, [
     activePendingProgress,
     activePendingResolvedAnswers,
     composerSendState.hasSendableContent,
-    isEditingQueuedMessage,
     environmentUnavailable,
     isConnecting,
     isMobileViewport,
@@ -2120,14 +2114,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           currentValue,
         );
         if (navigation.handled) {
-          const exitedQueuedEdit =
-            composerInputHistoryRef.current.browsingIndex !== null &&
-            navigation.state.browsingIndex === null;
           persistComposerInputHistory(navigation.state);
           applyComposerHistoryValue(navigation.value);
-          if (exitedQueuedEdit) {
-            onQueuedEditCancel();
-          }
           return true;
         }
       }
@@ -2793,17 +2781,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
         persistComposerInputHistory(history);
         applyComposerHistoryValue(text);
-      },
-      restoreDraftAfterQueuedEdit: () => {
-        const history = composerInputHistoryRef.current;
-        if (history.browsingIndex === null) return;
-        const draft = history.stashedDraft;
-        persistComposerInputHistory({
-          entries: history.entries,
-          browsingIndex: null,
-          stashedDraft: "",
-        });
-        applyComposerHistoryValue(draft);
       },
       openModelPicker: () => {
         setIsComposerModelPickerOpen(true);
@@ -3519,9 +3496,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     projectSelectionRequired
                   }
                   isPreparingWorktree={isPreparingWorktree}
-                  hasSendableContent={
-                    composerSendState.hasSendableContent || isEditingQueuedMessage
-                  }
+                  hasSendableContent={composerSendState.hasSendableContent}
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}

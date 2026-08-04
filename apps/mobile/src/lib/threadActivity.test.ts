@@ -14,6 +14,7 @@ import {
 import {
   buildThreadFeed,
   deriveQueuedMessageControls,
+  promoteSteeredQueuedMessages,
   deriveThreadFeedPresentation,
   type ThreadFeedActivity,
   type ThreadFeedEntry,
@@ -23,21 +24,21 @@ describe("deriveQueuedMessageControls", () => {
   it("allows steering or removing server-queued messages", () => {
     expect(deriveQueuedMessageControls("queued", "server")).toEqual({
       canSteer: true,
-      canRemove: true,
+      canEdit: true,
     });
   });
 
   it("allows discarding an offline local-outbox message", () => {
     expect(deriveQueuedMessageControls("waiting", "local")).toEqual({
       canSteer: false,
-      canRemove: true,
+      canEdit: true,
     });
   });
 
   it("does not claim an in-flight local send can still be cancelled", () => {
     expect(deriveQueuedMessageControls("sending", "local")).toEqual({
       canSteer: false,
-      canRemove: false,
+      canEdit: false,
     });
   });
 });
@@ -696,5 +697,70 @@ describe("buildThreadFeed", () => {
       type: "work-toggle",
       expanded: true,
     });
+  });
+});
+
+describe("promoteSteeredQueuedMessages", () => {
+  const steeredId = MessageId.make("msg-steered");
+  const waitingId = MessageId.make("msg-waiting");
+
+  function makeQueuedThread() {
+    return makeThread({
+      id: ThreadId.make("thread-steer"),
+      projectId: ProjectId.make("project-steer"),
+      title: "Steer thread",
+      queuedMessages: [
+        {
+          messageId: steeredId,
+          text: "send this one now",
+          attachments: [],
+          queuedAt: "2026-04-01T00:00:05.000Z",
+        },
+        {
+          messageId: waitingId,
+          text: "this one waits",
+          attachments: [],
+          queuedAt: "2026-04-01T00:00:06.000Z",
+        },
+      ],
+    });
+  }
+
+  it("moves only the steered message into the conversation", () => {
+    const promoted = promoteSteeredQueuedMessages(makeQueuedThread(), new Set([steeredId]));
+
+    expect(promoted.messages.map((message) => message.id)).toEqual([steeredId]);
+    expect(promoted.messages[0]).toMatchObject({ role: "user", text: "send this one now" });
+    // Still server-queued until the dispatch lands — chip lists drop it because
+    // it is now in the timeline, not because the queue changed.
+    expect(promoted.queuedMessages.map((entry) => entry.messageId)).toEqual([steeredId, waitingId]);
+  });
+
+  it("reverts by dropping the id, restoring the queue-only view", () => {
+    const thread = makeQueuedThread();
+
+    expect(promoteSteeredQueuedMessages(thread, new Set())).toBe(thread);
+    expect(promoteSteeredQueuedMessages(thread, new Set([steeredId])).messages).toHaveLength(1);
+    expect(promoteSteeredQueuedMessages(thread, new Set()).messages).toHaveLength(0);
+  });
+
+  it("does not duplicate a message the server has already persisted", () => {
+    const thread = makeQueuedThread();
+    const persisted = {
+      ...thread,
+      messages: [
+        {
+          id: steeredId,
+          role: "user" as const,
+          text: "send this one now",
+          turnId: TurnId.make("turn-1"),
+          streaming: false,
+          createdAt: "2026-04-01T00:00:07.000Z",
+          updatedAt: "2026-04-01T00:00:07.000Z",
+        },
+      ],
+    };
+
+    expect(promoteSteeredQueuedMessages(persisted, new Set([steeredId])).messages).toHaveLength(1);
   });
 });

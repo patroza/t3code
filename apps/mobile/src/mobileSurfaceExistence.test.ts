@@ -43,6 +43,38 @@ describe("mobile surface existence (anti stack-drop)", () => {
     expect(listItems).toMatch(/settledRowContent[\s\S]*?opacity-40[\s\S]*?ProjectFavicon/);
   });
 
+  it("keeps the feed still for sends the server will hold in the steering queue", () => {
+    const composerState = readSrc("state/use-thread-composer-state.ts");
+    const detailScreen = readSrc("features/threads/ThreadDetailScreen.tsx");
+
+    // The prediction is the shared one (same rule as the server decider and
+    // the web client), not a mobile-local re-derivation that can drift.
+    expect(composerState).toContain('from "@t3tools/shared/chatList"');
+    expect(composerState).toContain("sendEntersSteeringQueue({");
+    expect(composerState).toContain("hasPendingTurnStart:");
+
+    // A queue-bound send must move neither the viewport nor the anchor: both
+    // live inside the guard, and the anchor would otherwise stay armed and
+    // fire whenever the queue eventually drains.
+    expect(detailScreen).toMatch(
+      /if \(!sendWillQueue\) \{[\s\S]*?scrollToEnd\(\{ animated: false \}\)[\s\S]*?setAnchorMessageId\(messageId\)[\s\S]*?\}/,
+    );
+  });
+
+  it('"Send now" moves the message optimistically and can put it back', () => {
+    const composerState = readSrc("state/use-thread-composer-state.ts");
+
+    // The feed and the chip list both read the promoted detail, so one piece
+    // of state moves the message and one revert puts it back.
+    expect(composerState).toContain("promoteSteeredQueuedMessages(selectedThreadDetail");
+    expect(composerState).toMatch(/buildThreadFeed\(\{ \.\.\.steeredDetail/);
+    expect(composerState).toMatch(/timelineIds = new Set\(steeredDetail\?\.messages/);
+    // Failure puts it back rather than leaving a bubble the agent never got.
+    expect(composerState).toMatch(
+      /if \(result\._tag === "Success"\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?pruneSteeringQueuedMessageIds\([\s\S]*?setPendingConnectionError/,
+    );
+  });
+
   it("keys markdown nodes uniquely even when parser spans collide", () => {
     const nodeKey = NodeFS.readFileSync(
       NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),

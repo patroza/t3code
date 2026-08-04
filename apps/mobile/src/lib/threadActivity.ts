@@ -146,13 +146,52 @@ export type ThreadFeedEntry =
 export function deriveQueuedMessageControls(
   deliveryState: "waiting" | "sending" | "queued" | undefined,
   queueSource: "local" | "server" | undefined,
-): { readonly canSteer: boolean; readonly canRemove: boolean } {
+): { readonly canSteer: boolean; readonly canEdit: boolean } {
   return {
     canSteer: deliveryState === "queued" && queueSource === "server",
-    canRemove:
+    canEdit:
       (deliveryState === "queued" && queueSource === "server") ||
       (deliveryState === "waiting" && queueSource === "local"),
   };
+}
+
+/**
+ * Moves messages the user sent now ("Send now") out of the queue and into the
+ * conversation before the server confirms the dispatch.
+ *
+ * The server keeps listing a steered message as queued until its dispatch
+ * lands, so the promotion happens here rather than waiting: the feed renders it
+ * as a bubble, and every chip list that skips ids already in the timeline drops
+ * its chip for free. Dropping the id from `steeringMessageIds` reverts both.
+ */
+export function promoteSteeredQueuedMessages(
+  thread: OrchestrationThread,
+  steeringMessageIds: ReadonlySet<MessageId>,
+): OrchestrationThread {
+  if (steeringMessageIds.size === 0) {
+    return thread;
+  }
+  const alreadyPersisted = new Set(thread.messages.map((message) => message.id));
+  const steeredMessages = thread.queuedMessages
+    .filter(
+      (queuedMessage) =>
+        steeringMessageIds.has(queuedMessage.messageId) &&
+        !alreadyPersisted.has(queuedMessage.messageId),
+    )
+    .map((queuedMessage) => ({
+      id: queuedMessage.messageId,
+      role: "user" as const,
+      text: queuedMessage.text,
+      attachments: queuedMessage.attachments,
+      turnId: null,
+      streaming: false,
+      createdAt: queuedMessage.queuedAt,
+      updatedAt: queuedMessage.queuedAt,
+    }));
+  if (steeredMessages.length === 0) {
+    return thread;
+  }
+  return { ...thread, messages: [...thread.messages, ...steeredMessages] };
 }
 
 export type ThreadFeedLatestTurn = Pick<

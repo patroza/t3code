@@ -103,8 +103,6 @@ export interface ThreadComposerProps {
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
-  readonly activeThreadBusy: boolean;
-  readonly isEditingQueuedMessage?: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
@@ -284,7 +282,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   const isExpanded = isFocused;
-  const canSend = hasContent || props.isEditingQueuedMessage === true;
+  const canSend = hasContent;
 
   const onPressImage = useCallback(
     (uri: string) => {
