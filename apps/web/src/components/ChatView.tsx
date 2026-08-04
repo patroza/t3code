@@ -37,7 +37,7 @@ import {
   createModelSelection,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
-import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
+import { CHAT_LIST_ANCHOR_OFFSET, sendEntersSteeringQueue } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
@@ -295,7 +295,6 @@ import {
   revokeBlobPreviewUrl,
   pruneOptimisticQueuedMessageIds,
   revokeUserMessagePreviewUrls,
-  sendEntersSteeringQueue,
   shouldTreatServerThreadAsActive,
   waitForStartedServerThread,
   resolveServerThreadError,
