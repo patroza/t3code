@@ -1,17 +1,15 @@
-import { MessageId, type OrchestrationQueuedMessage } from "@t3tools/contracts";
+import { MessageId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { QueuedMessageChips } from "./QueuedMessageChips";
+import { QueuedMessageChips, type DisplayQueuedMessage } from "./QueuedMessageChips";
 
-function makeQueued(
-  overrides: Partial<OrchestrationQueuedMessage> = {},
-): OrchestrationQueuedMessage {
+function makeQueued(overrides: Partial<DisplayQueuedMessage> = {}): DisplayQueuedMessage {
   return {
     messageId: MessageId.make("msg-queued-1"),
     text: "follow up after this turn",
-    attachments: [],
-    queuedAt: "2026-07-28T12:00:00.000Z",
+    attachmentCount: 0,
+    pending: false,
     ...overrides,
   };
 }
@@ -34,23 +32,35 @@ describe("QueuedMessageChips", () => {
     expect(html).toContain('aria-label="Edit queued message"');
     expect(html).toContain("Steer: send now, interrupting the current step");
     expect(html).toContain("Steer");
+    expect(html).toContain('data-queued-message-pending="false"');
+    expect(html).not.toContain('disabled=""');
   });
 
   it("labels attachment-only queued messages", () => {
     const html = renderToStaticMarkup(
       <QueuedMessageChips
-        queuedMessages={[
-          makeQueued({
-            text: "",
-            // Length is what the chip labels; shape is not rendered.
-            attachments: [{} as OrchestrationQueuedMessage["attachments"][number]],
-          }),
-        ]}
+        queuedMessages={[makeQueued({ text: "", attachmentCount: 1 })]}
         onSteer={() => {}}
         onEdit={() => {}}
       />,
     );
 
     expect(html).toContain("1 attachment(s)");
+  });
+
+  it("renders an unacknowledged send as an inert pending chip", () => {
+    const html = renderToStaticMarkup(
+      <QueuedMessageChips
+        queuedMessages={[makeQueued({ text: "queued optimistically", pending: true })]}
+        onSteer={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+
+    // The text is visible immediately; Steer/Edit stay inert until the server
+    // knows about the message.
+    expect(html).toContain("queued optimistically");
+    expect(html).toContain('data-queued-message-pending="true"');
+    expect(html.match(/disabled=""/g)).toHaveLength(2);
   });
 });

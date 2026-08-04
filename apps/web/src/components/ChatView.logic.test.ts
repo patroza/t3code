@@ -22,6 +22,7 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  pruneOptimisticQueuedMessageIds,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
@@ -236,6 +237,27 @@ describe("sendEntersSteeringQueue", () => {
         hasPendingTurnStart: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("pruneOptimisticQueuedMessageIds", () => {
+  const first = MessageId.make("msg-queued-1");
+  const second = MessageId.make("msg-queued-2");
+
+  it("drops ids the server has acknowledged", () => {
+    expect(pruneOptimisticQueuedMessageIds(new Set([first, second]), new Set([first]))).toEqual(
+      new Set([second]),
+    );
+  });
+
+  it("keeps the same reference when nothing resolved", () => {
+    const current = new Set([first]);
+    expect(pruneOptimisticQueuedMessageIds(current, new Set([second]))).toBe(current);
+  });
+
+  it("keeps the same reference when already empty", () => {
+    const current: ReadonlySet<MessageId> = new Set();
+    expect(pruneOptimisticQueuedMessageIds(current, new Set([first]))).toBe(current);
   });
 });
 

@@ -130,12 +130,19 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain('aria-label": "provider usage status"');
   });
 
-  it("every send path guards timeline anchoring on the steering-queue prediction", () => {
+  it("every send path routes on the steering-queue prediction", () => {
     const chatView = readSrc("components/ChatView.tsx");
-    // Both send paths (composer + plan follow-up) must skip scrollToEnd /
-    // anchored end-space when the server will hold the message in the queue.
-    expect(chatView.match(/!sendEntersSteeringQueue\(\{/g)).toHaveLength(2);
+    // Both send paths (composer + plan follow-up) branch on the prediction:
+    // queue-bound sends become chips, everything else takes the live edge.
+    expect(chatView.match(/sendEntersSteeringQueue\(\{/g)).toHaveLength(2);
     expect(chatView).toContain("hasPendingTurnStart: activeThread.pendingTurnStart !== null");
+    expect(
+      chatView.match(
+        /setOptimisticQueuedMessageIds\(\(existing\) => new Set\(existing\)\.add\(messageIdForSend\)\)/g,
+      ),
+    ).toHaveLength(2);
+    // The chips render the merged list, never the raw server queue.
+    expect(chatView).toContain("queuedMessages={displayQueuedMessages}");
   });
 
   it("queued message chips keep edit + steer labels", () => {

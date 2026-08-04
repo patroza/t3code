@@ -1,8 +1,21 @@
 import { memo } from "react";
 import { CornerDownRightIcon, ListEndIcon, PencilIcon } from "lucide-react";
-import type { MessageId, OrchestrationQueuedMessage } from "@t3tools/contracts";
+import type { MessageId } from "@t3tools/contracts";
 
 import { Button } from "../ui/button";
+import { cn } from "~/lib/utils";
+
+/**
+ * A queued follow-up as the composer renders it: either server-held, or an
+ * optimistic send that will be queued once the server acknowledges it.
+ */
+export interface DisplayQueuedMessage {
+  readonly messageId: MessageId;
+  readonly text: string;
+  readonly attachmentCount: number;
+  /** Not acknowledged yet — the server cannot steer or edit it. */
+  readonly pending: boolean;
+}
 
 /**
  * Queued follow-up messages held server-side while a turn runs. Each chip
@@ -15,7 +28,7 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
   onSteer,
   onEdit,
 }: {
-  readonly queuedMessages: ReadonlyArray<OrchestrationQueuedMessage>;
+  readonly queuedMessages: ReadonlyArray<DisplayQueuedMessage>;
   readonly disabled?: boolean;
   readonly onSteer: (messageId: MessageId) => void;
   readonly onEdit: (messageId: MessageId) => void;
@@ -29,7 +42,11 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
       {queuedMessages.map((queuedMessage) => (
         <div
           key={queuedMessage.messageId}
-          className="flex items-center gap-2.5 rounded-xl border border-border/60 bg-card/95 py-1.5 pr-1.5 pl-3.5 shadow-sm backdrop-blur"
+          className={cn(
+            "flex items-center gap-2.5 rounded-xl border border-border/60 bg-card/95 py-1.5 pr-1.5 pl-3.5 shadow-sm backdrop-blur",
+            queuedMessage.pending && "opacity-60",
+          )}
+          data-queued-message-pending={queuedMessage.pending ? "true" : "false"}
         >
           <ListEndIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           <span
@@ -38,12 +55,12 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
           >
             {queuedMessage.text.length > 0
               ? queuedMessage.text
-              : `${queuedMessage.attachments.length} attachment(s)`}
+              : `${queuedMessage.attachmentCount} attachment(s)`}
           </span>
           <Button
             size="xs"
             variant="ghost"
-            disabled={disabled}
+            disabled={disabled || queuedMessage.pending}
             aria-label="Steer: send now, interrupting the current step"
             title="Send now, interrupting the current step"
             onClick={() => onSteer(queuedMessage.messageId)}
@@ -54,7 +71,7 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
           <Button
             size="icon-xs"
             variant="ghost"
-            disabled={disabled}
+            disabled={disabled || queuedMessage.pending}
             aria-label="Edit queued message"
             title="Edit queued message; save an empty draft to remove it"
             onClick={() => onEdit(queuedMessage.messageId)}

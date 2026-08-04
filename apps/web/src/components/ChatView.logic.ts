@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   isProviderDriverKind,
+  type MessageId,
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
@@ -209,6 +210,27 @@ export function sendEntersSteeringQueue(input: {
     input.sessionStatus === "starting" ||
     input.hasPendingTurnStart
   );
+}
+
+/**
+ * Drops resolved ids (acknowledged or rolled back) from the optimistic
+ * queue-bound set, returning the same reference when nothing changed so the
+ * chip list does not re-render on every unrelated thread update.
+ */
+export function pruneOptimisticQueuedMessageIds(
+  current: ReadonlySet<MessageId>,
+  resolvedIds: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (current.size === 0) {
+    return current;
+  }
+  const next = new Set<MessageId>();
+  for (const messageId of current) {
+    if (!resolvedIds.has(messageId)) {
+      next.add(messageId);
+    }
+  }
+  return next.size === current.size ? current : next;
 }
 
 export function reconcileMountedTerminalThreadIds(input: {
