@@ -51,4 +51,21 @@ git commit -q -m c
   exit 1
 }
 
+# Dependency preparation is best-effort for native Git, but T3's explicit pass
+# requests the real exit status so it can persist a degraded-worktree activity.
+printf '{}\n' >package.json
+printf 'lockfileVersion: 9\n' >pnpm-lock.yaml
+sh .githooks/post-checkout HEAD HEAD 1 >/dev/null 2>&1 || {
+  echo "FAIL: native checkout preparation failure must soft-fail" >&2
+  exit 1
+}
+set +e
+T3CODE_WORKTREE_PREPARATION_STRICT=1 sh .githooks/post-checkout HEAD HEAD 1 >/dev/null 2>&1
+strict_status=$?
+set -e
+[ "${strict_status}" -ne 0 ] || {
+  echo "FAIL: strict checkout preparation should preserve the package-manager failure" >&2
+  exit 1
+}
+
 echo "worktree post-checkout hook tests passed"

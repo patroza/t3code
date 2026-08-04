@@ -1239,6 +1239,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
+        assert.deepEqual(created.preparation, { _tag: "ready", attempts: 0 });
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
 
         yield* driver.removeWorktree({ cwd, path: worktreePath });
@@ -1275,7 +1276,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["config", "core.hooksPath", ".githooks"]);
 
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* driver.createWorktree({
+        const created = yield* driver.createWorktree({
           cwd,
           path: worktreePath,
           refName: targetRef,
@@ -1286,10 +1287,112 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* fileSystem.readFileString(pathService.join(worktreePath, ".prepared")),
           "prepared",
         );
+        assert.deepEqual(created.preparation, { _tag: "ready", attempts: 1 });
         assert.equal(
           yield* git(worktreePath, ["branch", "--show-current"]),
           "feature/prepared-worktree",
         );
+      }),
+    );
+
+    it.effect("keeps a worktree when deterministic target preparation fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "degraded-worktree",
+        );
+
+        yield* fileSystem.makeDirectory(pathService.join(cwd, ".githooks"));
+        const hookPath = pathService.join(cwd, ".githooks", "post-checkout");
+        yield* fileSystem.writeFileString(
+          hookPath,
+          [
+            "#!/bin/sh",
+            '[ "${T3CODE_WORKTREE_PREPARATION_STRICT:-0}" = "1" ] || exit 99',
+            'echo "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH: catalogs differ" >&2',
+            "exit 17",
+            "",
+          ].join("\n"),
+        );
+        yield* fileSystem.chmod(hookPath, 0o755);
+        yield* git(cwd, ["add", ".githooks/post-checkout"]);
+        yield* git(cwd, ["commit", "-m", "add failing checkout hook"]);
+        const targetRef = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["checkout", `${targetRef}^`]);
+        yield* git(cwd, ["config", "core.hooksPath", ".githooks"]);
+
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const created = yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: targetRef,
+          newRefName: "feature/degraded-worktree",
+        });
+
+        assert.equal(created.worktree.path, worktreePath);
+        assert.deepEqual(created.preparation, {
+          _tag: "degraded",
+          attempts: 1,
+          command: "git hook run post-checkout",
+          detail: "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH: catalogs differ",
+          exitCode: 17,
+        });
+        assert.equal(
+          yield* git(worktreePath, ["branch", "--show-current"]),
+          "feature/degraded-worktree",
+        );
+      }),
+    );
+
+    it.effect("retries transient target preparation failures once", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "recovered-worktree",
+        );
+        const attemptFile = `${worktreePath}.preparation-attempted`;
+        const preparedFile = `${worktreePath}.prepared`;
+
+        yield* fileSystem.makeDirectory(pathService.join(cwd, ".githooks"));
+        const hookPath = pathService.join(cwd, ".githooks", "post-checkout");
+        yield* fileSystem.writeFileString(
+          hookPath,
+          [
+            "#!/bin/sh",
+            `if [ ! -f "${attemptFile}" ]; then`,
+            `  touch "${attemptFile}"`,
+            '  echo "temporary package registry failure" >&2',
+            "  exit 1",
+            "fi",
+            `printf prepared >"${preparedFile}"`,
+            "",
+          ].join("\n"),
+        );
+        yield* fileSystem.chmod(hookPath, 0o755);
+        yield* git(cwd, ["add", ".githooks/post-checkout"]);
+        yield* git(cwd, ["commit", "-m", "add recovering checkout hook"]);
+        const targetRef = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["checkout", `${targetRef}^`]);
+        yield* git(cwd, ["config", "core.hooksPath", ".githooks"]);
+
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const created = yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: targetRef,
+          newRefName: "feature/recovered-worktree",
+        });
+
+        assert.deepEqual(created.preparation, { _tag: "ready", attempts: 2 });
+        assert.equal(yield* fileSystem.readFileString(preparedFile), "prepared");
       }),
     );
   });
