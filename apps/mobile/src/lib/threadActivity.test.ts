@@ -23,21 +23,21 @@ describe("deriveQueuedMessageControls", () => {
   it("allows steering or removing server-queued messages", () => {
     expect(deriveQueuedMessageControls("queued", "server")).toEqual({
       canSteer: true,
-      canRemove: true,
+      canEdit: true,
     });
   });
 
   it("allows discarding an offline local-outbox message", () => {
     expect(deriveQueuedMessageControls("waiting", "local")).toEqual({
       canSteer: false,
-      canRemove: true,
+      canEdit: true,
     });
   });
 
   it("does not claim an in-flight local send can still be cancelled", () => {
     expect(deriveQueuedMessageControls("sending", "local")).toEqual({
       canSteer: false,
-      canRemove: false,
+      canEdit: false,
     });
   });
 });

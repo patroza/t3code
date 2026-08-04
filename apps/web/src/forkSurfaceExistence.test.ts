@@ -145,10 +145,11 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chatView).toContain("queuedMessages={displayQueuedMessages}");
   });
 
-  it("queued message chips keep edit + steer labels", () => {
+  it("queued message chips keep edit + send-now labels", () => {
     const chips = readSrc("components/chat/QueuedMessageChips.tsx");
     expect(chips).toContain('aria-label="Edit queued message"');
-    expect(chips).toContain("Steer: send now, interrupting the current step");
+    expect(chips).toContain('aria-label="Send queued message now"');
+    expect(chips).toContain("Remove from queue and edit in composer");
   });
 
   it("git action menu keeps the GitHub pull request list link", () => {

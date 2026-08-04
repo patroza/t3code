@@ -19,7 +19,8 @@ export interface DisplayQueuedMessage {
 
 /**
  * Queued follow-up messages held server-side while a turn runs. Each chip
- * offers Steer (send now, injecting into the active turn) and delete; the
+ * offers Send now (steering into the active turn) and Edit (dequeue to the
+ * composer); the
  * queue otherwise auto-drains in order when the turn completes naturally.
  */
 export const QueuedMessageChips = memo(function QueuedMessageChips({
@@ -61,19 +62,19 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
             size="xs"
             variant="ghost"
             disabled={disabled || queuedMessage.pending}
-            aria-label="Steer: send now, interrupting the current step"
+            aria-label="Send queued message now"
             title="Send now, interrupting the current step"
             onClick={() => onSteer(queuedMessage.messageId)}
           >
             <CornerDownRightIcon className="size-3.5" />
-            Steer
+            Send now
           </Button>
           <Button
             size="icon-xs"
             variant="ghost"
             disabled={disabled || queuedMessage.pending}
             aria-label="Edit queued message"
-            title="Edit queued message; save an empty draft to remove it"
+            title="Remove from queue and edit in composer"
             onClick={() => onEdit(queuedMessage.messageId)}
           >
             <PencilIcon className="size-3.5" />

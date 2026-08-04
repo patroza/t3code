@@ -85,7 +85,7 @@ export function ComposerQueuedMessages(props: {
                 </Text>
               </Pressable>
             ) : null}
-            {controls.canRemove ? (
+            {controls.canEdit ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Edit queued message"
