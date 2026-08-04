@@ -387,11 +387,11 @@ it.effect("writes a runtime descriptor the desktop client can decode", () =>
     assert.isTrue(contents.endsWith("\n"));
     assert.equal(contents.trimEnd().split("\n").length, 1);
 
-    // DesktopExistingBackend reads it back exactly this way, so the round trip
-    // through the shared schema is the cross-process contract.
-    const decoded = Schema.decodeUnknownExit(ServerRuntime.ServerRuntimeDescriptor)(
-      JSON.parse(contents) as unknown,
-    );
+    // DesktopExistingBackend decodes the file with this same shared schema, so
+    // the round trip through it is the cross-process contract.
+    const decoded = Schema.decodeUnknownExit(
+      Schema.fromJsonString(ServerRuntime.ServerRuntimeDescriptor),
+    )(contents);
     assert.equal(decoded._tag, "Success");
     assert.deepStrictEqual(decoded._tag === "Success" ? decoded.value : null, descriptor);
   }),
