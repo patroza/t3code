@@ -10,6 +10,12 @@ const people = [
     name: "Patrick Roza",
     github: { login: "patroza", id: "42661" },
   },
+  {
+    personId: "andrea",
+    username: "andrea",
+    name: "Andrea",
+    github: { login: "andrea", id: "99" },
+  },
 ] as const;
 
 describe("withAgentIdentityAttribution", () => {
@@ -23,7 +29,7 @@ describe("withAgentIdentityAttribution", () => {
       };
       const result = withAgentIdentityAttribution({ message: "make the change", source, people });
 
-      expect(result).toContain("The server identity map attributes this turn to patroza");
+      expect(result).toContain("The server identity map attributes this work to patroza");
       expect(result).toContain(
         "Co-authored-by: Patrick Roza <42661+patroza@users.noreply.github.com>",
       );
@@ -46,5 +52,56 @@ describe("withAgentIdentityAttribution", () => {
     };
 
     expect(withAgentIdentityAttribution({ message, source, people })).toBe(message);
+  });
+
+  it("attributes the thread starter and current requester once", () => {
+    const threadStarter: SourceRef = {
+      channel: "discord",
+      personId: PersonId.make("andrea"),
+      username: IdentityUsername.make("andrea"),
+    };
+    const requester: SourceRef = {
+      channel: "discord",
+      personId: PersonId.make("patroza"),
+      username: IdentityUsername.make("patroza"),
+    };
+    const result = withAgentIdentityAttribution({
+      message: "continue the work",
+      source: requester,
+      additionalSources: [threadStarter, threadStarter],
+      people,
+    });
+
+    expect(result).toContain("attributes this work to andrea, patroza");
+    expect(result).toContain("Co-authored-by: Andrea <99+andrea@users.noreply.github.com>");
+    expect(result).toContain(
+      "Co-authored-by: Patrick Roza <42661+patroza@users.noreply.github.com>",
+    );
+    expect(result.match(/Co-authored-by: Andrea/gu)).toHaveLength(1);
+  });
+
+  it("adds only a missing requester when legacy Discord supplied the thread starter", () => {
+    const threadStarter: SourceRef = {
+      channel: "discord",
+      personId: PersonId.make("andrea"),
+      username: IdentityUsername.make("andrea"),
+    };
+    const requester: SourceRef = {
+      channel: "discord",
+      personId: PersonId.make("patroza"),
+      username: IdentityUsername.make("patroza"),
+    };
+    const message = "continue\n\ncab: Andrea <99+andrea@users.noreply.github.com>";
+    const result = withAgentIdentityAttribution({
+      message,
+      source: requester,
+      additionalSources: [threadStarter],
+      people,
+    });
+
+    expect(result.match(/Andrea <99\+andrea@users\.noreply\.github\.com>/gu)).toHaveLength(1);
+    expect(result).toContain(
+      "Co-authored-by: Patrick Roza <42661+patroza@users.noreply.github.com>",
+    );
   });
 });
