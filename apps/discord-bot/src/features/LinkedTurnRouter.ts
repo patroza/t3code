@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { resolveWorktreeBaseBranch } from "../gitDefaultBranch.ts";
 import { workingMessageFields } from "../presentation/messages.ts";
 import {
   buildFirstTurnPrompt,
@@ -178,12 +179,18 @@ export const startOrContinueT3Turn = Effect.fn("startOrContinueT3Turn")(function
           discordThreadId: input.externalConversationId,
         })
       : undefined;
+  const baseBranch = yield* Effect.tryPromise(() =>
+    resolveWorktreeBaseBranch({
+      workspaceRoot: resolved.project.workspaceRoot,
+      override: input.flags.base ?? config.t3DefaultBaseBranch,
+    }),
+  );
   const { threadId } = yield* t3.startTurnWithWorktree({
     project: resolved.project,
     prompt: enrichedPrompt,
     modelSelection,
     interactionMode: input.flags.plan ? "plan" : "default",
-    baseBranch: input.flags.base ?? config.t3DefaultBaseBranch,
+    baseBranch,
     local: input.flags.local ?? false,
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(sourceHint === undefined ? {} : { sourceHint }),
