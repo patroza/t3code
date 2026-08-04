@@ -4,12 +4,15 @@ import {
   formatPaceNote,
   formatResetsIn,
   formatWindowValue,
+  isEnforcedUsageWindow,
   usageMarkerForItem,
   usageProviderLabel,
 } from "../../aiUsageState";
 import { cn } from "~/lib/utils";
 
-function barColorClass(percent: number): string {
+function barColorClass(percent: number, enforced: boolean): string {
+  // Extra-usage / credit pools are context, not caps: a full one is neutral.
+  if (!enforced) return "bg-muted-foreground/40";
   if (percent >= 100) return "bg-destructive";
   if (percent >= 80) return "bg-warning";
   return "bg-muted-foreground/60";
@@ -44,6 +47,7 @@ export function AiUsageStats(props: {
           {item.windows.map((window) => {
             const resets = formatResetsIn(window.resets_at, props.nowMs ?? Date.now());
             const pace = formatPaceNote(window);
+            const enforced = isEnforcedUsageWindow(window);
             // In compact mode only surface a sub-line when there's a pace
             // warning worth acting on; plain reset times stay in the hover form.
             const showSubLine = compact ? Boolean(pace) : Boolean(resets || pace);
@@ -51,12 +55,14 @@ export function AiUsageStats(props: {
               <div key={window.id} className="flex flex-col gap-0.5">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">{window.label}</span>
-                  <span className="tabular-nums">{formatWindowValue(window)}</span>
+                  <span className={cn("tabular-nums", !enforced && "text-muted-foreground")}>
+                    {formatWindowValue(window)}
+                  </span>
                 </div>
                 {!compact && typeof window.percent === "number" ? (
                   <div className="h-1 w-full overflow-hidden rounded-full bg-muted-foreground/15">
                     <div
-                      className={cn("h-full rounded-full", barColorClass(window.percent))}
+                      className={cn("h-full rounded-full", barColorClass(window.percent, enforced))}
                       style={{ width: `${Math.max(0, Math.min(100, window.percent))}%` }}
                     />
                   </div>

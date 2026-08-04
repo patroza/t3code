@@ -13,6 +13,7 @@ export {
   formatResetsIn,
   formatWindowValue,
   hasUsageMarker,
+  isEnforcedUsageWindow,
   mapDriverToUsageProvider,
   resolveDriverUsage,
   resolveDriverUsages,

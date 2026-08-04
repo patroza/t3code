@@ -37,15 +37,21 @@ export type AiUsagePace = typeof AiUsagePace.Type;
  * One rolling usage window for a provider (e.g. the 5-hour or weekly limit).
  * `percent` is the primary signal; `used`/`unit` carry raw values for
  * dollar/token/request based windows that have no percentage.
+ *
+ * `informational` marks a window the daemon does not consider a real gate on
+ * using the provider right now (e.g. a legacy pay-as-you-go pool); clients must
+ * not escalate it into a "can't use this" signal.
  */
 export const AiUsageWindow = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
   percent: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   used: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+  limit: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   unit: Schema.optionalKey(Schema.NullOr(Schema.String)),
   resets_at: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   pace: Schema.optionalKey(Schema.NullOr(AiUsagePace)),
+  informational: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 });
 export type AiUsageWindow = typeof AiUsageWindow.Type;
 
