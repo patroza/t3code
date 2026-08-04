@@ -247,6 +247,7 @@ describe("GitWorkflowService", () => {
           cwd: "/bare-repo",
           refName: "main",
           newRefName: "feature",
+          path: null,
         });
 
         assert.deepStrictEqual(result.worktree, {
