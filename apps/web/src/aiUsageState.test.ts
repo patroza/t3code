@@ -9,6 +9,7 @@ import {
   formatPaceNote,
   formatResetsIn,
   formatWindowValue,
+  isEnforcedUsageWindow,
   mapDriverToUsageProvider,
   resolveDriverUsage,
   resolveDriverUsages,
@@ -120,6 +121,70 @@ describe("usageMarkerForItem", () => {
     ).toEqual({ fill: "none", outlookAtRisk: false });
   });
 
+  it("does not go critical from a drained extra-usage pool (real claude/max feed)", () => {
+    // The daemon reports the extra-usage buffer as a `monthly` window; it is
+    // only drawn from once 5h/weekly run out, so 100% there is not a limit.
+    const marker = usageMarkerForItem(
+      status({
+        provider: "claude",
+        windows: [
+          { id: "5h", label: "5-hour", percent: 18 },
+          { id: "weekly", label: "Weekly", percent: 78 },
+          { id: "monthly", label: "Extra usage (off)", percent: 100, used: 47.89, unit: "€" },
+        ],
+      }),
+    );
+    expect(marker.fill).toBe("none");
+    // Weekly at 78% is still just an outlook concern, not a block.
+    expect(marker.outlookAtRisk).toBe(true);
+  });
+
+  it("ignores daemon-flagged informational pools for fill and outlook", () => {
+    const marker = usageMarkerForItem(
+      status({
+        provider: "grok",
+        windows: [
+          { id: "weekly", label: "Weekly SuperGrok Heavy", percent: 12 },
+          {
+            id: "monthly",
+            label: "Monthly (legacy $)",
+            percent: 100,
+            unit: "$",
+            informational: true,
+            pace: { lasts_to_reset: false, delta_percent: 1 },
+          },
+        ],
+      }),
+    );
+    expect(marker).toEqual({ fill: "none", outlookAtRisk: false });
+  });
+
+  it("still goes critical when a real plan window is maxed alongside extras", () => {
+    expect(
+      usageMarkerForItem(
+        status({
+          windows: [
+            { id: "5h", label: "5-hour", percent: 100 },
+            { id: "monthly", label: "Extra usage (off)", percent: 100 },
+          ],
+        }),
+      ).fill,
+    ).toBe("critical");
+  });
+
+  it("keeps enforcing money-denominated plan windows", () => {
+    // opencode-go / cursor bill in $ or requests — those monthly windows are
+    // the plan, not a buffer behind it.
+    expect(
+      usageMarkerForItem(
+        status({
+          provider: "cursor",
+          windows: [{ id: "monthly", label: "Monthly (billing cycle)", percent: 100, unit: "req" }],
+        }),
+      ).fill,
+    ).toBe("critical");
+  });
+
   it("is quiet when the provider is not ok", () => {
     expect(
       usageMarkerForItem(status({ ok: false, windows: [{ id: "5h", label: "5h", percent: 100 }] })),
@@ -140,6 +205,43 @@ describe("worstUsagePercent", () => {
         }),
       ),
     ).toBe(84);
+  });
+
+  it("skips spend pools so a drained extras buffer is not the worst window", () => {
+    expect(
+      worstUsagePercent(
+        status({
+          windows: [
+            { id: "5h", label: "5-hour", percent: 18 },
+            { id: "monthly", label: "Extra usage (off)", percent: 100 },
+          ],
+        }),
+      ),
+    ).toBe(18);
+  });
+});
+
+describe("isEnforcedUsageWindow", () => {
+  it("treats extra-usage / credit / on-demand buffers and off windows as context", () => {
+    for (const label of [
+      "Extra usage (off)",
+      "Extra usage",
+      "Credits",
+      "On-demand ($)",
+      "Pay as you go",
+      "Weekly (off)",
+    ]) {
+      expect(isEnforcedUsageWindow({ id: "monthly", label })).toBe(false);
+    }
+    expect(
+      isEnforcedUsageWindow({ id: "monthly", label: "Monthly (legacy $)", informational: true }),
+    ).toBe(false);
+  });
+
+  it("treats real plan windows as enforced", () => {
+    for (const label of ["5-hour", "Weekly", "Monthly ($)", "Monthly (billing cycle)"]) {
+      expect(isEnforcedUsageWindow({ id: "weekly", label })).toBe(true);
+    }
   });
 });
 

@@ -43,14 +43,40 @@ export const USAGE_OUTLOOK_PERCENT = 75;
  */
 const IMMEDIATE_WINDOW_PRIORITY = ["5h", "weekly_opus", "weekly", "monthly"];
 
+/**
+ * Labels for spend buffers that sit *behind* the plan limits — extra usage /
+ * credit / on-demand pools. They are only drawn from once the plan windows are
+ * exhausted, so an empty (or switched-off) pool never means "unusable now".
+ */
+const SPEND_POOL_LABEL =
+  /extra usage|extra credit|\bcredits?\b|overage|on-?demand|pay[\s-]?as[\s-]?you[\s-]?go/i;
+/** A window the provider has switched off, e.g. "Extra usage (off)". */
+const DISABLED_LABEL = /\(off\)/i;
+
+/**
+ * True when a window actually gates using the provider right now. Everything
+ * else — daemon-flagged `informational` pools, extra-usage/credit buffers, and
+ * windows the account has switched off — is reported as context only and must
+ * never drive the marker. Without this, a 100%-drained "Extra usage (off)"
+ * pool would paint Claude red while the 5-hour and weekly windows are wide
+ * open.
+ */
+export function isEnforcedUsageWindow(window: AiUsageWindow): boolean {
+  if (window.informational === true) return false;
+  return !SPEND_POOL_LABEL.test(window.label) && !DISABLED_LABEL.test(window.label);
+}
+
+function enforcedWindows(item: AiUsageProviderStatus): ReadonlyArray<AiUsageWindow> {
+  return item.windows.filter(isEnforcedUsageWindow);
+}
+
 function immediateUsageWindow(item: AiUsageProviderStatus): AiUsageWindow | undefined {
+  const windows = enforcedWindows(item);
   for (const id of IMMEDIATE_WINDOW_PRIORITY) {
-    const match = item.windows.find(
-      (window) => window.id === id && typeof window.percent === "number",
-    );
+    const match = windows.find((window) => window.id === id && typeof window.percent === "number");
     if (match) return match;
   }
-  return item.windows.find((window) => typeof window.percent === "number");
+  return windows.find((window) => typeof window.percent === "number");
 }
 
 /**
@@ -109,10 +135,14 @@ export function mapDriverToUsageProvider(
   return providers[0] ?? null;
 }
 
-/** The highest percentage across a provider's windows, or `null` if none. */
+/**
+ * The highest percentage across a provider's *enforced* windows, or `null` if
+ * none. Spend pools are skipped for the same reason they never colour the
+ * marker: draining them is not being out of plan.
+ */
 export function worstUsagePercent(item: AiUsageProviderStatus): number | null {
   let worst: number | null = null;
-  for (const window of item.windows) {
+  for (const window of enforcedWindows(item)) {
     if (typeof window.percent === "number" && (worst === null || window.percent > worst)) {
       worst = window.percent;
     }
@@ -130,10 +160,14 @@ function windowPaceAtRisk(window: AiUsageWindow): boolean {
  * immediate window (red at any hard 100% cap, orange at the warn threshold);
  * `outlookAtRisk` reflects a longer-horizon window filling up or a pace
  * overshoot, and is surfaced as a ring rather than escalating the fill.
+ *
+ * Only enforced windows count — a drained or disabled extra-usage/credit pool
+ * is not a limit and must not colour the marker.
  */
 export function usageMarkerForItem(item: AiUsageProviderStatus): UsageMarker {
   if (!item.ok) return { fill: "none", outlookAtRisk: false };
-  const anyMaxed = item.windows.some(
+  const windows = enforcedWindows(item);
+  const anyMaxed = windows.some(
     (window) => typeof window.percent === "number" && window.percent >= 100,
   );
   const immediate = immediateUsageWindow(item);
@@ -143,7 +177,7 @@ export function usageMarkerForItem(item: AiUsageProviderStatus): UsageMarker {
     : immediatePercent !== null && immediatePercent >= USAGE_WARN_PERCENT
       ? "warn"
       : "none";
-  const outlookAtRisk = item.windows.some(
+  const outlookAtRisk = windows.some(
     (window) =>
       windowPaceAtRisk(window) ||
       (window !== immediate &&
