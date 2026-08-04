@@ -38,7 +38,7 @@ import {
   createModelSelection,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
-import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
+import { CHAT_LIST_ANCHOR_OFFSET, sendEntersSteeringQueue } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
@@ -260,7 +260,7 @@ import {
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
-import { QueuedMessageChips } from "./chat/QueuedMessageChips";
+import { QueuedMessageChips, type DisplayQueuedMessage } from "./chat/QueuedMessageChips";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
   DRAFT_HERO_TRANSITION_DURATION_MS,
@@ -294,6 +294,8 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
+  pruneOptimisticQueuedMessageIds,
+  resolvedSteeredMessageIds,
   revokeUserMessagePreviewUrls,
   shouldTreatServerThreadAsActive,
   waitForStartedServerThread,
@@ -411,6 +413,7 @@ const PreviewPanel = lazy(() =>
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
 
 // Turns whose original startThreadTurn call has not settled yet. The outbox
 // drain must not replay these: a bootstrap turn stays in flight for seconds
@@ -1229,9 +1232,6 @@ function ChatViewContent(props: ChatViewProps) {
   const removeQueuedThreadMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
     reportFailure: false,
   });
-  const updateQueuedThreadMessage = useAtomCommand(threadEnvironment.updateQueuedMessage, {
-    reportFailure: false,
-  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1323,13 +1323,23 @@ function ChatViewContent(props: ChatViewProps) {
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<MessageId | null>(null);
   const [hasUnreadTimelineActivity, setHasUnreadTimelineActivity] = useState(false);
   const [maintainTimelineAtEnd, setMaintainTimelineAtEnd] = useState(true);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  // Optimistic sends the server will hold in the steering queue. They are the
+  // same records as above, routed to the queue chips instead of the timeline
+  // so an outgoing message shows up where it will actually live.
+  const [optimisticQueuedMessageIds, setOptimisticQueuedMessageIds] =
+    useState<ReadonlySet<MessageId>>(EMPTY_MESSAGE_ID_SET);
+  // Server-queued messages the user sent now ("Send now"). They move out of the
+  // chips and into the timeline immediately; the server still lists them as
+  // queued until the dispatch lands, so they are tracked until it does — or
+  // until a failure moves them back.
+  const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] =
+    useState<ReadonlySet<MessageId>>(EMPTY_MESSAGE_ID_SET);
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, LocalThreadErrorEntry>
   >({});
@@ -2558,12 +2568,62 @@ function ChatViewContent(props: ChatViewProps) {
       return serverMessagesWithPreviewHandoff;
     }
     const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    // Queue-bound sends render as chips above the composer, never as rows.
+    const pendingMessages = optimisticUserMessages.filter(
+      (message) => !serverIds.has(message.id) && !optimisticQueuedMessageIds.has(message.id),
+    );
     if (pendingMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
+  }, [
+    attachmentPreviewHandoffByMessageId,
+    displayServerMessages,
+    optimisticQueuedMessageIds,
+    optimisticUserMessages,
+  ]);
+  /**
+   * Server-held queue plus sends that have not been acknowledged yet. A pending
+   * chip is display-only: the server does not know the message, so Steer/Edit
+   * would have nothing to act on until it lands.
+   */
+  const displayQueuedMessages = useMemo<ReadonlyArray<DisplayQueuedMessage>>(() => {
+    const serverQueued: DisplayQueuedMessage[] = (activeThread?.queuedMessages ?? [])
+      // A steered message has already moved into the timeline optimistically;
+      // it stays server-queued until the dispatch lands, but showing both a
+      // chip and a row would read as a duplicate.
+      .filter((queuedMessage) => !steeringQueuedMessageIds.has(queuedMessage.messageId))
+      .map((queuedMessage) => ({
+        messageId: queuedMessage.messageId,
+        text: queuedMessage.text,
+        attachmentCount: queuedMessage.attachments.length,
+        pending: false,
+      }));
+    if (optimisticQueuedMessageIds.size === 0) {
+      return serverQueued;
+    }
+    const acknowledgedIds = new Set([
+      ...serverQueued.map((queuedMessage) => queuedMessage.messageId),
+      ...(activeThread?.messages ?? []).map((message) => message.id),
+    ]);
+    const pendingQueued = optimisticUserMessages
+      .filter(
+        (message) => optimisticQueuedMessageIds.has(message.id) && !acknowledgedIds.has(message.id),
+      )
+      .map<DisplayQueuedMessage>((message) => ({
+        messageId: message.id,
+        text: message.text ?? "",
+        attachmentCount: message.attachments?.length ?? 0,
+        pending: true,
+      }));
+    return pendingQueued.length === 0 ? serverQueued : [...serverQueued, ...pendingQueued];
+  }, [
+    activeThread?.messages,
+    activeThread?.queuedMessages,
+    optimisticQueuedMessageIds,
+    optimisticUserMessages,
+    steeringQueuedMessageIds,
+  ]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
@@ -4126,19 +4186,37 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     // A queued message is server-acknowledged too — it renders as a chip
-    // above the composer, so its optimistic timeline copy must go.
+    // above the composer, so its optimistic timeline copy must go. A steered
+    // message is the exception: it stays server-queued until the dispatch
+    // lands, and dropping its optimistic row on that would bounce it back to
+    // a chip mid-flight. Only persistence acknowledges a steer.
     const persistedMessageIds = new Set(activeThread.messages.map((message) => message.id));
     const serverIds = new Set([
       ...persistedMessageIds,
-      ...activeThread.queuedMessages.map((message) => message.messageId),
+      ...activeThread.queuedMessages
+        .map((message) => message.messageId)
+        .filter((messageId) => !steeringQueuedMessageIds.has(messageId)),
     ]);
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
-    if (removedMessages.length === 0) {
+    // A steer settles when the server stops holding the message in the queue:
+    // dispatched (now a real message) or otherwise gone. Waiting on
+    // persistence alone would strand the marker if the message never lands.
+    const resolvedSteeredIds = resolvedSteeredMessageIds(
+      steeringQueuedMessageIds,
+      activeThread.queuedMessages,
+    );
+    if (removedMessages.length === 0 && resolvedSteeredIds.size === 0) {
       return;
     }
     const timer = window.setTimeout(() => {
       setOptimisticUserMessages((existing) =>
         existing.filter((message) => !serverIds.has(message.id)),
+      );
+      setOptimisticQueuedMessageIds((existing) =>
+        pruneOptimisticQueuedMessageIds(existing, serverIds),
+      );
+      setSteeringQueuedMessageIds((existing) =>
+        pruneOptimisticQueuedMessageIds(existing, resolvedSteeredIds),
       );
     }, 0);
     for (const removedMessage of removedMessages) {
@@ -4161,6 +4239,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.queuedMessages,
     handoffAttachmentPreviews,
     optimisticUserMessages,
+    steeringQueuedMessageIds,
   ]);
 
   useEffect(() => {
@@ -4170,6 +4249,8 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return [];
     });
+    setOptimisticQueuedMessageIds(EMPTY_MESSAGE_ID_SET);
+    setSteeringQueuedMessageIds(EMPTY_MESSAGE_ID_SET);
     resetLocalDispatch();
     setExpandedImage(null);
   }, [draftId, resetLocalDispatch, threadId]);
@@ -4897,36 +4978,6 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
-    if (editingQueuedMessageId !== null) {
-      const text = promptRef.current.trim();
-      const result =
-        text.length === 0
-          ? await removeQueuedThreadMessage({
-              environmentId,
-              input: { threadId: activeThread.id, messageId: editingQueuedMessageId },
-            })
-          : await updateQueuedThreadMessage({
-              environmentId,
-              input: {
-                threadId: activeThread.id,
-                messageId: editingQueuedMessageId,
-                text,
-              },
-            });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          setThreadError(
-            activeThread.id,
-            error instanceof Error ? error.message : "Failed to edit the queued message.",
-          );
-        }
-        return;
-      }
-      setEditingQueuedMessageId(null);
-      composerRef.current?.restoreDraftAfterQueuedEdit();
-      return;
-    }
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;
@@ -5127,26 +5178,39 @@ function ChatViewContent(props: ChatViewProps) {
         sizeBytes: image.sizeBytes,
         previewUrl: image.previewUrl,
       }));
-      // Sending always returns to the live edge. The new row becomes the
-      // anchored end-space target so it lands near the top while the response
-      // streams into the reserved space below it.
-      isAtEndRef.current = true;
-      timelineScrollModeRef.current = "anchoring-new-turn";
-      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-      pendingTimelineAnchorRef.current = messageIdForSend;
-      activeTimelineAnchorIndexRef.current = null;
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-      setHasUnreadTimelineActivity(false);
-      setMaintainTimelineAtEnd(true);
-      // LegendList only starts maintaining the end when the viewport is
-      // already there. Move the existing timeline first so submitting from
-      // older history cannot leave the outgoing row below the viewport.
-      void legendListRef.current?.scrollToEnd?.({ animated: false });
-      setTimelineAnchor({
-        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-        messageId: messageIdForSend,
-      });
+      // A send the server will hold in the steering queue belongs in the queue
+      // chips, not the timeline — so it neither renders a row nor moves the
+      // viewport. Anything else opens a turn and takes the live edge.
+      if (
+        sendEntersSteeringQueue({
+          hasBootstrap: isLocalDraftThread || baseBranchForWorktree !== null,
+          sessionStatus: activeThread.session?.status,
+          hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+        })
+      ) {
+        setOptimisticQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
+      } else {
+        // Sending always returns to the live edge. The new row becomes the
+        // anchored end-space target so it lands near the top while the response
+        // streams into the reserved space below it.
+        isAtEndRef.current = true;
+        timelineScrollModeRef.current = "anchoring-new-turn";
+        liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+        pendingTimelineAnchorRef.current = messageIdForSend;
+        activeTimelineAnchorIndexRef.current = null;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+        setHasUnreadTimelineActivity(false);
+        setMaintainTimelineAtEnd(true);
+        // LegendList only starts maintaining the end when the viewport is
+        // already there. Move the existing timeline first so submitting from
+        // older history cannot leave the outgoing row below the viewport.
+        void legendListRef.current?.scrollToEnd?.({ animated: false });
+        setTimelineAnchor({
+          threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+          messageId: messageIdForSend,
+        });
+      }
       setOptimisticUserMessages((existing) => [
         ...existing,
         {
@@ -5354,6 +5418,9 @@ function ChatViewContent(props: ChatViewProps) {
             const next = existing.filter((message) => message.id !== messageIdForSend);
             return next.length === existing.length ? existing : next;
           });
+          setOptimisticQueuedMessageIds((existing) =>
+            pruneOptimisticQueuedMessageIds(existing, new Set([messageIdForSend])),
+          );
           promptRef.current = promptForSend;
           const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
           composerImagesRef.current = retryComposerImages;
@@ -5428,29 +5495,90 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSteerQueuedMessage = async (messageId: MessageId) => {
     if (!activeThread) return;
+    const queuedMessage = activeThread.queuedMessages.find(
+      (message) => message.messageId === messageId,
+    );
+    // Already steered (double click) or already dispatched — nothing to move.
+    if (!queuedMessage || steeringQueuedMessageIds.has(messageId)) return;
+
+    // Move it out of the chips and into the conversation up front. The server
+    // still reports it as queued until the dispatch lands, so both halves are
+    // driven by `steeringQueuedMessageIds` and both are undone together.
+    const steeredAt = new Date().toISOString();
+    setSteeringQueuedMessageIds((existing) => new Set(existing).add(messageId));
+    setOptimisticUserMessages((existing) =>
+      existing.some((message) => message.id === messageId)
+        ? existing
+        : [
+            ...existing,
+            {
+              id: messageId,
+              role: "user",
+              text: queuedMessage.text,
+              // Server-held attachments carry no blob preview, so an image
+              // renders by name until the persisted message replaces this.
+              ...(queuedMessage.attachments.length > 0
+                ? { attachments: [...queuedMessage.attachments] }
+                : {}),
+              turnId: null,
+              createdAt: steeredAt,
+              updatedAt: steeredAt,
+              streaming: false,
+            },
+          ],
+    );
+
     const result = await steerQueuedThreadMessage({
       environmentId,
       input: { threadId: activeThread.id, messageId },
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+    if (result._tag !== "Failure") {
+      return;
+    }
+
+    // Put it back. The steer is genuinely rejectable — the decider refuses one
+    // that races a pending turn start ("steer once it is running") — so the
+    // chip has to return rather than leave a row the agent never received.
+    // Interruption reverts too: if the command did land after all, the next
+    // projection re-settles this within a frame.
+    setSteeringQueuedMessageIds((existing) =>
+      pruneOptimisticQueuedMessageIds(existing, new Set([messageId])),
+    );
+    setOptimisticUserMessages((existing) => {
+      const next = existing.filter((message) => message.id !== messageId);
+      return next.length === existing.length ? existing : next;
+    });
+    if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       setThreadError(
         activeThread.id,
-        error instanceof Error ? error.message : "Failed to steer the queued message.",
+        error instanceof Error ? error.message : "Failed to send the queued message now.",
       );
     }
   };
 
-  const onEditQueuedMessage = (messageId: MessageId) => {
+  const onEditQueuedMessage = async (messageId: MessageId) => {
     if (!activeThread) return;
     const queuedMessage = activeThread.queuedMessages.find(
       (message) => message.messageId === messageId,
     );
     if (!queuedMessage) return;
-    if (editingQueuedMessageId !== null) {
-      composerRef.current?.restoreDraftAfterQueuedEdit();
+    const result = await removeQueuedThreadMessage({
+      environmentId,
+      input: { threadId: activeThread.id, messageId },
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error
+            ? error.message
+            : "Failed to remove the queued message for editing.",
+        );
+      }
+      return;
     }
-    setEditingQueuedMessageId(messageId);
     composerRef.current?.recallQueuedMessage(queuedMessage.text);
   };
 
@@ -5666,23 +5794,35 @@ function ChatViewContent(props: ChatViewProps) {
       beginLocalDispatch({ preparingWorktree: false, messageId: messageIdForSend });
       setThreadError(threadIdForSend, null);
 
-      // Position this sent row once LegendList has measured the anchored tail.
-      isAtEndRef.current = true;
-      timelineScrollModeRef.current = "anchoring-new-turn";
-      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-      pendingTimelineAnchorRef.current = messageIdForSend;
-      activeTimelineAnchorIndexRef.current = null;
-      showScrollDebouncer.current.cancel();
-      setShowScrollToBottom(false);
-      setHasUnreadTimelineActivity(false);
-      setMaintainTimelineAtEnd(true);
-      // See the primary send path above: resume from the physical live edge
-      // before the optimistic row is inserted and positioned.
-      void legendListRef.current?.scrollToEnd?.({ animated: false });
-      setTimelineAnchor({
-        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-        messageId: messageIdForSend,
-      });
+      // A follow-up submitted while the plan turn is still running is held in
+      // the steering queue, so it becomes a chip rather than a positioned row.
+      if (
+        sendEntersSteeringQueue({
+          hasBootstrap: false,
+          sessionStatus: activeThread.session?.status,
+          hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+        })
+      ) {
+        setOptimisticQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
+      } else {
+        // Position this sent row once LegendList has measured the anchored tail.
+        isAtEndRef.current = true;
+        timelineScrollModeRef.current = "anchoring-new-turn";
+        liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+        pendingTimelineAnchorRef.current = messageIdForSend;
+        activeTimelineAnchorIndexRef.current = null;
+        showScrollDebouncer.current.cancel();
+        setShowScrollToBottom(false);
+        setHasUnreadTimelineActivity(false);
+        setMaintainTimelineAtEnd(true);
+        // See the primary send path above: resume from the physical live edge
+        // before the optimistic row is inserted and positioned.
+        void legendListRef.current?.scrollToEnd?.({ animated: false });
+        setTimelineAnchor({
+          threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+          messageId: messageIdForSend,
+        });
+      }
 
       setOptimisticUserMessages((existing) => [
         ...existing,
@@ -5763,6 +5903,9 @@ function ChatViewContent(props: ChatViewProps) {
 
       setOptimisticUserMessages((existing) =>
         existing.filter((message) => message.id !== messageIdForSend),
+      );
+      setOptimisticQueuedMessageIds((existing) =>
+        pruneOptimisticQueuedMessageIds(existing, new Set([messageIdForSend])),
       );
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);
@@ -6444,10 +6587,10 @@ function ChatViewContent(props: ChatViewProps) {
                     <>
                       {isServerThread && activeThread ? (
                         <QueuedMessageChips
-                          queuedMessages={activeThread.queuedMessages}
+                          queuedMessages={displayQueuedMessages}
                           disabled={Boolean(activeEnvironmentUnavailableState)}
                           onSteer={(messageId) => void onSteerQueuedMessage(messageId)}
-                          onEdit={onEditQueuedMessage}
+                          onEdit={(messageId) => void onEditQueuedMessage(messageId)}
                         />
                       ) : null}
                       <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
@@ -6527,8 +6670,6 @@ function ChatViewContent(props: ChatViewProps) {
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
-                            isEditingQueuedMessage={editingQueuedMessageId !== null}
-                            onQueuedEditCancel={() => setEditingQueuedMessageId(null)}
                             onStartNewThread={handleStartNewThread}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}

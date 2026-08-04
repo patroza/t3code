@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   isProviderDriverKind,
+  type MessageId,
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
@@ -182,6 +183,50 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
     threadId: thread.id,
     ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
   };
+}
+
+/**
+ * Drops resolved ids (acknowledged or rolled back) from the optimistic
+ * queue-bound set, returning the same reference when nothing changed so the
+ * chip list does not re-render on every unrelated thread update.
+ */
+export function pruneOptimisticQueuedMessageIds(
+  current: ReadonlySet<MessageId>,
+  resolvedIds: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (current.size === 0) {
+    return current;
+  }
+  const next = new Set<MessageId>();
+  for (const messageId of current) {
+    if (!resolvedIds.has(messageId)) {
+      next.add(messageId);
+    }
+  }
+  return next.size === current.size ? current : next;
+}
+
+/**
+ * Steered ids the server no longer holds in the queue. That is the settle
+ * signal for the optimistic overlay: either the dispatch landed (the message
+ * is a real timeline row now) or the message is gone. Both mean stop
+ * overlaying it — waiting on persistence alone would strand the marker.
+ */
+export function resolvedSteeredMessageIds(
+  steering: ReadonlySet<MessageId>,
+  queuedMessages: ReadonlyArray<{ readonly messageId: MessageId }>,
+): ReadonlySet<MessageId> {
+  if (steering.size === 0) {
+    return steering;
+  }
+  const stillQueued = new Set(queuedMessages.map((message) => message.messageId));
+  const resolved = new Set<MessageId>();
+  for (const messageId of steering) {
+    if (!stillQueued.has(messageId)) {
+      resolved.add(messageId);
+    }
+  }
+  return resolved;
 }
 
 export function reconcileMountedTerminalThreadIds(input: {
