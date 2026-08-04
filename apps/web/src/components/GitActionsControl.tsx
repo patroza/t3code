@@ -1258,6 +1258,30 @@ export default function GitActionsControl({
     });
   }, [gitStatusForActions, threadToastData]);
 
+  const openPullRequestList = useCallback(() => {
+    const api = readLocalApi();
+    const repositoryUrl = gitStatusForActions?.sourceControlProvider?.repositoryUrl;
+    if (!api || !repositoryUrl) {
+      toastManager.add({
+        type: "error",
+        title: "Pull request list is unavailable.",
+        data: threadToastData,
+      });
+      return;
+    }
+    void api.shell.openExternal(`${repositoryUrl}/pulls`).catch((err: unknown) => {
+      console.error(err);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Unable to open pull request list",
+          description: err instanceof Error ? err.message : "An error occurred.",
+          ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+        }),
+      );
+    });
+  }, [gitStatusForActions?.sourceControlProvider?.repositoryUrl, threadToastData]);
+
   runGitActionWithToast = useEffectEvent(
     async ({
       action,
@@ -1845,6 +1869,14 @@ export default function GitActionsControl({
                 >
                   <CloudUploadIcon />
                   Publish repository...
+                </MenuItem>
+              ) : null}
+              {gitStatusForActions?.sourceControlProvider?.kind === "github" &&
+              gitStatusForActions.sourceControlProvider.repositoryUrl ? (
+                <MenuItem aria-label="View GitHub pull requests" onClick={openPullRequestList}>
+                  <GitHubIcon />
+                  View PRs
+                  <ExternalLinkIcon aria-hidden="true" className="ml-auto size-3.5 opacity-60" />
                 </MenuItem>
               ) : null}
               {gitStatusForActions?.refName === null && (
