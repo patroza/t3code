@@ -16,7 +16,9 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  IdentityUsername,
   MessageId,
+  PersonId,
   ProjectId,
   ThreadId,
   TurnId,
@@ -69,6 +71,8 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import * as IdentityService from "../../identity/IdentityService.ts";
+import type { IdentityMapPerson } from "@t3tools/shared/identityMap";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -173,6 +177,7 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
     readonly interruptTurnEffect?: ProviderServiceShape["interruptTurn"];
+    readonly identityPeople?: ReadonlyArray<IdentityMapPerson>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -469,6 +474,7 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(IdentityService.layerWithPeople(input?.identityPeople ?? [])),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(persistenceLayer),
@@ -823,6 +829,45 @@ describe("ProviderCommandReactor", () => {
     expect(harness.providerBindings.get(threadId)?.runtimePayload).toMatchObject({
       restartRecovery: null,
       interactionMode: "plan",
+    });
+  });
+
+  it("sends desktop turns with identity-map commit attribution", async () => {
+    const harness = await createHarness({
+      identityPeople: [
+        {
+          personId: "patroza",
+          username: "patroza",
+          name: "Patrick Roza",
+          github: { login: "patroza", id: "42661" },
+        },
+      ],
+    });
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-attributed-turn"),
+      threadId: ThreadId.make("thread-1"),
+      message: {
+        messageId: asMessageId("attributed-user-message"),
+        role: "user",
+        text: "ship this",
+        attachments: [],
+      },
+      source: {
+        channel: "desktop",
+        personId: PersonId.make("patroza"),
+        username: IdentityUsername.make("patroza"),
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      input: expect.stringContaining(
+        "Co-authored-by: Patrick Roza <42661+patroza@users.noreply.github.com>",
+      ),
     });
   });
 
