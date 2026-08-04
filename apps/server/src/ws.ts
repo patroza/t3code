@@ -25,6 +25,7 @@ import {
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
+  type VcsCreateWorktreeResult,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
@@ -551,9 +552,13 @@ const makeWsRpcLayer = (
           ),
         );
 
-      const appendSetupScriptActivity = (input: {
+      const appendBootstrapActivity = (input: {
         readonly threadId: ThreadId;
-        readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
+        readonly kind:
+          | "setup-script.requested"
+          | "setup-script.started"
+          | "setup-script.failed"
+          | "worktree-preparation.failed";
         readonly summary: string;
         readonly createdAt: string;
         readonly payload: Record<string, unknown>;
@@ -822,7 +827,7 @@ const makeWsRpcLayer = (
             readonly worktreePath: string;
           }) => {
             const detail = projectSetupScriptCompatibilityDetail(input.error);
-            return appendSetupScriptActivity({
+            return appendBootstrapActivity({
               threadId: command.threadId,
               kind: "setup-script.failed",
               summary: "Setup script failed to start",
@@ -844,6 +849,38 @@ const makeWsRpcLayer = (
             );
           };
 
+          const recordWorktreePreparationFailure = (
+            worktree: VcsCreateWorktreeResult,
+          ): Effect.Effect<void> => {
+            const preparation = worktree.preparation;
+            if (preparation?._tag !== "degraded") {
+              return Effect.void;
+            }
+            return Effect.gen(function* () {
+              const createdAt = yield* nowIso;
+              yield* appendBootstrapActivity({
+                threadId: command.threadId,
+                kind: "worktree-preparation.failed",
+                summary: "Worktree preparation failed; continuing in degraded mode",
+                createdAt,
+                payload: {
+                  attempts: preparation.attempts,
+                  command: preparation.command,
+                  detail: preparation.detail,
+                  ...(preparation.exitCode === undefined ? {} : { exitCode: preparation.exitCode }),
+                  worktreePath: worktree.worktree.path,
+                },
+                tone: "error",
+              }).pipe(Effect.ignoreCause({ log: false }));
+              yield* Effect.logWarning("worktree preparation failed; continuing bootstrap", {
+                threadId: command.threadId,
+                worktreePath: worktree.worktree.path,
+                attempts: preparation.attempts,
+                detail: preparation.detail,
+              });
+            });
+          };
+
           const recordSetupScriptStarted = (input: {
             readonly requestedAt: string;
             readonly worktreePath: string;
@@ -860,7 +897,7 @@ const makeWsRpcLayer = (
                 worktreePath: input.worktreePath,
               };
               yield* Effect.all([
-                appendSetupScriptActivity({
+                appendBootstrapActivity({
                   threadId: command.threadId,
                   kind: "setup-script.requested",
                   summary: "Starting setup script",
@@ -868,7 +905,7 @@ const makeWsRpcLayer = (
                   payload,
                   tone: "info",
                 }),
-                appendSetupScriptActivity({
+                appendBootstrapActivity({
                   threadId: command.threadId,
                   kind: "setup-script.started",
                   summary: "Setup script started",
@@ -1041,6 +1078,7 @@ const makeWsRpcLayer = (
                     branch: worktree.worktree.refName,
                     worktreePath: targetWorktreePath,
                   });
+                  yield* recordWorktreePreparationFailure(worktree);
                   yield* waitForWorktreeProjection(targetWorktreePath);
                   yield* refreshGitStatus(targetWorktreePath);
                 }
@@ -1106,6 +1144,7 @@ const makeWsRpcLayer = (
                 branch: worktree.worktree.refName,
                 worktreePath: targetWorktreePath,
               });
+              yield* recordWorktreePreparationFailure(worktree);
               yield* waitForWorktreeProjection(targetWorktreePath);
               yield* refreshGitStatus(targetWorktreePath);
             }

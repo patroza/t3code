@@ -337,8 +337,22 @@ export const VcsListRefsResult = Schema.Struct({
 });
 export type VcsListRefsResult = typeof VcsListRefsResult.Type;
 
+export const VcsWorktreePreparation = Schema.Union([
+  Schema.TaggedStruct("ready", {
+    attempts: NonNegativeInt,
+  }),
+  Schema.TaggedStruct("degraded", {
+    attempts: NonNegativeInt,
+    command: Schema.String,
+    detail: Schema.String,
+    exitCode: Schema.optional(Schema.Number),
+  }),
+]);
+export type VcsWorktreePreparation = typeof VcsWorktreePreparation.Type;
+
 export const VcsCreateWorktreeResult = Schema.Struct({
   worktree: VcsWorktree,
+  preparation: Schema.optional(VcsWorktreePreparation),
 });
 export type VcsCreateWorktreeResult = typeof VcsCreateWorktreeResult.Type;
 

@@ -7382,6 +7382,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   refName: "t3code/bootstrap-refName",
                   path: "/tmp/bootstrap-worktree",
                 },
+                preparation: {
+                  _tag: "degraded" as const,
+                  attempts: 1,
+                  command: "git hook run post-checkout",
+                  detail: "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH: catalogs differ",
+                  exitCode: 17,
+                },
               };
             }),
         );
@@ -7476,12 +7483,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
-        assert.equal(response.sequence, 5);
+        assert.equal(response.sequence, 6);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [
             "thread.create",
             "thread.meta.update",
+            "thread.activity.append",
             "thread.activity.append",
             "thread.activity.append",
             "thread.turn.start",
@@ -7522,9 +7530,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         assert.deepEqual(
           setupActivities.map((command) => command.activity.kind),
-          ["setup-script.requested", "setup-script.started"],
+          ["worktree-preparation.failed", "setup-script.requested", "setup-script.started"],
         );
-        const finalCommand = dispatchedCommands[4];
+        const preparationFailure = setupActivities[0];
+        assert.equal(preparationFailure?.activity.tone, "error");
+        assert.deepInclude(preparationFailure?.activity.payload, {
+          attempts: 1,
+          command: "git hook run post-checkout",
+          detail: "ERR_PNPM_LOCKFILE_CONFIG_MISMATCH: catalogs differ",
+          exitCode: 17,
+          worktreePath: "/tmp/bootstrap-worktree",
+        });
+        const finalCommand = dispatchedCommands[5];
         assertTrue(finalCommand?.type === "thread.turn.start");
         if (finalCommand?.type === "thread.turn.start") {
           assert.equal(finalCommand.bootstrap, undefined);

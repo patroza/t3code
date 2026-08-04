@@ -141,9 +141,19 @@ command -v pnpm >/dev/null 2>&1 || {
 export CI=1
 echo "post-checkout: pnpm install (hardlink from store) in $wt_root" >&2
 cd "$wt_root" || exit 1
-pnpm install \
-  --frozen-lockfile \
-  --prefer-offline \
-  --config.package-import-method=hardlink \
-  --config.confirmModulesPurge=false || exit $?
-printf '%s\n' "$state" >"$state_file"
+if pnpm install \
+    --frozen-lockfile \
+    --prefer-offline \
+    --config.package-import-method=hardlink \
+    --config.confirmModulesPurge=false
+then
+  printf '%s\n' "$state" >"$state_file"
+else
+  status=$?
+  echo "post-checkout: dependency preparation failed (exit $status); worktree remains usable but degraded" >&2
+  echo "post-checkout: fix the lockfile/configuration or rerun this hook after transient failures clear" >&2
+  # Native Git invokes this hook inside `git worktree add`; dependency setup
+  # must not turn an already-created worktree into a structural Git failure.
+  [ "${T3CODE_WORKTREE_PREPARATION_STRICT:-0}" = "1" ] && exit "$status"
+  exit 0
+fi
