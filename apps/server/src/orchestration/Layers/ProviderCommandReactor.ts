@@ -67,6 +67,8 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { IdentityService } from "../../identity/IdentityService.ts";
+import { withAgentIdentityAttribution } from "../../identity/agentAttribution.ts";
 
 const PROVIDER_CONTROL_TIMEOUT = Duration.seconds(5);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
@@ -285,6 +287,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const identityService = yield* IdentityService;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -1148,9 +1151,15 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    const identityPeople = yield* identityService.listMapPeople();
+    const attributedMessageText = withAgentIdentityAttribution({
+      message: message.text,
+      source: message.source,
+      people: identityPeople,
+    });
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
+      messageText: attributedMessageText,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
