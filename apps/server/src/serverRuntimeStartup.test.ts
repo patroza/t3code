@@ -8,7 +8,9 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as ServerRuntime from "@t3tools/shared/serverRuntime";
 
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -367,4 +369,30 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
     assert.strictEqual(error, uuidError);
     assert.deepStrictEqual(yield* Ref.get(dispatchCalls), []);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("writes a runtime descriptor the desktop client can decode", () =>
+  Effect.gen(function* () {
+    const descriptor = {
+      version: 1 as const,
+      pid: 4242,
+      stateDir: "/state",
+      httpBaseUrl: "http://127.0.0.1:3773",
+      startedAt: "2026-08-04T10:00:00.000Z",
+    };
+
+    const contents = yield* ServerRuntimeStartup.encodeServerRuntimeDescriptorFile(descriptor);
+
+    // The file is newline-terminated and holds a single JSON document.
+    assert.isTrue(contents.endsWith("\n"));
+    assert.equal(contents.trimEnd().split("\n").length, 1);
+
+    // DesktopExistingBackend reads it back exactly this way, so the round trip
+    // through the shared schema is the cross-process contract.
+    const decoded = Schema.decodeUnknownExit(ServerRuntime.ServerRuntimeDescriptor)(
+      JSON.parse(contents) as unknown,
+    );
+    assert.equal(decoded._tag, "Success");
+    assert.deepStrictEqual(decoded._tag === "Success" ? decoded.value : null, descriptor);
+  }),
 );
