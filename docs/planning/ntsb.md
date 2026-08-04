@@ -34,11 +34,11 @@ Implementation is out of scope for this planning stage.
 
 ## Proposal: A triggering event creates a new thread
 
-Each accepted external event that triggers an agent turn creates a new T3 thread. The first user message is constructed from the current authorized snapshot of the external source together with the event that triggered the run. In the existing T3 protocol, this can be expressed with `thread.turn.start` and `bootstrap.createThread`; it does not require a separate NTBS command.
+Each accepted external event that triggers an agent turn creates a new T3 thread. The first user message is constructed from the captured source snapshot of the external source together with the event that triggered the run. Authorization to access the source is checked separately. In the existing T3 protocol, this can be expressed with `thread.turn.start` and `bootstrap.createThread`; it does not require a separate NTBS command.
 
 An external event is not the same as a delivery attempt. Retries and duplicate webhook deliveries must resolve to the same accepted event and must not create additional threads. The identity and idempotency rules needed to guarantee this are still to be designed.
 
-Triggering events for the same external interaction are processed in order. If an earlier event's T3 thread is still running, a later event waits. It does not run concurrently and does not alter, steer, or continue the active thread. When its turn comes, the later event starts its own T3 thread.
+Triggering events for the same external interaction may start T3 threads concurrently. Each thread is correlated with the external event that created it, and its output is projected to that event's response target. A later event does not alter, steer, or continue an earlier thread merely because both belong to the same external interaction.
 
 ### Advantages
 
@@ -57,17 +57,16 @@ Triggering events for the same external interaction are processed in order. If a
 - A high-volume external discussion may create many short-lived T3 threads, increasing storage and making native T3 discovery noisier.
 - Independent threads can still target the same worktree or other mutable resource, so execution needs separate serialization or conflict rules.
 - An external reply cannot continue an in-flight approval, user-input request, interrupt, or steering interaction merely by creating another thread; those interactions would need an explicit command targeting the existing thread or be unsupported.
-- Reliable replay requires the system to retain or reconstruct the exact authorized source snapshot used for the run, not merely fetch whatever the source contains later.
+- Reliable replay requires the system to retain or reconstruct the exact captured source snapshot used for the run, not merely fetch whatever the source contains later.
 
 ## Open questions
 
-- Which external messages or state changes trigger an agent turn, and which are ignored or recorded without starting work?
-- What identifies the same external interaction for sequential processing: a Jira issue, Discord thread, GitHub issue or pull request, nested review discussion, Teams conversation, or another scope?
-- Is the source snapshot frozen when an event is accepted or fetched when its queued execution begins?
-- If the source is edited or deleted while its event is waiting, does the queued event retain its original snapshot, get replaced, or get cancelled?
+- What identifies the same external interaction for correlation and projection: a Jira issue, Discord thread, GitHub issue or pull request, nested review discussion, Teams conversation, or another scope?
+- Is the source snapshot frozen when an event is accepted or fetched immediately before its thread starts?
+- If resource coordination delays a thread after its event is accepted, does it retain its original snapshot, or may the snapshot be refreshed?
 - What stable identity distinguishes an accepted external event from duplicate, retried, late, or out-of-order deliveries?
-- Does sequential processing apply only within one external interaction, or must executions that share a worktree or another mutable resource also wait for each other?
-- Is bootstrap `thread.turn.start` the only command NTBS may issue, or are any commands targeting an existing execution thread supported?
+- How are concurrent executions that share a worktree or another mutable resource coordinated without imposing an event queue?
+- NTBS does not target existing execution threads; each accepted event uses the new-thread form of `thread.turn.start`.
 - Which T3 events and projected fields may NTBS clients consume, and which are deliberately omitted or unsupported?
 - How do clients obtain an initial snapshot, resume from a cursor, replay missed changes, and recover when their cursor is no longer valid?
 - How are completion, failure, timeout, and cancellation represented and rendered on limited external platforms?
@@ -76,5 +75,6 @@ Triggering events for the same external interaction are processed in order. If a
 
 ## Agreed decisions
 
-- Each accepted external event that triggers an agent turn creates a new T3 thread from the authorized external source snapshot and the triggering event.
-- Triggering events for the same external interaction are processed sequentially. A later event waits for the earlier event's thread to finish, then starts a new thread.
+### Which external messages or state changes trigger an agent turn, and which are ignored or recorded without starting work?
+
+The platform-specific trigger forms, ignored events, thread creation, and response routing are defined in [ntsb-event-processing.md](./ntsb-event-processing.md).
