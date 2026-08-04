@@ -39,6 +39,7 @@ import {
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import {
+  makeProviderRestartRecoveryMarker,
   readPersistedProviderCwd,
   readPersistedProviderInteractionMode,
   readPersistedProviderModelSelection,
@@ -172,9 +173,18 @@ function formatThreadTitleContext(
   };
 }
 const STARTUP_RECOVERY_CONCURRENCY = 4;
+/** Bound recovery provider calls so a hung agent cannot pin reactor start forever. */
+const STARTUP_RECOVERY_PROVIDER_TIMEOUT = Duration.seconds(45);
 
 export const RESTART_RECOVERY_CONTINUATION_INSTRUCTION =
   "The server restarted while you were working. Inspect the conversation and current workspace state, verify which side effects from the interrupted turn already happened, and continue the unfinished work safely. Do not repeat completed work or assume an earlier tool call failed merely because its response is absent.";
+
+function runtimePayloadRecord(value: unknown): Record<string, unknown> {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return { ...(value as Record<string, unknown>) };
+  }
+  return {};
+}
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -1425,7 +1435,26 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const recoverInterruptedTurn = Effect.fn("recoverInterruptedTurn")(function* (input: {
+  type ClaimedInterruptedRecovery = {
+    readonly binding: ProviderRuntimeBindingWithMetadata;
+    readonly candidate: ProviderRestartRecoveryCandidate;
+    readonly thread: {
+      readonly id: ThreadId;
+      readonly projectId: ProjectId;
+      readonly worktreePath: string | null;
+      readonly runtimeMode: RuntimeMode;
+      readonly modelSelection: ModelSelection;
+      readonly interactionMode: ProviderInteractionMode;
+      readonly latestTurn?: { readonly turnId?: TurnId | null } | null;
+    };
+    readonly createdAt: string;
+  };
+
+  /**
+   * Sync claim only: durable marker + interrupted projection so orphan settle
+   * cannot wipe recovery intent, without waiting on provider start/sendTurn.
+   */
+  const claimInterruptedTurn = Effect.fn("claimInterruptedTurn")(function* (input: {
     readonly binding: ProviderRuntimeBindingWithMetadata;
     readonly candidate: ProviderRestartRecoveryCandidate;
   }) {
@@ -1436,7 +1465,7 @@ const make = Effect.gen(function* () {
         reason: "duplicate-in-boot",
         provider: binding.provider,
       });
-      return;
+      return undefined;
     }
     recoveredThreadIds.add(binding.threadId);
 
@@ -1452,7 +1481,7 @@ const make = Effect.gen(function* () {
         reason: "inactive-thread",
         provider: binding.provider,
       });
-      return;
+      return undefined;
     }
 
     const createdAt = DateTime.formatIso(yield* DateTime.now);
@@ -1502,30 +1531,88 @@ const make = Effect.gen(function* () {
         reason: "projected-turn-settled",
         provider: binding.provider,
       });
-      return;
+      return undefined;
     }
+
     interruptedRecoveryThreadIds.add(thread.id);
+    const runtimeMode = binding.runtimeMode ?? thread.runtimeMode;
+    const recoveryMarker = makeProviderRestartRecoveryMarker({
+      interruptedProviderTurnId: candidate.interruptedProviderTurnId,
+      shutdownAt: candidate.shutdownAt,
+    });
+
+    // Persist a durable marker and demote live-claiming status before orphan
+    // audit. Orphan settle spreads payload fields, so the marker survives even
+    // if a late stop rewrites the binding; status "stopped" skips live claims.
+    yield* providerSessionDirectory
+      .upsert({
+        threadId: binding.threadId,
+        provider: binding.provider,
+        ...(binding.providerInstanceId !== undefined
+          ? { providerInstanceId: binding.providerInstanceId }
+          : {}),
+        ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+        status: "stopped",
+        ...(binding.resumeCursor !== undefined && binding.resumeCursor !== null
+          ? { resumeCursor: binding.resumeCursor }
+          : {}),
+        runtimePayload: {
+          ...runtimePayloadRecord(binding.runtimePayload),
+          activeTurnId: null,
+          restartRecovery: recoveryMarker,
+          lastRuntimeEvent: "provider.restartRecovery.claimed",
+          lastRuntimeEventAt: createdAt,
+        },
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider restart recovery claim was not persisted", {
+            threadId: binding.threadId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+
+    // Settle the concrete old projection row as interrupted before replacement.
+    yield* setThreadSession({
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: "interrupted",
+        providerName: binding.provider,
+        ...(binding.providerInstanceId !== undefined
+          ? { providerInstanceId: binding.providerInstanceId }
+          : {}),
+        runtimeMode,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: createdAt,
+      },
+      createdAt,
+    });
+
+    yield* Effect.logInfo("provider turn restart recovery claimed", {
+      threadId: thread.id,
+      provider: binding.provider,
+      recoverySource: candidate.source,
+      interruptedProviderTurnId: candidate.interruptedProviderTurnId,
+    });
+
+    return {
+      binding,
+      candidate,
+      thread,
+      createdAt,
+    } satisfies ClaimedInterruptedRecovery;
+  });
+
+  const continueInterruptedTurn = Effect.fn("continueInterruptedTurn")(function* (
+    input: ClaimedInterruptedRecovery,
+  ) {
+    const { binding, candidate, thread, createdAt } = input;
 
     const recover = Effect.gen(function* () {
       const runtimeMode = binding.runtimeMode ?? thread.runtimeMode;
-      // This lifecycle transition settles the concrete old projection row as
-      // interrupted before validation or replacement work can proceed.
-      yield* setThreadSession({
-        threadId: thread.id,
-        session: {
-          threadId: thread.id,
-          status: "interrupted",
-          providerName: binding.provider,
-          ...(binding.providerInstanceId !== undefined
-            ? { providerInstanceId: binding.providerInstanceId }
-            : {}),
-          runtimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: createdAt,
-        },
-        createdAt,
-      });
 
       const providerInstanceId = binding.providerInstanceId;
       if (providerInstanceId === undefined) {
@@ -1575,15 +1662,25 @@ const make = Effect.gen(function* () {
         readPersistedProviderCwd(binding.runtimePayload) ??
         resolveThreadWorkspaceCwd({ thread, projects: project ? [project] : [] });
 
-      const session = yield* providerService.startSession(thread.id, {
-        threadId: thread.id,
-        provider: binding.provider,
-        providerInstanceId,
-        ...(cwd !== undefined ? { cwd } : {}),
-        modelSelection,
-        resumeCursor: binding.resumeCursor,
-        runtimeMode,
-      });
+      const sessionResult = yield* providerService
+        .startSession(thread.id, {
+          threadId: thread.id,
+          provider: binding.provider,
+          providerInstanceId,
+          ...(cwd !== undefined ? { cwd } : {}),
+          modelSelection,
+          resumeCursor: binding.resumeCursor,
+          runtimeMode,
+        })
+        .pipe(Effect.interruptible, Effect.timeoutOption(STARTUP_RECOVERY_PROVIDER_TIMEOUT));
+      if (Option.isNone(sessionResult)) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Provider session start timed out after ${Duration.format(STARTUP_RECOVERY_PROVIDER_TIMEOUT)} during restart recovery.`,
+        });
+      }
+      const session = sessionResult.value;
       yield* setThreadSession({
         threadId: thread.id,
         session: {
@@ -1599,13 +1696,23 @@ const make = Effect.gen(function* () {
         createdAt,
       });
 
-      const replacement = yield* providerService.sendTurn({
-        threadId: thread.id,
-        input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
-        attachments: [],
-        modelSelection,
-        interactionMode,
-      });
+      const replacementResult = yield* providerService
+        .sendTurn({
+          threadId: thread.id,
+          input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+          attachments: [],
+          modelSelection,
+          interactionMode,
+        })
+        .pipe(Effect.interruptible, Effect.timeoutOption(STARTUP_RECOVERY_PROVIDER_TIMEOUT));
+      if (Option.isNone(replacementResult)) {
+        return yield* new ProviderAdapterRequestError({
+          provider: binding.provider,
+          method: "provider.turn.restart-recovery",
+          detail: `Provider recovery sendTurn timed out after ${Duration.format(STARTUP_RECOVERY_PROVIDER_TIMEOUT)} during restart recovery.`,
+        });
+      }
+      const replacement = replacementResult.value;
 
       // ProviderService clears this in the accepted sendTurn transaction. The
       // explicit write keeps the reconciliation invariant local and obvious.
@@ -1816,15 +1923,21 @@ const make = Effect.gen(function* () {
       );
     }
 
-    yield* Effect.forEach(recoveryCandidates, recoverInterruptedTurn, {
+    // Claim phase is synchronous and must finish before orphan settle (next
+    // startup phase). Provider startSession/sendTurn runs after activation so a
+    // hung agent cannot block HTTP readiness / Discord oauth bootstrap.
+    const claimedRecoveries = yield* Effect.forEach(recoveryCandidates, claimInterruptedTurn, {
       concurrency: STARTUP_RECOVERY_CONCURRENCY,
-      discard: true,
-    });
+    }).pipe(
+      Effect.map((claims) => claims.flatMap((claim) => (claim === undefined ? [] : [claim]))),
+    );
 
     const pendingWithoutInterruptedRecovery = pendingTurnStarts.filter(
       (pending) => !interruptedRecoveryThreadIds.has(pending.threadId),
     );
-    if (pendingWithoutInterruptedRecovery.length === 0) return;
+    if (pendingWithoutInterruptedRecovery.length === 0) {
+      return claimedRecoveries;
+    }
 
     const persistedEvents = yield* Stream.runCollect(
       orchestrationEngine.readEvents(0, Number.MAX_SAFE_INTEGER),
@@ -1907,6 +2020,8 @@ const make = Effect.gen(function* () {
         ),
       { concurrency: STARTUP_RECOVERY_CONCURRENCY, discard: true },
     );
+
+    return claimedRecoveries;
   });
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
@@ -1966,17 +2081,37 @@ const make = Effect.gen(function* () {
       yield* forkParked(clearInterrupted);
     }
 
-    // Startup recovery must finish before server startup settles orphaned
-    // sessions. Otherwise the orphan audit can clear the persisted recovery
-    // marker or stop the replacement process while it is being started.
-    yield* reconcileStartup().pipe(
+    // Claim interrupted recoveries (and enqueue pending turn starts) before this
+    // reactor returns. Server startup then runs orphan settle against claimed
+    // durable markers, not against live-claiming zombie runtimes.
+    //
+    // Provider startSession/sendTurn is intentionally parked until activation so
+    // a hung agent cannot block command readiness (HTTP/oauth). drain still
+    // waits for those continuations via startupReconciliationDone.
+    const claimedRecoveries = yield* reconcileStartup().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("provider restart reconciliation failed", {
           cause: Cause.pretty(cause),
-        }),
+        }).pipe(Effect.as([] as ReadonlyArray<ClaimedInterruptedRecovery>)),
       ),
+    );
+
+    const runClaimedRecoveries = Effect.forEach(claimedRecoveries, continueInterruptedTurn, {
+      concurrency: STARTUP_RECOVERY_CONCURRENCY,
+      discard: true,
+    }).pipe(
       Effect.ensuring(Deferred.succeed(startupReconciliationDone, undefined).pipe(Effect.ignore)),
     );
+
+    // Mirror clearInterrupted: unit tests omit ServerActivation and run
+    // recovery inline for determinism. Production installs activation so
+    // startSession/sendTurn wait until after orphan settle + the readiness
+    // boundary, and cannot block HTTP/oauth on a hung agent.
+    if (activation === undefined) {
+      yield* runClaimedRecoveries;
+    } else {
+      yield* forkParked(runClaimedRecoveries);
+    }
   });
 
   return {

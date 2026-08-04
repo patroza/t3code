@@ -78,7 +78,8 @@ const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
-import { makeRoutesLayer } from "./server.ts";
+import * as HttpResponseCompression from "./httpCompression/HttpResponseCompression.ts";
+import { isCommandReadinessExemptPath, makeRoutesLayer } from "./server.ts";
 import { resolveAvailableEditorsForConfig } from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GrokTranscriptResync from "./externalSessions/GrokTranscriptResync.ts";
@@ -1435,6 +1436,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isTrue(yield* Deferred.isDone(completed));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+
+  it("exempts bootstrap paths from command readiness", () => {
+    assert.isTrue(isCommandReadinessExemptPath("/oauth/token"));
+    assert.isTrue(isCommandReadinessExemptPath("/oauth/token?grant_type=client_credentials"));
+    assert.isTrue(isCommandReadinessExemptPath("/.well-known/t3/environment"));
+    assert.isTrue(isCommandReadinessExemptPath("/api/t3-connect/health"));
+    assert.isTrue(isCommandReadinessExemptPath("/api/connect/health"));
+    assert.isFalse(isCommandReadinessExemptPath("/"));
+    assert.isFalse(isCommandReadinessExemptPath("/api/orchestration/snapshot"));
+    assert.isFalse(isCommandReadinessExemptPath("/api/auth/session"));
+  });
 
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {

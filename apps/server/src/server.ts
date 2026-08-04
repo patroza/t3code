@@ -4,7 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as ServerConfig from "./config.ts";
@@ -511,11 +511,32 @@ const RuntimeDependenciesLive = RuntimeCoreWithIntegrationsLive.pipe(
   Layer.provide(NetService.layer),
 );
 
+/**
+ * Bootstrap / liveness surfaces that must not wait for provider recovery or the
+ * broader command-readiness gate. Discord bot token exchange and environment
+ * discovery hang the whole client fleet if they sit behind a stuck recovery turn.
+ */
+export function isCommandReadinessExemptPath(url: string): boolean {
+  const pathOnly = (url.split("?", 1)[0] ?? url).split("#", 1)[0] ?? url;
+  return (
+    pathOnly === "/oauth/token" ||
+    pathOnly === "/.well-known/t3/environment" ||
+    pathOnly === "/api/t3-connect/health" ||
+    pathOnly === "/api/connect/health"
+  );
+}
+
 const commandReadinessLayer = HttpRouter.middleware(
   (httpEffect) =>
-    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
-      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      if (isCommandReadinessExemptPath(request.url)) {
+        return yield* httpEffect;
+      }
+      const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+      yield* startup.awaitCommandReady.pipe(Effect.orDie);
+      return yield* httpEffect;
+    }),
   { global: true },
 );
 
