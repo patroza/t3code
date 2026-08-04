@@ -12,12 +12,6 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 import {
-  formatIdentityAttributionBlock,
-  resolveParticipantIdentity,
-  type PersonIdentity,
-  type ResolvedParticipantIdentity,
-} from "../identityMap.ts";
-import {
   buildT3WebThreadUrl,
   starterDisplayName,
   starterUserId,
@@ -89,11 +83,6 @@ export interface ThreadBootstrapContext {
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   /** Browse base for turning keys into links (e.g. https://org.atlassian.net). */
   readonly jiraBrowseBaseUrl?: string | undefined;
-  /**
-   * Operator identity map (Discord → GitHub/Jira). Used to inject Co-authored-by
-   * guidance for the thread starter and current requester.
-   */
-  readonly identityPeople?: ReadonlyArray<PersonIdentity> | undefined;
   /** Guild snowflake — required to build a real Discord thread jump URL for PR footers. */
   readonly guildId?: string | null | undefined;
   /** Discord thread (or channel) snowflake for the PR footer jump link. */
@@ -172,49 +161,6 @@ export function formatLinkedJiraWorkItemsBlock(input: {
 }
 
 /**
- * Resolve starter + requester against the identity map for prompt injection.
- * Order: thread starter first, then requester (when distinct Discord ids).
- */
-export function resolveTurnIdentityParticipants(input: {
-  readonly people?: ReadonlyArray<PersonIdentity> | undefined;
-  readonly starter?: DiscordMessageLike | null | undefined;
-  readonly requester?: DiscordMessageLike | undefined;
-}): ReadonlyArray<ResolvedParticipantIdentity> {
-  const people = input.people ?? [];
-  const out: ResolvedParticipantIdentity[] = [];
-
-  const starterAuthor = input.starter?.author;
-  if (starterAuthor !== undefined && starterAuthor.bot !== true) {
-    out.push(
-      resolveParticipantIdentity({
-        role: "thread_starter",
-        discordId: starterAuthor.id,
-        discordUsername: starterAuthor.username,
-        discordDisplayName: starterAuthor.displayName ?? starterAuthor.username,
-        people,
-      }),
-    );
-  }
-
-  const requesterAuthor = input.requester?.author;
-  if (requesterAuthor !== undefined) {
-    // Always list requester role even when same person as starter so the agent
-    // sees both roles; trailer dedupe happens in formatIdentityAttributionBlock.
-    out.push(
-      resolveParticipantIdentity({
-        role: "requester",
-        discordId: requesterAuthor.id,
-        discordUsername: requesterAuthor.username,
-        discordDisplayName: requesterAuthor.displayName ?? requesterAuthor.username,
-        people,
-      }),
-    );
-  }
-
-  return out;
-}
-
-/**
  * Compact PR footer fields for agents (ids only — expand via rules doc).
  * Returns null when starter user id is missing.
  */
@@ -272,7 +218,6 @@ export function buildDiscordTurnPrompt(input: {
   readonly referencedMessageUrl?: string | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly jiraBrowseBaseUrl?: string | undefined;
-  readonly identityPeople?: ReadonlyArray<PersonIdentity> | undefined;
   readonly guildId?: string | null | undefined;
   readonly discordThreadId?: string | null | undefined;
   readonly discordThreadTitle?: string | null | undefined;
@@ -297,19 +242,6 @@ export function buildDiscordTurnPrompt(input: {
   });
   const jiraSection = jiraBlock !== null ? `\n${jiraBlock}` : "";
 
-  const identityBlock = formatIdentityAttributionBlock({
-    participants: resolveTurnIdentityParticipants({
-      people: input.identityPeople,
-      starter: input.starter,
-      requester: input.requester,
-    }),
-  });
-  // Only inject when the operator map is configured (non-empty). Empty map keeps prompts compact.
-  const identitySection =
-    input.identityPeople !== undefined && input.identityPeople.length > 0 && identityBlock !== null
-      ? `\n${identityBlock}`
-      : "";
-
   const prFooterBlock = formatDiscordPrFooterPromptBlock({
     starter: input.starter,
     requester: input.requester,
@@ -330,7 +262,7 @@ export function buildDiscordTurnPrompt(input: {
   // Discord overlay path is surface-specific static policy for this turn.
   return `## Discord conversation context
 rules: ${overlayRulesPath}
-req: ${formatRequesterLine(input.requester)}${jiraSection}${identitySection}${prFooterSection}${t3Section}
+req: ${formatRequesterLine(input.requester)}${jiraSection}${prFooterSection}${t3Section}
 
 ## User request
 ${input.mentionPrompt.trim()}${referencedBlock}`;
@@ -448,7 +380,6 @@ export function buildFirstTurnPrompt(input: ThreadBootstrapContext): string {
     referencedMessageUrl: input.referencedMessageUrl,
     jiraIssueKeys: input.jiraIssueKeys,
     jiraBrowseBaseUrl: input.jiraBrowseBaseUrl,
-    identityPeople: input.identityPeople,
     guildId: input.guildId,
     discordThreadId: input.discordThreadId,
     discordThreadTitle: input.discordThreadTitle,
@@ -540,7 +471,6 @@ ${buildDiscordTurnPrompt({
   // Referenced / starter bodies are rendered in dedicated bootstrap sections below.
   jiraIssueKeys: input.jiraIssueKeys,
   jiraBrowseBaseUrl: input.jiraBrowseBaseUrl,
-  identityPeople: input.identityPeople,
   guildId: input.guildId,
   discordThreadId: input.discordThreadId,
   discordThreadTitle: input.discordThreadTitle,
