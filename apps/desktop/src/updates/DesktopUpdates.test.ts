@@ -136,6 +136,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDockIcon: () => Effect.void,
     getAppMetrics: Effect.succeed([]),
     appendCommandLineSwitch: () => Effect.void,
+    removeCommandLineSwitch: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
     on: () => Effect.void as any,
   } satisfies ElectronApp.ElectronApp["Service"]);
