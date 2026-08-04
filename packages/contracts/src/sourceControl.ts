@@ -15,6 +15,7 @@ export const SourceControlProviderInfo = Schema.Struct({
   kind: SourceControlProviderKind,
   name: TrimmedNonEmptyString,
   baseUrl: Schema.String,
+  repositoryUrl: Schema.optional(TrimmedNonEmptyString),
 });
 export type SourceControlProviderInfo = typeof SourceControlProviderInfo.Type;
 
