@@ -183,6 +183,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(gitActions).toContain('aria-label="View GitHub pull requests"');
     expect(gitActions).toContain("openPullRequestList");
     expect(gitActions).toContain("`${repositoryUrl}/pulls`");
+  });
+
   it("identity claim gate and participant stack surfaces exist", () => {
     const gate = readSrc("components/identity/IdentityClaimGate.tsx");
     expect(gate).toContain('data-testid="identity-claim-gate"');
