@@ -36,22 +36,35 @@ Implementation is out of scope for this planning stage.
 
 Each event that matches a trigger creates a new T3 thread from the event and its captured source snapshot; the detailed trigger, processing, concurrency, and response-routing rules are defined in [ntsb-event-processing.md](./ntsb-event-processing.md).
 
-## Open questions
-
-- What identifies the same external interaction for correlation and projection: a Jira issue, Discord thread, GitHub issue or pull request, nested review discussion, Teams conversation, or another scope?
-- Is the source snapshot frozen when an event is accepted or fetched immediately before its thread starts?
-- If resource coordination delays a thread after its event is accepted, does it retain its original snapshot, or may the snapshot be refreshed?
-- What stable identity distinguishes an accepted external event from duplicate, retried, late, or out-of-order deliveries?
-- How are concurrent executions that share a worktree or another mutable resource coordinated without imposing an event queue?
-- NTBS does not target existing execution threads; each accepted event uses the new-thread form of `thread.turn.start`.
-- Which T3 events and projected fields may NTBS clients consume, and which are deliberately omitted or unsupported?
-- How do clients obtain an initial snapshot, resume from a cursor, replay missed changes, and recover when their cursor is no longer valid?
-- How are completion, failure, timeout, and cancellation represented and rendered on limited external platforms?
-- How is an external event correlated with its T3 execution thread and the response rendered back onto the source?
-- How long are captured source snapshots, execution threads, and their correlation records retained, and how are they presented in native T3 clients?
-
 ## Agreed decisions
 
 ### Which external messages or state changes trigger an agent turn, and which are ignored or recorded without starting work?
 
 The platform-specific trigger forms, ignored events, thread creation, and response routing are defined in [ntsb-event-processing.md](./ntsb-event-processing.md).
+
+### What identifies the same external interaction for correlation and projection?
+
+- Jira: the issue key or immutable issue ID. Comments and replies are events within that issue.
+- Discord: the thread ID. The thread is the interaction.
+- GitHub: the repository and pull-request number. Issue comments, review comments, and replies are events within that pull request; the triggering comment and any diff context belong to the individual event.
+- Teams: unresolved. The likely scope is the conversation or reply-chain ID, with each message as its own event.
+
+### When does the adapter capture the source snapshot relative to receiving a trigger and creating the T3 thread?
+
+The adapter captures the source snapshot while processing the trigger, before creating the T3 thread. The new thread uses that captured snapshot.
+
+### How does T3 prevent repeated delivery of the same source event from creating multiple threads?
+
+Each adapter derives an idempotency key from the platform’s source-event identity and version. The adapter stores that key with the T3 thread created for the event. If the same key is delivered again, the adapter reuses the existing record and does not create another thread. A later edit or distinct source event receives a different key and may create a new thread. The exact event identity, versioning, and retention rules are platform-specific and remain to be defined.
+
+### How are concurrent NTBS threads isolated without an event queue?
+
+Each NTBS-triggered T3 thread receives its own worktree and branch before provider execution begins. Threads from the same external interaction can therefore run concurrently without sharing a mutable checkout or requiring an event queue.
+
+### How are completion, failure, timeout, and cancellation reported for an external event?
+
+They use the same response destination as the triggering event. Normal completion returns the agent’s answer; failure, timeout, or cancellation returns a response that explicitly reports the outcome and, where available, its reason. These outcomes do not create a separate external lifecycle or target a different thread.
+
+### How does T3 associate a thread's outcome with the external event that created it, and where does the adapter post that outcome?
+
+Each source event has a unique event ID. T3 stores a correlation record linking that event ID to the T3 thread, user message or turn, and exact response destination. When the turn ends, the adapter uses that record to post the answer or outcome back to the originating source.
