@@ -17,6 +17,7 @@ import {
   useOlderThreadActivities,
   type OlderActivitiesCursor,
 } from "@t3tools/client-runtime/state/older-thread-activities";
+import { sendEntersSteeringQueue } from "@t3tools/shared/chatList";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
@@ -255,9 +256,14 @@ export function useThreadComposerState() {
     );
   }, [selectedThreadDetail, selectedThreadSessionActivity, selectedThreadShell]);
 
-  const activeThreadBusy =
-    !!selectedThread &&
-    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
+  // A send made now would be held in the steering queue rather than opening a
+  // turn, so it becomes a composer chip and must not move the feed. Threads on
+  // this screen already exist server-side, so no send here is a bootstrap.
+  const sendEntersQueue = sendEntersSteeringQueue({
+    hasBootstrap: false,
+    sessionStatus: selectedThread?.session?.status,
+    hasPendingTurnStart: (selectedThreadDetail?.pendingTurnStart ?? null) !== null,
+  });
 
   const onSendMessage = useCallback(async () => {
     if (!selectedThreadShell) {
@@ -509,7 +515,7 @@ export function useThreadComposerState() {
     modelSelection,
     runtimeMode,
     interactionMode,
-    activeThreadBusy,
+    sendEntersQueue,
     isEditingQueuedMessage: editingQueuedMessage !== null,
     // Lazy-loaded older pages + the live window — the full loaded activity set.
     // Request derivations must run over this (not the windowed live set alone)

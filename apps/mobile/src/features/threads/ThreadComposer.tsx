@@ -103,7 +103,6 @@ export interface ThreadComposerProps {
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
-  readonly activeThreadBusy: boolean;
   readonly isEditingQueuedMessage?: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;

@@ -62,7 +62,8 @@ export interface ThreadDetailScreenProps {
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
-  readonly activeThreadBusy: boolean;
+  /** A send made now would be held in the steering queue, not open a turn. */
+  readonly sendEntersQueue: boolean;
   readonly isEditingQueuedMessage: boolean;
   readonly hasMoreOlderActivities: boolean;
   readonly loadingOlderActivities: boolean;
@@ -302,21 +303,29 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     return () => cancelAnimationFrame(frame);
   }, [anchorMessageId, freeze, selectedThreadFeed, scrollMessageToEnd, selectedThreadKey]);
 
+  const sendEntersQueue = props.sendEntersQueue;
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
+    const sendWillQueue = sendEntersQueue;
     const messageId = await props.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
     }
 
-    // Rejoin the physical live edge before the outgoing-row anchor is
-    // applied. Enabling end maintenance alone is ineffective when the list
-    // was scrolled into older history.
-    listRef.current?.scrollToEnd({ animated: false });
-    setAnchorMessageId(messageId);
+    // A send the server holds in the steering queue stays a composer chip: it
+    // never becomes a feed row, so moving the feed for it would both yank a
+    // reader out of history now and leave the anchor armed to fire whenever
+    // the queue finally drains.
+    if (!sendWillQueue) {
+      // Rejoin the physical live edge before the outgoing-row anchor is
+      // applied. Enabling end maintenance alone is ineffective when the list
+      // was scrolled into older history.
+      listRef.current?.scrollToEnd({ animated: false });
+      setAnchorMessageId(messageId);
+    }
     composerEditorRef.current?.blur();
     return messageId;
-  }, [props.onSendMessage, selectedThreadKey]);
+  }, [props.onSendMessage, selectedThreadKey, sendEntersQueue]);
 
   const collapseComposer = useCallback(() => {
     composerEditorRef.current?.blur();
@@ -458,7 +467,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 threadSyncPhase={threadSyncPhase}
                 selectedThread={props.selectedThread}
                 serverConfig={props.serverConfig}
-                activeThreadBusy={props.activeThreadBusy}
                 isEditingQueuedMessage={props.isEditingQueuedMessage}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}

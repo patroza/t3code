@@ -788,7 +788,7 @@ function ThreadRouteContent(
           draftAttachments={composer.draftAttachments}
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
-          activeThreadBusy={composer.activeThreadBusy}
+          sendEntersQueue={composer.sendEntersQueue}
           isEditingQueuedMessage={composer.isEditingQueuedMessage}
           composerQueueItems={composer.composerQueueItems}
           hasMoreOlderActivities={composer.hasMoreOlderActivities}
