@@ -65,6 +65,15 @@ export function escapeDesktopEntryExecArgument(value: string): string {
   return escapeDesktopEntryString(`"${quoted}"`);
 }
 
+// xdg-utils' generic desktop backend extracts the first Exec word and passes it
+// directly to `command -v`, without removing freedesktop quotes first. Prefer an
+// unquoted executable when its path needs no escaping so custom schemes work on
+// wlroots compositors such as niri. Keep spec-compliant quoting for paths that
+// contain spaces or reserved characters.
+export function renderDesktopEntryExecArgument(value: string): string {
+  return /^[A-Za-z0-9_@+=:,./-]+$/.test(value) ? value : escapeDesktopEntryExecArgument(value);
+}
+
 // The AppImage integration entry owns the window identity and icon. This
 // hidden URL-only entry must not compete with it for StartupWMClass matching.
 export function renderUrlHandlerDesktopEntry(input: {
@@ -76,7 +85,7 @@ export function renderUrlHandlerDesktopEntry(input: {
     "[Desktop Entry]",
     "Type=Application",
     `Name=${escapeDesktopEntryString(input.displayName)}`,
-    `Exec=${escapeDesktopEntryExecArgument(input.execTarget)} %U`,
+    `Exec=${renderDesktopEntryExecArgument(input.execTarget)} %U`,
     "Terminal=false",
     "NoDisplay=true",
     "StartupNotify=false",
