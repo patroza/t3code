@@ -173,9 +173,20 @@ export const make = Effect.gen(function* () {
   const gitManager = yield* GitManager.GitManager;
   const lifecycleScriptRunner = yield* ProjectLifecycleScriptRunner.ProjectLifecycleScriptRunner;
 
+  /**
+   * Bare repositories have no checkout, but stay valid sources for ref, fetch,
+   * and `worktree add` plumbing — which is exactly what starting a thread needs,
+   * since the thread then runs in the worktree it just created. Such routes opt
+   * in with `allowBare: true`; everything that touches a checkout keeps the
+   * default and reports this reason instead of a blanket routing failure.
+   */
+  const bareRepositoryDetail = (operation: string, cwd: string) =>
+    `The ${operation} operation needs a working tree, but ${cwd} is a bare Git repository (no checkout of its own). Run it inside a worktree, or give the project a checkout.`;
+
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
     cwd: string,
+    options?: { readonly allowBare?: boolean },
   ) {
     const handle = yield* registry.resolve({ cwd }).pipe(
       Effect.mapError(
@@ -195,11 +206,19 @@ export const make = Effect.gen(function* () {
         detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
       });
     }
+    if (handle.repository.bare && options?.allowBare !== true) {
+      return yield* new GitManagerError({
+        operation,
+        cwd,
+        detail: bareRepositoryDetail(operation, cwd),
+      });
+    }
   });
 
   const ensureGitCommand = Effect.fn("GitWorkflowService.ensureGitCommand")(function* (
     operation: string,
     cwd: string,
+    options?: { readonly allowBare?: boolean },
   ) {
     const handle = yield* registry.resolve({ cwd }).pipe(
       Effect.mapError(
@@ -221,6 +240,15 @@ export const make = Effect.gen(function* () {
         cwd,
         failureKind: "unknown",
         detail: `The ${operation} command currently supports Git repositories only; detected ${handle.kind}.`,
+      });
+    }
+    if (handle.repository.bare && options?.allowBare !== true) {
+      return yield* new GitCommandError({
+        operation,
+        command: "vcs-route",
+        cwd,
+        failureKind: "unknown",
+        detail: bareRepositoryDetail(operation, cwd),
       });
     }
   });
@@ -247,6 +275,12 @@ export const make = Effect.gen(function* () {
           cwd,
           detail: `The ${operation} workflow currently supports Git repositories only; detected ${handle.kind}. (${cwd})`,
         });
+      }
+      // Status describes a working tree, and a bare repository has none. These
+      // paths are polled continuously, so report "no workspace here" instead of
+      // failing every poll with an error nobody can act on.
+      if (handle.repository.bare) {
+        return false;
       }
       return true;
     },
@@ -341,20 +375,22 @@ export const make = Effect.gen(function* () {
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
         ),
       ),
+    // `git worktree add` is the whole point of a bare source repository: the
+    // thread gets its own checkout, so the source never needs one.
     createWorktree: (input) =>
-      ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.createWorktree", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.createWorktree(input)),
       ),
     fetchRemote: (input) =>
-      ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.fetchRemote(input)),
       ),
     resolveRemoteTrackingCommit: (input) =>
-      ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
-        Effect.andThen(git.resolveRemoteTrackingCommit(input)),
-      ),
+      ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd, {
+        allowBare: true,
+      }).pipe(Effect.andThen(git.resolveRemoteTrackingCommit(input))),
     removeWorktree: (input) =>
-      ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(
           Effect.gen(function* () {
             // Prefer the PR associated with the worktree branch (status cwd = worktree path).
@@ -395,15 +431,17 @@ export const make = Effect.gen(function* () {
         ),
       ),
     createRef: (input) =>
-      ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
-        Effect.andThen(git.createRef(input)),
-      ),
+      ensureGitCommand("GitWorkflowService.createRef", input.cwd, {
+        // Creating the branch is pure ref plumbing; only checking it out after
+        // creation needs a working tree.
+        allowBare: input.switchRef !== true,
+      }).pipe(Effect.andThen(git.createRef(input))),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
         Effect.andThen(Effect.scoped(git.switchRef(input))),
       ),
     renameBranch: (input) =>
-      ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
+      ensureGit("GitWorkflowService.renameBranch", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.renameBranch(input)),
       ),
   });

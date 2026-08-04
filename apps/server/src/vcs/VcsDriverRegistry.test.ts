@@ -61,8 +61,8 @@ describe("VcsDriverRegistry", () => {
               const normalizedArgs =
                 input.args[0] === "-C" && input.args.length >= 2 ? input.args.slice(2) : input.args;
               const command = normalizedArgs.join(" ");
-              if (command === "rev-parse --is-inside-work-tree") {
-                return processOutput("true\n");
+              if (command === "rev-parse --is-bare-repository --is-inside-work-tree") {
+                return processOutput("false\ntrue\n");
               }
               if (command === "rev-parse --show-toplevel") {
                 return processOutput("/repo\n");
@@ -86,16 +86,16 @@ describe("VcsDriverRegistry", () => {
       assert.deepStrictEqual(
         calls.map((call) => normalizeGitArgs(call.args).join(" ")),
         [
-          "rev-parse --is-inside-work-tree",
-          "rev-parse --show-toplevel",
+          "rev-parse --is-bare-repository --is-inside-work-tree",
           "rev-parse --git-common-dir",
+          "rev-parse --show-toplevel",
         ],
       );
     }).pipe(Effect.provide(layer));
   });
 
   it.effect("detects a repository created after a negative lookup", () => {
-    let insideWorkTreeChecks = 0;
+    let probeChecks = 0;
     const layer = Layer.effect(VcsDriverRegistry.VcsDriverRegistry, VcsDriverRegistry.make).pipe(
       Layer.provide(NodeServices.layer),
       Layer.provide(
@@ -108,15 +108,15 @@ describe("VcsDriverRegistry", () => {
           run: (input) =>
             Effect.sync(() => {
               const command = normalizeGitArgs(input.args).join(" ");
-              if (command === "rev-parse --is-inside-work-tree") {
-                insideWorkTreeChecks += 1;
-                return insideWorkTreeChecks === 1
+              if (command === "rev-parse --is-bare-repository --is-inside-work-tree") {
+                probeChecks += 1;
+                return probeChecks === 1
                   ? {
                       ...processOutput(""),
                       exitCode: ChildProcessSpawner.ExitCode(128),
                       stderr: "fatal: not a git repository",
                     }
-                  : processOutput("true\n");
+                  : processOutput("false\ntrue\n");
               }
               if (command === "rev-parse --show-toplevel") {
                 return processOutput("/repo\n");
@@ -137,7 +137,9 @@ describe("VcsDriverRegistry", () => {
       // Negative detects are TTL-cached (15s); advance so a later repo creation is noticed.
       yield* TestClock.adjust("16 seconds");
       assert.equal((yield* registry.detect({ cwd: "/repo" }))?.repository.rootPath, "/repo");
-      assert.equal(insideWorkTreeChecks, 2);
+      // One probe per detect: the combined rev-parse keeps negative detection
+      // to a single git call.
+      assert.equal(probeChecks, 2);
     }).pipe(Effect.provide(Layer.mergeAll(layer, TestClock.layer())));
   });
 });

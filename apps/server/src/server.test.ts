@@ -475,6 +475,7 @@ const buildAppUnderTest = (options?: {
                           kind: "git" as const,
                           rootPath: input.cwd,
                           metadataPath: null,
+                          bare: false,
                           freshness: {
                             source: "live-local" as const,
                             observedAt: TEST_EPOCH,
@@ -504,6 +505,7 @@ const buildAppUnderTest = (options?: {
               input.requestedKind === "auto" || !input.requestedKind ? "git" : input.requestedKind,
             rootPath: input.cwd,
             metadataPath: null,
+            bare: false,
             freshness: {
               source: "live-local",
               observedAt: TEST_EPOCH,
