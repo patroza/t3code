@@ -5,4 +5,8 @@ if [ ! -x "$root/node_modules/.bin/lint-staged" ]; then
   echo "pre-commit: T3/manual checkout must finish post-checkout before commit" >&2
   exit 1
 fi
-exec pnpm lint-staged
+# The binary directly, not `pnpm lint-staged`: pnpm runs a dependency-status
+# check first and will try to purge node_modules when the lockfile moved, which
+# aborts without a TTY — the commit then fails with a pnpm error that says
+# nothing about linting. The guard above already established this path exists.
+exec "$root/node_modules/.bin/lint-staged"
