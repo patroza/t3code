@@ -2,10 +2,10 @@
  * Resolve whether the current branch's open PR should enforce the agent ship gate.
  *
  * Modes:
- *   none    — no open PR (or closed/merged): free agent push
- *   draft   — open draft PR: free agent push (GitHub Diff UI)
- *   ready   — open non-draft PR: ship gate on every agent push
- *   unknown — gh missing / failed: fail closed (run the gate)
+ *   none    — no open PR (or closed/merged): static gate only
+ *   draft   — open draft PR: static gate only (lighter than publish)
+ *   ready   — open non-draft PR: full ship gate on every agent push
+ *   unknown — gh missing / failed: fail closed (run the full gate)
  *
  * This fork lives under `patroza/t3code` but `gh` defaults to the upstream
  * parent (`pingdotgg/t3code`). A bare `gh pr view` therefore never finds the
@@ -36,6 +36,18 @@ export const classifyPrPayload = (pr) => {
  * @returns {boolean}
  */
 export const shouldRunShipGateOnPush = (mode) => mode === "ready" || mode === "unknown";
+
+/**
+ * How much of the gate a push pays for.
+ *
+ * Nothing is free any more: a push that does not format, lint or typecheck is
+ * worthless to a reviewer whether or not the PR says "draft". What draft buys
+ * is the *expensive* half — full unit suite stays on the ready/publish path.
+ *
+ * @param {"none" | "draft" | "ready" | "unknown"} mode
+ * @returns {"full" | "static"}
+ */
+export const shipGateScopeForPush = (mode) => (shouldRunShipGateOnPush(mode) ? "full" : "static");
 
 /** Strip ANSI color codes so `gh --json` stays parseable when color is forced. */
 const stripAnsi = (text) => String(text).replace(/\u001b\[[0-9;]*m/g, "");
