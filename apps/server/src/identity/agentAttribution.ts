@@ -17,6 +17,10 @@ export function withAgentIdentityAttribution(input: {
   if (person === null) return input.message;
   const trailer = formatCoAuthoredByTrailer(person);
   if (trailer === null) return input.message;
+  const trailerBody = trailer.replace(/^Co-authored-by:\s*/iu, "").trim();
+  // Discord's existing turn context uses the compact `cab: Name <email>` form.
+  // Treat either representation as already attributed while old/new clients coexist.
+  if (input.message.toLowerCase().includes(trailerBody.toLowerCase())) return input.message;
 
   return `${input.message}\n\n<identity_attribution>\nThe server identity map attributes this turn to ${person.username}. Every git commit created for this work must include this exact trailer after a blank line:\n${trailer}\nKeep the environment's default author and committer.\n</identity_attribution>`;
 }
