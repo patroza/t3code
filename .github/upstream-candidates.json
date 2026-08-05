@@ -30,6 +30,12 @@
       "sourceSha": "6be48eb238cf310a60cc9571240601e774c7d381",
       "status": "active",
       "purpose": "Queue follow-up messages server-side during active turns with explicit steer controls"
+    },
+    {
+      "upstreamPr": 4379,
+      "sourceSha": "a27510d060645809ae1472bba4dbb248dc624e25",
+      "status": "active",
+      "purpose": "Refresh open workspace file previews when disk contents change"
     }
   ]
 }
