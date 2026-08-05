@@ -470,6 +470,15 @@ it.effect("graceful shutdown preserves recovery intent only for working sessions
       input: "keep working",
       interactionMode: "plan",
     });
+    const armedRows = yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      return yield* repository.list();
+    }).pipe(Effect.provide(runtimeRepositoryLayer));
+    const armedRunning = armedRows.find((row) => row.threadId === runningThreadId);
+    assert.equal(
+      readProviderRestartRecoveryMarker(armedRunning?.runtimePayload)?.interruptedProviderTurnId,
+      asTurnId(`turn-${String(runningThreadId)}`),
+    );
     codex.updateSession(runningThreadId, (session) => ({
       ...session,
       status: "running",
@@ -1506,7 +1515,33 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.activeTurnId, `turn-${String(session.threadId)}`);
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
+          assert.equal(
+            readProviderRestartRecoveryMarker(runtimePayload)?.interruptedProviderTurnId,
+            asTurnId(`turn-${String(session.threadId)}`),
+          );
         }
+      }
+
+      yield* Effect.yieldNow;
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-runtime-status-completed"),
+        provider: CODEX_DRIVER,
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId: session.threadId,
+        turnId: asTurnId(`turn-${String(session.threadId)}`),
+        status: "completed",
+      });
+      yield* Effect.yieldNow;
+      yield* advanceTestClock(50);
+      const completedRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(completedRuntime), true);
+      if (Option.isSome(completedRuntime)) {
+        assert.isUndefined(
+          readProviderRestartRecoveryMarker(completedRuntime.value.runtimePayload),
+        );
       }
     }),
   );
