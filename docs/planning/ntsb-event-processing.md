@@ -4,6 +4,12 @@
 
 This document defines how events arriving from non-turn-based surfaces are classified and converted into T3 work. It focuses on which events start new T3 threads, which events are ignored, and how independently started threads are correlated with their external events and responses.
 
+T3 clients are built around T3 data views (projections): threads, diffs, and projects.
+
+External NTBSs like Jira, Discord, or GitHub know nothing about that: they have only limited capabilities for sending and receiving messages.
+
+The UX on these platforms has to be thoroughly scoped, and adapters to these platforms have to be extended to retain the information needed to connect T3 events to Jira, Discord, GitHub, or Teams events.
+
 ## Inbound event processing
 
 ### Core rule
@@ -11,6 +17,15 @@ This document defines how events arriving from non-turn-based surfaces are class
 An external event starts a new T3 thread when the adapter recognizes it as one of the trigger forms defined below. Each triggering event creates a new T3 thread. NTBS does not explicitly target, continue, steer, or modify an existing T3 thread.
 
 The event is captured together with the source snapshot used to construct the first user message. The adapter must distinguish a source event from delivery attempts. Retrying or redelivering the same source event must not create another T3 thread.
+
+### Adapter storage
+
+For each inbound event, the adapter retains:
+
+- the source event ID and version, to avoid handling the same event twice;
+- the source context and message or comment IDs, so it knows where the event came from;
+- the captured source snapshot;
+- the T3 thread, user-message, and turn IDs created from the event.
 
 ### Platform triggers
 
@@ -70,10 +85,36 @@ Multiple events from the same external interaction may create T3 threads at the 
 
 ## Outbound response processing
 
-The following questions remain open for the T3-to-NTBS path:
+Outbound processing adds the acknowledgement and final-outcome message IDs, together with whether each message was posted.
 
-- Which T3 outputs are rendered on the external platform: only the final answer, or also intermediate updates, tool results, attachments, and generated artifacts?
-- Does the adapter post the result as a reply, create a new comment or message, or update a message created earlier for the same turn?
+### Agreed decisions
+
+Each inbound event creates an immediate outbound acknowledgement. When its T3 thread ends, the adapter sends the final answer, failure, timeout, or cancellation as a new message after that acknowledgement, in the platform's native conversation scope.
+
+#### Message identifiers and placement
+
+Each adapter defines how these identifiers and message relationships map to its platform:
+
+##### Jira
+
+The adapter retains the issue ID or key, invoking comment ID, root comment ID, acknowledgement comment ID, and outcome comment ID. It posts the acknowledgement and outcome as separate replies to the same root comment.
+
+##### GitHub
+
+The adapter retains the repository, pull-request number, invoking comment ID, root review-comment ID when the invocation is in a review thread, acknowledgement message ID, and outcome message ID. In a review thread, the acknowledgement and outcome both reply to the root review comment. For ordinary issue or pull-request comments, they are separate timeline comments on the pull request.
+
+##### Discord
+
+The adapter retains the thread or channel ID, invoking message ID, acknowledgement message ID, and outcome message ID. The acknowledgement replies to the invoking message, and the outcome replies to the acknowledgement.
+
+##### Teams
+
+The adapter retains the team and channel or chat ID, root conversation-message ID, invoking message ID, acknowledgement message ID, and outcome message ID. The acknowledgement and outcome are separate replies in the same root conversation.
+
+### Open questions
+
+#### Shared questions
+
 - How does each adapter translate T3 formatting and content into the external platform's supported format and size limits?
 - What happens when a response cannot be posted, is posted only partially, or must be retried?
 - How are responses to concurrent turns ordered or labeled when they appear in the same external interaction?
