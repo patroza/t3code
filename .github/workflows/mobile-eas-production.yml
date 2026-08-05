@@ -9,11 +9,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "build (+ auto-submit to TestFlight) or update (OTA)"
+        description: "auto (fingerprint decides), build (+ auto-submit to TestFlight), or update (OTA)"
         required: true
         type: choice
-        default: build
+        default: auto
         options:
+          - auto
           - build
           - update
       platform:
@@ -29,16 +30,28 @@ on:
         description: "OTA update message (mode=update only)"
         required: false
         type: string
+      sha:
+        description: "Exact fork/integration SHA (blank uses its current tip)"
+        required: false
+        type: string
+
+concurrency:
+  group: mobile-eas-production
+  cancel-in-progress: false
 
 jobs:
   production:
     name: EAS Production ${{ inputs.mode }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     env:
       APP_VARIANT: production
       NODE_OPTIONS: --max-old-space-size=8192
+      T3CODE_MOBILE_EAS_PROJECT_ID: ${{ vars.T3CODE_MOBILE_EAS_PROJECT_ID }}
+      T3CODE_MOBILE_EXPO_OWNER: ${{ vars.T3CODE_MOBILE_EXPO_OWNER }}
+      T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
+      T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
     steps:
       - id: expo-token
         name: Check for EXPO_TOKEN
@@ -56,11 +69,30 @@ jobs:
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
+          ref: fork/integration
           fetch-depth: 0
           # No sparse-checkout here: it makes actions/checkout fetch with
           # --filter=blob:none, and eas-cli archives the project via
           # `git clone --depth 1 file://<workspace>`, which fails (exit 128)
           # when the partial clone can't serve the unfetched blobs.
+
+      - id: source
+        name: Resolve approved integration source
+        if: steps.expo-token.outputs.present == 'true'
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: |
+          integration_sha="$(git rev-parse HEAD)"
+          target_sha="${REQUESTED_SHA:-$integration_sha}"
+          if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "sha must be an exact 40-character commit SHA" >&2
+            exit 1
+          fi
+          git fetch origin "$target_sha"
+          git merge-base --is-ancestor "$target_sha" "$integration_sha"
+          git checkout --detach "$target_sha"
+          test "$(git rev-parse HEAD)" = "$target_sha"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
@@ -98,6 +130,24 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull production --non-interactive
 
+      # Fingerprint decides: a JavaScript-only integration publishes an OTA
+      # update to the production channel, which the installed TestFlight build
+      # picks up on next launch. A change to native runtime inputs starts a
+      # production build and submits it to TestFlight instead.
+      - name: Deploy with fingerprint check
+        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'auto'
+        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        with:
+          profile: production
+          branch: production
+          platform: ${{ inputs.platform }}
+          environment: production
+          auto-submit-builds: true
+          working-directory: apps/mobile
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and submit
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'build'
         working-directory: apps/mobile
@@ -115,5 +165,5 @@ jobs:
             --channel production \
             --environment production \
             --platform ${{ inputs.platform }} \
-            --message "${{ inputs.message || format('Production OTA ({0})', github.sha) }}" \
+            --message "${{ inputs.message || format('Production OTA ({0})', steps.source.outputs.sha) }}" \
             --non-interactive
