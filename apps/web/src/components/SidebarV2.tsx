@@ -6,6 +6,10 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   scopeProjectRef,
@@ -2836,14 +2840,18 @@ export default function SidebarV2() {
                   <MenuTrigger
                     render={
                       <SidebarMenuButton
-                        size="icon"
                         type="button"
+                        className="shrink-0 gap-1.5 px-2 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         aria-label={`Thread ordering: ${WEB_THREAD_GROUPING_LABELS[threadGrouping]}`}
                         data-testid="sidebar-v2-thread-grouping"
                       />
                     }
                   >
                     {threadGrouping === "project" ? <ListIcon /> : <ClockIcon />}
+                    <span className="text-sm">
+                      {threadGrouping === "project" ? "Default" : "Recent"}
+                    </span>
+                    <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
                   </MenuTrigger>
                   <MenuPopup align="start">
                     <MenuRadioGroup
@@ -3108,6 +3116,34 @@ export default function SidebarV2() {
                       />
                     );
                   };
+                  const appendRecencyRows = (
+                    items: ReactNode[],
+                    rows: readonly EnvironmentThreadShell[],
+                    section: "active" | "settled",
+                  ) => {
+                    const groups = groupSortedThreadsByRecency(
+                      rows,
+                      new Date(`${nowMinute}:00.000Z`),
+                    );
+                    if (threadGrouping !== "recency" || !shouldShowRecencySectionHeaders(groups)) {
+                      for (const thread of rows) items.push(renderThreadRow(thread, section));
+                      return;
+                    }
+                    for (const group of groups) {
+                      items.push(
+                        <li
+                          key={`recency-${section}-${group.id}`}
+                          data-testid={`sidebar-v2-${section}-recency-${group.id}`}
+                          className="list-none px-2.5 pb-1 pt-3 text-[11px] font-medium text-sidebar-muted-foreground/55"
+                        >
+                          {group.label}
+                        </li>,
+                      );
+                      for (const thread of group.threads) {
+                        items.push(renderThreadRow(thread, section));
+                      }
+                    }
+                  };
                   // Pinned block: full cards above the inbox, closed by a
                   // thin divider (the pin glyphs carry the meaning, so no
                   // header text). Vanishes entirely at count 0.
@@ -3124,9 +3160,7 @@ export default function SidebarV2() {
                       />,
                     );
                   }
-                  for (const thread of activeThreads) {
-                    items.push(renderThreadRow(thread, "active"));
-                  }
+                  appendRecencyRows(items, activeThreads, "active");
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when
@@ -3198,9 +3232,7 @@ export default function SidebarV2() {
                       </li>,
                     );
                   }
-                  for (const thread of renderedSettledThreads) {
-                    items.push(renderThreadRow(thread, "settled"));
-                  }
+                  appendRecencyRows(items, renderedSettledThreads, "settled");
                   return items;
                 })()}
                 {settledShelfExpanded && hiddenSettledCount > 0 ? (

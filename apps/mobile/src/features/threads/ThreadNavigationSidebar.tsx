@@ -733,7 +733,15 @@ function ThreadNavigationSidebarPane(
 
   const threadListV2Layout = useMemo(() => {
     if (!threadListV2Enabled)
-      return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
+      return {
+        items: [],
+        hiddenSettledCount: 0,
+        snoozedCount: 0,
+        snoozedShelfHeaderIndex: null,
+        settledCount: 0,
+        settledShelfHeaderIndex: null,
+        nextSnoozeWakeAt: null,
+      };
     // Always partition settled into the slim tail (web V2 / classic Recent
     // shelf). Hide-settled must not erase that history on mobile.
     return buildThreadListV2Items({
@@ -818,6 +826,14 @@ function ThreadNavigationSidebarPane(
     const items: SidebarListItem[] = buildThreadListV2ListItems({
       items: threadListV2Layout.items,
       pendingTasks: v2PendingTasks,
+      snoozedCount: threadListV2Layout.snoozedCount,
+      snoozedShelfExpanded,
+      snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
+      settledCount: threadListV2Layout.settledCount,
+      settledShelfExpanded,
+      settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
+      snoozeLabelNow: `${nowMinute}:00.000Z`,
+      groupByRecency: options.threadGrouping === "recency",
     });
     if (threadListV2Layout.hiddenSettledCount > 0) {
       items.push({
@@ -831,11 +847,15 @@ function ThreadNavigationSidebarPane(
     classicSettledHiddenCount,
     listLayout.items,
     options.selectedEnvironmentIds,
+    options.threadGrouping,
     pendingTasks,
     props.searchQuery,
     selectedProjectRefs,
     threadListV2Enabled,
     threadListV2Layout,
+    nowMinute,
+    settledShelfExpanded,
+    snoozedShelfExpanded,
   ]);
   const showsConnectionStatus = shouldShowWorkspaceConnectionStatus(catalogState);
   const listOrganization = showProjectThreadList && !threadListV2Enabled;
@@ -1100,17 +1120,22 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-settled-shelf" && item.type === "v2-settled-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
+      if (previous.type === "v2-recency-header" && item.type === "v2-recency-header") {
+        return previous.key === item.key && previous.label === item.label;
+      }
       if (
         previous.type === "v2-thread" ||
         previous.type === "v2-show-more" ||
         previous.type === "v2-pending" ||
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
+        previous.type === "v2-recency-header" ||
         item.type === "v2-thread" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
         item.type === "v2-snoozed-shelf" ||
-        item.type === "v2-settled-shelf"
+        item.type === "v2-settled-shelf" ||
+        item.type === "v2-recency-header"
       ) {
         return false;
       }
@@ -1220,6 +1245,12 @@ function ThreadNavigationSidebarPane(
             />
           );
         }
+        case "v2-recency-header":
+          return (
+            <View className="px-3 pb-1 pt-3">
+              <Text className="text-xs font-t3-medium text-foreground-muted">{item.label}</Text>
+            </View>
+          );
         case "v2-snoozed-shelf":
           return (
             <ThreadListV2SnoozedShelfHeader

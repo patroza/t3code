@@ -9,6 +9,10 @@ import {
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  groupSortedThreadsByRecency,
+  shouldShowRecencySectionHeaders,
+} from "@t3tools/client-runtime/state/thread-recency-groups";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -234,11 +238,19 @@ export interface ThreadListV2SettledShelfListItem {
   readonly expanded: boolean;
 }
 
+export interface ThreadListV2RecencyHeaderListItem {
+  readonly type: "v2-recency-header";
+  readonly key: string;
+  readonly label: string;
+  readonly section: "active" | "settled";
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2SnoozedShelfListItem
-  | ThreadListV2SettledShelfListItem;
+  | ThreadListV2SettledShelfListItem
+  | ThreadListV2RecencyHeaderListItem;
 
 /**
  * Builds the shared mobile order: active → pending → snoozed shelf → settled.
@@ -255,9 +267,12 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
+  /** Adds activity buckets inside active and settled sections. Pinned cards
+      remain above the active buckets. */
+  readonly groupByRecency?: boolean;
 }): ThreadListV2ListItem[] {
-  const threadItems = input.items.map(
-    (item): ThreadListV2ListItem => ({
+  const threadItems: ThreadListV2ThreadListItem[] = input.items.map(
+    (item): ThreadListV2ThreadListItem => ({
       type: "v2-thread",
       key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
       item,
@@ -281,7 +296,41 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const addRecencyHeaders = (
+    items: ReadonlyArray<ThreadListV2ThreadListItem>,
+    section: "active" | "settled",
+  ): ThreadListV2ListItem[] => {
+    if (input.groupByRecency !== true) return [...items];
+    const groups = groupSortedThreadsByRecency(
+      items.map((item) => item.item.thread),
+      input.snoozeLabelNow === undefined ? undefined : new Date(input.snoozeLabelNow),
+    );
+    if (!shouldShowRecencySectionHeaders(groups)) return [...items];
+    const itemByKey = new Map(
+      items.map((item) => [`${item.item.thread.environmentId}:${item.item.thread.id}`, item]),
+    );
+    return groups.flatMap((group) => [
+      {
+        type: "v2-recency-header" as const,
+        key: `v2-recency-header:${section}:${group.id}`,
+        label: group.label,
+        section,
+      },
+      ...group.threads.flatMap((thread) => {
+        const item = itemByKey.get(`${thread.environmentId}:${thread.id}`);
+        return item === undefined ? [] : [item];
+      }),
+    ]);
+  };
+  const activeItems = threadItems.slice(0, activeEnd);
+  const pinnedEnd = activeItems.findIndex((item) => !item.item.pinned);
+  const pinnedItems = pinnedEnd < 0 ? activeItems : activeItems.slice(0, pinnedEnd);
+  const unpinnedActiveItems = pinnedEnd < 0 ? [] : activeItems.slice(pinnedEnd);
+  const result: ThreadListV2ListItem[] = [
+    ...pinnedItems,
+    ...addRecencyHeaders(unpinnedActiveItems, "active"),
+    ...pendingItems,
+  ];
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",
@@ -298,7 +347,7 @@ export function buildThreadListV2ListItems(input: {
       count: settledCount,
       expanded: input.settledShelfExpanded !== false,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    result.push(...addRecencyHeaders(threadItems.slice(settledShelfHeaderIndex), "settled"));
   }
   return result;
 }

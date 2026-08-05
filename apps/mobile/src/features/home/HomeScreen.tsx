@@ -902,6 +902,7 @@ export function HomeScreen(props: HomeScreenProps) {
         settledShelfExpanded,
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
+        groupByRecency: props.threadGrouping === "recency",
       }),
     [nowMinute, settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
   );
@@ -946,6 +947,13 @@ export function HomeScreen(props: HomeScreenProps) {
             expanded={item.expanded}
             onToggle={toggleSettledShelf}
           />
+        );
+      }
+      if (item.type === "v2-recency-header") {
+        return (
+          <View className="bg-screen px-5 pb-1 pt-3">
+            <Text className="text-xs font-t3-medium text-foreground-muted">{item.label}</Text>
+          </View>
         );
       }
       const thread = item.item.thread;
