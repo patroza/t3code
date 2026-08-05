@@ -1,6 +1,8 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import Migration0001 from "./Migrations/037_ProjectionQueuedMessages.ts";
+import Migration0002 from "./Migrations/038_SessionIdentityClaims.ts";
+import Migration0003 from "./Migrations/041_ProjectionThreadSourceAttribution.ts";
 
 export const forkMigrationTable = "t3_fork_sql_migrations";
 
@@ -11,7 +13,11 @@ export const forkMigrationTable = "t3_fork_sql_migrations";
  * IDs 2 and 3 are already assigned to the identity overlay's historical
  * SessionIdentityClaims and ProjectionThreadSourceAttribution migrations.
  */
-export const forkMigrationEntries = [[1, "ProjectionQueuedMessages", Migration0001]] as const;
+export const forkMigrationEntries = [
+  [1, "ProjectionQueuedMessages", Migration0001],
+  [2, "SessionIdentityClaims", Migration0002],
+  [3, "ProjectionThreadSourceAttribution", Migration0003],
+] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(([id, name]) => [id, name] as const);
 
