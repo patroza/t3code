@@ -295,6 +295,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   pruneOptimisticQueuedMessageIds,
+  resolvedSteeredMessageIds,
   revokeUserMessagePreviewUrls,
   shouldTreatServerThreadAsActive,
   waitForStartedServerThread,
@@ -1332,6 +1333,12 @@ function ChatViewContent(props: ChatViewProps) {
   // same records as above, routed to the queue chips instead of the timeline
   // so an outgoing message shows up where it will actually live.
   const [optimisticQueuedMessageIds, setOptimisticQueuedMessageIds] =
+    useState<ReadonlySet<MessageId>>(EMPTY_MESSAGE_ID_SET);
+  // Server-queued messages the user sent now ("Send now"). They move out of the
+  // chips and into the timeline immediately; the server still lists them as
+  // queued until the dispatch lands, so they are tracked until it does — or
+  // until a failure moves them back.
+  const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] =
     useState<ReadonlySet<MessageId>>(EMPTY_MESSAGE_ID_SET);
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, LocalThreadErrorEntry>
@@ -2581,14 +2588,17 @@ function ChatViewContent(props: ChatViewProps) {
    * would have nothing to act on until it lands.
    */
   const displayQueuedMessages = useMemo<ReadonlyArray<DisplayQueuedMessage>>(() => {
-    const serverQueued: DisplayQueuedMessage[] = (activeThread?.queuedMessages ?? []).map(
-      (queuedMessage) => ({
+    const serverQueued: DisplayQueuedMessage[] = (activeThread?.queuedMessages ?? [])
+      // A steered message has already moved into the timeline optimistically;
+      // it stays server-queued until the dispatch lands, but showing both a
+      // chip and a row would read as a duplicate.
+      .filter((queuedMessage) => !steeringQueuedMessageIds.has(queuedMessage.messageId))
+      .map((queuedMessage) => ({
         messageId: queuedMessage.messageId,
         text: queuedMessage.text,
         attachmentCount: queuedMessage.attachments.length,
         pending: false,
-      }),
-    );
+      }));
     if (optimisticQueuedMessageIds.size === 0) {
       return serverQueued;
     }
@@ -2612,6 +2622,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.queuedMessages,
     optimisticQueuedMessageIds,
     optimisticUserMessages,
+    steeringQueuedMessageIds,
   ]);
   const timelineEntries = useMemo(
     () =>
@@ -4175,14 +4186,26 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     // A queued message is server-acknowledged too — it renders as a chip
-    // above the composer, so its optimistic timeline copy must go.
+    // above the composer, so its optimistic timeline copy must go. A steered
+    // message is the exception: it stays server-queued until the dispatch
+    // lands, and dropping its optimistic row on that would bounce it back to
+    // a chip mid-flight. Only persistence acknowledges a steer.
     const persistedMessageIds = new Set(activeThread.messages.map((message) => message.id));
     const serverIds = new Set([
       ...persistedMessageIds,
-      ...activeThread.queuedMessages.map((message) => message.messageId),
+      ...activeThread.queuedMessages
+        .map((message) => message.messageId)
+        .filter((messageId) => !steeringQueuedMessageIds.has(messageId)),
     ]);
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
-    if (removedMessages.length === 0) {
+    // A steer settles when the server stops holding the message in the queue:
+    // dispatched (now a real message) or otherwise gone. Waiting on
+    // persistence alone would strand the marker if the message never lands.
+    const resolvedSteeredIds = resolvedSteeredMessageIds(
+      steeringQueuedMessageIds,
+      activeThread.queuedMessages,
+    );
+    if (removedMessages.length === 0 && resolvedSteeredIds.size === 0) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -4191,6 +4214,9 @@ function ChatViewContent(props: ChatViewProps) {
       );
       setOptimisticQueuedMessageIds((existing) =>
         pruneOptimisticQueuedMessageIds(existing, serverIds),
+      );
+      setSteeringQueuedMessageIds((existing) =>
+        pruneOptimisticQueuedMessageIds(existing, resolvedSteeredIds),
       );
     }, 0);
     for (const removedMessage of removedMessages) {
@@ -4213,6 +4239,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.queuedMessages,
     handoffAttachmentPreviews,
     optimisticUserMessages,
+    steeringQueuedMessageIds,
   ]);
 
   useEffect(() => {
@@ -4223,6 +4250,7 @@ function ChatViewContent(props: ChatViewProps) {
       return [];
     });
     setOptimisticQueuedMessageIds(EMPTY_MESSAGE_ID_SET);
+    setSteeringQueuedMessageIds(EMPTY_MESSAGE_ID_SET);
     resetLocalDispatch();
     setExpandedImage(null);
   }, [draftId, resetLocalDispatch, threadId]);
@@ -5467,15 +5495,64 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSteerQueuedMessage = async (messageId: MessageId) => {
     if (!activeThread) return;
+    const queuedMessage = activeThread.queuedMessages.find(
+      (message) => message.messageId === messageId,
+    );
+    // Already steered (double click) or already dispatched — nothing to move.
+    if (!queuedMessage || steeringQueuedMessageIds.has(messageId)) return;
+
+    // Move it out of the chips and into the conversation up front. The server
+    // still reports it as queued until the dispatch lands, so both halves are
+    // driven by `steeringQueuedMessageIds` and both are undone together.
+    const steeredAt = new Date().toISOString();
+    setSteeringQueuedMessageIds((existing) => new Set(existing).add(messageId));
+    setOptimisticUserMessages((existing) =>
+      existing.some((message) => message.id === messageId)
+        ? existing
+        : [
+            ...existing,
+            {
+              id: messageId,
+              role: "user",
+              text: queuedMessage.text,
+              // Server-held attachments carry no blob preview, so an image
+              // renders by name until the persisted message replaces this.
+              ...(queuedMessage.attachments.length > 0
+                ? { attachments: [...queuedMessage.attachments] }
+                : {}),
+              turnId: null,
+              createdAt: steeredAt,
+              updatedAt: steeredAt,
+              streaming: false,
+            },
+          ],
+    );
+
     const result = await steerQueuedThreadMessage({
       environmentId,
       input: { threadId: activeThread.id, messageId },
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+    if (result._tag !== "Failure") {
+      return;
+    }
+
+    // Put it back. The steer is genuinely rejectable — the decider refuses one
+    // that races a pending turn start ("steer once it is running") — so the
+    // chip has to return rather than leave a row the agent never received.
+    // Interruption reverts too: if the command did land after all, the next
+    // projection re-settles this within a frame.
+    setSteeringQueuedMessageIds((existing) =>
+      pruneOptimisticQueuedMessageIds(existing, new Set([messageId])),
+    );
+    setOptimisticUserMessages((existing) => {
+      const next = existing.filter((message) => message.id !== messageId);
+      return next.length === existing.length ? existing : next;
+    });
+    if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       setThreadError(
         activeThread.id,
-        error instanceof Error ? error.message : "Failed to steer the queued message.",
+        error instanceof Error ? error.message : "Failed to send the queued message now.",
       );
     }
   };

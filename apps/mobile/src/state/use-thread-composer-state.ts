@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CommandId,
@@ -28,7 +28,7 @@ import {
 } from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { buildThreadFeed } from "../lib/threadActivity";
+import { buildThreadFeed, promoteSteeredQueuedMessages } from "../lib/threadActivity";
 import { appAtomRegistry } from "../state/atom-registry";
 import {
   appendComposerDraftAttachments,
@@ -55,6 +55,45 @@ import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "./thread-
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = [];
+const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
+
+/** Set-minus that keeps the current reference when nothing was removed. */
+function pruneSteeringQueuedMessageIds(
+  current: ReadonlySet<MessageId>,
+  resolved: ReadonlySet<MessageId>,
+): ReadonlySet<MessageId> {
+  if (current.size === 0 || resolved.size === 0) {
+    return current;
+  }
+  const next = new Set<MessageId>();
+  for (const messageId of current) {
+    if (!resolved.has(messageId)) {
+      next.add(messageId);
+    }
+  }
+  return next.size === current.size ? current : next;
+}
+
+/**
+ * Steered ids the server no longer holds in the queue. That is the settle
+ * signal for the optimistic overlay: dispatched (now a real message) or gone.
+ */
+function resolvedSteeredMessageIds(
+  steering: ReadonlySet<MessageId>,
+  queuedMessages: ReadonlyArray<{ readonly messageId: MessageId }> | undefined,
+): ReadonlySet<MessageId> {
+  if (steering.size === 0) {
+    return EMPTY_MESSAGE_ID_SET;
+  }
+  const stillQueued = new Set((queuedMessages ?? []).map((message) => message.messageId));
+  const resolved = new Set<MessageId>();
+  for (const messageId of steering) {
+    if (!stillQueued.has(messageId)) {
+      resolved.add(messageId);
+    }
+  }
+  return resolved;
+}
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -93,6 +132,10 @@ export function useThreadComposerState() {
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const { connectedEnvironments } = useRemoteConnectionStatus();
+  // Server-queued messages the user sent now, until the dispatch lands (or a
+  // failure puts them back in the queue).
+  const [steeringQueuedMessageIds, setSteeringQueuedMessageIds] =
+    useState<ReadonlySet<MessageId>>(EMPTY_MESSAGE_ID_SET);
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -101,6 +144,23 @@ export function useThreadComposerState() {
   const selectedThreadKey = selectedThreadShell
     ? scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)
     : null;
+
+  // Resolved once the server stops listing it as queued: the dispatch landed
+  // and it is a real timeline message from here on, so stop overlaying it.
+  const serverQueuedMessages = selectedThreadDetail?.queuedMessages;
+  useEffect(() => {
+    setSteeringQueuedMessageIds((existing) =>
+      pruneSteeringQueuedMessageIds(
+        existing,
+        resolvedSteeredMessageIds(existing, serverQueuedMessages),
+      ),
+    );
+  }, [serverQueuedMessages]);
+
+  // Optimistic overlays never survive a thread switch.
+  useEffect(() => {
+    setSteeringQueuedMessageIds(EMPTY_MESSAGE_ID_SET);
+  }, [selectedThreadKey]);
   const selectedThreadQueuedMessages = useMemo(
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
@@ -155,14 +215,25 @@ export function useThreadComposerState() {
     loadPage: loadOlderActivitiesPage,
   });
 
+  // "Send now" promotes a queued message into the conversation before the
+  // server confirms the dispatch; the chip goes with it. See
+  // promoteSteeredQueuedMessages.
+  const steeredDetail = useMemo(
+    () =>
+      selectedThreadDetail
+        ? promoteSteeredQueuedMessages(selectedThreadDetail, steeringQueuedMessageIds)
+        : selectedThreadDetail,
+    [selectedThreadDetail, steeringQueuedMessageIds],
+  );
+
   // Queued / outbox rows are composer chips (KeyboardStickyView), not feed
   // bubbles — same model as web QueuedMessageChips + contracts.
   const selectedThreadFeed = useMemo(() => {
-    if (!selectedThreadDetail) {
+    if (!steeredDetail) {
       return [];
     }
-    return buildThreadFeed({ ...selectedThreadDetail, activities: mergedActivities });
-  }, [selectedThreadDetail, mergedActivities]);
+    return buildThreadFeed({ ...steeredDetail, activities: mergedActivities });
+  }, [steeredDetail, mergedActivities]);
 
   const composerQueueItems = useMemo(() => {
     type QueueItem = {
@@ -174,9 +245,10 @@ export function useThreadComposerState() {
       readonly sortAt: string;
     };
     const byId = new Map<MessageId, QueueItem>();
-    const timelineIds = new Set(selectedThreadDetail?.messages.map((message) => message.id) ?? []);
+    // Includes optimistically steered messages, so their chips go immediately.
+    const timelineIds = new Set(steeredDetail?.messages.map((message) => message.id) ?? []);
 
-    for (const message of selectedThreadDetail?.queuedMessages ?? []) {
+    for (const message of steeredDetail?.queuedMessages ?? []) {
       if (timelineIds.has(message.messageId)) continue;
       byId.set(message.messageId, {
         messageId: message.messageId,
@@ -209,7 +281,7 @@ export function useThreadComposerState() {
     }
 
     return Array.from(byId.values()).sort((left, right) => left.sortAt.localeCompare(right.sortAt));
-  }, [connectedEnvironments, selectedThreadDetail, selectedThreadQueuedMessages]);
+  }, [connectedEnvironments, steeredDetail, selectedThreadQueuedMessages]);
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
   const draftMessage = selectedDraft?.text ?? "";
@@ -299,15 +371,30 @@ export function useThreadComposerState() {
 
   const onSteerQueuedMessage = useCallback(
     async (messageId: MessageId) => {
-      if (!selectedThreadShell) {
+      if (!selectedThreadShell || steeringQueuedMessageIds.has(messageId)) {
         return;
       }
-      await steerQueuedMessage({
+      // Into the conversation up front; the chip goes with it.
+      setSteeringQueuedMessageIds((existing) => new Set(existing).add(messageId));
+      const result = await steerQueuedMessage({
         environmentId: selectedThreadShell.environmentId,
         input: { threadId: selectedThreadShell.id, messageId },
       });
+      if (result._tag === "Success") {
+        return;
+      }
+      // Back to the queue. The decider rejects a steer that races a pending
+      // turn start, so this is a reachable path, not just transport failure.
+      // Interruption reverts too — a steer that did land re-settles on the
+      // next projection.
+      setSteeringQueuedMessageIds((existing) =>
+        pruneSteeringQueuedMessageIds(existing, new Set([messageId])),
+      );
+      if (!isAtomCommandInterrupted(result)) {
+        setPendingConnectionError("Failed to send the queued message now.");
+      }
     },
-    [selectedThreadShell, steerQueuedMessage],
+    [selectedThreadShell, steerQueuedMessage, steeringQueuedMessageIds],
   );
 
   const onEditQueuedMessage = useCallback(
