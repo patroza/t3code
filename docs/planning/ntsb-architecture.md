@@ -18,7 +18,7 @@ The adapter sends an acknowledgement to the external platform. When T3 reports t
 
 T3 remains independent of the platform that produced the event. It owns its threads, messages, turns, execution state, worktrees, and branches. The adapter owns platform authentication, event delivery, source snapshots, platform identifiers, response placement, and platform-specific rendering.
 
-The adapter keeps the full record for its platform. T3 does not receive or interpret the adapter's source-event data or response destination. The adapter detects repeated deliveries, creates the snapshot, and asks T3 to start work. T3 receives the snapshot, returns the new thread, message, and turn IDs, and later reports the final outcome. The adapter adds those T3 values to its own record and posts the result on its platform.
+The adapter keeps the full record for its platform. T3 does not receive or interpret platform data. The adapter detects repeated deliveries, creates the snapshot, and asks T3 to start work. T3 receives the snapshot, returns the new thread, message, and turn IDs, and later reports the final outcome. The adapter adds those T3 values to its own record and posts the result on its platform.
 
 ## Event lifecycle
 
@@ -35,32 +35,52 @@ Starting from an external event, this happens:
 
 Before it asks T3 to create a thread, the adapter record contains:
 
-- the adapter's own source-event data;
-- the adapter's own response destination;
+- the adapter's platform data;
 - the captured source snapshot as a string;
 
 After T3 creates the thread, the adapter adds the T3 thread, user-message, and turn IDs.
 
 After it posts the acknowledgement and final response, the adapter adds their message IDs.
 
-The record retains the accepted source event, the new T3 thread it starts, and the messages the adapter sends for that thread.
+The event retains the accepted source event, the new T3 thread it starts, and the messages the adapter sends for that thread.
 
-`NtsbEventRecord` is a TypeScript pattern for adapter code, not a shared storage format. Each adapter defines, validates, and stores its own source-event data and response destination.
+`NtsbEvent` is a TypeScript pattern for adapter code, not a shared storage format. Each adapter defines, validates, and stores its own platform data.
 
 ```ts
+/** All data that is specific to the external platform. */
+type PlatformData<Source, ResponseDestination> = {
+  /** Information about the inbound event. */
+  source: Source;
+  /** Information about where replies belong. */
+  responseDestination: ResponseDestination;
+};
+
 /**
  * Tracks the lifecycle of external inbound events, such as comments or messages, that trigger T3 work.
  * External applications have no relationship to T3, and vice versa. The adapter relates events in one to the other.
  */
-type NtsbEventRecord<SourceEvent, ResponseDestination> = {
-  /** Adapter-defined information about the inbound event. */
-  source: SourceEvent;
-  /** Adapter-defined information about where replies belong. */
-  responseDestination: ResponseDestination;
+type NtsbEvent<P extends PlatformData<unknown, unknown>> =
+  | NtsbEventAccepted<P>
+  | NtsbEventThreadStarted<P>
+  | NtsbEventAcknowledgementPosted<P>
+  | NtsbEventOutcomeAvailable<P>
+  | NtsbEventResponsePosted<P>;
+
+type NtsbEventBase<P extends PlatformData<unknown, unknown>> = {
+  /** Adapter-defined data for the external platform. T3 does not inspect it. */
+  platformData: P;
   /** The captured source text used to create T3's first user message. */
   snapshot: string;
+};
+
+type NtsbEventAccepted<P extends PlatformData<unknown, unknown>> = NtsbEventBase<P> & {
+  /** The adapter has accepted the inbound event but has not started T3 work. */
+  state: "accepted";
+};
+
+type NtsbEventWithThread<P extends PlatformData<unknown, unknown>> = NtsbEventBase<P> & {
   /** The T3 IDs created after the adapter starts work. */
-  t3?: {
+  t3: {
     /** The T3 thread created from the source event. */
     threadId: string;
     /** The first T3 user message created from the snapshot. */
@@ -68,14 +88,41 @@ type NtsbEventRecord<SourceEvent, ResponseDestination> = {
     /** The T3 turn started from that message. */
     turnId: string;
   };
-  /** The external acknowledgement message posted by the adapter. */
-  acknowledgementMessageId?: string;
-  /** The external final message posted by the adapter. */
-  finalMessageId?: string;
 };
+
+type NtsbEventThreadStarted<P extends PlatformData<unknown, unknown>> = NtsbEventWithThread<P> & {
+  /** T3 has created the new thread from the source snapshot. */
+  state: "threadStarted";
+};
+
+type NtsbEventWithAcknowledgement<P extends PlatformData<unknown, unknown>> =
+  NtsbEventWithThread<P> & {
+    /** The external acknowledgement message posted by the adapter. */
+    acknowledgementMessageId: string;
+  };
+
+type NtsbEventAcknowledgementPosted<P extends PlatformData<unknown, unknown>> =
+  NtsbEventWithAcknowledgement<P> & {
+    /** The adapter has posted the acknowledgement. */
+    state: "acknowledgementPosted";
+  };
+
+type NtsbEventOutcomeAvailable<P extends PlatformData<unknown, unknown>> =
+  NtsbEventWithAcknowledgement<P> & {
+    /** T3 has produced a final outcome for the turn. */
+    state: "outcomeAvailable";
+  };
+
+type NtsbEventResponsePosted<P extends PlatformData<unknown, unknown>> =
+  NtsbEventWithAcknowledgement<P> & {
+    /** The adapter has posted T3's final response. */
+    state: "responsePosted";
+    /** The external final message posted by the adapter. */
+    finalMessageId: string;
+  };
 ```
 
-The optional fields in this initial type represent different points in the event lifecycle. They must be replaced with separate record shapes once those lifecycle transitions have been fully defined.
+TODO: Define error and retry lifecycle states when adapter behaviour is tested.
 
 ## Jira example
 
@@ -83,16 +130,18 @@ A user adds top-level Jira comment `10401` on issue `T3-123`: `@agent investigat
 
 ```ts
 {
-  source: {
-    platform: "jira",
-    eventId: "jira-event-1",
-    version: "1",
-    contextId: "T3-123",
-    messageId: "10401",
-  },
-  responseDestination: {
-    contextId: "T3-123",
-    parentMessageId: "10401",
+  state: "accepted",
+  platformData: {
+    source: {
+      eventId: "jira-event-1",
+      version: "1",
+      contextId: "T3-123",
+      messageId: "10401",
+    },
+    responseDestination: {
+      contextId: "T3-123",
+      parentMessageId: "10401",
+    },
   },
   snapshot: "@agent investigate the failed build",
 }
@@ -101,6 +150,7 @@ A user adds top-level Jira comment `10401` on issue `T3-123`: `@agent investigat
 When T3 creates the work, the adapter adds its IDs:
 
 ```ts
+state: "threadStarted",
 t3: {
   threadId: "thread-1",
   userMessageId: "message-1",
@@ -108,7 +158,7 @@ t3: {
 }
 ```
 
-The adapter posts an acknowledgement as a reply to Jira comment `10401` and adds `acknowledgementMessageId: "10402"`. When T3 produces the final result for `turn-1`, the adapter finds this record, posts another reply to comment `10401`, and adds `finalMessageId: "10403"`.
+The adapter posts an acknowledgement as a reply to Jira comment `10401`, changes the state to `"acknowledgementPosted"`, and adds `acknowledgementMessageId: "10402"`. When T3 produces the final result for `turn-1`, the state becomes `"outcomeAvailable"`. The adapter then posts another reply to comment `10401`, changes the state to `"responsePosted"`, and adds `finalMessageId: "10403"`.
 
 ## Decisions still needed
 
@@ -116,7 +166,6 @@ The adapter posts an acknowledgement as a reply to Jira comment `10401` and adds
 - Define how an adapter receives thread outcomes from T3, including replay after an adapter restart.
 - Define the exact idempotency rules for source events, edits, retries, late delivery, and out-of-order delivery.
 - Choose the durable storage implementation and retention policy for adapter records.
-- Define separate record shapes for each lifecycle transition, replacing the optional fields in `NtsbEventRecord`.
 - Define what happens when the source object is deleted, closed, archived, or otherwise changes while T3 work is running.
 
 ## Related documents
