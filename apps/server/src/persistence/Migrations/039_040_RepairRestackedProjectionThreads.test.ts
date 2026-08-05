@@ -5,7 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import { forkMigrationTable } from "../ForkMigrations.ts";
-import { upstreamMigrationTable } from "../MigrationBootstrap.ts";
+import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";
 import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
@@ -60,7 +60,7 @@ layer("039_040_RepairRestackedProjectionThreads", (it) => {
         readonly name: string;
       }>`
         SELECT migration_id, name
-        FROM effect_sql_migrations
+        FROM ${sql(legacyMigrationBackupTable)}
         WHERE migration_id >= 35
         ORDER BY migration_id
       `;
