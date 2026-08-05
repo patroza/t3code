@@ -12,6 +12,7 @@ import {
   conflictResolutionManifestSnippet,
   isProductConflictPath,
   isSuccessfulFeatureRebaseSkip,
+  linkRewriteNodeModules,
   packagesForChangedPaths,
   parseManifest,
   rebaseOpenFeaturePullRequests,
@@ -25,6 +26,41 @@ import {
   type StackManifest,
   validatePullRequestSnapshots,
 } from "./rebase-pr-stack.ts";
+
+describe("linkRewriteNodeModules", () => {
+  it("shares the source install with an isolated rewrite clone", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-stack-modules-"));
+    try {
+      const source = NodePath.join(root, "source");
+      const repo = NodePath.join(root, "repo");
+      NodeFS.mkdirSync(NodePath.join(source, "node_modules"), { recursive: true });
+      NodeFS.mkdirSync(repo);
+
+      assert.equal(linkRewriteNodeModules(source, repo), true);
+      assert.equal(
+        NodeFS.realpathSync(NodePath.join(repo, "node_modules")),
+        NodeFS.realpathSync(NodePath.join(source, "node_modules")),
+      );
+    } finally {
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the clone untouched when the source install is absent", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-stack-modules-"));
+    try {
+      const source = NodePath.join(root, "source");
+      const repo = NodePath.join(root, "repo");
+      NodeFS.mkdirSync(source);
+      NodeFS.mkdirSync(repo);
+
+      assert.equal(linkRewriteNodeModules(source, repo), false);
+      assert.equal(NodeFS.existsSync(NodePath.join(repo, "node_modules")), false);
+    } finally {
+      NodeFS.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("packagesForChangedPaths", () => {
   it("maps package and app sources to pnpm filters", () => {
