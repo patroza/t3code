@@ -259,40 +259,43 @@ describe("sortThreadsForListV2", () => {
 });
 
 describe("buildThreadListV2Items", () => {
-  it("changes only ordering when grouped by project", () => {
-    const firstProject = ProjectId.make("project-first");
-    const secondProject = ProjectId.make("project-second");
+  it("keeps upstream order by default and changes only card ordering for recency", () => {
     const threads = [
       makeThread({
-        id: ThreadId.make("newer-second"),
-        title: "Newer second",
-        projectId: secondProject,
+        id: ThreadId.make("newer-created"),
+        title: "Newer created",
         createdAt: "2026-06-01T12:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T13:00:00.000Z",
       }),
       makeThread({
-        id: ThreadId.make("older-first"),
-        title: "Older first",
-        projectId: firstProject,
+        id: ThreadId.make("older-created-more-recent"),
+        title: "Older created, more recent",
         createdAt: "2026-06-01T08:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T18:00:00.000Z",
       }),
     ];
 
-    const recency = buildThreadListV2Items({ threads, searchQuery: "", now: NOW });
-    const project = buildThreadListV2Items({
+    const defaultOrder = buildThreadListV2Items({ threads, searchQuery: "", now: NOW });
+    const recency = buildThreadListV2Items({
       threads,
       searchQuery: "",
       now: NOW,
-      projectOrder: [
-        { environmentId, projectId: firstProject },
-        { environmentId, projectId: secondProject },
-      ],
+      orderByRecency: true,
     });
 
-    expect(recency.items.map((item) => item.thread.id)).toEqual(["newer-second", "older-first"]);
-    expect(project.items.map((item) => item.thread.id)).toEqual(["older-first", "newer-second"]);
+    expect(defaultOrder.items.map((item) => item.thread.id)).toEqual([
+      "newer-created",
+      "older-created-more-recent",
+    ]);
+    expect(recency.items.map((item) => item.thread.id)).toEqual([
+      "older-created-more-recent",
+      "newer-created",
+    ]);
     expect(
-      project.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })),
-    ).toEqual(recency.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })));
+      recency.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })),
+    ).toEqual(
+      defaultOrder.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })),
+    );
   });
 
   it("hides snoozed threads and counts them — visibility parity with web", () => {

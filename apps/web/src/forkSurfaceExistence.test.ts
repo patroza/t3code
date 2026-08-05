@@ -129,16 +129,24 @@ describe("fork surface existence (anti stack-drop)", () => {
 
   it("Sidebar V2 grouping changes ordering without changing its row surface", () => {
     const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const webGrouping = readSrc("components/listEnvironmentFilter.ts");
+    const mobileGrouping = readSrc("../../mobile/src/features/home/homeListMode.ts");
+    const orderingContract = readSrc("../../../docs/sidebar-v2.md");
     expect(sidebarV2).toContain("sidebar-v2-thread-grouping-${grouping}");
     expect(sidebarV2).toContain('grouping !== "none"');
+    expect(sidebarV2).toContain('threadGrouping !== "recency"');
     expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebarV2(active))");
     expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
+    expect(webGrouping).toContain('project: "Group by default"');
+    expect(mobileGrouping).toContain('project: "Group by default"');
+    expect(orderingContract).toContain("Do not make `project` group V2 rows by project");
+    expect(orderingContract).toContain("pinned cards remain above active cards");
 
     const mobileHome = readSrc("../../mobile/src/features/home/HomeScreen.tsx");
     const mobileSidebar = readSrc("../../mobile/src/features/threads/ThreadNavigationSidebar.tsx");
     for (const source of [mobileHome, mobileSidebar]) {
-      expect(source).toContain('threadGrouping === "project"');
-      expect(source).toContain("projectOrder:");
+      expect(source).toContain('threadGrouping === "recency"');
+      expect(source).toContain("orderByRecency:");
     }
   });
 

@@ -37,7 +37,9 @@ export function otherHomeListModes(mode: HomeListMode): readonly HomeListMode[] 
 export const DEFAULT_HOME_LIST_MODE: HomeListMode = "threads";
 
 /**
- * How the Threads list is organized. Custom user groups are a follow-up.
+ * Historical persisted enum. `project` means literal project groups only in
+ * classic/V1 lists; Thread List V2 exposes it as Default/upstream order.
+ * See docs/sidebar-v2.md before changing or interpreting these values.
  */
 export type HomeThreadGrouping = "recency" | "project" | "none";
 
@@ -49,7 +51,9 @@ export const HOME_THREAD_GROUPINGS = [
 
 export const HOME_THREAD_GROUPING_LABELS: Record<HomeThreadGrouping, string> = {
   recency: "Group by recency",
-  project: "Group by project",
+  // Persisted as `project` for compatibility: classic lists keep project
+  // groups, while Thread List V2 uses the upstream default ordering.
+  project: "Group by default",
   none: "Group by nothing",
 };
 

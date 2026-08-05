@@ -830,10 +830,7 @@ export function HomeScreen(props: HomeScreenProps) {
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: props.selectedEnvironmentIds,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
-      projectOrder:
-        props.threadGrouping === "project"
-          ? projectScopes.flatMap((scope) => scope.projectRefs)
-          : undefined,
+      orderByRecency: props.threadGrouping === "recency",
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
@@ -861,7 +858,6 @@ export function HomeScreen(props: HomeScreenProps) {
     props.selectedEnvironmentIds,
     props.threads,
     threadListV2Enabled,
-    projectScopes,
     v2ScopedProjectGroup,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the

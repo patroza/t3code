@@ -740,10 +740,7 @@ function ThreadNavigationSidebarPane(
       threads: threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: options.selectedEnvironmentIds,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
-      projectOrder:
-        options.threadGrouping === "project"
-          ? projectScopes.flatMap((scope) => scope.projectRefs)
-          : undefined,
+      orderByRecency: options.threadGrouping === "recency",
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
@@ -762,7 +759,6 @@ function ThreadNavigationSidebarPane(
     snoozeWakeTick,
     options.selectedEnvironmentIds,
     options.threadGrouping,
-    projectScopes,
     props.searchQuery,
     settledVisibleCount,
     settlementEnvironmentIds,
