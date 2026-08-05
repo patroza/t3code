@@ -259,6 +259,42 @@ describe("sortThreadsForListV2", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("changes only ordering when grouped by project", () => {
+    const firstProject = ProjectId.make("project-first");
+    const secondProject = ProjectId.make("project-second");
+    const threads = [
+      makeThread({
+        id: ThreadId.make("newer-second"),
+        title: "Newer second",
+        projectId: secondProject,
+        createdAt: "2026-06-01T12:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("older-first"),
+        title: "Older first",
+        projectId: firstProject,
+        createdAt: "2026-06-01T08:00:00.000Z",
+      }),
+    ];
+
+    const recency = buildThreadListV2Items({ threads, searchQuery: "", now: NOW });
+    const project = buildThreadListV2Items({
+      threads,
+      searchQuery: "",
+      now: NOW,
+      projectOrder: [
+        { environmentId, projectId: firstProject },
+        { environmentId, projectId: secondProject },
+      ],
+    });
+
+    expect(recency.items.map((item) => item.thread.id)).toEqual(["newer-second", "older-first"]);
+    expect(project.items.map((item) => item.thread.id)).toEqual(["older-first", "newer-second"]);
+    expect(
+      project.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })),
+    ).toEqual(recency.items.map(({ variant, pinned, snoozed }) => ({ variant, pinned, snoozed })));
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [

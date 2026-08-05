@@ -227,10 +227,10 @@ export function HomeScreen(props: HomeScreenProps) {
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  // Thread List v2 only applies when Threads are grouped by project.
+  // Grouping changes V2 ordering only; the cards, pin block, and shelves are
+  // shared across project and recency modes.
   const threadListV2Enabled =
     props.listMode === "threads" &&
-    usesProjectThreadGrouping(props.threadGrouping) &&
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -830,6 +830,10 @@ export function HomeScreen(props: HomeScreenProps) {
       threads: props.threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: props.selectedEnvironmentIds,
       projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.projectRefs,
+      projectOrder:
+        props.threadGrouping === "project"
+          ? projectScopes.flatMap((scope) => scope.projectRefs)
+          : undefined,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
@@ -853,9 +857,11 @@ export function HomeScreen(props: HomeScreenProps) {
     settledShelfExpanded,
     matchedThreadKeys,
     props.searchQuery,
+    props.threadGrouping,
     props.selectedEnvironmentIds,
     props.threads,
     threadListV2Enabled,
+    projectScopes,
     v2ScopedProjectGroup,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the

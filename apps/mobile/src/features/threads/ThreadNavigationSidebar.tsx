@@ -277,10 +277,10 @@ function ThreadNavigationSidebarPane(
     () => new Set(threadSearch.matches.map(threadSearchMatchKey)),
     [threadSearch.matches],
   );
-  // Thread List v2 only applies when Threads are grouped by project.
+  // Grouping changes V2 ordering only; it must never swap in a different row
+  // renderer or remove pinning / shelves.
   const threadListV2Enabled =
     options.listMode === "threads" &&
-    usesProjectThreadGrouping(options.threadGrouping) &&
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.threadListV2Enabled === true;
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
@@ -740,6 +740,10 @@ function ThreadNavigationSidebarPane(
       threads: threads.filter((thread) => thread.archivedAt === null),
       selectedEnvironmentIds: options.selectedEnvironmentIds,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
+      projectOrder:
+        options.threadGrouping === "project"
+          ? projectScopes.flatMap((scope) => scope.projectRefs)
+          : undefined,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
@@ -757,6 +761,8 @@ function ThreadNavigationSidebarPane(
     nowMinute,
     snoozeWakeTick,
     options.selectedEnvironmentIds,
+    options.threadGrouping,
+    projectScopes,
     props.searchQuery,
     settledVisibleCount,
     settlementEnvironmentIds,
