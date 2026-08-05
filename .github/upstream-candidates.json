@@ -36,6 +36,12 @@
       "sourceSha": "a27510d060645809ae1472bba4dbb248dc624e25",
       "status": "active",
       "purpose": "Refresh open workspace file previews when disk contents change"
+    },
+    {
+      "upstreamPr": 5344,
+      "sourceSha": "783fd023c69f7ebc9c0ae657ce124cce77d94587",
+      "status": "active",
+      "purpose": "Batch live thread stream items so large-thread sync publishes client state once per batch"
     }
   ]
 }
