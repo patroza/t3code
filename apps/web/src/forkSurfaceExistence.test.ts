@@ -133,10 +133,12 @@ describe("fork surface existence (anti stack-drop)", () => {
     const mobileGrouping = readSrc("../../mobile/src/features/home/homeListMode.ts");
     const orderingContract = readSrc("../../../docs/sidebar-v2.md");
     expect(sidebarV2).toContain("sidebar-v2-thread-grouping-${grouping}");
+    expect(sidebarV2).toContain('data-testid="sidebar-v2-thread-grouping"');
+    expect(sidebarV2).toMatch(/size="icon"\s+type="button"\s+aria-label={`Thread ordering:/);
+    expect(sidebarV2).toContain('aria-label="Filter threads by project"');
     expect(sidebarV2).toContain('grouping !== "none"');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
     expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebarV2(active))");
-    expect(sidebarV2).toContain('threadGrouping === "project" ? "Default" : "Recent"');
     expect(sidebarV2).toContain("sidebar-v2-${section}-recency-${group.id}");
     expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
     expect(webGrouping).toContain('project: "Group by default"');

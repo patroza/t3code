@@ -2840,18 +2840,14 @@ export default function SidebarV2() {
                   <MenuTrigger
                     render={
                       <SidebarMenuButton
+                        size="icon"
                         type="button"
-                        className="shrink-0 gap-1.5 px-2 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         aria-label={`Thread ordering: ${WEB_THREAD_GROUPING_LABELS[threadGrouping]}`}
                         data-testid="sidebar-v2-thread-grouping"
                       />
                     }
                   >
                     {threadGrouping === "project" ? <ListIcon /> : <ClockIcon />}
-                    <span className="text-sm">
-                      {threadGrouping === "project" ? "Default" : "Recent"}
-                    </span>
-                    <ChevronDownIcon className="size-3 shrink-0 opacity-60" />
                   </MenuTrigger>
                   <MenuPopup align="start">
                     <MenuRadioGroup
