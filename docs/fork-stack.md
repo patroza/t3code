@@ -560,6 +560,44 @@ pnpm fork:stack find-upstream "worktree cleanup"
 
 ## Importing another fork
 
+### Migration namespaces during provenance imports
+
+Upstream and downstream migrations use independent manifests and ledgers:
+
+| Owner                                        | Manifest                                      | SQLite ledger            | ID policy                             |
+| -------------------------------------------- | --------------------------------------------- | ------------------------ | ------------------------------------- |
+| `pingdotgg/t3code:main`                      | `migrationEntries` in `Migrations.ts`         | `effect_sql_migrations`  | Preserve upstream ID and name exactly |
+| This fork, Tim imports, candidates, overlays | `forkMigrationEntries` in `ForkMigrations.ts` | `t3_fork_sql_migrations` | Allocate the next fork-local ID       |
+
+The one-time namespace bootstrap backs up the old mixed ledger as
+`effect_sql_migrations_backup_v1`, then regenerates `effect_sql_migrations` with canonical upstream
+rows only. Never add a fork migration to it, and never avoid a collision by choosing a large
+downstream ID. Effect's migrator uses the greatest numeric ID as a high-water mark, so a large fork
+ID would suppress every later upstream migration below it.
+
+This is a **required source adaptation** whenever rebuilding `fork/tim` or `fork/candidates`:
+
+1. Diff every imported commit against its source and inspect changes under
+   `apps/server/src/persistence/Migrations*`. Check both newly added migrations and edits or renames
+   to existing migrations.
+2. Keep migrations already present on upstream `main` in `Migrations.ts`, with the upstream numeric
+   ID and name unchanged.
+3. Move every migration introduced by Tim, an unmerged candidate, an overlay, or this fork into
+   `ForkMigrations.ts`. Give it the next durable fork-local ID even if its source commit used an
+   upstream-shaped filename or edited the shared manifest.
+4. Rewrite follow-up changes to that migration in the fork copy. Do not modify the upstream
+   migration to make it serve both histories.
+5. If an imported migration was previously released through the legacy shared ledger, extend the
+   namespace bootstrap with an exact legacy `(id, name)` mapping and a schema/data probe. Unknown
+   legacy states must fail closed; never infer application from ID alone.
+6. Run upgrade fixtures for every known released ledger shape, plus a fresh database and a database
+   where an upstream and fork migration have the same local numeric ID.
+
+When an upstream candidate is accepted, remove its provenance commit during the candidates rebuild
+but keep its historical fork-ledger assignment reserved. If upstream ships equivalent schema under
+an upstream ID, make both migrations idempotent or add an explicit reconciliation step; never relabel
+the old fork ledger row as proof that the upstream migration ran.
+
 External forks are source remotes, not branches to merge wholesale. For Tim Smart, start an import
 branch from `fork/tim`, port only the wanted source PR, and open it against `fork/tim`:
 
@@ -601,6 +639,10 @@ Each candidate PR must become exactly one provenance commit and document the ups
 source SHA, imported behavior, local adaptations, and exclusions. The registry
 `.github/upstream-candidates.json` records the same source SHA and lifecycle state. Product-specific
 follow-ups belong in `fork/changes`, not in the candidate commit.
+
+The provenance description must also list every migration that was moved or rewritten into the fork
+namespace. A candidate migration remaining in the upstream manifest is an incomplete import even if
+the layer currently passes on a fresh database.
 
 Before updating the upstream mirror, inspect every active candidate:
 

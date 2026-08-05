@@ -64,6 +64,11 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   reviewed commit per source PR on `fork/candidates`; our adaptations land separately on
   `fork/changes`. Cherry-pick only wanted commits, explicitly document imported, adapted, and
   excluded pieces, and never merge a source branch wholesale.
+- During every Tim/candidates import or restack, inspect all new and changed persistence migrations.
+  Preserve true upstream migrations unchanged in `Migrations.ts`; rewrite every Tim, candidate,
+  overlay, or downstream migration into the fork-local manifest and ledger in `ForkMigrations.ts`.
+  Never share a migration ledger between upstream and fork histories. Full rules:
+  [docs/fork-stack.md](./docs/fork-stack.md) ("Migration namespaces during provenance imports").
 - Run and deploy from `fork/integration`, never from a temporary feature or import branch.
 - All features must land in `fork/changes`, including upstreamable work. After its downstream PR
   merges, use `pnpm fork:stack promote <downstream-pr> <upstream-branch>` to extract a clean

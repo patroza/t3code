@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { upstreamMigrationTable } from "../MigrationBootstrap.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
@@ -26,7 +27,7 @@ layer("027_028_ProviderInstanceIdColumns", (it) => {
         readonly name: string;
       }>`
         SELECT migration_id, name
-        FROM effect_sql_migrations
+        FROM ${sql(upstreamMigrationTable)}
         WHERE migration_id IN (27, 28)
         ORDER BY migration_id
       `;
