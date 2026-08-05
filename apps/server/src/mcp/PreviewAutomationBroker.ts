@@ -572,10 +572,15 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         return yield* new PreviewAutomationRequestQueueClosedError(requestContext);
       }
       const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeoutMs));
-      return yield* Option.match(result, {
-        onNone: () => Effect.fail(new PreviewAutomationTimeoutError(requestContext)),
-        onSome: (value) => Effect.succeed(value as A),
-      });
+      if (Option.isSome(result)) return result.value as A;
+
+      // A connected host that stops consuming requests otherwise remains the
+      // authoritative route forever: every later tool call is queued to the
+      // same dead stream and pays another full timeout. Closing the stream
+      // makes the client subscription reconnect and lets the replacement host
+      // register with a fresh connection id.
+      yield* disconnect(connection.clientId, connection.queue);
+      return yield* new PreviewAutomationTimeoutError(requestContext);
     });
     const result = yield* awaitResponse().pipe(Effect.ensuring(removePending));
     const responseTabId = readResultTabId(result);
