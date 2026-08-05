@@ -18,7 +18,19 @@ The adapter sends an acknowledgement to the external platform. When T3 reports t
 
 T3 remains independent of the platform that produced the event. It owns its threads, messages, turns, execution state, worktrees, and branches. The adapter owns platform authentication, event delivery, source snapshots, platform identifiers, response placement, and platform-specific rendering.
 
-The adapter keeps the full record for its platform. T3 does not receive or interpret platform data. The adapter detects repeated deliveries, creates the snapshot, and asks T3 to start work. T3 receives the snapshot, returns the new thread, message, and turn IDs, and later reports the final outcome. The adapter adds those T3 values to its own record and posts the result on its platform.
+The adapter keeps the full record for its platform. T3 does not receive or interpret platform data. The adapter makes sure the same platform message does not start T3 work twice, creates the snapshot, and asks T3 to start work. T3 receives the snapshot, returns the new thread, message, and turn IDs, and later reports the final outcome. The adapter adds those T3 values to its own record and posts the result on its platform.
+
+Storage and retention are adapter implementation details, not architecture decisions. Platform-specific edge cases, such as a source item being deleted or closed while T3 is working, also belong to the adapter implementation phase.
+
+## Passing T3 context
+
+An incoming platform event carries both platform data and the T3 context needed to start work, such as the project, revision, and execution context. The adapter forwards that T3 context to T3 when it creates the new thread.
+
+`NtsbEvent` does not retain the project, revision, or execution context as lifecycle data. Once T3 creates the thread, T3 owns that information. Keeping copies in `NtsbEvent` would require the adapter to keep them in sync with T3.
+
+## Receiving T3 outcomes
+
+Adapters subscribe to T3's event log, like other T3 consumers. After T3 starts a thread, `NtsbEvent` contains its turn ID. When the adapter receives the final outcome for that turn from the event log, it uses the same `NtsbEvent` to post the result on the external platform.
 
 ## Event lifecycle
 
@@ -159,14 +171,6 @@ t3: {
 ```
 
 The adapter posts an acknowledgement as a reply to Jira comment `10401`, changes the state to `"acknowledgementPosted"`, and adds `acknowledgementMessageId: "10402"`. When T3 produces the final result for `turn-1`, the state becomes `"outcomeAvailable"`. The adapter then posts another reply to comment `10401`, changes the state to `"responsePosted"`, and adds `finalMessageId: "10403"`.
-
-## Decisions still needed
-
-- Define the request from an adapter to T3: the source snapshot, target project, starting revision, and execution settings.
-- Define how an adapter receives thread outcomes from T3, including replay after an adapter restart.
-- Define the exact idempotency rules for source events, edits, retries, late delivery, and out-of-order delivery.
-- Choose the durable storage implementation and retention policy for adapter records.
-- Define what happens when the source object is deleted, closed, archived, or otherwise changes while T3 work is running.
 
 ## Related documents
 
