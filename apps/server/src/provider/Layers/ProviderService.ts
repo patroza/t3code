@@ -311,20 +311,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ) {
             return undefined;
           }
-          return { status: "running" as const, activeTurnId: null };
+          return { status: "running" as const, activeTurnId: null, restartRecovery: null };
         case "session.exited":
-          return { status: "stopped" as const, activeTurnId: null };
+          return { status: "stopped" as const, activeTurnId: null, restartRecovery: null };
         case "session.state.changed":
           switch (event.payload.state) {
             case "starting":
               return { status: "starting" as const };
             case "error":
-              return { status: "error" as const, activeTurnId: null };
+              return { status: "error" as const, activeTurnId: null, restartRecovery: null };
             case "stopped":
-              return { status: "stopped" as const, activeTurnId: null };
+              return { status: "stopped" as const, activeTurnId: null, restartRecovery: null };
             case "ready":
             case "waiting":
-              return { status: "running" as const, activeTurnId: null };
+              return { status: "running" as const, activeTurnId: null, restartRecovery: null };
             case "running":
               return { status: "running" as const };
           }
@@ -342,6 +342,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       status: lifecycle.status,
       runtimePayload: {
         ...(lifecycle.activeTurnId !== undefined ? { activeTurnId: lifecycle.activeTurnId } : {}),
+        ...(lifecycle.restartRecovery !== undefined
+          ? { restartRecovery: lifecycle.restartRecovery }
+          : {}),
         lastRuntimeEvent: event.type,
         lastRuntimeEventAt: event.createdAt,
       },
@@ -845,6 +848,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // browser tool calls used to lose the toolkit outright.
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
       const turn = yield* routed.adapter.sendTurn(input);
+      const turnStartedAt = yield* nowIso;
       yield* directory.upsert({
         threadId: input.threadId,
         provider: routed.adapter.provider,
@@ -857,9 +861,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ? { interactionMode: input.interactionMode }
             : {}),
           activeTurnId: turn.turnId,
-          restartRecovery: null,
+          // Arm recovery while the turn is live, rather than waiting for a
+          // process-shutdown finalizer. Supervisors and desktop updaters can
+          // still exhaust their graceful-stop budget or crash after TERM; the
+          // next process must already have durable intent to resume the turn.
+          restartRecovery: makeProviderRestartRecoveryMarker({
+            interruptedProviderTurnId: turn.turnId,
+            shutdownAt: turnStartedAt,
+          }),
           lastRuntimeEvent: "provider.sendTurn",
-          lastRuntimeEventAt: yield* nowIso,
+          lastRuntimeEventAt: turnStartedAt,
         },
       });
       yield* analytics.record("provider.turn.sent", {
