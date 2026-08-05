@@ -122,6 +122,15 @@ if [ -n "$include" ] && [ -f "$include" ]; then
 fi
 fi
 
+# T3 can hand dependency installation to its asynchronous worktree setup
+# terminal. Keep the metadata cleanup and seed copy above synchronous so the
+# checkout is structurally ready, but let the UI become responsive before a
+# potentially slow package install finishes.
+if [ "${T3CODE_DEFER_DEPENDENCY_INSTALL:-0}" = "1" ]; then
+  echo "post-checkout: dependency installation deferred to T3 workspace initialization" >&2
+  exit 0
+fi
+
 # Shared-store hardlink install: fast when the store is warm, no inode clone storm.
 [ -f "$wt_root/package.json" ] || exit 0
 [ -f "$wt_root/pnpm-lock.yaml" ] || {

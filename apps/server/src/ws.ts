@@ -1069,6 +1069,7 @@ const makeWsRpcLayer = (
                     // Existing branch: no newRefName → `git worktree add <path> <branch>`
                     refName: existingBranch,
                     path: existingWorktreePath,
+                    ...(bootstrap.runSetupScript === true ? { deferDependencyInstall: true } : {}),
                   });
                   targetWorktreePath = worktree.worktree.path;
                   yield* orchestrationEngine.dispatch({
@@ -1134,6 +1135,7 @@ const makeWsRpcLayer = (
                 refName: worktreeBaseRef,
                 ...(worktreeNewRefName !== undefined ? { newRefName: worktreeNewRefName } : {}),
                 ...(worktreeBaseRefName !== undefined ? { baseRefName: worktreeBaseRefName } : {}),
+                ...(bootstrap.runSetupScript === true ? { deferDependencyInstall: true } : {}),
                 path: null,
               });
               targetWorktreePath = worktree.worktree.path;

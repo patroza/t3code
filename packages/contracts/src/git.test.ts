@@ -59,6 +59,17 @@ describe("VcsCreateWorktreeInput", () => {
 
     expect(parsed.baseRefName).toBe("origin/main");
   });
+
+  it("accepts deferring dependency installation to asynchronous project setup", () => {
+    const parsed = decodeCreateWorktreeInput({
+      cwd: "/repo",
+      refName: "main",
+      deferDependencyInstall: true,
+      path: "/tmp/worktree",
+    });
+
+    expect(parsed.deferDependencyInstall).toBe(true);
+  });
 });
 
 describe("GitPreparePullRequestThreadInput", () => {

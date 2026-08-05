@@ -38,4 +38,10 @@ Successful reconciliation records the package/lockfile state under
 which Git already completed. Explicit invocation from the target is required
 for bare or stale source repositories.
 
+When T3 will launch a configured worktree setup script, its VCS driver sets
+`T3CODE_DEFER_DEPENDENCY_INSTALL=1`. The hook still clears stale emit and copies
+seed files, but skips `pnpm install` so setup can perform it asynchronously in
+the thread terminal. Raw Git worktree creation does not set this marker and
+continues to return with dependencies prepared.
+
 Lefthook may later orchestrate parallel jobs, but is intentionally unused now.

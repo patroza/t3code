@@ -7521,6 +7521,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           refName: fetchedOriginCommit,
           newRefName: "t3code/bootstrap-refName",
           baseRefName: "main",
+          deferDependencyInstall: true,
           path: null,
         });
         assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
@@ -8175,6 +8176,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         cwd: "/tmp/project",
         refName: "t3code/recreate",
         path: missingWorktreePath,
+        deferDependencyInstall: true,
       });
       assert.equal(runForThread.mock.calls.length, 1);
       assert.deepEqual(refreshStatus.mock.calls[0]?.[0], missingWorktreePath);

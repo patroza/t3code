@@ -1410,6 +1410,52 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("passes deferred dependency installation through native and explicit hooks", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(
+          yield* makeTmpDir("git-worktrees-"),
+          "deferred-worktree",
+        );
+
+        yield* fileSystem.makeDirectory(pathService.join(cwd, ".githooks"));
+        const hookPath = pathService.join(cwd, ".githooks", "post-checkout");
+        yield* fileSystem.writeFileString(
+          hookPath,
+          [
+            "#!/bin/sh",
+            'mode="${T3CODE_DEFER_DEPENDENCY_INSTALL:-blocking}"',
+            'printf "%s\\n" "$mode" >>"$(git rev-parse --show-toplevel)/.preparation-mode"',
+            "",
+          ].join("\n"),
+        );
+        yield* fileSystem.chmod(hookPath, 0o755);
+        yield* git(cwd, ["add", ".githooks/post-checkout"]);
+        yield* git(cwd, ["commit", "-m", "add checkout hook"]);
+        yield* git(cwd, ["config", "core.hooksPath", ".githooks"]);
+
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const created = yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/deferred-worktree",
+          deferDependencyInstall: true,
+        });
+
+        assert.deepEqual(created.preparation, { _tag: "ready", attempts: 1 });
+        assert.deepEqual(
+          (yield* fileSystem.readFileString(pathService.join(worktreePath, ".preparation-mode")))
+            .trim()
+            .split("\n"),
+          ["1", "1"],
+        );
+      }),
+    );
+
     it.effect("keeps a worktree when deterministic target preparation fails", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

@@ -2864,8 +2864,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
+    const preparationEnv = input.deferDependencyInstall
+      ? { T3CODE_DEFER_DEPENDENCY_INSTALL: "1" }
+      : undefined;
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorDetail: "git worktree add failed",
+      ...(preparationEnv === undefined ? {} : { env: preparationEnv }),
     });
 
     // A relative core.hooksPath is resolved from the worktree where `git
@@ -2907,7 +2911,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const runPreparation = (attempts: number) =>
         executeGit("GitVcsDriver.createWorktree.prepare", worktreePath, hookArgs, {
           allowNonZeroExit: true,
-          env: { T3CODE_WORKTREE_PREPARATION_STRICT: "1" },
+          env: {
+            ...preparationEnv,
+            T3CODE_WORKTREE_PREPARATION_STRICT: "1",
+          },
         }).pipe(
           Effect.map((result) =>
             result.exitCode === 0
