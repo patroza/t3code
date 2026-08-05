@@ -34,13 +34,13 @@ Implementation is out of scope for this planning stage.
 
 ## Proposal: A triggering event creates a new thread
 
-Each event that matches a trigger creates a new T3 thread from the event and its captured source snapshot; the detailed trigger, processing, concurrency, and response-routing rules are defined in [ntsb-event-processing.md](./ntsb-event-processing.md).
+Each event that matches a trigger creates a new T3 thread from the event and its captured source snapshot; the detailed trigger, processing, concurrency, and response-routing rules are defined in [ntbs-event-processing.md](./ntbs-event-processing.md).
 
 ## Agreed decisions
 
 ### Which external messages or state changes trigger an agent turn, and which are ignored or recorded without starting work?
 
-The platform-specific trigger forms, ignored events, thread creation, and response routing are defined in [ntsb-event-processing.md](./ntsb-event-processing.md).
+The platform-specific trigger forms, ignored events, thread creation, and response routing are defined in [ntbs-event-processing.md](./ntbs-event-processing.md).
 
 ### What identifies the same external interaction for correlation and projection?
 

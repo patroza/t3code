@@ -26,11 +26,11 @@ Storage and retention are adapter implementation details, not architecture decis
 
 An incoming platform event carries both platform data and the T3 context needed to start work, such as the project, revision, and execution context. The adapter forwards that T3 context to T3 when it creates the new thread.
 
-`NtsbEvent` does not retain the project, revision, or execution context as lifecycle data. Once T3 creates the thread, T3 owns that information. Keeping copies in `NtsbEvent` would require the adapter to keep them in sync with T3.
+`NtbsEvent` does not retain the project, revision, or execution context as lifecycle data. Once T3 creates the thread, T3 owns that information. Keeping copies in `NtbsEvent` would require the adapter to keep them in sync with T3.
 
 ## Receiving T3 outcomes
 
-Adapters subscribe to T3's event log, like other T3 consumers. After T3 starts a thread, `NtsbEvent` contains its turn ID. When the adapter receives the final outcome for that turn from the event log, it uses the same `NtsbEvent` to post the result on the external platform.
+Adapters subscribe to T3's event log, like other T3 consumers. After T3 starts a thread, `NtbsEvent` contains its turn ID. When the adapter receives the final outcome for that turn from the event log, it uses the same `NtbsEvent` to post the result on the external platform.
 
 ## Event lifecycle
 
@@ -56,7 +56,7 @@ After it posts the acknowledgement and final response, the adapter adds their me
 
 The event retains the accepted source event, the new T3 thread it starts, and the messages the adapter sends for that thread.
 
-`NtsbEvent` is a TypeScript pattern for adapter code, not a shared storage format. Each adapter defines, validates, and stores its own platform data.
+`NtbsEvent` is a TypeScript pattern for adapter code, not a shared storage format. Each adapter defines, validates, and stores its own platform data.
 
 ```ts
 /** All data that is specific to the external platform. */
@@ -71,26 +71,26 @@ type PlatformData<Source, ResponseDestination> = {
  * Tracks the lifecycle of external inbound events, such as comments or messages, that trigger T3 work.
  * External applications have no relationship to T3, and vice versa. The adapter relates events in one to the other.
  */
-type NtsbEvent<P extends PlatformData<unknown, unknown>> =
-  | NtsbEventAccepted<P>
-  | NtsbEventThreadStarted<P>
-  | NtsbEventAcknowledgementPosted<P>
-  | NtsbEventOutcomeAvailable<P>
-  | NtsbEventResponsePosted<P>;
+type NtbsEvent<P extends PlatformData<unknown, unknown>> =
+  | NtbsEventAccepted<P>
+  | NtbsEventThreadStarted<P>
+  | NtbsEventAcknowledgementPosted<P>
+  | NtbsEventOutcomeAvailable<P>
+  | NtbsEventResponsePosted<P>;
 
-type NtsbEventBase<P extends PlatformData<unknown, unknown>> = {
+type NtbsEventBase<P extends PlatformData<unknown, unknown>> = {
   /** Adapter-defined data for the external platform. T3 does not inspect it. */
   platformData: P;
   /** The captured source text used to create T3's first user message. */
   snapshot: string;
 };
 
-type NtsbEventAccepted<P extends PlatformData<unknown, unknown>> = NtsbEventBase<P> & {
+type NtbsEventAccepted<P extends PlatformData<unknown, unknown>> = NtbsEventBase<P> & {
   /** The adapter has accepted the inbound event but has not started T3 work. */
   state: "accepted";
 };
 
-type NtsbEventWithThread<P extends PlatformData<unknown, unknown>> = NtsbEventBase<P> & {
+type NtbsEventWithThread<P extends PlatformData<unknown, unknown>> = NtbsEventBase<P> & {
   /** The T3 IDs created after the adapter starts work. */
   t3: {
     /** The T3 thread created from the source event. */
@@ -102,31 +102,31 @@ type NtsbEventWithThread<P extends PlatformData<unknown, unknown>> = NtsbEventBa
   };
 };
 
-type NtsbEventThreadStarted<P extends PlatformData<unknown, unknown>> = NtsbEventWithThread<P> & {
+type NtbsEventThreadStarted<P extends PlatformData<unknown, unknown>> = NtbsEventWithThread<P> & {
   /** T3 has created the new thread from the source snapshot. */
   state: "threadStarted";
 };
 
-type NtsbEventWithAcknowledgement<P extends PlatformData<unknown, unknown>> =
-  NtsbEventWithThread<P> & {
+type NtbsEventWithAcknowledgement<P extends PlatformData<unknown, unknown>> =
+  NtbsEventWithThread<P> & {
     /** The external acknowledgement message posted by the adapter. */
     acknowledgementMessageId: string;
   };
 
-type NtsbEventAcknowledgementPosted<P extends PlatformData<unknown, unknown>> =
-  NtsbEventWithAcknowledgement<P> & {
+type NtbsEventAcknowledgementPosted<P extends PlatformData<unknown, unknown>> =
+  NtbsEventWithAcknowledgement<P> & {
     /** The adapter has posted the acknowledgement. */
     state: "acknowledgementPosted";
   };
 
-type NtsbEventOutcomeAvailable<P extends PlatformData<unknown, unknown>> =
-  NtsbEventWithAcknowledgement<P> & {
+type NtbsEventOutcomeAvailable<P extends PlatformData<unknown, unknown>> =
+  NtbsEventWithAcknowledgement<P> & {
     /** T3 has produced a final outcome for the turn. */
     state: "outcomeAvailable";
   };
 
-type NtsbEventResponsePosted<P extends PlatformData<unknown, unknown>> =
-  NtsbEventWithAcknowledgement<P> & {
+type NtbsEventResponsePosted<P extends PlatformData<unknown, unknown>> =
+  NtbsEventWithAcknowledgement<P> & {
     /** The adapter has posted T3's final response. */
     state: "responsePosted";
     /** The external final message posted by the adapter. */
@@ -174,5 +174,5 @@ The adapter posts an acknowledgement as a reply to Jira comment `10401`, changes
 
 ## Related documents
 
-- [ntsb.md](./ntsb.md) records the overall scope and agreed decisions.
-- [ntsb-event-processing.md](./ntsb-event-processing.md) defines inbound triggers and outbound messages on each platform.
+- [ntbs.md](./ntbs.md) records the overall scope and agreed decisions.
+- [ntbs-event-processing.md](./ntbs-event-processing.md) defines inbound triggers and outbound messages on each platform.
