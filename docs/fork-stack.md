@@ -564,15 +564,16 @@ pnpm fork:stack find-upstream "worktree cleanup"
 
 Upstream and downstream migrations use independent manifests and ledgers:
 
-| Owner                                        | Manifest                                      | SQLite ledger                | ID policy                             |
-| -------------------------------------------- | --------------------------------------------- | ---------------------------- | ------------------------------------- |
-| `pingdotgg/t3code:main`                      | `migrationEntries` in `Migrations.ts`         | `t3_upstream_sql_migrations` | Preserve upstream ID and name exactly |
-| This fork, Tim imports, candidates, overlays | `forkMigrationEntries` in `ForkMigrations.ts` | `t3_fork_sql_migrations`     | Allocate the next fork-local ID       |
+| Owner                                        | Manifest                                      | SQLite ledger            | ID policy                             |
+| -------------------------------------------- | --------------------------------------------- | ------------------------ | ------------------------------------- |
+| `pingdotgg/t3code:main`                      | `migrationEntries` in `Migrations.ts`         | `effect_sql_migrations`  | Preserve upstream ID and name exactly |
+| This fork, Tim imports, candidates, overlays | `forkMigrationEntries` in `ForkMigrations.ts` | `t3_fork_sql_migrations` | Allocate the next fork-local ID       |
 
-The old shared `effect_sql_migrations` ledger is read only by the one-time namespace bootstrap. Never
-add another migration to it, and never avoid a collision by choosing a large downstream ID. Effect's
-migrator uses the greatest numeric ID as a high-water mark, so a large fork ID would suppress every
-later upstream migration below it.
+The one-time namespace bootstrap backs up the old mixed ledger as
+`effect_sql_migrations_backup_v1`, then regenerates `effect_sql_migrations` with canonical upstream
+rows only. Never add a fork migration to it, and never avoid a collision by choosing a large
+downstream ID. Effect's migrator uses the greatest numeric ID as a high-water mark, so a large fork
+ID would suppress every later upstream migration below it.
 
 This is a **required source adaptation** whenever rebuilding `fork/tim` or `fork/candidates`:
 

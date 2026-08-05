@@ -6,7 +6,8 @@ import { forkMigrationTable } from "./ForkMigrations.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 
-export const upstreamMigrationTable = "t3_upstream_sql_migrations";
+export const upstreamMigrationTable = "effect_sql_migrations";
+export const legacyMigrationBackupTable = "effect_sql_migrations_backup_v1";
 
 const namespaceTable = "t3_migration_namespaces";
 const namespaceVersion = 1;
@@ -134,18 +135,24 @@ const verifySourceAttributionSchema = Effect.fn("MigrationBootstrap.verifySource
 
 const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedger")(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* createLedger(sql, upstreamMigrationTable);
   yield* createLedger(sql, forkMigrationTable);
 
-  if (!(yield* tableExists("effect_sql_migrations"))) {
+  if (!(yield* tableExists(upstreamMigrationTable))) {
+    yield* createLedger(sql, upstreamMigrationTable);
     return;
   }
 
   const legacyRows = yield* sql<LedgerRow>`
     SELECT migration_id, name
-    FROM effect_sql_migrations
+    FROM ${sql(upstreamMigrationTable)}
     ORDER BY migration_id
   `;
+  yield* createLedger(sql, legacyMigrationBackupTable);
+  if (legacyRows.length > 0) {
+    yield* sql`INSERT OR IGNORE INTO ${sql(legacyMigrationBackupTable)} ${sql.insert(
+      legacyRows.map(({ migration_id, name }) => ({ migration_id, name })),
+    )}`;
+  }
   if (legacyRows.length === 0) {
     return;
   }
@@ -178,17 +185,9 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
         migration_id <= canonicalPrefix && upstreamNames.get(migration_id) === name,
     )
     .map(({ migration_id, name }) => ({ migration_id, name }));
-  if (copiedUpstreamRows.length > 0) {
-    yield* sql`INSERT OR IGNORE INTO ${sql(upstreamMigrationTable)} ${sql.insert(copiedUpstreamRows)}`;
-  }
-
   if (tail.length > 0) {
     yield* Migration0035;
     yield* Migration0036;
-    yield* sql`INSERT OR IGNORE INTO ${sql(upstreamMigrationTable)} ${sql.insert([
-      { migration_id: 35, name: upstreamNames.get(35)! },
-      { migration_id: 36, name: upstreamNames.get(36)! },
-    ])}`;
   }
 
   const forkNames = new Set(legacyRows.map(({ name }) => name));
@@ -225,6 +224,19 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
     yield* sql`INSERT OR IGNORE INTO ${sql(forkMigrationTable)} ${sql.insert([
       { migration_id: 3, name: "ProjectionThreadSourceAttribution" },
     ])}`;
+  }
+
+  yield* sql`DELETE FROM ${sql(upstreamMigrationTable)}`;
+  if (copiedUpstreamRows.length > 0) {
+    yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(copiedUpstreamRows)}`;
+  }
+  if (tail.length > 0) {
+    const reconciledRows = [35, 36]
+      .filter((migration_id) => migration_id > canonicalPrefix)
+      .map((migration_id) => ({ migration_id, name: upstreamNames.get(migration_id)! }));
+    if (reconciledRows.length > 0) {
+      yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(reconciledRows)}`;
+    }
   }
 });
 

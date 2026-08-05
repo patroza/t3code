@@ -5,7 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Migrator from "effect/unstable/sql/Migrator";
 
 import { forkMigrationTable } from "../ForkMigrations.ts";
-import { upstreamMigrationTable } from "../MigrationBootstrap.ts";
+import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";
 import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
@@ -35,11 +35,19 @@ layer("fork migration namespace for a repaired database", (it) => {
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
       `;
+      const backup = yield* sql<LedgerRow>`
+        SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
+      `;
       assert.deepStrictEqual(upstream.slice(-2), [
         { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
       ]);
       assert.deepStrictEqual(fork, [{ migration_id: 1, name: "ProjectionQueuedMessages" }]);
+      assert.deepStrictEqual(backup.slice(-3), [
+        { migration_id: 37, name: "ProjectionQueuedMessages" },
+        { migration_id: 39, name: "RepairProjectionThreadTitleRegeneration" },
+        { migration_id: 40, name: "RepairProjectionThreadsPinned" },
+      ]);
     }),
   );
 });
