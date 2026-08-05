@@ -127,6 +127,21 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain('aria-label": "provider usage status"');
   });
 
+  it("Sidebar V2 grouping changes ordering without changing its row surface", () => {
+    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    expect(sidebarV2).toContain("sidebar-v2-thread-grouping-${grouping}");
+    expect(sidebarV2).toContain('grouping !== "none"');
+    expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebarV2(active))");
+    expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
+
+    const mobileHome = readSrc("../../mobile/src/features/home/HomeScreen.tsx");
+    const mobileSidebar = readSrc("../../mobile/src/features/threads/ThreadNavigationSidebar.tsx");
+    for (const source of [mobileHome, mobileSidebar]) {
+      expect(source).toContain('threadGrouping === "project"');
+      expect(source).toContain("projectOrder:");
+    }
+  });
+
   it("every send path routes on the steering-queue prediction", () => {
     const chatView = readSrc("components/ChatView.tsx");
     // Both send paths (composer + plan follow-up) branch on the prediction:

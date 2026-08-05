@@ -170,6 +170,15 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  DEFAULT_WEB_THREAD_GROUPING,
+  LIST_THREAD_GROUPING_STORAGE_KEY,
+  WEB_THREAD_GROUPING_LABELS,
+  WEB_THREAD_GROUPINGS,
+  WebThreadGroupingSchema,
+  type WebThreadGrouping,
+} from "./listEnvironmentFilter";
 
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -1214,6 +1223,11 @@ export default function SidebarV2() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const [threadGrouping, setThreadGrouping] = useLocalStorage(
+    LIST_THREAD_GROUPING_STORAGE_KEY,
+    DEFAULT_WEB_THREAD_GROUPING,
+    WebThreadGroupingSchema,
+  );
   const {
     settleThread,
     unsettleThread,
@@ -1395,6 +1409,30 @@ export default function SidebarV2() {
         ),
       ),
     [projectGroups],
+  );
+  const projectRankByRef = useMemo(
+    () =>
+      new Map(
+        projectGroups.flatMap((group, rank) =>
+          group.memberProjectRefs.map(
+            (ref) => [`${ref.environmentId}:${ref.projectId}`, rank] as const,
+          ),
+        ),
+      ),
+    [projectGroups],
+  );
+  const orderForThreadGrouping = useCallback(
+    (ordered: EnvironmentThreadShell[]) => {
+      if (threadGrouping !== "project") return ordered;
+      return ordered.sort(
+        (left, right) =>
+          (projectRankByRef.get(`${left.environmentId}:${left.projectId}`) ??
+            Number.MAX_SAFE_INTEGER) -
+          (projectRankByRef.get(`${right.environmentId}:${right.projectId}`) ??
+            Number.MAX_SAFE_INTEGER),
+      );
+    },
+    [projectRankByRef, threadGrouping],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -1674,21 +1712,24 @@ export default function SidebarV2() {
       return {
         // Same static creation order as the inbox: a pin freezes prominence,
         // it does not introduce a new ordering scheme.
-        pinnedThreads: sortThreadsForSidebarV2(pinned),
-        activeThreads: sortThreadsForSidebarV2(active),
+        pinnedThreads: orderForThreadGrouping(sortThreadsForSidebarV2(pinned)),
+        activeThreads: orderForThreadGrouping(sortThreadsForSidebarV2(active)),
         // Soonest wake first: "what comes back next" is the shelf's question.
-        snoozedThreads: snoozed.toSorted(
-          (left, right) =>
-            firstValidTimestampMs(left.snoozedUntil ?? null) -
-            firstValidTimestampMs(right.snoozedUntil ?? null),
+        snoozedThreads: orderForThreadGrouping(
+          snoozed.toSorted(
+            (left, right) =>
+              firstValidTimestampMs(left.snoozedUntil ?? null) -
+              firstValidTimestampMs(right.snoozedUntil ?? null),
+          ),
         ),
-        settledThreads: sortSettledThreadsForSidebarV2(settled),
+        settledThreads: orderForThreadGrouping(sortSettledThreadsForSidebarV2(settled)),
         snoozeNow: preciseNow,
       };
     }, [
       autoSettleAfterDays,
       changeRequestStateByKey,
       nowMinute,
+      orderForThreadGrouping,
       scopedProjectKeys,
       serverConfigs,
       snoozeWakeTick,
@@ -2804,6 +2845,40 @@ export default function SidebarV2() {
             </div>
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        type="button"
+                        aria-label={`Thread ordering: ${WEB_THREAD_GROUPING_LABELS[threadGrouping]}`}
+                        data-testid="sidebar-v2-thread-grouping"
+                      />
+                    }
+                  >
+                    {threadGrouping === "project" ? <FolderIcon /> : <ClockIcon />}
+                  </MenuTrigger>
+                  <MenuPopup align="start">
+                    <MenuRadioGroup
+                      value={threadGrouping}
+                      onValueChange={(value) => setThreadGrouping(value as WebThreadGrouping)}
+                    >
+                      {WEB_THREAD_GROUPINGS.filter((grouping) => grouping !== "none").map(
+                        (grouping) => (
+                          <MenuRadioItem
+                            key={grouping}
+                            value={grouping}
+                            closeOnClick
+                            data-testid={`sidebar-v2-thread-grouping-${grouping}`}
+                          >
+                            {grouping === "project" ? <FolderIcon /> : <ClockIcon />}
+                            {WEB_THREAD_GROUPING_LABELS[grouping]}
+                          </MenuRadioItem>
+                        ),
+                      )}
+                    </MenuRadioGroup>
+                  </MenuPopup>
+                </Menu>
                 <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                   <MenuTrigger
                     render={
