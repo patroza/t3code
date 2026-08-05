@@ -806,10 +806,24 @@ function updateState(
   return updated;
 }
 
+/** Reuse the source checkout's installed dependencies in the isolated rewrite
+ * clone. `verify-head` runs from that clone, so installing only in sourceRoot
+ * is otherwise invisible and every package-touching replay aborts. */
+export function linkRewriteNodeModules(sourceRoot: string, repoDir: string): boolean {
+  const source = NodePath.join(sourceRoot, "node_modules");
+  if (!NodeFS.existsSync(source)) return false;
+  const target = NodePath.join(repoDir, "node_modules");
+  if (NodeFS.existsSync(target)) return true;
+  // Junctions use absolute targets on Windows; on POSIX the directory type is ignored.
+  NodeFS.symlinkSync(source, target, "junction");
+  return true;
+}
+
 function initializeState(
   sourceRoot: string,
   manifest: StackManifest,
   initialBaseForAll: boolean,
+  verifyEachCommit = false,
 ): { readonly stateDir: string; readonly state: PersistedState } {
   // Disk-backed: full git clones must not land on tmpfs /tmp (host) or RAM root (t3vm).
   const stateDir = mkdtempDiskBacked("rebase-pr-stack-", {
@@ -832,6 +846,7 @@ function initializeState(
       },
     );
     git(repoDir, ["config", "commit.gpgsign", "false"], { stateDir });
+    if (verifyEachCommit) linkRewriteNodeModules(sourceRoot, repoDir);
     git(repoDir, ["remote", "add", "origin", originUrl], { stateDir });
     git(repoDir, ["remote", "add", manifest.upstreamRemote, upstreamUrl], { stateDir });
 
@@ -1707,6 +1722,7 @@ export async function syncStack(options: StackRunOptions): Promise<StackRunResul
     sourceRoot,
     manifest,
     options.initialBaseForAll === true,
+    options.verifyEachCommit === true,
   );
   const completed = continueOperations(stateDir, state, {
     verifyEachCommit: options.verifyEachCommit === true,
