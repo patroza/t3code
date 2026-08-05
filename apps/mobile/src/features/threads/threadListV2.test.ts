@@ -850,6 +850,69 @@ describe("buildThreadListV2ListItems", () => {
     ]);
   });
 
+  it("adds recency headers to active and settled sections while pins stay above them", () => {
+    const now = "2026-06-02T12:00:00.000Z";
+    const groupedLayout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("pinned"),
+          title: "pinned",
+          pinnedAt: now,
+          latestUserMessageAt: "2026-05-20T10:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("active-recent"),
+          title: "active recent",
+          latestUserMessageAt: "2026-06-02T11:30:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("active-yesterday"),
+          title: "active yesterday",
+          latestUserMessageAt: "2026-06-01T10:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("settled-recent"),
+          title: "settled recent",
+          settledOverride: "settled",
+          settledAt: now,
+          latestUserMessageAt: "2026-06-02T11:15:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("settled-yesterday"),
+          title: "settled yesterday",
+          settledOverride: "settled",
+          settledAt: now,
+          latestUserMessageAt: "2026-06-01T09:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now,
+      orderByRecency: true,
+    });
+    const items = buildThreadListV2ListItems({
+      items: groupedLayout.items,
+      pendingTasks: [],
+      settledCount: groupedLayout.settledCount,
+      settledShelfHeaderIndex: groupedLayout.settledShelfHeaderIndex,
+      groupByRecency: true,
+      snoozeLabelNow: now,
+    });
+
+    expect(items.map((item) => item.key)).toEqual([
+      `v2-thread:${environmentId}:pinned`,
+      "v2-recency-header:active:last_hour",
+      `v2-thread:${environmentId}:active-recent`,
+      "v2-recency-header:active:yesterday",
+      `v2-thread:${environmentId}:active-yesterday`,
+      "v2-settled-shelf",
+      "v2-recency-header:settled:last_hour",
+      `v2-thread:${environmentId}:settled-recent`,
+      "v2-recency-header:settled:yesterday",
+      `v2-thread:${environmentId}:settled-yesterday`,
+    ]);
+  });
+
   it("places queued tasks before a collapsed snoozed shelf", () => {
     const snoozedLayout = buildThreadListV2Items({
       threads: [
