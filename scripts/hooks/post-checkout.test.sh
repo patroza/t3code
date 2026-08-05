@@ -68,4 +68,18 @@ set -e
   exit 1
 }
 
+# App-created worktrees can defer the dependency phase to T3's visible async
+# setup terminal without weakening strict failures for normal preparation.
+deferred_out="$(
+  T3CODE_DEFER_DEPENDENCY_INSTALL=1 T3CODE_WORKTREE_PREPARATION_STRICT=1 \
+    sh .githooks/post-checkout HEAD HEAD 1 2>&1
+)"
+case "${deferred_out}" in
+  *"dependency installation deferred to T3 workspace initialization"*) ;;
+  *)
+    echo "FAIL: deferred preparation did not report the async handoff" >&2
+    exit 1
+    ;;
+esac
+
 echo "worktree post-checkout hook tests passed"
