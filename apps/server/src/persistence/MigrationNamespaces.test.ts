@@ -11,7 +11,11 @@ describe("migration namespaces", () => {
       [35, "ProjectionThreadTitleRegeneration"],
       [36, "ProjectionThreadsPinned"],
     ]);
-    assert.deepStrictEqual(forkMigrationManifest, [[1, "ProjectionQueuedMessages"]]);
+    assert.deepStrictEqual(forkMigrationManifest, [
+      [1, "ProjectionQueuedMessages"],
+      [2, "SessionIdentityClaims"],
+      [3, "ProjectionThreadSourceAttribution"],
+    ]);
 
     const upstreamNames = new Set<string>(migrationManifest.map(([, name]) => name));
     for (const [, name] of forkMigrationManifest) {

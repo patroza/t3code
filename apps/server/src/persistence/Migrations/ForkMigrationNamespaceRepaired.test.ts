@@ -39,7 +39,11 @@ layer("fork migration namespace for a repaired database", (it) => {
         { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
       ]);
-      assert.deepStrictEqual(fork, [{ migration_id: 1, name: "ProjectionQueuedMessages" }]);
+      assert.deepStrictEqual(fork, [
+        { migration_id: 1, name: "ProjectionQueuedMessages" },
+        { migration_id: 2, name: "SessionIdentityClaims" },
+        { migration_id: 3, name: "ProjectionThreadSourceAttribution" },
+      ]);
     }),
   );
 });
