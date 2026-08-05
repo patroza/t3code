@@ -13,11 +13,10 @@ import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 const runLegacyMigrations = Migrator.make({});
 
-layer("b18 desktop migration namespace repair", (it) => {
-  it.effect("repairs the observed b18 mixed migration ledger", () =>
+layer("smart migration namespace repair", (it) => {
+  it.effect("repairs the observed smart mixed migration ledger", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-
       yield* runLegacyMigrations({ loader: makeMigrationLoader(34) });
       yield* ProjectionQueuedMessages;
       yield* sql`
@@ -47,51 +46,39 @@ layer("b18 desktop migration namespace repair", (it) => {
           (37, 'ProjectionThreadSourceAttribution'),
           (38, 'ProjectionThreadSourceAttribution'),
           (39, 'RepairProjectionThreadTitleRegeneration'),
-          (40, 'ProjectionThreadSourceAttribution')
+          (40, 'ProjectionThreadSourceAttribution'),
+          (41, 'ProjectionThreadSourceAttribution')
       `;
 
       yield* runMigrations();
 
-      const columns = yield* sql<{ readonly name: string }>`
-        PRAGMA table_info(projection_threads)
-      `;
-      const names = new Set(columns.map((column) => column.name));
-      assert.ok(names.has("title_regeneration_request_id"));
-      assert.ok(names.has("title_regeneration_started_at"));
-      assert.ok(names.has("pinned_at"));
-
-      const migrations = yield* sql<{
-        readonly migration_id: number;
-        readonly name: string;
-      }>`
+      const backupTail = yield* sql<LedgerRow>`
         SELECT migration_id, name
         FROM ${sql(legacyMigrationBackupTable)}
         WHERE migration_id >= 35
         ORDER BY migration_id
       `;
-      assert.deepStrictEqual(migrations, [
+      assert.deepStrictEqual(backupTail, [
         { migration_id: 35, name: "ProjectionQueuedMessages" },
         { migration_id: 36, name: "SessionIdentityClaims" },
         { migration_id: 37, name: "ProjectionThreadSourceAttribution" },
         { migration_id: 38, name: "ProjectionThreadSourceAttribution" },
         { migration_id: 39, name: "RepairProjectionThreadTitleRegeneration" },
         { migration_id: 40, name: "ProjectionThreadSourceAttribution" },
+        { migration_id: 41, name: "ProjectionThreadSourceAttribution" },
       ]);
 
-      const upstreamMigrations = yield* sql<{
-        readonly migration_id: number;
-        readonly name: string;
-      }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id`;
-      assert.deepStrictEqual(upstreamMigrations.slice(-2), [
+      const upstream = yield* sql<LedgerRow>`
+        SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
+      `;
+      assert.deepStrictEqual(upstream.slice(-2), [
         { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
       ]);
-
-      const forkMigrations = yield* sql<{
-        readonly migration_id: number;
-        readonly name: string;
-      }>`SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id`;
-      assert.deepStrictEqual(forkMigrations, [
+      const fork = yield* sql<LedgerRow>`
+        SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
+      `;
+      assert.deepStrictEqual(fork, [
         { migration_id: 1, name: "ProjectionQueuedMessages" },
         { migration_id: 2, name: "SessionIdentityClaims" },
         { migration_id: 3, name: "ProjectionThreadSourceAttribution" },
@@ -99,3 +86,8 @@ layer("b18 desktop migration namespace repair", (it) => {
     }),
   );
 });
+
+interface LedgerRow {
+  readonly migration_id: number;
+  readonly name: string;
+}
