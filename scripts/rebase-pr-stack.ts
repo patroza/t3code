@@ -6,6 +6,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 
 import { diskBackedWorkRoot, mkdtempDiskBacked } from "./lib/disk-backed-tmp.ts";
@@ -204,6 +205,25 @@ export function packagesForChangedPaths(paths: ReadonlyArray<string>): ReadonlyA
   return [...filters].sort();
 }
 
+const PACKAGE_DIRECTORIES: Readonly<Record<string, string>> = {
+  "@t3tools/contracts": "packages/contracts",
+  "@t3tools/shared": "packages/shared",
+  "@t3tools/client-runtime": "packages/client-runtime",
+  "@t3tools/ssh": "packages/ssh",
+  "@t3tools/tailscale": "packages/tailscale",
+  "effect-acp": "packages/effect-acp",
+  "effect-codex-app-server": "packages/effect-codex-app-server",
+  t3: "apps/server",
+  "@t3tools/web": "apps/web",
+  "@t3tools/mobile": "apps/mobile",
+  "@t3tools/desktop": "apps/desktop",
+  "@t3tools/discord-bot": "apps/discord-bot",
+  "t3-code": "apps/vscode",
+  "@t3tools/marketing": "apps/marketing",
+  "@t3tools/scripts": "scripts",
+  "@t3tools/oxlint-plugin-t3code": "oxlint-plugin-t3code",
+};
+
 /**
  * Typecheck packages touched by `HEAD` vs its first parent. Used as
  * `git rebase --exec` and as the `verify-head` CLI entry.
@@ -244,20 +264,23 @@ export function verifyReplayHead(
   }
   const sha = git(repoDir, ["rev-parse", "--short", "HEAD"], gitOpts);
   const subject = git(repoDir, ["log", "-1", "--format=%s"], gitOpts);
+  const tsgo = NodePath.join(
+    repoDir,
+    "node_modules",
+    "@typescript",
+    "native-preview",
+    "bin",
+    "tsgo.js",
+  );
   console.log(`verify-head: ${sha} ${subject} → ${packages.join(", ")}`);
   for (const pkg of packages) {
-    // Prefer `exec tsgo` over `run typecheck` so pnpm does not try a frozen
-    // install against a historical package.json/lockfile pair mid-rebase.
-    const result = run("pnpm", ["--filter", pkg, "exec", "tsgo", "--noEmit"], {
-      cwd: repoDir,
+    const packageDirectory = PACKAGE_DIRECTORIES[pkg];
+    if (!packageDirectory) throw new StackError(`No typecheck directory configured for ${pkg}.`);
+    // Invoke the already-installed compiler directly. Even `pnpm exec` may try
+    // to reinstall when replaying a historical manifest/lockfile pair.
+    const result = run(NodeProcess.execPath, [tsgo, "--noEmit"], {
+      cwd: NodePath.join(repoDir, packageDirectory),
       allowFailure: true,
-      env: {
-        ELECTRON_SKIP_BINARY_DOWNLOAD: "1",
-        // Historical commits often disagree with the worktree lockfile; never
-        // auto-install mid-verify (install once before the rewrite).
-        npm_config_frozen_lockfile: "false",
-        CI: "",
-      },
       ...gitOpts,
     });
     if (result.status !== 0) {
@@ -806,17 +829,8 @@ function updateState(
   return updated;
 }
 
-/** Reuse the source checkout's installed dependencies in the isolated rewrite
- * clone. `verify-head` runs from that clone, so installing only in sourceRoot
- * is otherwise invisible and every package-touching replay aborts. */
-export function linkRewriteNodeModules(sourceRoot: string, repoDir: string): boolean {
-  const source = NodePath.join(sourceRoot, "node_modules");
-  if (!NodeFS.existsSync(source)) return false;
-  const target = NodePath.join(repoDir, "node_modules");
-  if (NodeFS.existsSync(target)) return true;
-  // Junctions use absolute targets on Windows; on POSIX the directory type is ignored.
-  NodeFS.symlinkSync(source, target, "junction");
-  return true;
+export function rewriteInstallArgs(): ReadonlyArray<string> {
+  return ["install", "--frozen-lockfile", "--prefer-offline"];
 }
 
 function initializeState(
@@ -846,7 +860,6 @@ function initializeState(
       },
     );
     git(repoDir, ["config", "commit.gpgsign", "false"], { stateDir });
-    if (verifyEachCommit) linkRewriteNodeModules(sourceRoot, repoDir);
     git(repoDir, ["remote", "add", "origin", originUrl], { stateDir });
     git(repoDir, ["remote", "add", manifest.upstreamRemote, upstreamUrl], { stateDir });
 
@@ -901,6 +914,25 @@ function initializeState(
         `origin/${manifest.upstreamBranch} (${originMain}) has diverged from ${manifest.upstreamRemote}/${manifest.upstreamBranch} (${upstreamTip}); refusing to update fork main.`,
         { stateDir },
       );
+    }
+    if (verifyEachCommit) {
+      const integrationTip = snapshots[manifest.integrationBranch];
+      if (!integrationTip)
+        throw new StackError("The integration snapshot is missing.", { stateDir });
+      // Install once from the latest composed tree so workspace links point
+      // into this clone and the dependency set is a superset of replayed layers.
+      git(repoDir, ["checkout", "--quiet", "--detach", integrationTip], { stateDir });
+      const install = run("pnpm", rewriteInstallArgs(), {
+        cwd: repoDir,
+        allowFailure: true,
+        env: { CI: "" },
+        stateDir,
+      });
+      if (install.status !== 0) {
+        throw new StackError(`Unable to prepare rewrite dependencies.\n${install.output}`, {
+          stateDir,
+        });
+      }
     }
 
     const state: PersistedState = {
@@ -1000,6 +1032,13 @@ function rebaseInProgress(repoDir: string): boolean {
     NodeFS.existsSync(NodePath.join(absoluteGitDir, "rebase-merge")) ||
     NodeFS.existsSync(NodePath.join(absoluteGitDir, "rebase-apply"))
   );
+}
+
+export function shouldAttemptConflictResolution(
+  conflictingPaths: ReadonlyArray<string>,
+  rebaseHead: string,
+): boolean {
+  return conflictingPaths.length > 0 && rebaseHead.length > 0;
 }
 
 function conflictError(
@@ -1148,6 +1187,19 @@ function startOperation(
     stateDir,
   });
   while (result.status !== 0 && rebaseInProgress(updated.repoDir)) {
+    const conflictingPaths = git(updated.repoDir, ["diff", "--name-only", "--diff-filter=U"], {
+      allowFailure: true,
+      stateDir,
+    })
+      .split("\n")
+      .filter(Boolean);
+    const rebaseHead = git(updated.repoDir, ["rev-parse", "--verify", "REBASE_HEAD"], {
+      allowFailure: true,
+      stateDir,
+    });
+    // A failed rebase --exec has rebase state but no conflict/REBASE_HEAD.
+    // Preserve its original verifier output instead of masking it as a conflict.
+    if (!shouldAttemptConflictResolution(conflictingPaths, rebaseHead)) break;
     if (!applyConfiguredConflictResolutions(stateDir, updated, operation)) {
       throw conflictError(stateDir, updated, operation);
     }

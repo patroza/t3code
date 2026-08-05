@@ -12,14 +12,15 @@ import {
   conflictResolutionManifestSnippet,
   isProductConflictPath,
   isSuccessfulFeatureRebaseSkip,
-  linkRewriteNodeModules,
   packagesForChangedPaths,
   parseManifest,
   rebaseOpenFeaturePullRequests,
   RebaseConflictError,
+  rewriteInstallArgs,
   resumeStack,
   selectOpenFeaturePullRequests,
   selectOpenFeaturePullRequestTree,
+  shouldAttemptConflictResolution,
   StackError,
   syncStack,
   type PullRequestSnapshot,
@@ -27,38 +28,18 @@ import {
   validatePullRequestSnapshots,
 } from "./rebase-pr-stack.ts";
 
-describe("linkRewriteNodeModules", () => {
-  it("shares the source install with an isolated rewrite clone", () => {
-    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-stack-modules-"));
-    try {
-      const source = NodePath.join(root, "source");
-      const repo = NodePath.join(root, "repo");
-      NodeFS.mkdirSync(NodePath.join(source, "node_modules"), { recursive: true });
-      NodeFS.mkdirSync(repo);
-
-      assert.equal(linkRewriteNodeModules(source, repo), true);
-      assert.equal(
-        NodeFS.realpathSync(NodePath.join(repo, "node_modules")),
-        NodeFS.realpathSync(NodePath.join(source, "node_modules")),
-      );
-    } finally {
-      NodeFS.rmSync(root, { recursive: true, force: true });
-    }
+describe("shouldAttemptConflictResolution", () => {
+  it("distinguishes merge conflicts from failed rebase exec gates", () => {
+    assert.equal(shouldAttemptConflictResolution(["apps/web/src/App.tsx"], "abc123"), true);
+    assert.equal(shouldAttemptConflictResolution([], ""), false);
+    assert.equal(shouldAttemptConflictResolution([], "abc123"), false);
+    assert.equal(shouldAttemptConflictResolution(["apps/web/src/App.tsx"], ""), false);
   });
+});
 
-  it("leaves the clone untouched when the source install is absent", () => {
-    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-stack-modules-"));
-    try {
-      const source = NodePath.join(root, "source");
-      const repo = NodePath.join(root, "repo");
-      NodeFS.mkdirSync(source);
-      NodeFS.mkdirSync(repo);
-
-      assert.equal(linkRewriteNodeModules(source, repo), false);
-      assert.equal(NodeFS.existsSync(NodePath.join(repo, "node_modules")), false);
-    } finally {
-      NodeFS.rmSync(root, { recursive: true, force: true });
-    }
+describe("rewriteInstallArgs", () => {
+  it("prepares an isolated, lockfile-exact dependency tree", () => {
+    assert.deepEqual(rewriteInstallArgs(), ["install", "--frozen-lockfile", "--prefer-offline"]);
   });
 });
 
