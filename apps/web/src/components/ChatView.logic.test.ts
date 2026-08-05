@@ -23,6 +23,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   pruneOptimisticQueuedMessageIds,
+  resolvedSteeredMessageIds,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
@@ -206,6 +207,35 @@ describe("pruneOptimisticQueuedMessageIds", () => {
   it("keeps the same reference when already empty", () => {
     const current: ReadonlySet<MessageId> = new Set();
     expect(pruneOptimisticQueuedMessageIds(current, new Set([first]))).toBe(current);
+  });
+});
+
+describe("resolvedSteeredMessageIds", () => {
+  const steeredId = MessageId.make("msg-steered");
+  const otherId = MessageId.make("msg-other");
+
+  it("keeps a steer in flight while the server still holds it queued", () => {
+    expect(resolvedSteeredMessageIds(new Set([steeredId]), [{ messageId: steeredId }])).toEqual(
+      new Set(),
+    );
+  });
+
+  it("settles a steer once the server stops holding it queued", () => {
+    expect(resolvedSteeredMessageIds(new Set([steeredId]), [{ messageId: otherId }])).toEqual(
+      new Set([steeredId]),
+    );
+    expect(resolvedSteeredMessageIds(new Set([steeredId]), [])).toEqual(new Set([steeredId]));
+  });
+
+  it("settles each steer independently", () => {
+    expect(
+      resolvedSteeredMessageIds(new Set([steeredId, otherId]), [{ messageId: otherId }]),
+    ).toEqual(new Set([steeredId]));
+  });
+
+  it("short-circuits when nothing is steering", () => {
+    const empty: ReadonlySet<MessageId> = new Set();
+    expect(resolvedSteeredMessageIds(empty, [{ messageId: steeredId }])).toBe(empty);
   });
 });
 

@@ -61,6 +61,20 @@ describe("mobile surface existence (anti stack-drop)", () => {
     );
   });
 
+  it('"Send now" moves the message optimistically and can put it back', () => {
+    const composerState = readSrc("state/use-thread-composer-state.ts");
+
+    // The feed and the chip list both read the promoted detail, so one piece
+    // of state moves the message and one revert puts it back.
+    expect(composerState).toContain("promoteSteeredQueuedMessages(selectedThreadDetail");
+    expect(composerState).toMatch(/buildThreadFeed\(\{ \.\.\.steeredDetail/);
+    expect(composerState).toMatch(/timelineIds = new Set\(steeredDetail\?\.messages/);
+    // Failure puts it back rather than leaving a bubble the agent never got.
+    expect(composerState).toMatch(
+      /if \(result\._tag === "Success"\) \{[\s\S]*?return;[\s\S]*?\}[\s\S]*?pruneSteeringQueuedMessageIds\([\s\S]*?setPendingConnectionError/,
+    );
+  });
+
   it("keys markdown nodes uniquely even when parser spans collide", () => {
     const nodeKey = NodeFS.readFileSync(
       NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),

@@ -206,6 +206,29 @@ export function pruneOptimisticQueuedMessageIds(
   return next.size === current.size ? current : next;
 }
 
+/**
+ * Steered ids the server no longer holds in the queue. That is the settle
+ * signal for the optimistic overlay: either the dispatch landed (the message
+ * is a real timeline row now) or the message is gone. Both mean stop
+ * overlaying it — waiting on persistence alone would strand the marker.
+ */
+export function resolvedSteeredMessageIds(
+  steering: ReadonlySet<MessageId>,
+  queuedMessages: ReadonlyArray<{ readonly messageId: MessageId }>,
+): ReadonlySet<MessageId> {
+  if (steering.size === 0) {
+    return steering;
+  }
+  const stillQueued = new Set(queuedMessages.map((message) => message.messageId));
+  const resolved = new Set<MessageId>();
+  for (const messageId of steering) {
+    if (!stillQueued.has(messageId)) {
+      resolved.add(messageId);
+    }
+  }
+  return resolved;
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;
