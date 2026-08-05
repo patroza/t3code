@@ -20,10 +20,14 @@ layer("fork migration namespace on a fresh database", (it) => {
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} WHERE migration_id = 1
       `;
       const fork = yield* sql<LedgerRow>`
-        SELECT migration_id, name FROM ${sql(forkMigrationTable)} WHERE migration_id = 1
+        SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream, [{ migration_id: 1, name: "OrchestrationEvents" }]);
-      assert.deepStrictEqual(fork, [{ migration_id: 1, name: "ProjectionQueuedMessages" }]);
+      assert.deepStrictEqual(fork, [
+        { migration_id: 1, name: "ProjectionQueuedMessages" },
+        { migration_id: 2, name: "SessionIdentityClaims" },
+        { migration_id: 3, name: "ProjectionThreadSourceAttribution" },
+      ]);
     }),
   );
 });
