@@ -5,7 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import ProjectionQueuedMessages from "./036_ProjectionQueuedMessages.ts";
+import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 

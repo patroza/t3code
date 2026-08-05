@@ -39,14 +39,11 @@ describe("fork surface existence (anti stack-drop)", () => {
     const sidebarV2 = readSrc("components/SidebarV2.tsx");
     expect(sidebarV2).toContain("Settled shelf");
     expect(sidebarV2).toMatch(/New thread|new thread/i);
-    expect(sidebarV2).toContain("ProjectServerContextLine");
-    // Recent mode (shared thread grouping) + no VCS on settled history rows.
-    expect(sidebarV2).toContain("sidebar-v2-thread-grouping-");
-    expect(sidebarV2).toContain("sidebar-v2-active-recency-");
-    expect(sidebarV2).toContain("isSettledHistoryRow");
-    expect(sidebarV2).toContain("LIST_THREAD_GROUPING_STORAGE_KEY");
-    expect(sidebarV2).toContain("ComposerDraftDot");
-    expect(sidebarV2).toContain("hasComposerDraftMessage");
+    expect(sidebarV2).toContain("sidebar-v2-pinned-divider");
+    expect(sidebarV2).toContain("sidebar-v2-snoozed-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-v2-settled-shelf-toggle");
+    expect(sidebarV2).toContain("attemptPin");
+    expect(sidebarV2).toContain("attemptUnpin");
   });
 
   it("classic sidebar marks composer draft threads", () => {

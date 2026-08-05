@@ -646,7 +646,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-1"),
@@ -685,7 +685,7 @@ describe("ProviderCommandReactor", () => {
   it("replays a persisted pending turn start exactly once on startup", async () => {
     const harness = await createHarness({ deferReactorStart: true });
     const now = "2026-01-01T00:00:00.000Z";
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.interaction-mode.set",
         commandId: CommandId.make("cmd-plan-before-pending"),
@@ -3214,30 +3214,6 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-
-    await harness.runEffect(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-stopped-provider-switch"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-stopped-provider-switch"),
-          role: "user",
-          text: "continue with claude",
-          attachments: [],
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-          model: "claude-opus-4-6",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        activeTurnId: null,
-        lastError: null,
-        updatedAt: now,
-      },
-      createdAt: now,
-    });
 
     await harness.dispatch({
       type: "thread.turn.start",
