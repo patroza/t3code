@@ -2,20 +2,40 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/unstable/sql/Migrator";
 
-import { runMigrations } from "../Migrations.ts";
+import { forkMigrationTable } from "../ForkMigrations.ts";
+import { upstreamMigrationTable } from "../MigrationBootstrap.ts";
+import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const runLegacyMigrations = Migrator.make({});
 
 layer("039_040_RepairRestackedProjectionThreads", (it) => {
   it.effect("repairs a database with the pre-restack migration ledger", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 34 });
+      yield* runLegacyMigrations({ loader: makeMigrationLoader(34) });
       yield* ProjectionQueuedMessages;
+      yield* sql`
+        CREATE TABLE session_identity_claims (
+          session_id TEXT PRIMARY KEY NOT NULL,
+          person_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          claimed_at TEXT NOT NULL,
+          method TEXT NOT NULL
+        )
+      `;
+      yield* sql`
+        CREATE INDEX idx_session_identity_claims_person
+        ON session_identity_claims(person_id)
+      `;
+      yield* sql`ALTER TABLE projection_thread_messages ADD COLUMN source_json TEXT`;
+      yield* sql`ALTER TABLE projection_threads ADD COLUMN origin_source_json TEXT`;
+      yield* sql`ALTER TABLE projection_threads ADD COLUMN participant_summaries_json TEXT`;
       yield* sql`
         INSERT INTO effect_sql_migrations (migration_id, name)
         VALUES
@@ -25,7 +45,7 @@ layer("039_040_RepairRestackedProjectionThreads", (it) => {
           (38, 'ProjectionThreadSourceAttribution')
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 40 });
+      yield* runMigrations();
 
       const columns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)
@@ -49,8 +69,25 @@ layer("039_040_RepairRestackedProjectionThreads", (it) => {
         { migration_id: 36, name: "SessionIdentityClaims" },
         { migration_id: 37, name: "ProjectionThreadSourceAttribution" },
         { migration_id: 38, name: "ProjectionThreadSourceAttribution" },
-        { migration_id: 39, name: "RepairProjectionThreadTitleRegeneration" },
-        { migration_id: 40, name: "RepairProjectionThreadsPinned" },
+      ]);
+
+      const upstreamMigrations = yield* sql<{
+        readonly migration_id: number;
+        readonly name: string;
+      }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id`;
+      assert.deepStrictEqual(upstreamMigrations.slice(-2), [
+        { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
+        { migration_id: 36, name: "ProjectionThreadsPinned" },
+      ]);
+
+      const forkMigrations = yield* sql<{
+        readonly migration_id: number;
+        readonly name: string;
+      }>`SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id`;
+      assert.deepStrictEqual(forkMigrations, [
+        { migration_id: 1, name: "ProjectionQueuedMessages" },
+        { migration_id: 2, name: "SessionIdentityClaims" },
+        { migration_id: 3, name: "ProjectionThreadSourceAttribution" },
       ]);
     }),
   );
