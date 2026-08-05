@@ -326,13 +326,9 @@ export function buildThreadListV2Items(input: {
     readonly environmentId: EnvironmentId;
     readonly projectId: ProjectId;
   }> | null;
-  /** When present, keep the V2 lifecycle sections and row variants intact,
-      but order rows by this logical-project sequence before their normal
-      recency order. */
-  readonly projectOrder?: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly projectId: ProjectId;
-  }>;
+  /** Default/false preserves upstream creation order. Recency changes only
+      active and pinned card order; lifecycle sections and variants stay put. */
+  readonly orderByRecency?: boolean;
   readonly searchQuery: string;
   readonly matchedThreadKeys?: ReadonlySet<string>;
   /** Per-row PR state reported up by visible rows ("env:threadId" keys). */
@@ -372,21 +368,16 @@ export function buildThreadListV2Items(input: {
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
-  const projectRank = new Map(
-    (input.projectOrder ?? []).map(
-      (ref, index) => [`${ref.environmentId}:${ref.projectId}`, index] as const,
-    ),
-  );
-  const groupOrderedThreads = (ordered: EnvironmentThreadShell[]) => {
-    if (projectRank.size === 0) return ordered;
-    return ordered.sort(
+  const orderActiveThreads = (threads: ReadonlyArray<EnvironmentThreadShell>) => {
+    const upstreamOrder = sortThreadsForListV2(threads);
+    if (input.orderByRecency !== true) return upstreamOrder;
+    return upstreamOrder.sort(
       (left, right) =>
-        (projectRank.get(`${left.environmentId}:${left.projectId}`) ?? Number.MAX_SAFE_INTEGER) -
-        (projectRank.get(`${right.environmentId}:${right.projectId}`) ?? Number.MAX_SAFE_INTEGER),
+        firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt, right.createdAt) -
+          firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt, left.createdAt) ||
+        left.id.localeCompare(right.id),
     );
   };
-  const orderForGrouping = (threads: ReadonlyArray<EnvironmentThreadShell>) =>
-    groupOrderedThreads(sortThreadsForListV2(threads));
 
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -452,12 +443,10 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = orderForGrouping(active);
-  const orderedSnoozed = groupOrderedThreads(
-    [...snoozed].sort(
-      (left, right) =>
-        parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
-    ),
+  const orderedActive = orderActiveThreads(active);
+  const orderedSnoozed = [...snoozed].sort(
+    (left, right) =>
+      parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
   );
   const selectedThreadKey = input.selectedThreadKey ?? null;
   const visibleSnoozed =
@@ -466,12 +455,10 @@ export function buildThreadListV2Items(input: {
       : orderedSnoozed.filter(
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
         );
-  const orderedSettled = groupOrderedThreads(
-    [...settled].sort(
-      (left, right) =>
-        firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
-        firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
-    ),
+  const orderedSettled = [...settled].sort(
+    (left, right) =>
+      firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
+      firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
   );
   const settledLimit = input.settledLimit ?? Number.POSITIVE_INFINITY;
   const pagedSettled =
@@ -488,7 +475,7 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of orderForGrouping(pinned)) {
+  for (const thread of orderActiveThreads(pinned)) {
     items.push({
       thread,
       variant: "card",

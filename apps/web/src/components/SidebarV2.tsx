@@ -27,6 +27,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListIcon,
   MessageSquareIcon,
   PinIcon,
   PlusIcon,
@@ -1410,29 +1411,17 @@ export default function SidebarV2() {
       ),
     [projectGroups],
   );
-  const projectRankByRef = useMemo(
-    () =>
-      new Map(
-        projectGroups.flatMap((group, rank) =>
-          group.memberProjectRefs.map(
-            (ref) => [`${ref.environmentId}:${ref.projectId}`, rank] as const,
-          ),
-        ),
-      ),
-    [projectGroups],
-  );
   const orderForThreadGrouping = useCallback(
     (ordered: EnvironmentThreadShell[]) => {
-      if (threadGrouping !== "project") return ordered;
-      return ordered.sort(
+      if (threadGrouping !== "recency") return ordered;
+      return ordered.toSorted(
         (left, right) =>
-          (projectRankByRef.get(`${left.environmentId}:${left.projectId}`) ??
-            Number.MAX_SAFE_INTEGER) -
-          (projectRankByRef.get(`${right.environmentId}:${right.projectId}`) ??
-            Number.MAX_SAFE_INTEGER),
+          firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt, right.createdAt) -
+            firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt, left.createdAt) ||
+          left.id.localeCompare(right.id),
       );
     },
-    [projectRankByRef, threadGrouping],
+    [threadGrouping],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -1710,19 +1699,17 @@ export default function SidebarV2() {
         }
       }
       return {
-        // Same static creation order as the inbox: a pin freezes prominence,
-        // it does not introduce a new ordering scheme.
+        // Default is upstream's static creation order. Recency is the one
+        // explicit alternative; neither mode changes cards or sections.
         pinnedThreads: orderForThreadGrouping(sortThreadsForSidebarV2(pinned)),
         activeThreads: orderForThreadGrouping(sortThreadsForSidebarV2(active)),
         // Soonest wake first: "what comes back next" is the shelf's question.
-        snoozedThreads: orderForThreadGrouping(
-          snoozed.toSorted(
-            (left, right) =>
-              firstValidTimestampMs(left.snoozedUntil ?? null) -
-              firstValidTimestampMs(right.snoozedUntil ?? null),
-          ),
+        snoozedThreads: snoozed.toSorted(
+          (left, right) =>
+            firstValidTimestampMs(left.snoozedUntil ?? null) -
+            firstValidTimestampMs(right.snoozedUntil ?? null),
         ),
-        settledThreads: orderForThreadGrouping(sortSettledThreadsForSidebarV2(settled)),
+        settledThreads: sortSettledThreadsForSidebarV2(settled),
         snoozeNow: preciseNow,
       };
     }, [
@@ -2856,7 +2843,7 @@ export default function SidebarV2() {
                       />
                     }
                   >
-                    {threadGrouping === "project" ? <FolderIcon /> : <ClockIcon />}
+                    {threadGrouping === "project" ? <ListIcon /> : <ClockIcon />}
                   </MenuTrigger>
                   <MenuPopup align="start">
                     <MenuRadioGroup
@@ -2871,7 +2858,7 @@ export default function SidebarV2() {
                             closeOnClick
                             data-testid={`sidebar-v2-thread-grouping-${grouping}`}
                           >
-                            {grouping === "project" ? <FolderIcon /> : <ClockIcon />}
+                            {grouping === "project" ? <ListIcon /> : <ClockIcon />}
                             {WEB_THREAD_GROUPING_LABELS[grouping]}
                           </MenuRadioItem>
                         ),
