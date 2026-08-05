@@ -89,7 +89,19 @@ Outbound processing adds the acknowledgement and final-outcome message IDs, toge
 
 ### Agreed decisions
 
+Only the acknowledgement and the final answer, failure, timeout, or cancellation are rendered on the external platform. All other T3 events remain internal.
+
 Each inbound event creates an immediate outbound acknowledgement. When its T3 thread ends, the adapter sends the final answer, failure, timeout, or cancellation as a new message after that acknowledgement, in the platform's native conversation scope.
+
+#### Response format
+
+Acknowledgements and final messages are text. Adapters use the platform's Markdown-like formatting, including fenced code snippets when useful.
+
+T3 does not use interactive controls, permission requests, or multiple-choice prompts on external platforms. Any question is written as ordinary text.
+
+#### Delivery failures
+
+The adapter posts the result or error as the final message. If delivery fails for a recoverable reason, it retries; otherwise the original working message remains without a follow-up, and the user may start a new request.
 
 #### Message identifiers and placement
 
@@ -110,12 +122,3 @@ The adapter retains the thread or channel ID, invoking message ID, acknowledgeme
 ##### Teams
 
 The adapter retains the team and channel or chat ID, root conversation-message ID, invoking message ID, acknowledgement message ID, and outcome message ID. The acknowledgement and outcome are separate replies in the same root conversation.
-
-### Open questions
-
-#### Shared questions
-
-- How does each adapter translate T3 formatting and content into the external platform's supported format and size limits?
-- What happens when a response cannot be posted, is posted only partially, or must be retried?
-- How are responses to concurrent turns ordered or labeled when they appear in the same external interaction?
-- Which T3 events are intentionally kept inside T3 rather than rendered externally?
