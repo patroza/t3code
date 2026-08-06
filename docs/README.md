@@ -37,5 +37,6 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
+- [Provider turn startup and recovery](./operations/provider-turn-recovery.md)
 - [Relay observability](./operations/relay-observability.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)
