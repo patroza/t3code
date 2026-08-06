@@ -170,6 +170,7 @@ function BoardContent() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
+  const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const serverConfigs = useServerConfigs();
   const {
     archiveThread,
@@ -711,7 +712,7 @@ function BoardContent() {
       // as the sidebar.
       const preciseNow = new Date().toISOString();
       const isSnoozed = supportsSnooze && effectiveSnoozed(thread, { now: preciseNow });
-      const snoozePresets = resolveSnoozePresets(new Date());
+      const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
       const clicked = await api.contextMenu.show(
         buildSidebarV2ThreadContextMenuItems({
           branch: thread.branch,
@@ -740,7 +741,7 @@ function BoardContent() {
         toastManager.add(
           stackedThreadToast({
             type: "success",
-            title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date())}`,
+            title: `Snoozed until ${snoozeWakeDescription(preset.snoozedUntil, new Date(), timestampFormat)}`,
             timeout: 5_000,
             actionProps: {
               children: "Undo",
