@@ -1,5 +1,16 @@
 # Client integration overlays
 
+> [!IMPORTANT]
+> **Superseded. Do not follow this for new work.**
+>
+> Contributors branch from and target **`fork/dev`** — every kind of work, including Discord, VS Code,
+> identity and desktop. The integration overlays are drained and deregistered, and `fork/changes` and
+> `fork/integration` are frozen. See
+> [stable-dev-release-branch-handover.md](./stable-dev-release-branch-handover.md).
+>
+> Kept as a record of how the fork operated before 2026-08-06, and because the provenance stack
+> (`main` → `fork/base` → `fork/tim` → `fork/candidates`) it describes is still current.
+
 Discord and VS Code are long-lived product integrations rather than anonymous files in
 `fork/changes`. Their complete client implementations live in parallel draft PRs based on
 `fork/changes` and are composed into `fork/integration` like the desktop-link overlay.

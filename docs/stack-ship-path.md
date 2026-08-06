@@ -1,5 +1,16 @@
 # Stack ship path (planned operating model)
 
+> [!IMPORTANT]
+> **Superseded. Do not follow this for new work.**
+>
+> Contributors branch from and target **`fork/dev`** — every kind of work, including Discord, VS Code,
+> identity and desktop. The integration overlays are drained and deregistered, and `fork/changes` and
+> `fork/integration` are frozen. See
+> [stable-dev-release-branch-handover.md](./stable-dev-release-branch-handover.md).
+>
+> Kept as a record of how the fork operated before 2026-08-06, and because the provenance stack
+> (`main` → `fork/base` → `fork/tim` → `fork/candidates`) it describes is still current.
+
 **Goal:** make a product change, merge it, get a green `fork/integration`, and deploy — **without**
 waiting for a full upstream / Tim / candidates restack.
 
@@ -55,8 +66,7 @@ Related: [fork-stack.md](./fork-stack.md) (topology, overlays, conflict resoluti
 ### Current rule (keep)
 
 ```text
-ordinary shared work  → branch from fork/changes → PR base fork/changes
-overlay-owned work    → branch from that overlay  → PR base = overlay branch
+all work              → branch from fork/dev    → PR base fork/dev
 run / deploy          → always fork/integration (compose)
 ```
 

@@ -1,5 +1,16 @@
 # Downstream fork workflow
 
+> [!IMPORTANT]
+> **Superseded. Do not follow this for new work.**
+>
+> Contributors branch from and target **`fork/dev`** — every kind of work, including Discord, VS Code,
+> identity and desktop. The integration overlays are drained and deregistered, and `fork/changes` and
+> `fork/integration` are frozen. See
+> [stable-dev-release-branch-handover.md](./stable-dev-release-branch-handover.md).
+>
+> Kept as a record of how the fork operated before 2026-08-06, and because the provenance stack
+> (`main` → `fork/base` → `fork/tim` → `fork/candidates`) it describes is still current.
+
 Day-to-day merge → compose → deploy: [stack-ship-path.md](./stack-ship-path.md).
 
 This repository separates upstream history, downstream changes, temporary review branches, and the
@@ -223,7 +234,7 @@ The helper starts an independent branch from `fork/changes`:
 pnpm fork:stack start feature/my-change
 ```
 
-Commit and push normally, then open the PR against `fork/changes` (never against `main`). Updating
+Commit and push normally, then open the PR against `fork/dev` (never against `main`). Updating
 that branch updates the same PR and reruns PR CI. Ordinary feature and import PRs are deliberately
 not registered in the stack manifest, so multiple independent PRs may be open concurrently without
 editing central metadata.
