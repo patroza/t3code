@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   isT3TransportError,
+  shouldContinueWaitingForT3Ready,
   shouldPersistThreadModelSelectionForNextTurn,
   T3_STILL_CONNECTING_MESSAGE,
 } from "./T3Session.ts";
@@ -22,6 +23,35 @@ describe("isT3TransportError", () => {
   it("does not match ordinary application errors", () => {
     expect(isT3TransportError(new Error("No T3 project registered at /tmp/x"))).toBe(false);
     expect(isT3TransportError(new Error(T3_STILL_CONNECTING_MESSAGE))).toBe(false);
+  });
+});
+
+describe("shouldContinueWaitingForT3Ready", () => {
+  it("returns ready as soon as the shell is live", () => {
+    expect(shouldContinueWaitingForT3Ready({ ready: true, elapsedMs: 0, timeoutMs: 1_000 })).toBe(
+      "ready",
+    );
+    expect(
+      shouldContinueWaitingForT3Ready({ ready: true, elapsedMs: 5_000, timeoutMs: 1_000 }),
+    ).toBe("ready");
+  });
+
+  it("keeps waiting until the timeout elapses", () => {
+    expect(shouldContinueWaitingForT3Ready({ ready: false, elapsedMs: 0, timeoutMs: 1_000 })).toBe(
+      "wait",
+    );
+    expect(
+      shouldContinueWaitingForT3Ready({ ready: false, elapsedMs: 999, timeoutMs: 1_000 }),
+    ).toBe("wait");
+  });
+
+  it("times out once elapsed reaches the deadline", () => {
+    expect(
+      shouldContinueWaitingForT3Ready({ ready: false, elapsedMs: 1_000, timeoutMs: 1_000 }),
+    ).toBe("timeout");
+    expect(
+      shouldContinueWaitingForT3Ready({ ready: false, elapsedMs: 5_000, timeoutMs: 1_000 }),
+    ).toBe("timeout");
   });
 });
 
