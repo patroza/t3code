@@ -171,7 +171,7 @@ describe("resolveAgentTurnRulesPath", () => {
     expect(path.endsWith("docs/agent-turn-rules.md")).toBe(true);
     expect(NodeFS.existsSync(path)).toBe(true);
     const body = NodeFS.readFileSync(path, "utf8");
-    expect(body).toContain("cab");
+    expect(body).not.toContain("cab");
     expect(body).toContain("PR footer");
     expect(body).toContain("Style:");
     expect(body).toContain("client overlay");
@@ -279,7 +279,7 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).not.toContain("jira:");
   });
 
-  it("injects compact cab for starter + requester", () => {
+  it("leaves identity attribution to the server", () => {
     const prompt = buildDiscordTurnPrompt({
       mentionPrompt: "open a PR",
       starter: {
@@ -294,42 +294,14 @@ describe("buildDiscordTurnPrompt", () => {
           displayName: "Patrick Roza",
         },
       },
-      identityPeople: [
-        {
-          name: "Davide",
-          discord: { id: "222", username: "davide" },
-          github: { login: "davide", id: "99" },
-        },
-        {
-          name: "Patrick Roza",
-          discord: { id: "95218063095377920", username: "patroza" },
-          github: { login: "patroza", id: "12345" },
-        },
-      ],
     });
 
-    expect(prompt).toContain(
-      "cab: Davide <99+davide@users.noreply.github.com> | Patrick Roza <12345+patroza@users.noreply.github.com>",
-    );
+    expect(prompt).not.toContain("cab:");
     expect(prompt).not.toContain("Co-authored-by:");
     expect(prompt).not.toContain("who:");
     expect(prompt).not.toContain("do not invent emails");
     expect(prompt).not.toContain("Always open a PR");
     expect(prompt).not.toContain("jiraAccountId");
-  });
-
-  it("omits identity block when the map is empty/unset", () => {
-    const prompt = buildDiscordTurnPrompt({
-      mentionPrompt: "hello",
-      requester: {
-        id: "m1",
-        author: { id: "1", username: "x" },
-      },
-      identityPeople: [],
-    });
-    expect(prompt).not.toContain("who:");
-    expect(prompt).not.toContain("cab:");
-    expect(prompt).not.toContain("Co-authored-by");
   });
 
   it("injects compact pr fields (ids, not full URLs)", () => {

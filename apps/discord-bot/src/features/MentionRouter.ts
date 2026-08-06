@@ -978,7 +978,6 @@ const make = (botConfig: DiscordBotConfig) =>
             referencedMessageUrl: input.referencedMessageUrl,
             jiraIssueKeys: turnJiraIssueKeys,
             jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
-            identityPeople: identityMap.list(),
             guildId: input.guildId,
             discordThreadId: input.discordThreadId,
             t3ThreadId: existing.t3ThreadId,
@@ -1296,7 +1295,6 @@ const make = (botConfig: DiscordBotConfig) =>
           honeycombTraceUrlTemplate: botConfig.honeycombTraceUrlTemplate,
           jiraIssueKeys: firstTurnJiraIssueKeys,
           jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
-          identityPeople: identityMap.list(),
           guildId: input.guildId,
           discordThreadId: input.discordThreadId,
         });

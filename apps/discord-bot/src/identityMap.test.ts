@@ -5,14 +5,10 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  formatCoAuthoredByBody,
-  formatCoAuthoredByTrailer,
-  formatIdentityAttributionBlock,
   loadIdentityMapFromFileSync,
   makeRefreshingIdentityMapStore,
   parseIdentityMapDocument,
   parseSimpleIdentityYaml,
-  resolveGitHubCoAuthorEmail,
   classifyDiscordAgentAccess,
   resolveParticipantIdentity,
 } from "./identityMap.ts";
@@ -93,49 +89,7 @@ people:
   });
 });
 
-describe("co-author trailers", () => {
-  it("derives noreply email from github id + login", () => {
-    expect(resolveGitHubCoAuthorEmail({ login: "patroza", id: "12345" })).toBe(
-      "12345+patroza@users.noreply.github.com",
-    );
-  });
-
-  it("prefers explicit email", () => {
-    expect(
-      resolveGitHubCoAuthorEmail({
-        login: "patroza",
-        id: "12345",
-        email: "me@example.com",
-      }),
-    ).toBe("me@example.com");
-  });
-
-  it("formats co-author body and full trailer", () => {
-    expect(
-      formatCoAuthoredByBody({
-        name: "Patrick Roza",
-        github: { login: "patroza", id: "12345" },
-      }),
-    ).toBe("Patrick Roza <12345+patroza@users.noreply.github.com>");
-    expect(
-      formatCoAuthoredByTrailer({
-        name: "Patrick Roza",
-        github: { login: "patroza", id: "12345" },
-      }),
-    ).toBe("Co-authored-by: Patrick Roza <12345+patroza@users.noreply.github.com>");
-  });
-
-  it("returns null without resolvable email", () => {
-    expect(
-      formatCoAuthoredByTrailer({
-        name: "X",
-        github: { login: "x" },
-      }),
-    ).toBeNull();
-  });
-});
-
-describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
+describe("resolveParticipantIdentity", () => {
   const people = parseIdentityMapDocument({
     people: [
       {
@@ -160,7 +114,6 @@ describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
       people,
     });
     expect(resolved.person?.name).toBe("Patrick Roza");
-    expect(resolved.coAuthoredBy).toContain("patroza");
   });
 
   it("marks unmapped users", () => {
@@ -201,62 +154,6 @@ describe("resolveParticipantIdentity + formatIdentityAttributionBlock", () => {
     });
     expect(denied.allowed).toBe(false);
     if (!denied.allowed) expect(denied.reason).toBe("unmapped_discord_actor");
-  });
-
-  it("builds compact cab bodies (no Co-authored-by prefix, no who when mapped)", () => {
-    const block = formatIdentityAttributionBlock({
-      participants: [
-        resolveParticipantIdentity({
-          role: "thread_starter",
-          discordId: "222",
-          discordDisplayName: "Davide",
-          people,
-        }),
-        resolveParticipantIdentity({
-          role: "requester",
-          discordId: "95218063095377920",
-          discordDisplayName: "Patrick Roza",
-          people,
-        }),
-      ],
-    });
-    expect(block).toBe(
-      "cab: Davide <99+davide@users.noreply.github.com> | Patrick Roza <12345+patroza@users.noreply.github.com>",
-    );
-    expect(block).not.toContain("Co-authored-by:");
-    expect(block).not.toContain("who:");
-    expect(block).not.toContain("unmapped:");
-  });
-
-  it("dedupes identical cab when starter is also requester", () => {
-    const same = resolveParticipantIdentity({
-      role: "requester",
-      discordId: "222",
-      people,
-    });
-    const starter = resolveParticipantIdentity({
-      role: "thread_starter",
-      discordId: "222",
-      people,
-    });
-    const block = formatIdentityAttributionBlock({ participants: [starter, same] });
-    expect(block).toBe("cab: Davide <99+davide@users.noreply.github.com>");
-    expect(block?.match(/Davide/g)).toHaveLength(1);
-  });
-
-  it("lists unmapped participants without inventing cab", () => {
-    const block = formatIdentityAttributionBlock({
-      participants: [
-        resolveParticipantIdentity({
-          role: "requester",
-          discordId: "999",
-          discordUsername: "stranger",
-          people,
-        }),
-      ],
-    });
-    expect(block).toContain("cab: (none)");
-    expect(block).toContain("unmapped: req 999@stranger unmapped");
   });
 });
 

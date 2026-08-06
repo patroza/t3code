@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off
 /**
- * Operator-maintained map from Discord (and optional Jira) identities to GitHub
- * identities used for commit/PR co-authorship.
+ * Operator-maintained canonical map across Discord, Jira, and GitHub identities.
  *
  * Loaded once at bot startup from T3_IDENTITY_MAP_PATH (same delivery path as
  * project-aliases: staged secrets share). Absent path → empty map (feature off).
@@ -22,14 +21,11 @@ export interface DiscordIdentityRef {
 export interface GitHubIdentityRef {
   /** GitHub login (without @). */
   readonly login: string;
-  /** Numeric GitHub user id as a decimal string (preferred for noreply email). */
+  /** Numeric GitHub user id as a decimal string. */
   readonly id?: string | undefined;
-  /**
-   * Explicit email for Co-authored-by. When omitted, derived as
-   * `{id}+{login}@users.noreply.github.com` when id is present.
-   */
+  /** Explicit GitHub email retained in the shared identity document. */
   readonly email?: string | undefined;
-  /** Optional override for the trailer display name (defaults to person.name). */
+  /** Optional GitHub display name. */
   readonly name?: string | undefined;
 }
 
@@ -40,7 +36,7 @@ export interface JiraIdentityRef {
 }
 
 export interface PersonIdentity {
-  /** Human display name used in Co-authored-by trailers. */
+  /** Human display name. */
   readonly name: string;
   readonly discord?: DiscordIdentityRef | undefined;
   readonly github?: GitHubIdentityRef | undefined;
@@ -360,46 +356,12 @@ export function loadIdentityMapFromFileSync(filePath: string): ReadonlyArray<Per
   }
 }
 
-/** Derive the email used in Co-authored-by trailers. */
-export function resolveGitHubCoAuthorEmail(github: GitHubIdentityRef): string | null {
-  const explicit = github.email?.trim();
-  if (explicit !== undefined && explicit.length > 0) return explicit;
-  const id = github.id?.trim();
-  const login = github.login.trim();
-  if (id !== undefined && id.length > 0 && login.length > 0) {
-    return `${id}+${login}@users.noreply.github.com`;
-  }
-  return null;
-}
-
-/**
- * Co-author body only: `Name <email>` (no trailer prefix).
- * Prefix with `Co-authored-by: ` when writing git commits (see agent-turn-rules).
- */
-export function formatCoAuthoredByBody(person: PersonIdentity): string | null {
-  const github = person.github;
-  if (github === undefined) return null;
-  const email = resolveGitHubCoAuthorEmail(github);
-  if (email === null) return null;
-  const name = (github.name ?? person.name).trim() || person.name;
-  // Git trailers must be a single line; strip newlines from names.
-  const safeName = name.replace(/[\r\n]+/gu, " ").trim();
-  return `${safeName} <${email}>`;
-}
-
-/** Full git trailer `Co-authored-by: Name <email>`, or null when unresolved. */
-export function formatCoAuthoredByTrailer(person: PersonIdentity): string | null {
-  const body = formatCoAuthoredByBody(person);
-  return body === null ? null : `Co-authored-by: ${body}`;
-}
-
 export type ResolvedParticipantIdentity = {
   readonly role: "requester" | "thread_starter" | "other";
   readonly discordId: string | null;
   readonly discordUsername: string | null;
   readonly discordDisplayName: string | null;
   readonly person: PersonIdentity | null;
-  readonly coAuthoredBy: string | null;
   readonly unmappedReason: string | null;
 };
 
@@ -430,7 +392,6 @@ export function resolveParticipantIdentity(input: {
       discordUsername,
       discordDisplayName,
       person: null,
-      coAuthoredBy: null,
       unmappedReason:
         discordId === null && discordUsername === null
           ? "no discord identity on message"
@@ -438,20 +399,13 @@ export function resolveParticipantIdentity(input: {
     };
   }
 
-  const coAuthoredBy = formatCoAuthoredByTrailer(person);
   return {
     role: input.role,
     discordId,
     discordUsername,
     discordDisplayName,
     person,
-    coAuthoredBy,
-    unmappedReason:
-      coAuthoredBy === null
-        ? person.github === undefined
-          ? "mapped person has no github.login"
-          : "mapped person has no github email/id for Co-authored-by"
-        : null,
+    unmappedReason: null,
   };
 }
 
@@ -503,72 +457,6 @@ export function classifyDiscordAgentAccess(input: {
     };
   }
   return { allowed: true, person: resolved.person };
-}
-
-/**
- * Build the agent-facing attribution block for commits/PRs.
- * Bot already resolved the identity map — inject cab bodies only (no lookup, no
- * repeated `Co-authored-by:` prefix). Unmapped participants listed briefly.
- * Returns null when there is nothing useful to inject.
- */
-export function formatIdentityAttributionBlock(input: {
-  readonly participants: ReadonlyArray<ResolvedParticipantIdentity>;
-}): string | null {
-  const participants = input.participants;
-  if (participants.length === 0) return null;
-
-  const anyMapped = participants.some((p) => p.person !== null);
-  // Dedupe by trailer body; starter+req same person → one entry.
-  const cabBodies = uniqueStrings(
-    participants
-      .map((p) => {
-        if (p.coAuthoredBy === null) return null;
-        return p.coAuthoredBy.replace(/^Co-authored-by:\s*/iu, "").trim();
-      })
-      .filter((t): t is string => t !== null && t.length > 0),
-  );
-
-  // Only surface unmapped / incomplete rows (mapped people are fully covered by cab).
-  const unmappedParts: string[] = [];
-  const seenUnmapped = new Set<string>();
-  for (const p of participants) {
-    if (p.coAuthoredBy !== null) continue;
-    const role = p.role === "requester" ? "req" : p.role === "thread_starter" ? "starter" : "p";
-    const id = p.discordId ?? "?";
-    const user = p.discordUsername ?? p.person?.discord?.username ?? "?";
-    const key = `${id}@${user}`;
-    if (seenUnmapped.has(key)) continue;
-    seenUnmapped.add(key);
-    const why = p.person === null ? "unmapped" : "no-gh";
-    unmappedParts.push(`${role} ${key} ${why}`);
-  }
-
-  const lines: string[] = [];
-  if (cabBodies.length > 0) {
-    // Single line; agent prefixes each with `Co-authored-by: ` when committing.
-    lines.push(`cab: ${cabBodies.join(" | ")}`);
-  } else if (!anyMapped) {
-    lines.push("cab: (none)");
-  } else {
-    lines.push("cab: (none — missing gh id/email)");
-  }
-  if (unmappedParts.length > 0) {
-    lines.push(`unmapped: ${unmappedParts.join(" | ")}`);
-  }
-
-  return lines.join("\n");
-}
-
-function uniqueStrings(values: ReadonlyArray<string>): ReadonlyArray<string> {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    const key = value.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(value);
-  }
-  return out;
 }
 
 export interface IdentityMapStoreService {
@@ -701,7 +589,7 @@ export const layerFromOptionalPath = (filePath: string | undefined) =>
     Effect.gen(function* () {
       if (filePath === undefined || filePath.trim().length === 0) {
         yield* Effect.logInfo(
-          "T3_IDENTITY_MAP_PATH is unset; Discord→GitHub co-author injection is off until configured.",
+          "T3_IDENTITY_MAP_PATH is unset; Discord identity authorization is unavailable until configured.",
         );
         return makeIdentityMapStore([]);
       }
