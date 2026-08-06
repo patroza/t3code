@@ -46,6 +46,7 @@ import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
+import * as PrLookupFreeze from "../../git/PrLookupFreeze.ts";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -488,6 +489,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
+    const prLookupFreeze = yield* PrLookupFreeze.PrLookupFreeze;
 
     const applyProjectsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyProjectsProjection",
@@ -718,12 +720,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          const wasSettled = existingRow.value.settledOverride === "settled";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             settledOverride: "settled",
             settledAt: event.payload.settledAt,
             updatedAt: event.payload.updatedAt,
           });
+          // Idempotent re-settles must not double-count freeze interest.
+          if (!wasSettled) {
+            yield* prLookupFreeze.noteWorktreeSettled(existingRow.value.worktreePath);
+          }
           return;
         }
 
@@ -734,12 +741,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          const wasSettled = existingRow.value.settledOverride === "settled";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             settledOverride: event.payload.reason === "user" ? "active" : null,
             settledAt: null,
             updatedAt: event.payload.updatedAt,
           });
+          if (wasSettled) {
+            yield* prLookupFreeze.noteWorktreeUnsettled(existingRow.value.worktreePath);
+          }
           return;
         }
 
@@ -1925,4 +1936,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  // Shared with GitManager via the same layer value at the server root
+  // (PrLookupFreezeLive). Tests that mount this layer alone provide their own.
+  Layer.provide(PrLookupFreeze.layer),
 );
