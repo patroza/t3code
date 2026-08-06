@@ -32,6 +32,7 @@ import {
   PlusIcon,
   SearchIcon,
   ServerIcon,
+  SquareKanbanIcon,
   SquarePenIcon,
   TerminalIcon,
   Trash2Icon,
@@ -49,7 +50,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { useLocation, useParams, useRouter } from "@tanstack/react-router";
 
 import {
   isAtomCommandInterrupted,
@@ -108,7 +109,10 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat"
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
+  SETTLED_TAIL_INITIAL_COUNT,
+  SETTLED_TAIL_PAGE_COUNT,
   buildBulkTitleRegenerationContextMenuItem,
+  buildSidebarV2ThreadContextMenuItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
@@ -164,10 +168,6 @@ import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
 
-// Settled-tail paging: recent history is the common lookup; the deep tail
-// stays behind an explicit Show more.
-const SETTLED_TAIL_INITIAL_COUNT = 10;
-const SETTLED_TAIL_PAGE_COUNT = 25;
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
   repository_path: "Group by repository path",
@@ -451,7 +451,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
-  const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   const openPrLink = useOpenPrLink();
@@ -738,7 +737,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   ) : (
     <span
       className={cn(
-        "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
+        "min-w-0 flex-1 text-sm",
         shouldRecede ? "font-normal" : "font-medium",
         variant === "card"
           ? cn(
@@ -759,7 +758,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   ? "text-muted-foreground"
                   : "text-muted-foreground/70",
             ),
-        isRegeneratingTitle && "opacity-[0.55]",
       )}
     >
       {thread.title}
@@ -810,7 +808,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 role="button"
                 tabIndex={0}
                 data-testid="sidebar-v2-row-slim"
-                aria-busy={isRegeneratingTitle || undefined}
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
@@ -837,11 +834,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             </span>
             {title}
             {terminalStatusIcon}
-            {isRegeneratingTitle ? (
-              <span role="status" className="sr-only">
-                Regenerating title
-              </span>
-            ) : null}
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -926,7 +918,6 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               role="button"
               tabIndex={0}
               data-testid="sidebar-v2-row-card"
-              aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
@@ -1037,14 +1028,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 ) : null}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-            </div>
+            <div className="mt-1 flex min-w-0">{title}</div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
               {thread.branch ? (
                 <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
@@ -2193,17 +2177,17 @@ export default function SidebarV2() {
       const count = threadKeys.length;
       // Snooze (N) is offered when every selected thread can actually take
       // it — a mixed selection with blocked-on-you work would half-apply.
-      const selectionNow = new Date();
-      const selectedThreads = threadKeys.flatMap((threadKey) => {
+      const selectionNow = new Date().toISOString();
+      const snoozableThreads = threadKeys.flatMap((threadKey) => {
         const thread = threadByKeyRef.current.get(threadKey);
         return thread ? [thread] : [];
       });
-      const canSnoozeSelection = selectedThreads.every(
+      const canSnoozeSelection = snoozableThreads.every(
         (thread) =>
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true &&
-          canSnooze(thread, { now: selectionNow.toISOString() }),
+          canSnooze(thread, { now: selectionNow }),
       );
-      const titleRegenerationThreads = selectedThreads.filter(
+      const titleRegenerationThreads = snoozableThreads.filter(
         (thread) =>
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadTitleRegeneration === true,
@@ -2248,7 +2232,7 @@ export default function SidebarV2() {
           // Post-snooze navigation must skip threads snoozing in this same
           // batch — they are all leaving the card block together.
           const coSnoozingKeys = new Set(threadKeys);
-          for (const thread of selectedThreads) {
+          for (const thread of snoozableThreads) {
             attemptSnooze(scopeThreadRef(thread.environmentId, thread.id), preset, {
               coSnoozingKeys,
             });
@@ -2351,7 +2335,6 @@ export default function SidebarV2() {
       markThreadUnread,
       removeFromSelection,
       serverConfigs,
-      updateThreadMetadata,
     ],
   );
 
@@ -2394,62 +2377,19 @@ export default function SidebarV2() {
         const snoozePresets = resolveSnoozePresets(new Date());
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            [
-              ...(thread.branch
-                ? [
-                    {
-                      id: "new-thread-on-branch",
-                      label: `New thread on ${thread.branch}`,
-                    },
-                  ]
-                : []),
-              ...(supportsPinning
-                ? [
-                    isPinned
-                      ? { id: "unpin", label: "Unpin thread" }
-                      : { id: "pin", label: "Pin thread" },
-                  ]
-                : []),
-              // Both lifecycle actions stay available on pinned threads:
-              // settling clears the pin ("done" beats "keep on top"), and
-              // snoozing hides the card until wake with the pin intact.
-              ...(supportsSettlement
-                ? [
-                    isSettled
-                      ? { id: "unsettle", label: "Un-settle thread" }
-                      : { id: "settle", label: "Settle thread" },
-                  ]
-                : []),
-              ...(supportsSnooze
-                ? [
-                    isSnoozed
-                      ? { id: "unsnooze", label: "Wake thread" }
-                      : {
-                          id: "snooze",
-                          label: "Snooze",
-                          disabled: !canSnooze(thread, { now: new Date().toISOString() }),
-                          children: snoozePresets.map((preset) => ({
-                            id: `snooze:${preset.id}`,
-                            label: `${preset.label} (${preset.whenLabel})`,
-                          })),
-                        },
-                  ]
-                : []),
-              { id: "rename", label: "Rename thread" },
-              ...(supportsTitleRegeneration
-                ? [
-                    {
-                      id: "regenerate-title",
-                      label: isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
-                      disabled: isRegeneratingTitle,
-                    },
-                  ]
-                : []),
-              { id: "mark-unread", label: "Mark unread" },
-              { id: "copy-path", label: "Copy path", icon: "copy" },
-              ...(thread.branch ? [{ id: "copy-branch", label: "Copy branch", icon: "copy" }] : []),
-              { id: "delete", label: "Delete", destructive: true, icon: "trash" },
-            ],
+            buildSidebarV2ThreadContextMenuItems({
+              branch: thread.branch,
+              supportsPinning,
+              isPinned,
+              supportsSettlement,
+              isSettled,
+              supportsSnooze,
+              isSnoozed,
+              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+              snoozePresets,
+              supportsTitleRegeneration,
+              isRegeneratingTitle,
+            }),
             position,
           ),
         );
@@ -2504,7 +2444,7 @@ export default function SidebarV2() {
             startThreadRename(threadRef, thread.title);
             return;
           case "regenerate-title": {
-            if (isRegeneratingTitle) return;
+            if (!supportsTitleRegeneration || isRegeneratingTitle) return;
             const result = await updateThreadMetadata({
               environmentId: threadRef.environmentId,
               input: { threadId: threadRef.threadId, regenerateTitle: true },
@@ -2589,7 +2529,6 @@ export default function SidebarV2() {
       projectCwdByKey,
       serverConfigs,
       startThreadRename,
-      updateThreadMetadata,
     ],
   );
 
@@ -2611,6 +2550,13 @@ export default function SidebarV2() {
           modelPickerOpen: isModelPickerOpen(),
         },
       });
+      if (command === "board.open") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isMobile) setOpenMobile(false);
+        void router.navigate({ to: "/board" });
+        return;
+      }
       const navigateToThreadKey = (targetThreadKey: string | null) => {
         if (!targetThreadKey) return false;
         const targetThread = threadByKey.get(targetThreadKey);
@@ -2638,11 +2584,14 @@ export default function SidebarV2() {
     window.addEventListener("keydown", onWindowKeyDown);
     return () => window.removeEventListener("keydown", onWindowKeyDown);
   }, [
+    isMobile,
     keybindings,
     navigateToThread,
     orderedThreadKeys,
     routeTerminalOpen,
     routeThreadKey,
+    router,
+    setOpenMobile,
     threadByKey,
   ]);
 
@@ -2684,11 +2633,20 @@ export default function SidebarV2() {
     openCommandPalette({ open: "new-thread-in" });
   }, [isMobile, newThreadContext, projectGroups.length, setOpenMobile]);
 
+  const pathname = useLocation({ select: (l) => l.pathname });
+  const isBoardActive = pathname === "/board";
+  const handleBoardClick = useCallback(() => {
+    if (isMobile) setOpenMobile(false);
+    void router.navigate({ to: "/board" });
+  }, [isMobile, router, setOpenMobile]);
+
+  const commandPaletteShortcutLabel = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
   // Same resolution as v1: prefer the local-thread binding, fall back to
   // chat.new, no platform gating — web users have working shortcuts too.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
+  const boardShortcutLabel = shortcutLabelForCommand(keybindings, "board.open");
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -2742,6 +2700,35 @@ export default function SidebarV2() {
                     <XIcon className="size-3" />
                   </Button>
                 ) : null}
+              </div>
+              <div className="shrink-0">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        type="button"
+                        className={cn(
+                          "relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar",
+                          isBoardActive && "bg-sidebar-row-hover text-sidebar-foreground",
+                        )}
+                        onClick={handleBoardClick}
+                        aria-label="Board"
+                        aria-current={isBoardActive ? "page" : undefined}
+                        data-testid="sidebar-board-link"
+                      />
+                    }
+                  >
+                    <SquareKanbanIcon />
+                    <span
+                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                      aria-hidden="true"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">
+                    {boardShortcutLabel ? `Board (${boardShortcutLabel})` : "Board"}
+                  </TooltipPopup>
+                </Tooltip>
               </div>
               <div className="shrink-0">
                 <Tooltip>

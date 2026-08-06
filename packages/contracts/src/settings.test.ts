@@ -17,6 +17,12 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
 describe("ClientSettings word wrap", () => {
+  it("defaults Open With settings for legacy documents", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.openWithEntries).toEqual([]);
+    expect(settings.preferredOpenWith).toBeNull();
+  });
+
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
   });
@@ -30,6 +36,18 @@ describe("ClientSettings word wrap", () => {
     expect(decoded.wordWrap).toBe(true);
     expect(decoded).not.toHaveProperty("chatWordWrap");
     expect(decoded).not.toHaveProperty("diffWordWrap");
+  });
+});
+
+describe("ClientSettings worktree removal confirmation", () => {
+  it("defaults confirmation on for existing settings", () => {
+    expect(decodeClientSettings({}).confirmWorktreeRemoval).toBe(true);
+  });
+
+  it("accepts confirmation updates", () => {
+    expect(
+      decodeClientSettingsPatch({ confirmWorktreeRemoval: false }).confirmWorktreeRemoval,
+    ).toBe(false);
   });
 });
 

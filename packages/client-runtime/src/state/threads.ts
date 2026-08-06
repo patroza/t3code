@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationGetSnapshotError,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
@@ -43,6 +44,33 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
     : "Could not synchronize the thread.";
 }
 
+/**
+ * Extract a permanent snapshot-unavailable reason from a subscription failure.
+ * "thread-missing" is intentionally not returned: the projection row may just
+ * not be written yet (a freshly created thread), so it stays retriable.
+ */
+function terminalSnapshotReason(
+  cause: Cause.Cause<unknown>,
+): "thread-deleted" | "thread-archived" | undefined {
+  for (const reason of cause.reasons) {
+    if (reason._tag !== "Fail") {
+      continue;
+    }
+    const error: unknown = reason.error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { readonly _tag?: unknown })._tag === "OrchestrationGetSnapshotError"
+    ) {
+      const snapshotReason = (error as OrchestrationGetSnapshotError).reason;
+      if (snapshotReason === "thread-deleted" || snapshotReason === "thread-archived") {
+        return snapshotReason;
+      }
+    }
+  }
+  return undefined;
+}
+
 function shouldPersistThread(thread: OrchestrationThread): boolean {
   const status = thread.session?.status;
   return status !== "starting" && status !== "running";
@@ -80,6 +108,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const httpSnapshotLoadAttempted = yield* Ref.make(false);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
@@ -267,10 +296,20 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
-          if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
-            current = yield* SubscriptionRef.get(state);
+          // The socket subscription may retry an expected domain failure (for
+          // example, while a newly-created thread is still being projected).
+          // Do not repeat the HTTP fallback on each socket retry: a missing
+          // snapshot otherwise produces a new 404 every 250ms.
+          const alreadyAttemptedHttpSnapshotLoad = yield* Ref.getAndSet(
+            httpSnapshotLoadAttempted,
+            true,
+          );
+          if (!alreadyAttemptedHttpSnapshotLoad) {
+            const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+            if (Option.isSome(httpSnapshot)) {
+              yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+              current = yield* SubscriptionRef.get(state);
+            }
           }
         }
 
@@ -291,8 +330,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         };
       }),
       {
-        onExpectedFailure: setStreamError,
+        // A permanently unavailable thread must not keep resubscribing: the
+        // server can never satisfy it, and the 250ms retry would hammer the
+        // socket until the state's idle TTL expires.
+        onExpectedFailure: (cause) =>
+          terminalSnapshotReason(cause) === "thread-deleted" ? setDeleted() : setStreamError(cause),
         retryExpectedFailureAfter: "250 millis",
+        isExpectedFailureTerminal: (cause) => terminalSnapshotReason(cause) !== undefined,
         resubscribe: foregroundResubscriptions,
       },
     ).pipe(Stream.runForEach(applyItem)),

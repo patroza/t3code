@@ -211,7 +211,6 @@ it.effect("re-reads origin remote status after cache TTL expiry and bypassed inv
     assert.equal(afterExpiry.hasOriginRemote, true);
   }).pipe(Effect.provide(TestLayer)),
 );
-
 it.effect("coalesces concurrent ref pages into one repository snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -634,7 +633,6 @@ it.effect("backs off failed upstream refreshes across linked worktrees", () =>
     }),
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
-
 it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   describe("process environment", () => {
     it.effect("preserves the caller locale for general Git subprocesses", () =>

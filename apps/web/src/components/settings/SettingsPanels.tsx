@@ -650,6 +650,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
+      ...(settings.confirmWorktreeRemoval !== DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval
+        ? ["Worktree remove confirmation"]
+        : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
     ],
     [
@@ -658,6 +661,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
+      settings.confirmWorktreeRemoval,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -713,6 +717,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
+      confirmWorktreeRemoval: DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
@@ -2075,6 +2080,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ confirmThreadDelete: Boolean(checked) })
               }
               aria-label="Confirm thread deletion"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("worktree-remove-confirmation")}
+          title="Worktree remove confirmation"
+          description="Ask before removing a worktree when its last linked thread is archived or deleted."
+          resetAction={
+            settings.confirmWorktreeRemoval !== DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval ? (
+              <SettingResetButton
+                label="worktree remove confirmation"
+                onClick={() =>
+                  updateSettings({
+                    confirmWorktreeRemoval: DEFAULT_UNIFIED_SETTINGS.confirmWorktreeRemoval,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmWorktreeRemoval}
+              onCheckedChange={(checked) =>
+                updateSettings({ confirmWorktreeRemoval: Boolean(checked) })
+              }
+              aria-label="Confirm worktree removal"
             />
           }
         />
