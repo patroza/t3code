@@ -48,12 +48,17 @@ on:
       - fork/dev
 
 concurrency:
-  # Push runs are keyed by SHA and never cancelled: the conclusion of a push run
-  # is what approves that exact commit for deployment, so cancelling one as
-  # superseded would leave that merge SHA permanently unapprovable.
-  group: ci-${{ github.event.pull_request.number || inputs.checkout_ref ||
-    (github.event_name == 'push' && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  # Push runs are grouped per branch, so a newer merge cancels the in-flight run
+  # for the commit it supersedes. Only the surviving tip concludes success, so
+  # only the tip releases -- back-to-back merges produce one release, not a
+  # waterfall of them.
+  #
+  # This is safe because nothing ever asks to approve a superseded commit. The
+  # deploy poller resolves the branch tip and asks only whether that SHA is
+  # green, and release scope is a diff across the whole range, so intermediate
+  # commits are still represented in what ships.
+  group: ci-${{ github.event.pull_request.number || inputs.checkout_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
