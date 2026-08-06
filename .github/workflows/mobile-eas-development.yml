@@ -24,6 +24,11 @@ on:
         description: "Exact release-branch SHA (blank uses that branch's current tip)"
         required: false
         type: string
+      release_branch:
+        description: "Release branch that must contain the SHA"
+        required: false
+        type: string
+        default: fork/integration
 
 concurrency:
   group: mobile-eas-development
