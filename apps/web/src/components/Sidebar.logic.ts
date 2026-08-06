@@ -883,7 +883,7 @@ export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2S
 }
 
 export interface SidebarV2TopStatus {
-  label: "Working" | "Approval" | "Input" | "Failed" | "Done";
+  label: "Working" | "Monitoring" | "Approval" | "Input" | "Failed" | "Done";
   icon: "working" | "done" | null;
   className: string;
 }
@@ -894,14 +894,20 @@ export function resolveSidebarV2TopStatus(input: {
 }): SidebarV2TopStatus | null {
   switch (input.status) {
     case "working":
-    // Monitoring is live background work too. The v2 top-status label union has
-    // no Monitoring member, so it reads as Working rather than inventing one.
-    case "monitoring":
       return {
         label: "Working",
         icon: "working",
         className:
           "animate-sidebar-working-text text-sky-600 motion-reduce:animate-none dark:text-sky-400",
+      };
+    // Steady label, no icon, no duty-cycled shimmer: monitoring is calm
+    // background presence, not active progress (monitoring-pill D6). Matches the
+    // v2 sidebar row and the v1 pill, which uses pulse: false here.
+    case "monitoring":
+      return {
+        label: "Monitoring",
+        icon: null,
+        className: "text-sky-600 dark:text-sky-400",
       };
     case "approval":
       return {

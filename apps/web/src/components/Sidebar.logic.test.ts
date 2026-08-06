@@ -29,6 +29,7 @@ import {
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarV2Status,
+  resolveSidebarV2TopStatus,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
@@ -2145,5 +2146,24 @@ describe("sortLogicalProjectsForSidebar", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+  });
+});
+
+describe("resolveSidebarV2TopStatus", () => {
+  it("shows monitoring as its own calm status, not as Working", () => {
+    // Board cards read this. Folding monitoring into Working gave a watch loop
+    // the active-progress shimmer, which is what the v1 pill (pulse: false) and
+    // the v2 sidebar row both deliberately avoid.
+    const monitoring = resolveSidebarV2TopStatus({ status: "monitoring", isUnread: false });
+    expect(monitoring?.label).toBe("Monitoring");
+    expect(monitoring?.icon).toBeNull();
+    expect(monitoring?.className).not.toContain("animate-sidebar-working-text");
+  });
+
+  it("keeps working animated so the two remain distinguishable", () => {
+    const working = resolveSidebarV2TopStatus({ status: "working", isUnread: false });
+    expect(working?.label).toBe("Working");
+    expect(working?.icon).toBe("working");
+    expect(working?.className).toContain("animate-sidebar-working-text");
   });
 });
