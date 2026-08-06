@@ -100,7 +100,7 @@ const program = Effect.gen(function* () {
 
   // Force acquisition of MentionRouter + Discord gateway (must not be pruned).
   // Discord can become READY before guest T3 is listening — that is expected on
-  // restart. Mentions that land early get a transient "still connecting" reply.
+  // restart. Mentions that land early wait (⏳) until the shell is ready.
   const running = yield* DiscordBotRunning;
   yield* Effect.logInfo("Discord gateway active", { botUserId: running.botUserId });
 
