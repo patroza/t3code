@@ -732,6 +732,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         busy: this.#busy,
         error: this.#error,
         connected: this.client.serverConfig !== null,
+        supportsQueuedMessages: this.client.serverCapabilities.queuedMessages,
         environmentLabel: this.client.serverConfig?.environment.label ?? "T3 Code",
         // Scoped to the workspace checkout rather than the active thread's branch:
         // the panel follows the worktree VS Code has open.
