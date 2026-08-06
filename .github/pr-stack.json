@@ -21,24 +21,7 @@
       "branch": "fork/changes"
     }
   ],
-  "integrationOverlays": [
-    {
-      "number": 254,
-      "branch": "t3-discord/f7d37879-desktop-deeplinks"
-    },
-    {
-      "number": 174,
-      "branch": "fork/discord"
-    },
-    {
-      "number": 175,
-      "branch": "fork/vscode"
-    },
-    {
-      "number": 250,
-      "branch": "fork/identity"
-    }
-  ],
+  "integrationOverlays": [],
   "conflictResolutions": [
     {
       "branch": "fork/integration",
