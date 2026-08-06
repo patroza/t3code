@@ -141,7 +141,8 @@ re-architecture.
 4. Protect `fork/dev` against force-push and deletion. Add required checks **after** CI is wired to
    run for `fork/dev` — requiring a check that cannot yet run blocks the very PR that enables it.
 5. Disable merge commits and rebase merging so squash is the only method (see
-   [Merge policy](#merge-policy-squash-decided)).
+   [Merge policy](#merge-policy-squash-decided)), and add the sync automation as a ruleset bypass
+   actor so provenance ancestry merges can still be pushed.
 6. Make `fork/dev` the GitHub default branch and the base for ordinary contributor PRs.
 7. Point deployment at `fork/dev` (see [Ops Repository Changes](#ops-repository-changes)).
 8. Keep the old compose-and-deploy path installed as a temporary fallback.
@@ -259,8 +260,12 @@ commit, which is what makes the rest of this document work: the PR ledger maps o
 `fork/dev` history, release scope is a diff between two commits, and a later clean projection has a
 single unit to replay per PR.
 
-Exceptions are not defined yet. If a case appears where preserving a dependent series on `fork/dev`
-genuinely matters, it can be argued on its own merits then.
+One exception is known: **provenance sync PRs are merge-committed, not squashed**, because
+squashing discards the upstream ancestry link that makes "commits behind upstream" readable. See
+[Record upstream ancestry](#record-upstream-ancestry-so-behind-stays-readable).
+
+Beyond that, exceptions are not defined. If a case appears where preserving a dependent series on
+`fork/dev` genuinely matters, it can be argued on its own merits then.
 
 Enforce this in repository settings rather than by asking contributors to pick the right button.
 GitHub has no "default merge method" field: the merge button's primary action is whichever method is
@@ -275,6 +280,12 @@ gh api -X PATCH repos/<owner>/<repo> \
 That also makes an exception a deliberate act — someone has to re-enable a method to take one — which
 is the right shape for a policy whose exceptions are undefined. Pair it with
 `required_linear_history` on `fork/dev` so the invariant holds even if a setting is changed later.
+
+Leave merge commits disabled even though provenance syncs need one. Re-enabling them repo-wide makes
+**Merge** the merge button's primary action again — GitHub picks it in the order merge → squash →
+rebase — which quietly reverses this decision for every ordinary PR. Give the sync automation a
+ruleset **bypass actor** instead, so it can push the ancestry merge directly while every human path
+stays squash-only.
 
 Release only the exact merge SHA after its required checks pass. A green PR tip is not sufficient if
 the resulting merge SHA differs or the base moved.
@@ -304,18 +315,44 @@ Rewritten provenance branches must not be repeatedly merged into `fork/dev`. Aft
 commits have new identities; merging the rewritten tip would duplicate history and produce avoidable
 conflicts. Synchronize the net tree change instead.
 
-### GitHub will report `fork/dev` as behind upstream. Never "Sync fork"
+### Record upstream ancestry so "behind" stays readable
 
-Because the delta lands as one squashed commit, `fork/dev` carries upstream's _content_ without
-upstream's _commit objects_, and GitHub computes ahead/behind purely by reachability. The branch page
-will therefore always read `N commits behind pingdotgg/t3code:main`, and `N` grows with every import.
-That is expected, not drift: commit-level provenance lives on `main → fork/base → fork/tim →
-fork/candidates`, which is where currency should be checked.
+The no-merge rule above is about branches that are **rebased**: `fork/base`, `fork/tim`, and
+`fork/candidates` get new commit identities every cycle, so merging their tips repeatedly duplicates
+history. `upstream/main` is not rebased. It is append-only and its commit identities are permanent,
+so there is no reason for `fork/dev` to lack them.
 
-**Do not press the "Sync fork" button.** It merges upstream `main` into `fork/dev`, which is exactly
-the duplicate-history failure above — the content is already present, so the merge conflicts en masse
-and leaves two representations of the same changes. Verify currency by confirming that the imported
-upstream commit recorded in the latest checkpoint matches the upstream tip.
+Importing only a tree delta gives `fork/dev` upstream's _content_ without upstream's _commit
+objects_. GitHub computes ahead/behind purely by reachability, so the branch page reads
+`N commits behind pingdotgg/t3code:main` and `N` grows with every import — which makes the one number
+everyone actually wants to read permanently useless.
+
+Fix it by recording the ancestry the content already implies, as the final step of a sync:
+
+```sh
+git merge -s ours -m "chore(provenance): record upstream <sha> as an ancestor" <upstream-tip>
+```
+
+`-s ours` keeps `fork/dev`'s tree byte-for-byte and adds only the parent link. After it, the upstream
+commits are genuine ancestors and the branch page reads 0 behind, then counts up honestly as upstream
+moves.
+
+**This step asserts that every upstream change is accounted for.** If a sync resolution silently
+dropped one, the merge makes that loss permanent — later merges start from the new merge base and
+never re-offer those hunks. So run it only as the last step of a sync whose checks passed, never on
+its own to turn the banner green.
+
+One consequence for repository configuration: this is a merge commit, so it cannot go through the
+squash-only PR path. Do **not** re-enable merge commits repo-wide to allow it — that makes Merge the
+default button for every PR. Add the sync automation as a **bypass actor** on the `fork/dev` ruleset
+and let it push the ancestry merge directly, leaving `required_linear_history` and squash-only intact
+for every human path.
+
+Sequence per sync: merge the content PR normally (squashed), then push the `-s ours` ancestry merge
+on top. Squashing a sync branch that already contains the ancestry merge would discard it.
+
+The "Sync fork" button remains the wrong tool — it merges upstream into `fork/dev` for content, which
+re-applies changes the delta already brought in. The ancestry merge above is the supported path.
 
 Assume `C1` is the `fork/candidates` tree currently incorporated into `fork/dev`, and `C2` is the
 latest rebuilt and verified `fork/candidates` tree. Then:
@@ -326,8 +363,9 @@ latest rebuilt and verified `fork/candidates` tree. Then:
 4. Run the full required checks.
 5. Open a normal PR into `fork/dev`, titled for example
    `sync(provenance): import upstream stack C1..C2`.
-6. Merge it without rewriting `fork/dev`.
-7. Record `C2` as the newly imported provenance checkpoint.
+6. Merge it without rewriting `fork/dev` (squashed, like any other PR).
+7. Push the upstream ancestry merge on top: `git merge -s ours <upstream-tip>` (see above).
+8. Record `C2` and the imported upstream commit as the newly imported provenance checkpoint.
 
 **This is a manual procedure to begin with, and that is fine.** At the current upstream cadence it
 runs rarely enough that automation is a convenience, not a prerequisite. The imported checkpoint may
