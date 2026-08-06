@@ -302,15 +302,20 @@ jobs:
           # mode=auto, not update: an OTA alone never reaches a phone when the
           # native runtime changed, so the fingerprint decides between an update
           # and a TestFlight build. iOS only, because Android has no keystore.
+          # release_branch must match: the mobile workflows check out that branch
+          # and verify the SHA is contained by it. Defaulting it to
+          # fork/integration there would reject every fork/dev SHA.
           gh workflow run mobile-eas-production.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$RELEASE_REF" \
             -f mode=auto \
             -f platform=ios \
             -f sha="$GITHUB_SHA" \
+            -f release_branch="$RELEASE_REF" \
             -f message="${RELEASE_REF} ${GITHUB_SHA}"
           gh workflow run mobile-eas-development.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$RELEASE_REF" \
             -f platform=ios \
-            -f sha="$GITHUB_SHA"
+            -f sha="$GITHUB_SHA" \
+            -f release_branch="$RELEASE_REF"

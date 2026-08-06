@@ -40,9 +40,14 @@ on:
         required: false
         type: string
       sha:
-        description: "Exact fork/integration SHA (blank uses its current tip)"
+        description: "Exact release-branch SHA (blank uses that branch's current tip)"
         required: false
         type: string
+      release_branch:
+        description: "Release branch that must contain the SHA"
+        required: false
+        type: string
+        default: fork/integration
 
 concurrency:
   group: mobile-eas-production
@@ -78,7 +83,7 @@ jobs:
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
-          ref: fork/integration
+          ref: ${{ inputs.release_branch }}
           fetch-depth: 0
           # No sparse-checkout here: it makes actions/checkout fetch with
           # --filter=blob:none, and eas-cli archives the project via
@@ -108,7 +113,7 @@ jobs:
       # the deploy script + app.config runtime override from the workflow ref so
       # we can ship fixes without waiting for a full compose.
       - name: Overlay deploy tooling from workflow ref
-        if: steps.expo-token.outputs.present == 'true' && github.ref_name != 'fork/integration'
+        if: steps.expo-token.outputs.present == 'true' && github.ref_name != inputs.release_branch
         env:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |

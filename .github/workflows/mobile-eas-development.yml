@@ -21,7 +21,7 @@ on:
         required: false
         type: string
       sha:
-        description: "Exact fork/integration SHA (blank uses its current tip)"
+        description: "Exact release-branch SHA (blank uses that branch's current tip)"
         required: false
         type: string
 
@@ -60,7 +60,7 @@ jobs:
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
-          ref: fork/integration
+          ref: ${{ inputs.release_branch }}
           fetch-depth: 0
 
       - name: Resolve approved integration source
@@ -81,7 +81,7 @@ jobs:
           echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
       - name: Overlay deploy tooling from workflow ref
-        if: steps.expo-token.outputs.present == 'true' && github.ref_name != 'fork/integration'
+        if: steps.expo-token.outputs.present == 'true' && github.ref_name != inputs.release_branch
         env:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
