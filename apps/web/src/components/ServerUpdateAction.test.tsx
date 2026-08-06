@@ -101,11 +101,9 @@ describe("ServerUpdateAction", () => {
 });
 
 describe("ServerUpdateProgress", () => {
-  it("renders the chosen horizontal step rail without an animated spinner", () => {
+  it("shows one calm status row for the restart wait", () => {
     const markup = renderToStaticMarkup(
       <ServerUpdateProgress
-        fromVersion="0.0.30"
-        serverLabel="bb-1"
         state={{
           status: "running",
           stage: "resuming",
@@ -115,20 +113,36 @@ describe("ServerUpdateProgress", () => {
       />,
     );
 
-    expect(markup).toContain("0.0.30");
-    expect(markup).toContain("0.0.31");
-    expect(markup).toContain("Download");
-    expect(markup).toContain("Install");
-    expect(markup).toContain("Resume");
-    expect(markup).toContain("Waiting for bb-1 to accept commands.");
+    expect(markup).toContain("Restarting…");
+    // The wait state is monochrome and calm: no versions, no step rail, no
+    // success/warning colors, one duty-cycled pulse on the dot.
+    expect(markup).not.toContain("0.0.30");
+    expect(markup).not.toContain("Resum");
+    expect(markup).not.toContain("text-success");
+    expect(markup).not.toContain("text-primary");
+    expect(markup).toContain("animate-status-pulse");
     expect(markup).not.toContain("animate-spin");
   });
 
-  it("keeps the failed stage visible with its retryable error", () => {
+  it("folds the sub-second installing handoff into the download phase", () => {
     const markup = renderToStaticMarkup(
       <ServerUpdateProgress
-        fromVersion="0.0.30"
-        serverLabel="bb-1"
+        state={{
+          status: "running",
+          stage: "installing",
+          fromVersion: "0.0.30",
+          targetVersion: "0.0.31",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Downloading…");
+    expect(markup).not.toContain("Install");
+  });
+
+  it("keeps the failure visible with its retryable error", () => {
+    const markup = renderToStaticMarkup(
+      <ServerUpdateProgress
         state={{
           status: "failed",
           stage: "installing",
