@@ -197,18 +197,19 @@ The route returns 404 unless all four required variables are configured.
 
 ## Failure semantics
 
-| Condition                                      | Result                                                   |
-| ---------------------------------------------- | -------------------------------------------------------- |
-| No unique live PR/branch/worktree/thread match | Exactly `not yet linked/checked out.`                    |
-| Missing/deleted worktree or T3 thread          | Exactly `not yet linked/checked out.`                    |
-| Repository or PR mismatch                      | Exactly `not yet linked/checked out.`                    |
-| Unauthorized repository                        | Silently ignored; no response, no turn                   |
-| Unauthorized actor                             | Neutral authorization response; no link-state disclosure |
-| Thread already running                         | Busy response; no queue and no turn                      |
-| Duplicate delivery                             | Reuse persisted classification; no new comment or turn   |
-| Turn completes                                 | Replace working/progress comment with final answer       |
-| Turn errors or is interrupted                  | Replace comment with a stable failure response           |
-| Server restarts during turn                    | Resume the persisted response bridge                     |
+| Condition                                         | Result                                                   |
+| ------------------------------------------------- | -------------------------------------------------------- |
+| No unique live PR/branch/worktree/thread match    | Exactly `not yet linked/checked out.`                    |
+| Missing/deleted worktree or T3 thread             | Exactly `not yet linked/checked out.`                    |
+| Repository or PR mismatch                         | Exactly `not yet linked/checked out.`                    |
+| Unauthorized repository                           | Silently ignored; no response, no turn                   |
+| Unauthorized actor                                | Neutral authorization response; no link-state disclosure |
+| Thread already running                            | Busy response; no queue and no turn                      |
+| Duplicate delivery                                | Reuse persisted classification; no new comment or turn   |
+| Turn completes                                    | Replace working/progress comment with final answer       |
+| Turn errors or is interrupted                     | Replace comment with a stable failure response           |
+| Server restarts during turn                       | Resume the persisted response bridge                     |
+| Worktree prepare throws (e.g. transient `gh` 401) | One retry after 3 seconds, then stable provision failure |
 
 ## Tests and acceptance criteria
 
@@ -232,3 +233,10 @@ End-to-end acceptance:
 - Durable relay ingress for environments that cannot expose the local server directly.
 - Replacing the source-control implementation's personal `gh` and git credentials with GitHub App
   installation credentials; see the migration plan linked above.
+- **Provision auth hardening** (partial: one delayed prepare retry ships; rest still open):
+  - Resolve PR head/base via `GitHubAppClient` (webhook installation token) instead of CLI `gh`
+  - Invalidate App mint cache / remint on auth classification before retry
+  - Post the real provision error on the PR comment (not only “check server logs”)
+  - Always pass `-R owner/repo` from the bridge; fix App-mode errors that still say `gh auth login`
+  - Server token cache under `XDG_RUNTIME_DIR` / `T3_GITHUB_APP_TOKEN_CACHE_DIR`, not agent `TMPDIR`
+  - Cut `lookupStatusPr` `gh` noise; prune expired installation-token cache files
