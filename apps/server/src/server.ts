@@ -48,6 +48,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as AiUsageMonitor from "./aiUsage/AiUsageMonitor.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
+import * as PrLookupFreeze from "./git/PrLookupFreeze.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor.ts";
@@ -297,11 +298,16 @@ const SourceControlProviderRegistryLayerLive = SourceControlProviderRegistry.lay
   Layer.provideMerge(VcsDriverRegistryLayerLive),
 );
 
+// Single process-wide freeze map: GitManager (skip PR API) and the
+// projection pipeline (settle/unsettle) must share the same instance.
+const PrLookupFreezeLive = PrLookupFreeze.layer;
+
 const GitManagerLayerLive = GitManager.layer.pipe(
   Layer.provideMerge(ProjectSetupScriptRunner.layer),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(TextGeneration.layer),
+  Layer.provide(PrLookupFreezeLive),
 );
 
 const ProjectLifecycleScriptRunnerLayerLive = ProjectLifecycleScriptRunner.layer.pipe(

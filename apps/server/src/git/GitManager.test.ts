@@ -37,6 +37,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitManager from "./GitManager.ts";
+import * as PrLookupFreeze from "./PrLookupFreeze.ts";
 
 interface FakeGhScenario {
   prListSequence?: string[];
@@ -679,12 +680,14 @@ function makeManager(input?: {
     ),
     vcsDriverLayer,
     serverSettingsLayer,
+    PrLookupFreeze.layer,
   ).pipe(Layer.provideMerge(sourceControlRegistryLayer), Layer.provideMerge(NodeServices.layer));
 
-  return GitManager.make.pipe(
-    Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
-  );
+  return Effect.gen(function* () {
+    const manager = yield* GitManager.make;
+    const prLookupFreeze = yield* PrLookupFreeze.PrLookupFreeze;
+    return { manager, ghCalls, prLookupFreeze };
+  }).pipe(Effect.provide(managerLayer));
 }
 
 const asThreadId = (threadId: string) => threadId as ThreadId;
@@ -1255,6 +1258,101 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         state: "merged",
       });
     }),
+  );
+
+  it.effect("status does not re-list PRs after observing a merged PR (terminal freeze)", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/terminal-freeze"]);
+
+      const mergedPr = {
+        number: 44,
+        title: "Done",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/44",
+        baseRefName: "main",
+        headRefName: "feature/terminal-freeze",
+        state: "MERGED",
+        mergedAt: "2026-01-30T10:00:00Z",
+        updatedAt: "2026-01-30T10:00:00Z",
+      };
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // Two list answers: first observation freezes; invalidateStatus re-lists.
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          prListSequence: [JSON.stringify([mergedPr]), JSON.stringify([mergedPr])],
+        },
+      });
+
+      const first = yield* manager.remoteStatus({ cwd: repoDir });
+      expect(first?.pr?.state).toBe("merged");
+      const listCallsAfterFirst = ghCalls.filter((call) => call.startsWith("pr list ")).length;
+      expect(listCallsAfterFirst).toBe(1);
+
+      // Bypass remote status result cache (same as list-mode poll) without
+      // bumping the PR lookup epoch (that is only for explicit invalidateStatus).
+      const second = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+      expect(second?.pr?.number).toBe(44);
+      expect(second?.pr?.state).toBe("merged");
+      expect(ghCalls.filter((call) => call.startsWith("pr list ")).length).toBe(
+        listCallsAfterFirst,
+      );
+
+      // Explicit refresh re-opens the freeze (epoch bump).
+      yield* manager.invalidateStatus(repoDir);
+      const third = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+      expect(third?.pr?.number).toBe(44);
+      expect(ghCalls.filter((call) => call.startsWith("pr list ")).length).toBeGreaterThan(
+        listCallsAfterFirst,
+      );
+    }),
+  );
+
+  it.effect(
+    "status skips PR list while the worktree is settle-frozen and resumes on unsettle",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/settle-freeze"]);
+
+        const openPr = {
+          number: 55,
+          title: "In review",
+          url: "https://github.com/pingdotgg/codething-mvp/pull/55",
+          baseRefName: "main",
+          headRefName: "feature/settle-freeze",
+          state: "OPEN",
+          updatedAt: "2026-01-30T10:00:00Z",
+        };
+        const { manager, ghCalls, prLookupFreeze } = yield* makeManager({
+          ghScenario: {
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            prListSequence: [JSON.stringify([openPr]), JSON.stringify([openPr])],
+          },
+        });
+
+        const first = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+        expect(first?.pr?.number).toBe(55);
+        const listCallsAfterFirst = ghCalls.filter((call) => call.startsWith("pr list ")).length;
+        expect(listCallsAfterFirst).toBe(1);
+
+        yield* prLookupFreeze.noteWorktreeSettled(repoDir);
+        yield* manager.invalidateRemoteStatus(repoDir);
+        const settled = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+        expect(settled?.pr?.number).toBe(55);
+        expect(ghCalls.filter((call) => call.startsWith("pr list ")).length).toBe(
+          listCallsAfterFirst,
+        );
+
+        yield* prLookupFreeze.noteWorktreeUnsettled(repoDir);
+        yield* manager.invalidateStatus(repoDir);
+        const resumed = yield* manager.remoteStatus({ cwd: repoDir }, { refreshUpstream: false });
+        expect(resumed?.pr?.number).toBe(55);
+        expect(ghCalls.filter((call) => call.startsWith("pr list ")).length).toBeGreaterThan(
+          listCallsAfterFirst,
+        );
+      }),
   );
 
   it.effect("status hides merged PRs on the default branch", () =>

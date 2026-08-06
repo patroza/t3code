@@ -61,6 +61,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import { detectPrTemplate } from "../sourceControl/PrTemplateDetection.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
+import { PrLookupFreeze } from "./PrLookupFreeze.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -128,6 +129,13 @@ const STATUS_RESULT_CACHE_CAPACITY = 2_048;
 const PR_LOOKUP_CACHE_TTL = Duration.minutes(1);
 const PR_LOOKUP_FAILURE_TTL = Duration.seconds(20);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
+
+/** Merged/closed last-known badges do not re-hit the hosting provider until invalidateStatus. */
+export function isTerminalStatusPrState(
+  state: "open" | "closed" | "merged" | null | undefined,
+): boolean {
+  return state === "merged" || state === "closed";
+}
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 type GitActionProgressEmitter = (event: GitActionProgressPayload) => Effect.Effect<void, never>;
@@ -938,12 +946,14 @@ export const make = Effect.gen(function* () {
   // already-known PR badge, so the last successful answer per branch sticks
   // around as the fallback. Keep the resolved head context with it so a
   // branch retargeted to another remote/fork cannot inherit the old badge.
+  // `epoch` ties the entry to invalidateStatus so terminal freeze can re-open.
   interface LastKnownPr {
     readonly pr: ReturnType<typeof toStatusPr> | null;
     readonly upstreamRef: string | null;
     readonly headBranch: string;
     readonly remoteName: string | null;
     readonly headRemoteUrlKey: string | null;
+    readonly epoch: number;
   }
   const lastKnownPrByBranchKey = new Map<string, LastKnownPr>();
   const rememberLastKnownPr = (branchKey: string, entry: LastKnownPr) => {
@@ -992,6 +1002,7 @@ export const make = Effect.gen(function* () {
     }
     return lastKnown.pr;
   };
+  const prLookupFreeze = yield* PrLookupFreeze;
   const lookupStatusPr = Effect.fn("lookupStatusPr")(function* (
     cwd: string,
     details: { branch: string; upstreamRef: string | null; isDefaultBranch: boolean },
@@ -999,6 +1010,43 @@ export const make = Effect.gen(function* () {
     // Keyed by (cwd, branch) only: the upstream ref changing (e.g. a first
     // `push -u`) must not orphan the fallback value for the same branch.
     const branchKey = `${cwd}\u0000${details.branch}`;
+    const epoch = prLookupEpoch(cwd);
+
+    // Durable settle freeze: skip hosting-provider calls while every thread on
+    // this worktree is settled. Resume when the last settled interest drops
+    // (unsettle / activity) — next poll hits the live path again.
+    if (yield* prLookupFreeze.isWorktreeSettledFrozen(cwd)) {
+      const headContext = yield* resolveBranchHeadContext(cwd, details);
+      return resolveLastKnownPr(branchKey, {
+        upstreamRef: details.upstreamRef,
+        headBranch: headContext.headBranch,
+        remoteName: headContext.remoteName,
+        headRemoteUrlKey: headContext.headRemoteUrlKey,
+      });
+    }
+
+    // Terminal freeze: once we have observed merged/closed for this head under
+    // the current invalidate epoch, do not re-list PRs on every poll (Discord
+    // bridges + sidebar list mode otherwise re-hit gh forever).
+    const prior = lastKnownPrByBranchKey.get(branchKey);
+    if (
+      prior !== undefined &&
+      prior.epoch === epoch &&
+      prior.pr !== null &&
+      isTerminalStatusPrState(prior.pr.state)
+    ) {
+      const headContext = yield* resolveBranchHeadContext(cwd, details);
+      const frozen = resolveLastKnownPr(branchKey, {
+        upstreamRef: details.upstreamRef,
+        headBranch: headContext.headBranch,
+        remoteName: headContext.remoteName,
+        headRemoteUrlKey: headContext.headRemoteUrlKey,
+      });
+      if (frozen !== null && isTerminalStatusPrState(frozen.state)) {
+        return frozen;
+      }
+    }
+
     return yield* Cache.get(prLookupCache, prLookupCacheKey(cwd, details)).pipe(
       Effect.map(({ latest, headContext }) => {
         if (!latest) return { pr: null, headContext };
@@ -1017,6 +1065,7 @@ export const make = Effect.gen(function* () {
             headBranch: headContext.headBranch,
             remoteName: headContext.remoteName,
             headRemoteUrlKey: headContext.headRemoteUrlKey,
+            epoch,
           }),
         ),
       ),
