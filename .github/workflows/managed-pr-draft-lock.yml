@@ -3,6 +3,14 @@ name: Managed PR draft lock
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
+    # Only the bases the managed provenance PRs target. Ordinary work targets
+    # fork/dev, so this no longer starts a run -- and shows a check -- on every
+    # unrelated PR just to look itself up in an allowlist and exit.
+    #
+    # Not folded into Fork CI: that workflow deliberately does not watch main,
+    # and #255 targets main. Merging it would push fork CI plumbing into the
+    # upstream mirror, which is the single worst outcome this guard prevents.
+    branches: [main, fork/base, fork/tim]
 
 permissions:
   contents: read

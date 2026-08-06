@@ -155,7 +155,7 @@ whole branching model. See
   overlay tips**: amend/rewrite the offending commit when you have stack push bypass; do not leave
   a forever-forward `style(docs):` / `fix(stack):` tip.
   See [docs/fork-stack.md](./docs/fork-stack.md) (“Commit-green during stack rewrite”, “Permanent
-  draft PRs”) and [docs/stack-history-rewrite.md](./docs/stack-history-rewrite.md).
+  draft PRs”).
 - **Fork product changes need existence/behavior tests:** every user-visible or behavioral fork
   change must land with a test that fails if the surface disappears (pure helpers alone are not
   enough). Prefer pure gates + `aria-label`/`data-testid` existence, or markers in
