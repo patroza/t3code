@@ -138,8 +138,9 @@ re-architecture.
 1. Create `fork/dev` from the current green `fork/integration` tip.
 2. Prove the initial trees are identical: `git diff --exit-code fork/integration fork/dev`.
 3. Record the incorporated `fork/candidates` checkpoint (commit + tree).
-4. Protect `fork/dev` against force-push and deletion; configure required checks.
-5. Set squash as the repository's default merge method (see
+4. Protect `fork/dev` against force-push and deletion. Add required checks **after** CI is wired to
+   run for `fork/dev` — requiring a check that cannot yet run blocks the very PR that enables it.
+5. Disable merge commits and rebase merging so squash is the only method (see
    [Merge policy](#merge-policy-squash-decided)).
 6. Make `fork/dev` the GitHub default branch and the base for ordinary contributor PRs.
 7. Point deployment at `fork/dev` (see [Ops Repository Changes](#ops-repository-changes)).
@@ -259,10 +260,21 @@ commit, which is what makes the rest of this document work: the PR ledger maps o
 single unit to replay per PR.
 
 Exceptions are not defined yet. If a case appears where preserving a dependent series on `fork/dev`
-genuinely matters, it can be argued on its own merits then. Until that happens, treat squash as the
-only merge method — and set GitHub's repository default accordingly rather than relying on
-contributors picking the right button. Leaving the other merge methods enabled is fine while the
-exception question is open; making one the default is not.
+genuinely matters, it can be argued on its own merits then.
+
+Enforce this in repository settings rather than by asking contributors to pick the right button.
+GitHub has no "default merge method" field: the merge button's primary action is whichever method is
+enabled, in the order merge commit → squash → rebase. Squash only becomes the default by disabling
+the other two:
+
+```sh
+gh api -X PATCH repos/<owner>/<repo> \
+  -F allow_squash_merge=true -F allow_merge_commit=false -F allow_rebase_merge=false
+```
+
+That also makes an exception a deliberate act — someone has to re-enable a method to take one — which
+is the right shape for a policy whose exceptions are undefined. Pair it with
+`required_linear_history` on `fork/dev` so the invariant holds even if a setting is changed later.
 
 Release only the exact merge SHA after its required checks pass. A green PR tip is not sufficient if
 the resulting merge SHA differs or the base moved.
