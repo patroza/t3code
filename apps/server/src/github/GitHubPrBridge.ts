@@ -72,8 +72,6 @@ const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention. Conversation comments use the PR work thread; inline review reuses that discussion's session (first tag creates it). Override with `main-thread` or `sibling-thread`.";
 const IDENTITY_DENIED_RESPONSE =
   "Not authorized to run agent turns from this GitHub account. When the T3 identity map is enabled, only mapped operators (`github.login` / `github.id`) can invoke the bot — repository write access alone is not enough (including on public repos).";
-/** One delayed retry when `preparePullRequestThread` throws (often transient `gh`/token 401). */
-const PROVISION_PREPARE_RETRY_DELAY = "3 seconds";
 const MAX_GITHUB_COMMENT_LENGTH = 65_536;
 
 const PERMISSION_RANK: Readonly<Record<GitHubRepositoryPermission, number>> = {
@@ -862,43 +860,16 @@ export const make = Effect.gen(function* () {
         projectId: project.id,
         workspaceRoot: project.workspaceRoot,
       });
-      // Provision metadata still goes through CLI `gh` (App installation token mint +
-      // disk cache). Webhook replies already use GitHubAppClient and can succeed while
-      // this hop intermittently 401s. Permanent misconfig returns provisionFailed
-      // without throwing and is not retried.
-      //
-      // Follow-ups (not here):
-      // - Fetch PR head/base via GitHubAppClient (installationId) instead of `gh`
-      // - Invalidate mint cache / remint on auth classification before retry
-      // - Surface the real failure text on the PR comment (not only server logs)
-      // - Always pass `-R owner/repo` from this bridge
-      // - Server unit: XDG_RUNTIME_DIR or T3_GITHUB_APP_TOKEN_CACHE_DIR (not agent TMPDIR)
-      // - Reduce lookupStatusPr `gh` spam; prune expired mint cache entries
-      // - App-mode error copy should not recommend `gh auth login`
-      const prepareInput = {
+      // preparePullRequestThread shells out to `gh` for PR metadata. Transient App
+      // installation-token 401s are retried inside the guest `gh-app-wrapper`
+      // (remint --no-cache after a short delay) so every gh caller benefits—not
+      // only this bridge. Follow-ups: resolve PR via GitHubAppClient, surface real
+      // provision errors on the PR comment, always pass `-R owner/repo`.
+      const prepared = yield* gitWorkflow.preparePullRequestThread({
         cwd: project.workspaceRoot,
         reference: String(invocation.pullRequestNumber),
-        mode: "worktree" as const,
-      };
-      const prepared = yield* gitWorkflow.preparePullRequestThread(prepareInput).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logWarning(
-              "GitHub PR worktree prepare failed; retrying once after delay",
-              {
-                repository: invocation.repository,
-                pullRequestNumber: invocation.pullRequestNumber,
-                projectId: project.id,
-                workspaceRoot: project.workspaceRoot,
-                delay: PROVISION_PREPARE_RETRY_DELAY,
-                cause: Cause.pretty(cause),
-              },
-            );
-            yield* Effect.sleep(PROVISION_PREPARE_RETRY_DELAY);
-            return yield* gitWorkflow.preparePullRequestThread(prepareInput);
-          }),
-        ),
-      );
+        mode: "worktree",
+      });
       if (prepared.worktreePath === null) {
         yield* Effect.logWarning("GitHub PR provisioning did not create a worktree", {
           repository: invocation.repository,
