@@ -23,7 +23,48 @@ import * as Schema from "effect/Schema";
 
 export interface DiscordMessageDispatch {
   readonly channelId: string;
-  readonly handle: Effect.Effect<void>;
+  readonly handle: Effect.Effect<void, unknown>;
+}
+
+const DISCORD_MESSAGE_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
+
+function errorRecord(error: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof error === "object" && error !== null
+    ? (error as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+/** Retry transport failures and retryable HTTP responses, never deleted/forbidden resources. */
+export function isTransientDiscordDispatchError(error: unknown): boolean {
+  const outer = errorRecord(error);
+  if (outer === null) return false;
+  if (outer._tag === "RatelimitedResponse") return true;
+
+  const reason = errorRecord(outer.reason);
+  if (reason?._tag === "RequestError" || reason?._tag === "TransportError") return true;
+
+  const response = errorRecord(outer.response) ?? errorRecord(reason?.response);
+  const status = response?.status;
+  return (
+    typeof status === "number" &&
+    (status === 408 || status === 425 || status === 429 || status >= 500)
+  );
+}
+
+export function retryTransientDiscordOperation<A, E, R>(
+  handle: Effect.Effect<A, E, R>,
+  retryDelaysMs: ReadonlyArray<number>,
+  attempt = 0,
+): Effect.Effect<A, E, R> {
+  return handle.pipe(
+    Effect.catch((error) =>
+      isTransientDiscordDispatchError(error) && attempt < retryDelaysMs.length
+        ? Effect.sleep(`${retryDelaysMs[attempt] ?? 0} millis`).pipe(
+            Effect.andThen(retryTransientDiscordOperation(handle, retryDelaysMs, attempt + 1)),
+          )
+        : Effect.fail(error),
+    ),
+  );
 }
 
 /**
@@ -31,10 +72,20 @@ export interface DiscordMessageDispatch {
  * message lifecycle per channel so slower hydration for an earlier message
  * cannot let a later create, update, or delete overtake it.
  */
-export const makeDiscordMessageDispatchQueue = () =>
+export const makeDiscordMessageDispatchQueue = (
+  retryDelaysMs: ReadonlyArray<number> = DISCORD_MESSAGE_RETRY_DELAYS_MS,
+) =>
   makeKeyedDrainableWorker<string, DiscordMessageDispatch, never, never>({
     key: (dispatch) => dispatch.channelId,
-    process: (dispatch) => dispatch.handle,
+    process: (dispatch) =>
+      retryTransientDiscordOperation(dispatch.handle, retryDelaysMs).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("Discord message dispatch failed; continuing channel queue", {
+            channelId: dispatch.channelId,
+            cause,
+          }),
+        ),
+      ),
   });
 
 import type { DiscordBotConfig } from "../config.ts";
@@ -534,6 +585,8 @@ const make = (botConfig: DiscordBotConfig) =>
             QUEUED_PROMPT_REACTION_EMOJI,
           )
           .pipe(
+            (operation) =>
+              retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
             Effect.catch((error) =>
               Effect.logWarning("Failed to add queued badge reaction", {
                 discordMessageId: input.discordMessageId,
@@ -553,7 +606,10 @@ const make = (botConfig: DiscordBotConfig) =>
           entry.discordMessageId,
           QUEUED_PROMPT_REACTION_EMOJI,
         )
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(
+          (operation) => retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
+          Effect.catch(() => Effect.void),
+        );
 
     // Mentions use the bot *user* id, not the application id.
     const me = yield* rest.getMyUser();
@@ -1395,6 +1451,8 @@ const make = (botConfig: DiscordBotConfig) =>
                     THREAD_BOOTSTRAP_REACTION_EMOJI,
                   )
                   .pipe(
+                    (operation) =>
+                      retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
                     Effect.catch((error) =>
                       Effect.logWarning("Failed to clear Discord thread bootstrap reaction", {
                         discordMessageId: input.pendingReadyReaction?.messageId,
@@ -2043,6 +2101,8 @@ const make = (botConfig: DiscordBotConfig) =>
         const event: GatewayMessageEvent | null =
           source === "update"
             ? yield* rest.getMessage(rawEvent.channel_id, rawEvent.id).pipe(
+                (operation) =>
+                  retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
                 Effect.map(
                   (full) =>
                     ({
@@ -2125,6 +2185,8 @@ const make = (botConfig: DiscordBotConfig) =>
             { channelId: event.channel_id, messageId: event.id },
           );
           const full = yield* rest.getMessage(event.channel_id, event.id).pipe(
+            (operation) =>
+              retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
             Effect.catch((error) =>
               Effect.logError("Failed to fetch message content via REST", {
                 error: String(error),
@@ -2267,6 +2329,8 @@ const make = (botConfig: DiscordBotConfig) =>
               THREAD_BOOTSTRAP_REACTION_EMOJI,
             )
             .pipe(
+              (operation) =>
+                retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
               Effect.catch((error) =>
                 Effect.logWarning("Failed to add Discord thread bootstrap reaction", {
                   discordMessageId: event.id,
@@ -2630,7 +2694,11 @@ const make = (botConfig: DiscordBotConfig) =>
                 pendingReadyReaction.messageId,
                 THREAD_BOOTSTRAP_REACTION_EMOJI,
               )
-              .pipe(Effect.catch(() => Effect.void));
+              .pipe(
+                (operation) =>
+                  retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
+                Effect.catch(() => Effect.void),
+              );
           }
           yield* rest.createMessage(event.channel_id, {
             content: missingProjectBindingMessage({
@@ -2668,12 +2736,12 @@ const make = (botConfig: DiscordBotConfig) =>
           ...(uploadAttachments.length > 0 ? { attachments: uploadAttachments } : {}),
           ...(pendingReadyReaction === undefined ? {} : { pendingReadyReaction }),
         }).pipe(Effect.catch((error) => reportError(discordThread.id, error)));
-      }).pipe(Effect.catchCause(Effect.logError));
+      });
 
     const messageDispatchQueue = yield* makeDiscordMessageDispatchQueue();
-    const enqueueMessageDispatch = <R>(
+    const enqueueMessageDispatch = <E, R>(
       channelId: string,
-      handle: Effect.Effect<void, never, R>,
+      handle: Effect.Effect<void, E, R>,
     ): Effect.Effect<void, never, R> =>
       Effect.context<R>().pipe(
         Effect.flatMap((context) =>
