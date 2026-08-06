@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { T3_CONNECT_WAIT_REACTION_EMOJI } from "../t3/T3Session.ts";
 import {
   createHandledDiscordMessageTracker,
   findDiscordLinkForT3Target,
@@ -15,6 +16,15 @@ const mentionRouterSource = NodeFS.readFileSync(
   new URL("./MentionRouter.ts", import.meta.url),
   "utf8",
 );
+
+describe("T3 connect-wait queue", () => {
+  it("waits for T3 readiness on bridged turns instead of bouncing immediately", () => {
+    expect(mentionRouterSource).toContain("waitForT3ReadyForInbound");
+    expect(mentionRouterSource).toContain('reason: "startBridgedTurn"');
+    expect(mentionRouterSource).toContain("t3.waitUntilReady()");
+    expect(mentionRouterSource).toContain(T3_CONNECT_WAIT_REACTION_EMOJI);
+  });
+});
 
 describe("shouldShowThreadBootstrapReaction", () => {
   it("marks channel prompts that need a Discord/T3 thread bootstrap", () => {

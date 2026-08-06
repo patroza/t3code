@@ -98,9 +98,36 @@ export function isT3TransportError(cause: unknown): boolean {
   return false;
 }
 
-/** User-facing copy when the bot is online but T3 is still (re)connecting. */
+/**
+ * User-facing copy when the bot waited for T3 to become ready and the deadline
+ * elapsed (boot/reconnect still incomplete). Mentions normally **wait** instead
+ * of failing immediately — this is the timeout fallback.
+ */
 export const T3_STILL_CONNECTING_MESSAGE =
-  "T3 is still connecting after a server restart (or first boot). Try again in a few seconds.";
+  "T3 did not become ready after a server restart (or first boot). Try again in a minute.";
+
+/** Discord reaction while a mention is parked waiting for T3 to connect. */
+export const T3_CONNECT_WAIT_REACTION_EMOJI = "⏳";
+
+/** Default how long inbound work waits for shell readiness before failing. */
+export const DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS = 120_000;
+
+/** Poll interval while waiting for T3 readiness. */
+export const T3_WAIT_UNTIL_READY_POLL_MS = 200;
+
+/**
+ * Pure wait-loop decision for {@link T3SessionService.waitUntilReady}.
+ * Keeps the timeout policy unit-testable without a live RpcSession.
+ */
+export function shouldContinueWaitingForT3Ready(input: {
+  readonly ready: boolean;
+  readonly elapsedMs: number;
+  readonly timeoutMs: number;
+}): "ready" | "wait" | "timeout" {
+  if (input.ready) return "ready";
+  if (input.elapsedMs >= input.timeoutMs) return "timeout";
+  return "wait";
+}
 
 export function shouldPersistThreadModelSelectionForNextTurn(input: {
   readonly currentModelSelection?: ModelSelection;
@@ -144,6 +171,15 @@ export interface T3SessionService {
   readonly isConnected: () => Effect.Effect<boolean>;
   /** True when connected and the orchestration shell snapshot has arrived. */
   readonly isReady: () => Effect.Effect<boolean>;
+  /**
+   * Poll until {@link isReady} is true, or fail with
+   * {@link T3_STILL_CONNECTING_MESSAGE} after `timeoutMs` (default
+   * {@link DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS}). Used so Discord mentions
+   * that land during boot/reconnect are queued instead of rejected.
+   */
+  readonly waitUntilReady: (options?: {
+    readonly timeoutMs?: number;
+  }) => Effect.Effect<void, T3SessionError>;
   readonly shell: () => Effect.Effect<OrchestrationShellSnapshot | null>;
   readonly serverConfig: () => Effect.Effect<ServerConfig | null>;
   readonly findProjectByWorkspaceRoot: (
@@ -695,6 +731,39 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
         }
       });
 
+    /**
+     * Wait for a live shell so Discord intake can park work across boot/reconnect
+     * instead of telling the human to retry. Polls the same readiness predicate as
+     * {@link isReady}; does not itself drive reconnect (that is connectUntilReady /
+     * reconnectLoop).
+     */
+    const waitUntilReady = (options?: { readonly timeoutMs?: number }) =>
+      Effect.gen(function* () {
+        if (session !== null && shell !== null) return;
+        const timeoutMs = options?.timeoutMs ?? DEFAULT_T3_WAIT_UNTIL_READY_TIMEOUT_MS;
+        const startedAt = yield* Clock.currentTimeMillis;
+        yield* Effect.logInfo("Waiting for T3 shell readiness", { timeoutMs });
+        for (;;) {
+          const ready = session !== null && shell !== null;
+          const now = yield* Clock.currentTimeMillis;
+          const decision = shouldContinueWaitingForT3Ready({
+            ready,
+            elapsedMs: now - startedAt,
+            timeoutMs,
+          });
+          if (decision === "ready") {
+            yield* Effect.logInfo("T3 became ready while waiting", {
+              waitedMs: now - startedAt,
+            });
+            return;
+          }
+          if (decision === "timeout") {
+            return yield* Effect.fail(new T3SessionError(T3_STILL_CONNECTING_MESSAGE));
+          }
+          yield* Effect.sleep(Duration.millis(T3_WAIT_UNTIL_READY_POLL_MS));
+        }
+      });
+
     const providersForSelection = (): ReadonlyArray<ServerProvider> =>
       serverConfig?.providers ?? [];
 
@@ -738,6 +807,7 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
       },
       isConnected: () => Effect.sync(() => session !== null),
       isReady: () => Effect.sync(() => session !== null && shell !== null),
+      waitUntilReady,
       shell: () => Effect.succeed(shell),
       serverConfig: () => Effect.succeed(serverConfig),
       findProjectByWorkspaceRoot: (workspaceRoot) =>

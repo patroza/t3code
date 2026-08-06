@@ -94,7 +94,12 @@ import { discordSourceHint } from "../t3/sourceHint.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
 import { newMessageId } from "../t3/ids.ts";
-import { T3_STILL_CONNECTING_MESSAGE, T3Session, T3SessionError } from "../t3/T3Session.ts";
+import {
+  T3_CONNECT_WAIT_REACTION_EMOJI,
+  T3_STILL_CONNECTING_MESSAGE,
+  T3Session,
+  T3SessionError,
+} from "../t3/T3Session.ts";
 import { formatAlertCause } from "./Alerts.ts";
 import { ensureChannelInfoPin } from "./ChannelInfoPin.ts";
 import { makeDiscordThreadTurnCoordinator } from "./DiscordThreadTurnCoordinator.ts";
@@ -615,6 +620,70 @@ const make = (botConfig: DiscordBotConfig) =>
         });
       });
 
+    /**
+     * Park inbound work until T3 has a live shell (boot / post-restart reconnect).
+     * Reacts with ⏳ on the triggering Discord message so the human sees the queue
+     * instead of a "try again later" bounce.
+     */
+    const waitForT3ReadyForInbound = (input: {
+      readonly discordChannelId: string;
+      readonly discordMessageId?: string;
+      readonly reason: string;
+    }) =>
+      Effect.gen(function* () {
+        const ready = yield* t3.isReady();
+        if (ready) return;
+
+        const messageId = input.discordMessageId;
+        if (messageId !== undefined && messageId.length > 0) {
+          yield* rest
+            .addMyMessageReaction(input.discordChannelId, messageId, T3_CONNECT_WAIT_REACTION_EMOJI)
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to add T3 connect-wait reaction", {
+                  discordChannelId: input.discordChannelId,
+                  discordMessageId: messageId,
+                  error: String(error),
+                }),
+              ),
+            );
+        }
+
+        yield* Effect.logInfo("Queuing Discord work until T3 is ready", {
+          discordChannelId: input.discordChannelId,
+          discordMessageId: messageId ?? null,
+          reason: input.reason,
+        });
+
+        yield* t3.waitUntilReady().pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning("Timed out waiting for T3 readiness", {
+              discordChannelId: input.discordChannelId,
+              reason: input.reason,
+              error: String(error),
+            }),
+          ),
+        );
+
+        if (messageId !== undefined && messageId.length > 0) {
+          yield* rest
+            .deleteMyMessageReaction(
+              input.discordChannelId,
+              messageId,
+              T3_CONNECT_WAIT_REACTION_EMOJI,
+            )
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to clear T3 connect-wait reaction", {
+                  discordChannelId: input.discordChannelId,
+                  discordMessageId: messageId,
+                  error: String(error),
+                }),
+              ),
+            );
+        }
+      });
+
     const resolveProjectFromTopic = (topic: string | null | undefined) =>
       Effect.gen(function* () {
         const shortName = parseTopicShortName(topic);
@@ -627,12 +696,20 @@ const make = (botConfig: DiscordBotConfig) =>
             `Unknown project alias '${shortName}'. Add it to the bot aliases file (T3_PROJECT_ALIASES_PATH).` as const,
           );
         }
-        const project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
+        let project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
         if (project === null) {
           const ready = yield* t3.isReady();
           if (!ready) {
-            return yield* Effect.fail(T3_STILL_CONNECTING_MESSAGE);
+            // Wait for shell fill / reconnect, then re-resolve the alias once.
+            // Map the session error to a string so topic-resolution stays string-typed.
+            const waited = yield* t3.waitUntilReady().pipe(Effect.result);
+            if (Result.isFailure(waited)) {
+              return yield* Effect.fail(T3_STILL_CONNECTING_MESSAGE);
+            }
+            project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
           }
+        }
+        if (project === null) {
           return yield* Effect.fail(
             `No T3 project registered at ${alias.workspaceRoot} (alias '${shortName}'). Add the project in T3 first.` as const,
           );
@@ -681,16 +758,24 @@ const make = (botConfig: DiscordBotConfig) =>
             shortName,
           };
         }
-        const project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
+        let project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
         if (project === null) {
           const ready = yield* t3.isReady();
           if (!ready) {
-            return {
-              kind: "t3-connecting" as const,
-              shortName,
-              workspaceRoot: alias.workspaceRoot,
-            };
+            // Slash help must answer inside Discord's interaction window (no defer here).
+            // Wait only a short beat for shell race; otherwise report connecting.
+            const waited = yield* t3.waitUntilReady({ timeoutMs: 2_500 }).pipe(Effect.result);
+            if (Result.isFailure(waited)) {
+              return {
+                kind: "t3-connecting" as const,
+                shortName,
+                workspaceRoot: alias.workspaceRoot,
+              };
+            }
+            project = yield* t3.findProjectByWorkspaceRoot(alias.workspaceRoot);
           }
+        }
+        if (project === null) {
           return {
             kind: "no-project" as const,
             shortName,
@@ -835,6 +920,16 @@ const make = (botConfig: DiscordBotConfig) =>
           });
           return;
         }
+
+        // Boot/reconnect race: Discord is often READY before guest T3 has a shell.
+        // Queue (wait) here instead of bouncing "try again in a few seconds".
+        yield* waitForT3ReadyForInbound({
+          discordChannelId: input.discordThreadId,
+          ...(typeof input.mentionMessage?.id === "string"
+            ? { discordMessageId: input.mentionMessage.id }
+            : {}),
+          reason: "startBridgedTurn",
+        });
 
         // Only --provider / --model count as an explicit model change. Bare mentions must
         // NOT re-apply bot defaults (codex/gpt-5.4) on continue — Grok (and others) refuse
