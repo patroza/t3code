@@ -2,16 +2,14 @@
 
 ## Downstream fork branches and pull requests
 
-Read [docs/fork-stack.md](./docs/fork-stack.md) before creating, rebasing, merging, or retargeting
-branches.
-
-Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/stack-ship-path.md).
+Branch from `fork/dev`, open every PR against `fork/dev`, and let it merge by squash. That is the
+whole branching model. See
+[docs/stable-dev-release-branch-handover.md](./docs/stable-dev-release-branch-handover.md).
 
 - Before the documented one-time cutover, implementation PRs continue to target `main`.
 - After cutover, `main` is an upstream mirror. Never merge downstream fork work into it.
-- Update `main` only via a **local** provenance restack (`node scripts/rebase-pr-stack.ts sync
---push` or hand-applied layer rewrites), never via GitHub's **Sync fork** button, a PR into
-  `main`, or a casual force-push. The GitHub Actions workflow **Rebase fork PR stack** is
+- Update `main` only by fast-forwarding it to the upstream tip, never via GitHub's **Sync fork**
+  button, a PR into `main`, or a casual force-push. The stack-rewrite workflow is
   **`disabled_manually` — leave it disabled.** Do not enable or dispatch it. Local restacks that
   must move protected tips use the repository-scoped `FORK_STACK_DEPLOY_KEY` (or an allowed bypass
   actor) only for that intentional rewrite; agents must never print or reuse that credential.
@@ -45,15 +43,10 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   the upstream mirror; the other two are frozen and superseded by `fork/dev`. All three produce a
   huge unrelated diff, and `fork/changes` is rebased, which silently invalidates a PR based on it.
   See [docs/stable-dev-release-branch-handover.md](./docs/stable-dev-release-branch-handover.md).
-- Before handoff (and whenever a PR is CONFLICTING / behind), run
-  `pnpm fork:stack update --push` (or `pnpm fork:stack update --push <pr-number>`). That rebases or
-  replays the feature commits onto the PR's intended parent (`fork/dev` for ordinary features, or the
-  current parent branch for dependent PRs), retargets only an invalid base, and
-  force-with-lease pushes so the PR stays mergeable.
-- After automation rebases your branch (or `fork/changes`), refresh a local checkout with
-  `pnpm fork:stack pull`. It hard-resets to remote when local commits are patch-equivalent, and only
-  rebases when you have unique unpushed work.
-- Independent features use parallel PRs based on `fork/changes`. Chain PRs only when one change
+- When a PR is CONFLICTING or behind, rebase it onto `fork/dev` yourself and force-with-lease.
+  There is no stack automation to run: upstream is merged straight into `fork/dev`, so a PR is
+  only ever behind ordinary commits.
+- Independent features use parallel PRs based on `fork/dev`. Chain PRs only when one change
   genuinely depends on another, and merge that chain bottom-up.
 - Treat external forks and open upstream PRs as selective import sources. Tim Smart imports land as
   one reviewed commit per source PR on `fork/tim`; selected unmerged upstream work lands as one
@@ -66,10 +59,8 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   Never share a migration ledger between upstream and fork histories. Full rules:
   [docs/fork-stack.md](./docs/fork-stack.md) ("Migration namespaces during provenance imports").
 - Run and deploy from `fork/integration`, never from a temporary feature or import branch.
-- All features must land in `fork/changes`, including upstreamable work. After its downstream PR
-  merges, use `pnpm fork:stack promote <downstream-pr> <upstream-branch>` to extract a clean
-  projection onto
-  upstream `main`. Use `adopt` only for work that began upstream-first, and `demote` to close an
+- All features land in `fork/dev`, including upstreamable work. To send something upstream, open a
+  PR from a branch cut against upstream `main` in the usual GitHub way. Use `adopt` only for work that began upstream-first, and `demote` to close an
   upstream projection without removing the canonical downstream implementation.
 
 ### Automatic integration and deployment
@@ -96,9 +87,8 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
     `.github/pr-stack.json`, also add its branch to the `on.pull_request` base list in
     `compose-integration.yml` (and to `fork-ci.yml` PR bases).
 - **Slow path (upstream / Tim / candidates):** **manual / local only.** Run
-  `node scripts/rebase-pr-stack.ts sync --push` (or layer-by-layer hand restack). The Actions
-  workflow **Rebase fork PR stack** stays **`disabled_manually`** — do **not** enable it, schedule
-  it, or `gh workflow run` it. Pushes to `main` / `fork/tim` / `fork/candidates` must not auto-restack
+  merge `upstream/main` into `fork/dev` directly; `main` is then fast-forwarded to the upstream tip.
+  There is no restack workflow any more. Pushes to `main` / `fork/tim` / `fork/candidates` must not auto-restack
   or auto-compose. Local restacks mirror `pingdotgg/t3code:main`, rebuild provenance layers with
   stop-the-line green gates, rebase overlays, then compose integration via
   `workflow_dispatch` / local compose scripts. Deploy key (if used) is only for intentional
@@ -146,7 +136,7 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
     (“Per-layer full CI after stack rebase”).
   - Fix **all** failures on that layer, commit, force-with-lease push if the layer is shared, then
     and only then advance.
-  - Feature / overlay-child PRs after `pnpm fork:stack update`: rebase onto the fixed parent, then
+  - Feature PRs: rebase onto `fork/dev`, then
     let the automated agent ship gate validate the tip — a ready-PR push runs it, or publish with
     `pnpm pr:ready`. Only stack-layer rewrites (protected `fork/*` tips, not PR pushes) run the
     fuller per-layer manual gate below.
@@ -163,10 +153,9 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   fixed inside the related provenance/feature commit (or one product-named commit during rewrite),
   not as permanent tip patches. Same rule for CI format/typecheck recovery on **`fork/changes` and
   overlay tips**: amend/rewrite the offending commit when you have stack push bypass; do not leave
-  a forever-forward `style(docs):` / `fix(stack):` tip. Use
-  `node scripts/rebase-pr-stack.ts sync --verify-each-commit` so each replayed commit typechecks.
+  a forever-forward `style(docs):` / `fix(stack):` tip.
   See [docs/fork-stack.md](./docs/fork-stack.md) (“Commit-green during stack rewrite”, “Permanent
-  draft PRs”) and [docs/stack-history-rewrite.md](./docs/stack-history-rewrite.md).
+  draft PRs”).
 - **Fork product changes need existence/behavior tests:** every user-visible or behavioral fork
   change must land with a test that fails if the surface disappears (pure helpers alone are not
   enough). Prefer pure gates + `aria-label`/`data-testid` existence, or markers in
@@ -199,14 +188,13 @@ When implementation work for a user request is done (code, docs, config — not 
      can’t be resolved.
    - **Same gate for overlay-child PRs.** Base = overlay does **not** relax it; the gate keys off the
      PR’s ready state, not its base. Compose success or draft-lock green is **not** the gate.
-   - `pnpm fork:stack update --push` (current branch) or `pnpm fork:stack update --push <pr>` to
-     rebase/retarget; the ensuing push runs the appropriate gate scope.
+   - Rebase onto `fork/dev` and force-with-lease; the ensuing push runs the appropriate gate scope.
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
    - `baseRefName` must be `fork/changes` for ordinary features or the intended overlay/parent
      branch for a dependent/overlay-child PR. `mergeable` should be `MERGEABLE` (CI may still be
      `UNSTABLE` while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
-   - If the PR is **open** → update that branch (prefer `fork:stack update --push`) and push; the
+   - If the PR is **open** → update that branch and push; the
      gate re-runs for that HEAD (static if draft, full if ready).
    - If the PR is **merged** or **closed** → do **not** keep committing on that branch.
      Start a new branch, re-apply unmerged work, and open a **new PR** against the same intended
