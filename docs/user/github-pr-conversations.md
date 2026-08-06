@@ -210,6 +210,11 @@ The route returns 404 unless all four required variables are configured.
 | Turn errors or is interrupted                  | Replace comment with a stable failure response           |
 | Server restarts during turn                    | Resume the persisted response bridge                     |
 
+Provision still shells out to `gh` for PR metadata. Transient App installation-token
+auth failures (exit 4 / 401) are retried **inside the guest `gh-app-wrapper`** (wait,
+remint `--no-cache`, one retry)—not in this bridge—so agents and status polls get the
+same fix. That wrapper ships with the microVM image (`infra/microvm/github-app` in ops).
+
 ## Tests and acceptance criteria
 
 Automated coverage includes raw-body signatures, invocation parsing, bot/issue/empty-prompt ignores,
@@ -232,3 +237,9 @@ End-to-end acceptance:
 - Durable relay ingress for environments that cannot expose the local server directly.
 - Replacing the source-control implementation's personal `gh` and git credentials with GitHub App
   installation credentials; see the migration plan linked above.
+- **Provision auth hardening** (guest `gh-app-wrapper` remint-on-401 ships in ops; rest still open):
+  - Resolve PR head/base via `GitHubAppClient` (webhook installation token) instead of CLI `gh`
+  - Post the real provision error on the PR comment (not only “check server logs”)
+  - Always pass `-R owner/repo` from the bridge; fix App-mode errors that still say `gh auth login`
+  - Server token cache under `XDG_RUNTIME_DIR` / `T3_GITHUB_APP_TOKEN_CACHE_DIR`, not agent `TMPDIR`
+  - Cut `lookupStatusPr` `gh` noise; prune expired installation-token cache files

@@ -860,6 +860,11 @@ export const make = Effect.gen(function* () {
         projectId: project.id,
         workspaceRoot: project.workspaceRoot,
       });
+      // preparePullRequestThread shells out to `gh` for PR metadata. Transient App
+      // installation-token 401s are retried inside the guest `gh-app-wrapper`
+      // (remint --no-cache after a short delay) so every gh caller benefits—not
+      // only this bridge. Follow-ups: resolve PR via GitHubAppClient, surface real
+      // provision errors on the PR comment, always pass `-R owner/repo`.
       const prepared = yield* gitWorkflow.preparePullRequestThread({
         cwd: project.workspaceRoot,
         reference: String(invocation.pullRequestNumber),
