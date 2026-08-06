@@ -2,13 +2,20 @@
 import * as NodeFS from "node:fs";
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import { it as effectIt } from "@effect/vitest";
 
 import {
   createHandledDiscordMessageTracker,
   findDiscordLinkForT3Target,
   getContinuedConversationModelChangeError,
   isIncompleteDiscordLink,
+  isTransientDiscordDispatchError,
   shouldShowThreadBootstrapReaction,
+  makeDiscordMessageDispatchQueue,
+  retryTransientDiscordOperation,
 } from "./MentionRouter.ts";
 
 const mentionRouterSource = NodeFS.readFileSync(
@@ -92,6 +99,143 @@ describe("createHandledDiscordMessageTracker", () => {
     tracker.mark("message-2");
     expect(tracker.claim("message-2")).toBe(false);
   });
+});
+
+describe("makeDiscordMessageDispatchQueue", () => {
+  effectIt.effect("keeps same-channel events FIFO while other channels remain independent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const queue = yield* makeDiscordMessageDispatchQueue();
+        const releaseFirst = yield* Deferred.make<void>();
+        const firstStarted = yield* Deferred.make<void>();
+        const handled = yield* Ref.make<ReadonlyArray<string>>([]);
+        const record = (value: string) => Ref.update(handled, (values) => [...values, value]);
+
+        yield* queue.enqueue({
+          channelId: "channel-a",
+          handle: Deferred.succeed(firstStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirst)),
+            Effect.andThen(record("first")),
+          ),
+        });
+        yield* Deferred.await(firstStarted);
+        yield* queue.enqueue({ channelId: "channel-a", handle: record("second") });
+        yield* queue.enqueue({ channelId: "channel-b", handle: record("other-channel") });
+        yield* queue.drainKey("channel-b");
+
+        expect(yield* Ref.get(handled)).toEqual(["other-channel"]);
+
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* queue.drainKey("channel-a");
+        expect(yield* Ref.get(handled)).toEqual(["other-channel", "first", "second"]);
+      }),
+    ),
+  );
+
+  effectIt.effect("retries transient failures without allowing overtaking", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const queue = yield* makeDiscordMessageDispatchQueue([0, 0]);
+        const attempts = yield* Ref.make(0);
+        const handled = yield* Ref.make<ReadonlyArray<string>>([]);
+        const transient = { reason: { _tag: "TransportError" } };
+
+        yield* queue.enqueue({
+          channelId: "channel-a",
+          handle: Ref.updateAndGet(attempts, (value) => value + 1).pipe(
+            Effect.flatMap((attempt) =>
+              attempt < 3 ? Effect.fail(transient) : Ref.update(handled, (v) => [...v, "first"]),
+            ),
+          ),
+        });
+        yield* queue.enqueue({
+          channelId: "channel-a",
+          handle: Ref.update(handled, (values) => [...values, "second"]),
+        });
+        yield* queue.drainKey("channel-a");
+
+        expect(yield* Ref.get(attempts)).toBe(3);
+        expect(yield* Ref.get(handled)).toEqual(["first", "second"]);
+      }),
+    ),
+  );
+
+  effectIt.effect("drops a permanent failure and continues the channel queue", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const queue = yield* makeDiscordMessageDispatchQueue([0, 0]);
+        const handled = yield* Ref.make<ReadonlyArray<string>>([]);
+
+        yield* queue.enqueue({
+          channelId: "channel-a",
+          handle: Effect.fail({ _tag: "ErrorResponse", response: { status: 404 } }),
+        });
+        yield* queue.enqueue({
+          channelId: "channel-a",
+          handle: Ref.update(handled, (values) => [...values, "after-deletion"]),
+        });
+        yield* queue.drainKey("channel-a");
+
+        expect(yield* Ref.get(handled)).toEqual(["after-deletion"]);
+      }),
+    ),
+  );
+
+  effectIt.effect("contains defects so they cannot strand later channel work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const queue = yield* makeDiscordMessageDispatchQueue([]);
+        const handled = yield* Ref.make(false);
+        yield* queue.enqueue({ channelId: "channel-a", handle: Effect.die("broken handler") });
+        yield* queue.enqueue({ channelId: "channel-a", handle: Ref.set(handled, true) });
+        yield* queue.drainKey("channel-a");
+        expect(yield* Ref.get(handled)).toBe(true);
+      }),
+    ),
+  );
+});
+
+describe("isTransientDiscordDispatchError", () => {
+  it("distinguishes retryable transport/server errors from permanent Discord responses", () => {
+    expect(isTransientDiscordDispatchError({ reason: { _tag: "TransportError" } })).toBe(true);
+    expect(isTransientDiscordDispatchError({ response: { status: 503 } })).toBe(true);
+    expect(isTransientDiscordDispatchError({ _tag: "RatelimitedResponse" })).toBe(true);
+    expect(
+      isTransientDiscordDispatchError({ _tag: "ErrorResponse", response: { status: 404 } }),
+    ).toBe(false);
+    expect(
+      isTransientDiscordDispatchError({ _tag: "ErrorResponse", response: { status: 403 } }),
+    ).toBe(false);
+  });
+});
+
+describe("retryTransientDiscordOperation", () => {
+  effectIt.effect("replays a transient operation but never replays a permanent one", () =>
+    Effect.gen(function* () {
+      const transientAttempts = yield* Ref.make(0);
+      const value = yield* retryTransientDiscordOperation(
+        Ref.updateAndGet(transientAttempts, (attempt) => attempt + 1).pipe(
+          Effect.flatMap((attempt) =>
+            attempt === 1
+              ? Effect.fail({ response: { status: 503 } })
+              : Effect.succeed("recovered"),
+          ),
+        ),
+        [0],
+      );
+      expect(value).toBe("recovered");
+      expect(yield* Ref.get(transientAttempts)).toBe(2);
+
+      const permanentAttempts = yield* Ref.make(0);
+      yield* retryTransientDiscordOperation(
+        Ref.update(permanentAttempts, (attempt) => attempt + 1).pipe(
+          Effect.andThen(Effect.fail({ response: { status: 404 } })),
+        ),
+        [0, 0],
+      ).pipe(Effect.flip);
+      expect(yield* Ref.get(permanentAttempts)).toBe(1);
+    }),
+  );
 });
 
 describe("isIncompleteDiscordLink", () => {

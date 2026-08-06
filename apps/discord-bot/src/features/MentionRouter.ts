@@ -8,6 +8,7 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
+import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 import { Discord, DiscordREST, Ix } from "dfx";
 import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
 import * as Clock from "effect/Clock";
@@ -19,6 +20,73 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+
+export interface DiscordMessageDispatch {
+  readonly channelId: string;
+  readonly handle: Effect.Effect<void, unknown>;
+}
+
+const DISCORD_MESSAGE_RETRY_DELAYS_MS = [250, 1_000, 3_000] as const;
+
+function errorRecord(error: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof error === "object" && error !== null
+    ? (error as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+/** Retry transport failures and retryable HTTP responses, never deleted/forbidden resources. */
+export function isTransientDiscordDispatchError(error: unknown): boolean {
+  const outer = errorRecord(error);
+  if (outer === null) return false;
+  if (outer._tag === "RatelimitedResponse") return true;
+
+  const reason = errorRecord(outer.reason);
+  if (reason?._tag === "RequestError" || reason?._tag === "TransportError") return true;
+
+  const response = errorRecord(outer.response) ?? errorRecord(reason?.response);
+  const status = response?.status;
+  return (
+    typeof status === "number" &&
+    (status === 408 || status === 425 || status === 429 || status >= 500)
+  );
+}
+
+export function retryTransientDiscordOperation<A, E, R>(
+  handle: Effect.Effect<A, E, R>,
+  retryDelaysMs: ReadonlyArray<number>,
+  attempt = 0,
+): Effect.Effect<A, E, R> {
+  return handle.pipe(
+    Effect.catch((error) =>
+      isTransientDiscordDispatchError(error) && attempt < retryDelaysMs.length
+        ? Effect.sleep(`${retryDelaysMs[attempt] ?? 0} millis`).pipe(
+            Effect.andThen(retryTransientDiscordOperation(handle, retryDelaysMs, attempt + 1)),
+          )
+        : Effect.fail(error),
+    ),
+  );
+}
+
+/**
+ * Discord's gateway dispatches events concurrently. Serialize the complete
+ * message lifecycle per channel so slower hydration for an earlier message
+ * cannot let a later create, update, or delete overtake it.
+ */
+export const makeDiscordMessageDispatchQueue = (
+  retryDelaysMs: ReadonlyArray<number> = DISCORD_MESSAGE_RETRY_DELAYS_MS,
+) =>
+  makeKeyedDrainableWorker<string, DiscordMessageDispatch, never, never>({
+    key: (dispatch) => dispatch.channelId,
+    process: (dispatch) =>
+      retryTransientDiscordOperation(dispatch.handle, retryDelaysMs).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("Discord message dispatch failed; continuing channel queue", {
+            channelId: dispatch.channelId,
+            cause,
+          }),
+        ),
+      ),
+  });
 
 import type { DiscordBotConfig } from "../config.ts";
 import {
@@ -517,6 +585,8 @@ const make = (botConfig: DiscordBotConfig) =>
             QUEUED_PROMPT_REACTION_EMOJI,
           )
           .pipe(
+            (operation) =>
+              retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
             Effect.catch((error) =>
               Effect.logWarning("Failed to add queued badge reaction", {
                 discordMessageId: input.discordMessageId,
@@ -536,7 +606,10 @@ const make = (botConfig: DiscordBotConfig) =>
           entry.discordMessageId,
           QUEUED_PROMPT_REACTION_EMOJI,
         )
-        .pipe(Effect.catch(() => Effect.void));
+        .pipe(
+          (operation) => retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
+          Effect.catch(() => Effect.void),
+        );
 
     // Mentions use the bot *user* id, not the application id.
     const me = yield* rest.getMyUser();
@@ -1376,6 +1449,8 @@ const make = (botConfig: DiscordBotConfig) =>
                     THREAD_BOOTSTRAP_REACTION_EMOJI,
                   )
                   .pipe(
+                    (operation) =>
+                      retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
                     Effect.catch((error) =>
                       Effect.logWarning("Failed to clear Discord thread bootstrap reaction", {
                         discordMessageId: input.pendingReadyReaction?.messageId,
@@ -2024,6 +2099,8 @@ const make = (botConfig: DiscordBotConfig) =>
         const event: GatewayMessageEvent | null =
           source === "update"
             ? yield* rest.getMessage(rawEvent.channel_id, rawEvent.id).pipe(
+                (operation) =>
+                  retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
                 Effect.map(
                   (full) =>
                     ({
@@ -2106,6 +2183,8 @@ const make = (botConfig: DiscordBotConfig) =>
             { channelId: event.channel_id, messageId: event.id },
           );
           const full = yield* rest.getMessage(event.channel_id, event.id).pipe(
+            (operation) =>
+              retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
             Effect.catch((error) =>
               Effect.logError("Failed to fetch message content via REST", {
                 error: String(error),
@@ -2248,6 +2327,8 @@ const make = (botConfig: DiscordBotConfig) =>
               THREAD_BOOTSTRAP_REACTION_EMOJI,
             )
             .pipe(
+              (operation) =>
+                retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
               Effect.catch((error) =>
                 Effect.logWarning("Failed to add Discord thread bootstrap reaction", {
                   discordMessageId: event.id,
@@ -2611,7 +2692,11 @@ const make = (botConfig: DiscordBotConfig) =>
                 pendingReadyReaction.messageId,
                 THREAD_BOOTSTRAP_REACTION_EMOJI,
               )
-              .pipe(Effect.catch(() => Effect.void));
+              .pipe(
+                (operation) =>
+                  retryTransientDiscordOperation(operation, DISCORD_MESSAGE_RETRY_DELAYS_MS),
+                Effect.catch(() => Effect.void),
+              );
           }
           yield* rest.createMessage(event.channel_id, {
             content: missingProjectBindingMessage({
@@ -2649,49 +2734,69 @@ const make = (botConfig: DiscordBotConfig) =>
           ...(uploadAttachments.length > 0 ? { attachments: uploadAttachments } : {}),
           ...(pendingReadyReaction === undefined ? {} : { pendingReadyReaction }),
         }).pipe(Effect.catch((error) => reportError(discordThread.id, error)));
-      }).pipe(Effect.catchCause(Effect.logError));
+      });
 
-    const handleMessages = gateway.handleDispatch("MESSAGE_CREATE", (event) =>
-      handleInboundMessage(event as GatewayMessageEvent, "create"),
-    );
-    const handleMessageUpdates = gateway.handleDispatch("MESSAGE_UPDATE", (event) =>
-      handleInboundMessage(event as GatewayMessageEvent, "update"),
-    );
+    const messageDispatchQueue = yield* makeDiscordMessageDispatchQueue();
+    const enqueueMessageDispatch = <E, R>(
+      channelId: string,
+      handle: Effect.Effect<void, E, R>,
+    ): Effect.Effect<void, never, R> =>
+      Effect.context<R>().pipe(
+        Effect.flatMap((context) =>
+          messageDispatchQueue.enqueue({
+            channelId,
+            handle: handle.pipe(Effect.provide(context)),
+          }),
+        ),
+      );
+
+    const handleMessages = gateway.handleDispatch("MESSAGE_CREATE", (event) => {
+      const message = event as GatewayMessageEvent;
+      return enqueueMessageDispatch(message.channel_id, handleInboundMessage(message, "create"));
+    });
+    const handleMessageUpdates = gateway.handleDispatch("MESSAGE_UPDATE", (event) => {
+      const message = event as GatewayMessageEvent;
+      return enqueueMessageDispatch(message.channel_id, handleInboundMessage(message, "update"));
+    });
     // User deletes their parked prompt → drop it from the server queue (and badge).
-    const handleMessageDeletes = gateway.handleDispatch("MESSAGE_DELETE", (event) =>
-      Effect.gen(function* () {
-        const messageId =
-          typeof event === "object" &&
-          event !== null &&
-          "id" in event &&
-          typeof (event as { id?: unknown }).id === "string"
-            ? (event as { id: string }).id
-            : null;
-        if (messageId === null) return;
-        const pending = queuedPrompts.forgetDiscordMessage(messageId);
-        if (pending === null) return;
-        yield* Effect.logInfo("Discord user deleted queued prompt; removing from server queue", {
-          discordMessageId: messageId,
-          t3ThreadId: pending.t3ThreadId,
-          t3MessageId: pending.t3MessageId,
-        });
-        yield* t3
-          .removeQueuedMessage({
-            threadId: pending.t3ThreadId,
-            messageId: pending.t3MessageId,
-          })
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Failed to remove queued prompt after Discord delete", {
-                t3ThreadId: pending.t3ThreadId,
-                t3MessageId: pending.t3MessageId,
-                error: String(error),
-              }),
-            ),
-          );
-        // Message is gone — reaction cleanup is unnecessary.
-      }).pipe(Effect.catchCause(Effect.logError)),
-    );
+    const handleMessageDeletes = gateway.handleDispatch("MESSAGE_DELETE", (event) => {
+      const deleted = event as { readonly channel_id: string; readonly id?: unknown };
+      return enqueueMessageDispatch(
+        deleted.channel_id,
+        Effect.gen(function* () {
+          const messageId =
+            typeof event === "object" &&
+            event !== null &&
+            "id" in event &&
+            typeof (event as { id?: unknown }).id === "string"
+              ? (event as { id: string }).id
+              : null;
+          if (messageId === null) return;
+          const pending = queuedPrompts.forgetDiscordMessage(messageId);
+          if (pending === null) return;
+          yield* Effect.logInfo("Discord user deleted queued prompt; removing from server queue", {
+            discordMessageId: messageId,
+            t3ThreadId: pending.t3ThreadId,
+            t3MessageId: pending.t3MessageId,
+          });
+          yield* t3
+            .removeQueuedMessage({
+              threadId: pending.t3ThreadId,
+              messageId: pending.t3MessageId,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to remove queued prompt after Discord delete", {
+                  t3ThreadId: pending.t3ThreadId,
+                  t3MessageId: pending.t3MessageId,
+                  error: String(error),
+                }),
+              ),
+            );
+          // Message is gone — reaction cleanup is unnecessary.
+        }).pipe(Effect.catchCause(Effect.logError)),
+      );
+    });
 
     const approvalButton = Ix.messageComponent(
       Ix.idStartsWith("t3_approve:"),
