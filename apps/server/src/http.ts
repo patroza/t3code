@@ -249,7 +249,10 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       });
     }
 
-    const staticDir =
+    // Prefer the boot-time path, but re-resolve when it is empty so a mid-deploy
+    // rebuild that wiped dist/client can fall back to monorepo apps/web/dist
+    // (or a newly promoted client) without restarting the process.
+    let staticDir =
       config.staticDir ?? (config.devUrl ? yield* ServerConfig.resolveStaticDir() : undefined);
     if (!staticDir) {
       return HttpServerResponse.text("No static directory configured and no dev URL set.", {
@@ -259,7 +262,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const staticRoot = path.resolve(staticDir);
+    let staticRoot = path.resolve(staticDir);
     const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
     const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
     const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
@@ -293,10 +296,50 @@ export const staticAndDevRouteLayer = HttpRouter.add(
 
     const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
     if (!fileInfo || fileInfo.type !== "File") {
-      const indexPath = path.resolve(staticRoot, "index.html");
-      const indexData = yield* fileSystem
-        .readFile(indexPath)
-        .pipe(Effect.orElseSucceed(() => null));
+      let indexPath = path.resolve(staticRoot, "index.html");
+      let indexData = yield* fileSystem.readFile(indexPath).pipe(Effect.orElseSucceed(() => null));
+      if (!indexData) {
+        const recovered = yield* ServerConfig.resolveStaticDir();
+        if (recovered !== undefined) {
+          const recoveredRoot = path.resolve(recovered);
+          if (recoveredRoot !== staticRoot) {
+            staticDir = recovered;
+            staticRoot = recoveredRoot;
+            indexPath = path.resolve(staticRoot, "index.html");
+            indexData = yield* fileSystem
+              .readFile(indexPath)
+              .pipe(Effect.orElseSucceed(() => null));
+            // Re-attempt the original relative path under the recovered root
+            // (deep SPA links, hashed assets after a client repoint).
+            if (indexData) {
+              const recoveredFilePath = path.resolve(staticRoot, staticRelativePath);
+              if (isWithinStaticRoot(recoveredFilePath)) {
+                const recoveredInfo = yield* fileSystem
+                  .stat(recoveredFilePath)
+                  .pipe(Effect.orElseSucceed(() => null));
+                if (recoveredInfo?.type === "File") {
+                  filePath = recoveredFilePath;
+                  const recoveredData = yield* fileSystem
+                    .readFile(filePath)
+                    .pipe(Effect.orElseSucceed(() => null));
+                  if (recoveredData) {
+                    const contentType = Mime.getType(filePath) ?? "application/octet-stream";
+                    return yield* respondWithStaticFile({
+                      data: recoveredData,
+                      contentType,
+                      cacheControl: resolveStaticCacheControl(staticRelativePath),
+                      cacheKey: isContentHashedAsset(staticRelativePath)
+                        ? staticCacheKey(recoveredFilePath, recoveredInfo)
+                        : contentCacheKey(recoveredData),
+                      acceptEncoding: request.headers["accept-encoding"],
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
       if (!indexData) {
         // Missing index during atomic client promote (or a broken package) is
         // temporary/operational — not a permanent missing route. 503 lets
