@@ -1,5 +1,7 @@
 import { Discord, Ix } from "dfx";
 
+import { interactionMessageFlags } from "./suppressEmbeds.ts";
+
 /**
  * Guild-scoped `/omegent` control commands, with `/agent` as an alias, alongside
  * existing `@Omegent` mentions. Guild registration propagates immediately for
@@ -221,7 +223,7 @@ export function slashReply(
     type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
     data: {
       content,
-      ...(options?.ephemeral === true ? { flags: Discord.MessageFlags.Ephemeral } : {}),
+      flags: interactionMessageFlags({ ephemeral: options?.ephemeral === true }),
     },
   });
 }
@@ -239,11 +241,12 @@ export function slashDefer(options?: {
   if (options?.ephemeral === true) {
     return {
       type: Discord.InteractionCallbackTypes.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { flags: Discord.MessageFlags.Ephemeral },
+      data: { flags: interactionMessageFlags({ ephemeral: true }) },
     };
   }
   return {
     type: Discord.InteractionCallbackTypes.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+    data: { flags: interactionMessageFlags() },
   };
 }
 

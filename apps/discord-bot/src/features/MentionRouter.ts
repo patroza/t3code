@@ -2800,13 +2800,19 @@ const make = (botConfig: DiscordBotConfig) =>
         if (threadId === undefined || requestId === undefined) {
           return Ix.response({
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: "Invalid approval payload.", flags: Discord.MessageFlags.Ephemeral },
+            data: {
+              content: "Invalid approval payload.",
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+            },
           });
         }
         yield* t3.respondToApproval(threadId as ThreadId, requestId, "accept");
         return Ix.response({
           type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: "Approved.", flags: Discord.MessageFlags.Ephemeral },
+          data: {
+            content: "Approved.",
+            flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+          },
         });
       }).pipe(
         Effect.catch((error: unknown) =>
@@ -2815,7 +2821,7 @@ const make = (botConfig: DiscordBotConfig) =>
               type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
               data: {
                 content: `Approval failed: ${error instanceof Error ? error.message : String(error)}`,
-                flags: Discord.MessageFlags.Ephemeral,
+                flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
               },
             }),
           ),
@@ -2833,13 +2839,19 @@ const make = (botConfig: DiscordBotConfig) =>
         if (threadId === undefined || requestId === undefined) {
           return Ix.response({
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: "Invalid approval payload.", flags: Discord.MessageFlags.Ephemeral },
+            data: {
+              content: "Invalid approval payload.",
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+            },
           });
         }
         yield* t3.respondToApproval(threadId as ThreadId, requestId, "decline");
         return Ix.response({
           type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: "Denied.", flags: Discord.MessageFlags.Ephemeral },
+          data: {
+            content: "Denied.",
+            flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+          },
         });
       }).pipe(
         Effect.catch((error: unknown) =>
@@ -2848,7 +2860,7 @@ const make = (botConfig: DiscordBotConfig) =>
               type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
               data: {
                 content: `Deny failed: ${error instanceof Error ? error.message : String(error)}`,
-                flags: Discord.MessageFlags.Ephemeral,
+                flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
               },
             }),
           ),
@@ -2864,7 +2876,10 @@ const make = (botConfig: DiscordBotConfig) =>
         if (threadId.length === 0) {
           return Ix.response({
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: "Invalid stop payload.", flags: Discord.MessageFlags.Ephemeral },
+            data: {
+              content: "Invalid stop payload.",
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+            },
           });
         }
 
@@ -2874,7 +2889,7 @@ const make = (botConfig: DiscordBotConfig) =>
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
             data: {
               content: "There is no active turn to stop right now.",
-              flags: Discord.MessageFlags.Ephemeral,
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
             },
           });
         }
@@ -2882,7 +2897,10 @@ const make = (botConfig: DiscordBotConfig) =>
         yield* t3.interrupt(threadId as ThreadId);
         return Ix.response({
           type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-          data: { content: "Stopping the current turn.", flags: Discord.MessageFlags.Ephemeral },
+          data: {
+            content: "Stopping the current turn.",
+            flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+          },
         });
       }).pipe(
         Effect.catch((error: unknown) =>
@@ -2891,7 +2909,7 @@ const make = (botConfig: DiscordBotConfig) =>
               type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
               data: {
                 content: `Stop failed: ${error instanceof Error ? error.message : String(error)}`,
-                flags: Discord.MessageFlags.Ephemeral,
+                flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
               },
             }),
           ),
@@ -2912,7 +2930,10 @@ const make = (botConfig: DiscordBotConfig) =>
         if (t3ThreadId.length === 0) {
           return Ix.response({
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-            data: { content: "Invalid continue payload.", flags: Discord.MessageFlags.Ephemeral },
+            data: {
+              content: "Invalid continue payload.",
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+            },
           });
         }
 
@@ -2922,7 +2943,7 @@ const make = (botConfig: DiscordBotConfig) =>
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
             data: {
               content: "Continue only works inside a Discord thread.",
-              flags: Discord.MessageFlags.Ephemeral,
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
             },
           });
         }
@@ -2933,7 +2954,7 @@ const make = (botConfig: DiscordBotConfig) =>
             type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
             data: {
               content: "This thread is no longer linked to that T3 session.",
-              flags: Discord.MessageFlags.Ephemeral,
+              flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
             },
           });
         }
@@ -3010,7 +3031,7 @@ const make = (botConfig: DiscordBotConfig) =>
               type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
               data: {
                 content: `Continue failed: ${error instanceof Error ? error.message : String(error)}`,
-                flags: Discord.MessageFlags.Ephemeral,
+                flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
               },
             }),
           ),
