@@ -12,7 +12,7 @@ Don't mix up requester vs thread starter vs others.
 **Style:** lead with answer; concise; no status recaps.
 
 **PR:** always open for commits/landable work; draft until lint/typecheck/tests/`vp check`; then mark ready. No abandoned drafts.
-**PR lifecycle:** before push/handoff, check the linked PR is still **open** (`gh pr view --json state` or equivalent). If **merged** or **closed**, do **not** keep committing on that branch — branch fresh from the correct base (`fork/discord` overlay / `fork/changes` / etc.), re-apply unmerged work, open a **new** PR (draft if still iterating). One merged PR is not a free ticket for later commits.
+**PR lifecycle:** before push/handoff, check the linked PR is still **open** (`gh pr view --json state` or equivalent). If **merged** or **closed**, do **not** keep committing on that branch — branch fresh from `fork/dev`, re-apply unmerged work, open a **new** PR (draft if still iterating). One merged PR is not a free ticket for later commits.
 
 **PR footer** from turn `pr` + `t3` fields (paste at PR body end; bot may re-append):
 `opened by [{name}](https://discord.com/users/{uid}) in chat thread **Discord** · [{title}](https://discord.com/channels/{g}/{c}/{m}) · [T3]({t3url})`

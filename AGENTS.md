@@ -22,12 +22,10 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   contains selected open upstream PRs that we run before upstream accepts them, one provenance
   commit per source PR, above Tim. The permanent `fork/changes` PR is based on `fork/candidates`,
   contains only our downstream layer, remains open, and is the GitHub/T3 default branch.
-- Long-lived upstreamable features may be registered as `integrationOverlays`. They remain parallel
-  draft PRs based on `fork/changes`; `fork/integration` composes them in manifest order. Never merge
-  a registered overlay directly. Update its branch, or use
-  `pnpm fork:stack overlay-start <pr> <branch>` and target the child PR at the overlay branch.
-  Draft state blocks merging while normal green CI remains meaningful. Permanent overlay PRs must
-  carry the **`OVERLAY`** label.
+- **Integration overlays are retired.** `integrationOverlays` is empty, the four registered overlay
+  PRs are closed, and their content lives in `fork/dev`. Do not create one, and do not target
+  `fork/discord`, `fork/vscode`, `fork/identity` or the desktop deep-links branch. Client-owned work
+  is an ordinary PR against `fork/dev`; ownership follows changed paths.
 - **Closed permanent draft PRs (overlays / managed stack PRs):** do **not** open a replacement PR
   as the first reaction. (1) Fix the branch tip if needed (rebase onto the intended base, force-
   with-lease). (2) **`gh pr reopen <n>`** the **same** PR number and restore draft + **`OVERLAY`**
@@ -39,20 +37,18 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   the layer tip. Do **not** stack permanent tip-only `fix(…)` / `style(…)` recovery commits when the
   tip is still operator-owned stack surface and history rewrite is allowed. New tip commits are OK
   for ordinary **feature** work that lands via PR merge into the layer.
-- Before targeting `fork/changes`, inspect `.github/client-overlay-ownership.json` or run
-  `pnpm fork:overlay-owner <changed-path> [changed-path...]`. Changes owned by an extracted client
-  must update that draft overlay (or a child PR targeting it), not duplicate its implementation in
-  `fork/changes`. Read [docs/client-overlays.md](./docs/client-overlays.md) for mixed shared/client
-  changes and extraction cutovers.
-- Start new work with `pnpm fork:stack start <branch>` and open the PR against `fork/changes`.
-  Ordinary feature/import PRs are not added to `.github/pr-stack.json`; they enter the runnable fork
-  only after being reviewed and merged into `fork/changes`.
-- **Never open implementation PRs against `main`.** `main` is the upstream mirror; GitHub will
-  report conflicts and a huge unrelated diff. Always base and retarget feature PRs on `fork/changes`.
+- **Branch from `fork/dev` and open every PR against `fork/dev`.** Discord, VS Code, identity and
+  desktop work included: the integration overlays were drained into `fork/dev` and deregistered, so
+  there is no overlay branch to target. Ownership is inferred from changed paths, not from the base
+  branch.
+- **Never open implementation PRs against `main`, `fork/changes` or `fork/integration`.** `main` is
+  the upstream mirror; the other two are frozen and superseded by `fork/dev`. All three produce a
+  huge unrelated diff, and `fork/changes` is rebased, which silently invalidates a PR based on it.
+  See [docs/stable-dev-release-branch-handover.md](./docs/stable-dev-release-branch-handover.md).
 - Before handoff (and whenever a PR is CONFLICTING / behind), run
   `pnpm fork:stack update --push` (or `pnpm fork:stack update --push <pr-number>`). That rebases or
-  replays the feature commits onto the PR's intended parent (`fork/changes` for ordinary features,
-  or the current parent branch for dependent/overlay-child PRs), retargets only an invalid base, and
+  replays the feature commits onto the PR's intended parent (`fork/dev` for ordinary features, or the
+  current parent branch for dependent PRs), retargets only an invalid base, and
   force-with-lease pushes so the PR stays mergeable.
 - After automation rebases your branch (or `fork/changes`), refresh a local checkout with
   `pnpm fork:stack pull`. It hard-resets to remote when local commits are patch-equivalent, and only
@@ -131,7 +127,7 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
   recovery PR as done:
   1. On the rewritten tip (usually `fork/changes`), run `CI= pnpm install --no-frozen-lockfile`
      (or `vp install` with frozen lockfile disabled) until the lockfile matches.
-  2. Commit the updated `pnpm-lock.yaml` on a PR targeting `fork/changes` (or include it in the
+  2. Commit the updated `pnpm-lock.yaml` on a PR targeting `fork/dev` (or include it in the
      recovery commit that lands the rewrite).
   3. Recompose `fork/integration` if the tip already moved, then re-dispatch Fork CI.
   4. Confirm install would succeed under CI: frozen lockfile is **on** in Fork CI; failures look
@@ -186,12 +182,9 @@ Day-to-day ship path (compose, not restack): [docs/stack-ship-path.md](./docs/st
 
 When implementation work for a user request is done (code, docs, config — not pure Q&A):
 
-1. **Commit** the changes on a feature branch created with `pnpm fork:stack start <branch>` (from
-   `fork/changes`), or `pnpm fork:stack overlay-start <pr> <branch>` for overlay-owned work.
-2. **Open or update a PR** against the correct base before handing off:
-   - Ordinary features → **`fork/changes`** (never `main`, never `fork/integration`).
-   - Client overlay work → the **registered overlay branch** (`fork/discord`, `fork/vscode`, `fork/identity`, or
-     `t3-discord/f7d37879-desktop-deeplinks`), not a duplicate of that work in `fork/changes`.
+1. **Commit** the changes on a feature branch cut from `fork/dev`.
+2. **Open or update a PR against `fork/dev`** before handing off — for every kind of work, including
+   Discord, VS Code, identity and desktop. Never `main`, `fork/changes` or `fork/integration`.
 3. **Let the agent ship gate own validation** before saying “updated the PR” or finishing (see
    _Task Completion Requirements → Agent ship gate_):
    - **Every agent push is gated.** Draft / no-PR pays the **static** half (`vp check` +
@@ -288,10 +281,8 @@ result. **No agent push is free:** draft / no-PR still pays the static half; rea
 | **Ready** PR           | **full** ship gate on every push            |
 | PR state can’t resolve | **full** ship gate (**fail closed**)        |
 
-This is identical for `fork/changes`, every registered overlay base (`fork/discord`, `fork/vscode`,
-`fork/identity`, desktop deeplinks), and dependent / overlay-child PRs — the gate keys off the PR’s
-**ready state**, not its base. Overlay Compose success or Managed-PR draft-lock green is **not** the
-gate.
+This is identical for `fork/dev` and dependent PRs — the gate keys off the PR’s **ready state**, not
+its base. Managed-PR draft-lock green is **not** the gate.
 
 **Publish path:** `pnpm pr:ready` — runs the **full** ship gate, then marks the open draft PR ready.
 Raw `gh pr ready` (and the ready-for-review APIs) reach the same place: the `.tools/bin/gh` policy
