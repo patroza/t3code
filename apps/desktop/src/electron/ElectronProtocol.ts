@@ -210,10 +210,21 @@ async function proxyRequest(
   return withContentSecurityPolicy(response, contentSecurityPolicy);
 }
 
-const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
+const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150, 400] as const;
+
+function isRetryableDocumentResponse(url: string, response: Response): boolean {
+  if (response.status !== 503 && response.status !== 404) {
+    return false;
+  }
+  // Only the app shell / SPA document — hashed assets should fail fast so
+  // preload recovery can run instead of masking a torn swap.
+  const pathname = new URL(url).pathname;
+  return pathname === "/" || pathname === "/index.html" || !pathname.includes(".");
+}
 
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: unknown;
+  let lastResponse: Response | null = null;
 
   for (const delayMs of TRANSIENT_FETCH_RETRY_DELAYS_MS) {
     if (delayMs > 0) {
@@ -221,10 +232,18 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
     }
 
     try {
-      return await Electron.net.fetch(url, init);
+      const response = await Electron.net.fetch(url, init);
+      if (!isRetryableDocumentResponse(url, response)) {
+        return response;
+      }
+      lastResponse = response;
     } catch (error) {
       lastError = error;
     }
+  }
+
+  if (lastResponse !== null) {
+    return lastResponse;
   }
 
   throw lastError;

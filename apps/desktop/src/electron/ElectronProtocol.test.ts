@@ -141,6 +141,35 @@ describe("ElectronProtocol", () => {
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
 
+  it.effect("retries empty-web 503/404 on the document shell", () =>
+    Effect.gen(function* () {
+      let handler: ((request: Request) => Promise<Response>) | undefined;
+      handleMock.mockImplementation((_scheme, nextHandler) => {
+        handler = nextHandler;
+      });
+      netFetchMock
+        .mockResolvedValueOnce(new Response("Web assets unavailable", { status: 503 }))
+        .mockResolvedValueOnce(new Response("<html>ready</html>", { status: 200 }));
+
+      const response = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const protocol = yield* ElectronProtocol.ElectronProtocol;
+          yield* protocol.registerDesktopProtocol({
+            scheme: "t3code",
+            targetOrigin: new URL("http://127.0.0.1:3773/"),
+            backendOrigin: new URL("http://127.0.0.1:3773/"),
+            clerkFrontendApiHostname: undefined,
+          });
+          return yield* Effect.promise(() => handler!(new Request("t3code://app/")));
+        }),
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(yield* Effect.promise(() => response.text()), "<html>ready</html>");
+      assert.equal(netFetchMock.mock.calls.length, 2);
+    }).pipe(Effect.provide(ElectronProtocol.layer)),
+  );
+
   it.effect("preserves protocol registration failures", () =>
     Effect.gen(function* () {
       const cause = new Error("protocol registration failed");

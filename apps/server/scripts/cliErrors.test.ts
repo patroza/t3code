@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { ServerCliBuildAssetMissingError, ServerCliCommandExitError } from "./cliErrors.ts";
+import {
+  ServerCliBuildAssetMissingError,
+  ServerCliCommandExitError,
+  ServerCliWebClientBundleMissingError,
+} from "./cliErrors.ts";
 
 describe("server CLI errors", () => {
   it("preserves failed command context without changing its message", () => {
@@ -27,5 +31,13 @@ describe("server CLI errors", () => {
       error.message,
       "Missing build asset: /repo/server.mjs. Run the build subcommand first.",
     );
+  });
+
+  it("explains a missing web client bundle at package time", () => {
+    const error = new ServerCliWebClientBundleMissingError({ webDistPath: "/repo/apps/web/dist" });
+
+    assert.equal(error.webDistPath, "/repo/apps/web/dist");
+    assert.include(error.message, "Web client dist is missing");
+    assert.include(error.message, "/repo/apps/web/dist");
   });
 });

@@ -298,7 +298,13 @@ export const staticAndDevRouteLayer = HttpRouter.add(
         .readFile(indexPath)
         .pipe(Effect.orElseSucceed(() => null));
       if (!indexData) {
-        return HttpServerResponse.text("Not Found", { status: 404 });
+        // Missing index during atomic client promote (or a broken package) is
+        // temporary/operational — not a permanent missing route. 503 lets
+        // desktop retry instead of painting a permanent "Not Found" shell.
+        return HttpServerResponse.text("Web assets unavailable", {
+          status: 503,
+          headers: { "Retry-After": "1" },
+        });
       }
       return yield* respondWithStaticFile({
         data: indexData,
