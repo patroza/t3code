@@ -107,7 +107,9 @@ fi
 
 # The server target is affected purely through its served web bundle (no server
 # process code changed), so ops can hot-swap dist/client on the running server
-# instead of restarting it. Desktop, if flagged, still rebuilds independently.
+# instead of restarting it. Hot-swap MUST promote a complete tree atomically
+# (stage → rename); never delete the live dist/client first or desktop opens
+# to "Not Found" / 503. Desktop, if flagged, still rebuilds independently.
 web_hot_swap=false
 if [[ "${server}" == "true" && "${server_code}" == "false" ]]; then
   web_hot_swap=true

@@ -98,6 +98,8 @@ type WebviewRequest =
       readonly text: string;
       readonly images: ReadonlyArray<UploadChatAttachment>;
       readonly interactionMode?: "default" | "plan";
+      /** Client-chosen id so the webview can show a pending queue chip. */
+      readonly messageId?: string;
     }
   | { readonly type: "setInteractionMode"; readonly interactionMode: "default" | "plan" }
   | {
@@ -278,6 +280,13 @@ function isRequest(value: unknown): value is WebviewRequest {
       value.interactionMode !== undefined &&
       value.interactionMode !== "default" &&
       value.interactionMode !== "plan"
+    ) {
+      return false;
+    }
+    if (
+      "messageId" in value &&
+      value.messageId !== undefined &&
+      typeof value.messageId !== "string"
     ) {
       return false;
     }
@@ -612,6 +621,9 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
               runtimeMode: this.actions.runtimeMode(),
               interactionMode: requestedMode,
               attachments: message.images,
+              ...(message.messageId !== undefined
+                ? { messageId: MessageId.make(message.messageId) }
+                : {}),
               ...(followUp?.interactionMode === "default" && activePlan
                 ? {
                     sourceProposedPlan: {
@@ -827,6 +839,8 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
         attachmentCount: message.attachments.length,
         queuedAt: message.queuedAt,
       })),
+      sessionStatus: thread.session?.status ?? null,
+      hasPendingTurnStart: thread.pendingTurnStart !== null,
       proposedPlans: proposedPlans.map((plan) => ({
         id: plan.id,
         planMarkdown: plan.planMarkdown,

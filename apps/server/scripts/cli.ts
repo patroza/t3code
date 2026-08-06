@@ -27,6 +27,7 @@ import {
   ServerCliDevelopmentIconTargetMissingError,
   ServerCliPublishIconSourceMissingError,
   ServerCliPublishIconTargetMissingError,
+  ServerCliWebClientBundleMissingError,
 } from "./cliErrors.ts";
 
 interface PackageJson {
@@ -163,15 +164,61 @@ const buildCmd = Command.make(
       );
 
       const webDist = path.join(repoRoot, "apps/web/dist");
+      const webIndex = path.join(webDist, "index.html");
       const clientTarget = path.join(serverDir, "dist/client");
+      const distDir = path.join(serverDir, "dist");
 
-      if (yield* fs.exists(webDist)) {
-        yield* fs.copy(webDist, clientTarget);
+      // Fail closed: soft-skipping shipped empty client trees that surface as
+      // desktop "Not Found" after deploy. Promote atomically so a live server
+      // never observes a half-copied or deleted dist/client during rebuild.
+      if (!(yield* fs.exists(webIndex))) {
+        return yield* new ServerCliWebClientBundleMissingError({ webDistPath: webDist });
+      }
+
+      yield* fs.makeDirectory(distDir, { recursive: true });
+      const stagingDir = yield* fs.makeTempDirectory({
+        directory: distDir,
+        prefix: "client.next.",
+      });
+      const previousDir = path.join(distDir, "client.prev");
+
+      yield* Effect.gen(function* () {
+        yield* fs.copy(webDist, stagingDir);
+        if (!(yield* fs.exists(path.join(stagingDir, "index.html")))) {
+          return yield* new ServerCliWebClientBundleMissingError({ webDistPath: stagingDir });
+        }
+
+        if (yield* fs.exists(previousDir)) {
+          yield* fs.remove(previousDir, { recursive: true, force: true });
+        }
+        if (yield* fs.exists(clientTarget)) {
+          yield* fs.rename(clientTarget, previousDir);
+        }
+        yield* fs.rename(stagingDir, clientTarget).pipe(
+          Effect.catch((cause) =>
+            // If promote fails after the live tree was moved aside, put the
+            // previous client back so the process never stays empty.
+            Effect.gen(function* () {
+              if ((yield* fs.exists(previousDir)) && !(yield* fs.exists(clientTarget))) {
+                yield* fs.rename(previousDir, clientTarget).pipe(Effect.ignore);
+              }
+              return yield* Effect.fail(cause);
+            }),
+          ),
+        );
+        if (yield* fs.exists(previousDir)) {
+          yield* fs.remove(previousDir, { recursive: true, force: true }).pipe(Effect.ignore);
+        }
+
         yield* applyDevelopmentIconOverrides(repoRoot, serverDir);
         yield* Effect.log("[cli] Bundled web app into dist/client");
-      } else {
-        yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
-      }
+      }).pipe(
+        Effect.ensuring(
+          // Staging only remains if promote failed before rename; force so a
+          // successful promote (path gone) is a no-op.
+          fs.remove(stagingDir, { recursive: true, force: true }).pipe(Effect.ignore),
+        ),
+      );
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
 

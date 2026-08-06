@@ -1467,6 +1467,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("returns 503 when staticDir is set but index.html is missing", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-static-empty-",
+      });
+
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      const response = yield* HttpClient.get("/");
+      assert.equal(response.status, 503);
+      assert.include(yield* response.text, "Web assets unavailable");
+      assert.equal(response.headers["retry-after"], "1");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("redirects to dev URL when configured", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({

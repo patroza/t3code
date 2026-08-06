@@ -16,7 +16,11 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ScopedThreadRef,
+  SidebarProjectGroupingMode,
+} from "@t3tools/contracts";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -197,7 +201,6 @@ import {
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import {
   DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
-  DEFAULT_SIDEBAR_V2_SETTLED_RECENCY_HEADERS,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
   DEFAULT_WEB_THREAD_GROUPING,
   EMPTY_LIST_ENVIRONMENT_FILTER,
@@ -213,7 +216,6 @@ import {
   SIDEBAR_OWNERSHIP_RELATION_LABELS,
   SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_RELATIONS,
-  SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_THREAD_GROUPING_LABELS,
   WEB_THREAD_GROUPINGS,
@@ -1444,9 +1446,36 @@ export default function SidebarV2() {
   // Per-environment claims (not primary-only): smart has no map while t3vm does.
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
 
+  // Shared with classic list / Board so multi-env filters (e.g. hide t3vm) stick
+  // when switching sidebars.
+  const [storedEnvironmentFilter, setStoredEnvironmentFilter] = useLocalStorage(
+    LIST_ENVIRONMENT_FILTER_STORAGE_KEY,
+    EMPTY_LIST_ENVIRONMENT_FILTER,
+    ListEnvironmentFilterSchema,
+  );
+  const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
+    SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
+    DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
+    ListHideSettledSchema,
+  );
+  const availableEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
+  const selectedEnvironmentIds = useMemo(
+    () =>
+      resolveSelectedEnvironmentIds(
+        storedEnvironmentFilter as readonly EnvironmentId[],
+        availableEnvironmentIds,
+      ),
+    [availableEnvironmentIds, storedEnvironmentFilter],
+  );
+
   const listOptionsActive =
     ownershipFilter !== DEFAULT_SIDEBAR_OWNERSHIP_FILTER ||
-    ownershipRelation !== DEFAULT_OWNERSHIP_RELATION;
+    ownershipRelation !== DEFAULT_OWNERSHIP_RELATION ||
+    !isAllEnvironmentsSelected(selectedEnvironmentIds) ||
+    settledShelfExpanded !== DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED;
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1771,6 +1800,7 @@ export default function SidebarV2() {
       const visible = threads.filter(
         (thread) =>
           thread.archivedAt === null &&
+          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
           (scopedProjectKeys === null ||
             scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
           threadMatchesMine({
@@ -1839,6 +1869,7 @@ export default function SidebarV2() {
       ownershipFilter,
       ownershipRelation,
       scopedProjectKeys,
+      selectedEnvironmentIds,
       serverConfigs,
       snoozeWakeTick,
       threads,
@@ -1894,7 +1925,7 @@ export default function SidebarV2() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = `${projectScopeKey ?? "all"}:${selectedEnvironmentIds.join(",")}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -1922,8 +1953,10 @@ export default function SidebarV2() {
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
   );
-  const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
-  const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
+  const toggleSettledShelf = useCallback(
+    () => setSettledShelfExpanded((value) => !value),
+    [setSettledShelfExpanded],
+  );
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
     if (routeThreadKey === null) return [];
@@ -3159,6 +3192,62 @@ export default function SidebarV2() {
                               </MenuRadioItem>
                             ))}
                           </MenuRadioGroup>
+                        </MenuGroup>
+                      </>
+                    ) : null}
+                    <MenuSeparator />
+                    <MenuGroup>
+                      <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                        Settled shelf
+                      </div>
+                      <MenuCheckboxItem
+                        checked={settledShelfExpanded}
+                        closeOnClick={false}
+                        className="min-h-7 py-1 sm:text-xs"
+                        data-testid="sidebar-v2-settled-shelf-expanded"
+                        onCheckedChange={(checked) => setSettledShelfExpanded(checked === true)}
+                      >
+                        Expand settled shelf
+                      </MenuCheckboxItem>
+                    </MenuGroup>
+                    {environments.length > 1 ? (
+                      <>
+                        <MenuSeparator />
+                        <MenuGroup>
+                          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                            Environment
+                          </div>
+                          <MenuCheckboxItem
+                            checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
+                            closeOnClick={false}
+                            className="min-h-7 py-1 sm:text-xs"
+                            data-testid="sidebar-v2-environment-filter-all"
+                            onCheckedChange={() => setStoredEnvironmentFilter([])}
+                          >
+                            All environments
+                          </MenuCheckboxItem>
+                          {environments.map((environment) => (
+                            <MenuCheckboxItem
+                              key={environment.environmentId}
+                              checked={isEnvironmentSelected(
+                                selectedEnvironmentIds,
+                                environment.environmentId,
+                              )}
+                              closeOnClick={false}
+                              className="min-h-7 py-1 sm:text-xs"
+                              data-testid={`sidebar-v2-environment-filter-${environment.environmentId}`}
+                              onCheckedChange={() => {
+                                setStoredEnvironmentFilter([
+                                  ...toggleEnvironmentId(
+                                    selectedEnvironmentIds,
+                                    environment.environmentId,
+                                  ),
+                                ]);
+                              }}
+                            >
+                              {environment.label}
+                            </MenuCheckboxItem>
+                          ))}
                         </MenuGroup>
                       </>
                     ) : null}
