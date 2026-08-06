@@ -1,5 +1,12 @@
 # Stack history rewrite (fold tip-only `fix(stack)` debt)
 
+> [!IMPORTANT]
+> **Superseded. Do not follow this for new work.**
+>
+> The stack tooling this describes was removed. Upstream is merged straight into `fork/dev`, which is
+> the only contributor target. See
+> [stable-dev-release-branch-handover.md](./stable-dev-release-branch-handover.md).
+
 Goal: **layer tips green** and **replayed commits green**, without permanent product
 `fix(stack): rejoin…` commits.
 

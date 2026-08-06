@@ -23,7 +23,7 @@ jobs:
           manifest="$(
             gh api \
               -H 'Accept: application/vnd.github.raw+json' \
-              "repos/${REPOSITORY}/contents/.github/pr-stack.json?ref=fork/changes"
+              "repos/${REPOSITORY}/contents/.github/pr-stack.json?ref=fork/dev"
           )"
           if ! jq -e --argjson number "${PR_NUMBER}" \
             '([.pullRequests[], .integrationOverlays[]] | any(.number == $number))' \

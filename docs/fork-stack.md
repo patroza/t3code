@@ -11,8 +11,6 @@
 > Kept as a record of how the fork operated before 2026-08-06, and because the provenance stack
 > (`main` → `fork/base` → `fork/tim` → `fork/candidates`) it describes is still current.
 
-Day-to-day merge → compose → deploy: [stack-ship-path.md](./stack-ship-path.md).
-
 This repository separates upstream history, downstream changes, temporary review branches, and the
 runnable build:
 

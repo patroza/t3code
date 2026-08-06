@@ -39,14 +39,14 @@ The intended outcome, all of which now holds:
 
 ## What Remains
 
-| Work                                                                                                                             | State                                                                                                    |
-| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| PRs still based on `fork/changes`                                                                                                | #317, #226, #185 conflict on rebase; #237 and #238 live in an external fork and need their author        |
-| Retire `fork/changes` and `fork/integration`                                                                                     | blocked on the above                                                                                     |
-| Overlay machinery (`compose-integration`, `rebase-integration-overlays`, `force-update-overlay-tip`, `client-overlay-ownership`) | still present and passing its tests with an empty manifest; removal is ~20 files and a separate decision |
-| Automated provenance synchronization                                                                                             | manual, and fine at the current upstream cadence                                                         |
-| Clean downstream projection                                                                                                      | deferred indefinitely; nothing depends on it                                                             |
-| Per-target release cadence                                                                                                       | still immediate for everything                                                                           |
+| Work                                         | State                                                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| PRs still based on `fork/changes`            | #317, #226, #185 conflict on rebase; #237 and #238 live in an external fork and need their author |
+| Retire `fork/changes` and `fork/integration` | blocked on the above                                                                              |
+| Overlay and stack machinery                  | **removed.** `.github/pr-stack.json` survives only as the managed-PR allowlist for the draft lock |
+| Automated provenance synchronization         | manual, and fine at the current upstream cadence                                                  |
+| Clean downstream projection                  | deferred indefinitely; nothing depends on it                                                      |
+| Per-target release cadence                   | still immediate for everything                                                                    |
 
 The rebased provenance stack (`main → fork/base → fork/tim → fork/candidates`) works exactly as it
 did before and is unaffected by any of the above.
