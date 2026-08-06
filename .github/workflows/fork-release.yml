@@ -101,7 +101,11 @@ jobs:
         env:
           PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
         run: |
-          mobile=true
+          # Same script the smart-host poller runs, so this report and the fleet
+          # promotion cannot disagree about what a diff means.
+          deploy=true server=true discord=true vscode=true mobile=true desktop=true
+          web_hot_swap=false
+          basis="no previous released SHA; assuming every target changed"
           if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
               git fetch --quiet origin "${PREVIOUS_SHA}" || true
@@ -111,15 +115,32 @@ jobs:
                 scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${RELEASE_SHA}"
               )"
               printf '%s\n' "${classification}" >&2
-              mobile="$(sed -n 's/^mobile=//p' <<<"${classification}")"
-              [[ "${mobile}" =~ ^(true|false)$ ]] || mobile=true
+              for key in deploy server discord vscode mobile desktop web_hot_swap; do
+                value="$(sed -n "s/^${key}=//p" <<<"${classification}")"
+                [[ "${value}" =~ ^(true|false)$ ]] || continue
+                printf -v "${key}" '%s' "${value}"
+              done
+              basis="classified against the previous released SHA"
             else
-              echo "Previous released SHA unavailable; releasing every target."
+              basis="previous released SHA unavailable; assuming every target changed"
             fi
-          else
-            echo "No previous released SHA; releasing every target."
           fi
-          echo "mobile=${mobile}" >>"${GITHUB_OUTPUT}"
+          # A non-runtime-only range promotes nothing, exactly as the poller
+          # decides, so report every target as held rather than as released.
+          if [[ "${deploy}" == "false" ]]; then
+            server=false; discord=false; vscode=false; desktop=false; mobile=false
+          fi
+          for key in deploy server discord vscode mobile desktop web_hot_swap; do
+            echo "${key}=${!key}" >>"${GITHUB_OUTPUT}"
+          done
+          echo "basis=${basis}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "changed_files<<EOF"
+            if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              git diff --name-only "${PREVIOUS_SHA}" "${RELEASE_SHA}" | head -40
+            fi
+            echo "EOF"
+          } >>"${GITHUB_OUTPUT}"
 
       - name: Dispatch mobile releases
         if: steps.classify.outputs.mobile == 'true'
@@ -146,13 +167,44 @@ jobs:
 
       - name: Report
         if: always()
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+          BASIS: ${{ steps.classify.outputs.basis }}
+          DEPLOY: ${{ steps.classify.outputs.deploy }}
+          SERVER: ${{ steps.classify.outputs.server }}
+          DISCORD: ${{ steps.classify.outputs.discord }}
+          VSCODE: ${{ steps.classify.outputs.vscode }}
+          MOBILE: ${{ steps.classify.outputs.mobile }}
+          DESKTOP: ${{ steps.classify.outputs.desktop }}
+          WEB_HOT_SWAP: ${{ steps.classify.outputs.web_hot_swap }}
+          CHANGED_FILES: ${{ steps.classify.outputs.changed_files }}
         run: |
+          mark() { [[ "$1" == "true" ]] && echo "**yes**" || echo "no"; }
+          server_note="restart"
+          [[ "${WEB_HOT_SWAP}" == "true" ]] && server_note="web hot-swap, no restart"
           {
-            printf '### Fork Release\n\n'
-            printf -- '- SHA: `%s`\n' "${RELEASE_SHA}"
-            printf -- '- Branch: `%s`\n' "${RELEASE_REF}"
-            printf -- '- Previous released: `%s`\n' "${{ steps.previous.outputs.sha || 'none' }}"
-            printf -- '- Mobile dispatched: `%s`\n' "${{ steps.classify.outputs.mobile }}"
-            printf -- '\nServer, Discord, desktop and VS Code are promoted by the smart-host poller\n'
-            printf -- 'from the green Fork CI run, independently of this workflow.\n'
+            printf '### Fork Release — `%s`\n\n' "${RELEASE_SHA:0:12}"
+            printf 'Range: `%s` → `%s` on `%s`\n\n' \
+              "${PREVIOUS_SHA:0:12}" "${RELEASE_SHA:0:12}" "${RELEASE_REF}"
+            printf '_%s._\n\n' "${BASIS}"
+            if [[ "${DEPLOY}" == "false" ]]; then
+              printf '> Non-runtime-only range: the poller records it as evaluated and promotes nothing.\n\n'
+            fi
+            printf '| Target | Selected | Promoted by |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| Server (%s) | %s | smart-host poller |\n' "${server_note}" "$(mark "${SERVER}")"
+            printf '| Discord bot | %s | smart-host poller |\n' "$(mark "${DISCORD}")"
+            printf '| Desktop | %s | smart-host poller |\n' "$(mark "${DESKTOP}")"
+            printf '| VS Code | %s | smart-host poller |\n' "$(mark "${VSCODE}")"
+            printf '| Mobile (EAS) | %s | this workflow |\n\n' "$(mark "${MOBILE}")"
+            printf 'Classified by `scripts/classify-deployment-diff.sh`, the same script the poller\n'
+            printf 'runs, so this report and the fleet cannot disagree about what a diff means.\n\n'
+            printf '**Caveat:** the poller diffs against the last SHA it actually *deployed*, which is\n'
+            printf 'not always the last released SHA — a promotion it skipped or that failed part-way\n'
+            printf 'leaves its baseline behind this one. When they diverge the poller selects a\n'
+            printf 'superset of the rows above, never a subset.\n'
+            if [[ -n "${CHANGED_FILES}" ]]; then
+              printf '\n<details><summary>Changed files</summary>\n\n```text\n%s\n```\n\n</details>\n' \
+                "${CHANGED_FILES}"
+            fi
           } >>"${GITHUB_STEP_SUMMARY}"
