@@ -1,0 +1,158 @@
+name: Fork Release
+
+# Release actions, split out of Fork CI on purpose.
+#
+# Fork CI answers exactly one question: "is this SHA valid?" Its conclusion is
+# what the deploy poller on the smart host promotes on, so a release action must
+# never be able to turn it red — a failed EAS dispatch would otherwise strand
+# server, Discord, desktop and VS Code deployment of a perfectly good commit.
+#
+# workflow_run gives the ordering for free: this only starts after Fork CI has
+# already concluded success for a push to fork/dev, so nothing is released from a
+# SHA that is not green, and a failure here is recorded against this run alone.
+#
+# NOTE: workflow_run only fires for workflow files present on the repository
+# default branch. Until fork/dev is the default branch this workflow will not
+# trigger, and mobile releases must be dispatched manually below.
+on:
+  workflow_run:
+    workflows: ["Fork CI"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Exact green fork/dev SHA to release"
+        required: true
+        type: string
+      release_branch:
+        description: "Branch that must contain the SHA"
+        required: false
+        type: string
+        default: fork/dev
+
+concurrency:
+  # Per SHA: two releases of different commits may safely overlap, and a queued
+  # release must not be cancelled by a newer one — each SHA gets its own outcome.
+  group: fork-release-${{ github.event.workflow_run.head_sha || inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    # Only a green push run on fork/dev. Pull-request and workflow_dispatch runs
+    # of Fork CI validate a tip that was never merged and must not release.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'fork/dev')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+      RELEASE_REF: ${{ github.event.workflow_run.head_branch || inputs.release_branch }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+          fetch-depth: 0
+
+      - name: Confirm the SHA is green
+        # workflow_dispatch bypasses the workflow_run gate, so re-check it here.
+        # Releasing an unvalidated SHA by hand is the one thing this split must
+        # not make easier.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-ci.yml/runs" \
+              -f branch="${RELEASE_REF}" -f event=push -f status=success -f per_page=30 \
+              --jq "[.workflow_runs[] | select(.head_sha == \"${RELEASE_SHA}\")] | length"
+          )"
+          if [[ "${green}" -lt 1 ]]; then
+            echo "error: no successful Fork CI push run for ${RELEASE_SHA} on ${RELEASE_REF}" >&2
+            exit 1
+          fi
+          echo "Fork CI is green for ${RELEASE_SHA}."
+
+      - id: previous
+        name: Find previous released SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Compare against the last SHA this workflow released, not the last one
+          # that merely passed CI: a commit whose release was skipped must still
+          # be represented in the next release's scope.
+          previous_sha="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/fork-release.yml/runs" \
+              -f branch="${RELEASE_REF}" -f status=success -f per_page=30 \
+              --jq "[.workflow_runs[] | select(.head_sha != \"${RELEASE_SHA}\")] | first | .head_sha // \"\""
+          )"
+          echo "sha=${previous_sha}" >>"${GITHUB_OUTPUT}"
+
+      - id: classify
+        name: Classify release scope
+        env:
+          PREVIOUS_SHA: ${{ steps.previous.outputs.sha }}
+        run: |
+          mobile=true
+          if [[ "${PREVIOUS_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            if ! git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              git fetch --quiet origin "${PREVIOUS_SHA}" || true
+            fi
+            if git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null; then
+              classification="$(
+                scripts/classify-deployment-diff.sh "${PREVIOUS_SHA}" "${RELEASE_SHA}"
+              )"
+              printf '%s\n' "${classification}" >&2
+              mobile="$(sed -n 's/^mobile=//p' <<<"${classification}")"
+              [[ "${mobile}" =~ ^(true|false)$ ]] || mobile=true
+            else
+              echo "Previous released SHA unavailable; releasing every target."
+            fi
+          else
+            echo "No previous released SHA; releasing every target."
+          fi
+          echo "mobile=${mobile}" >>"${GITHUB_OUTPUT}"
+
+      - name: Dispatch mobile releases
+        if: steps.classify.outputs.mobile == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # mode=auto, not update: an OTA alone never reaches a phone when the
+          # native runtime changed, so the fingerprint decides between an update
+          # and a TestFlight build. iOS only, because Android has no keystore.
+          gh workflow run mobile-eas-production.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$RELEASE_REF" \
+            -f mode=auto \
+            -f platform=ios \
+            -f sha="$RELEASE_SHA" \
+            -f release_branch="$RELEASE_REF" \
+            -f message="${RELEASE_REF} ${RELEASE_SHA}"
+          gh workflow run mobile-eas-development.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$RELEASE_REF" \
+            -f platform=ios \
+            -f sha="$RELEASE_SHA" \
+            -f release_branch="$RELEASE_REF"
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            printf '### Fork Release\n\n'
+            printf -- '- SHA: `%s`\n' "${RELEASE_SHA}"
+            printf -- '- Branch: `%s`\n' "${RELEASE_REF}"
+            printf -- '- Previous released: `%s`\n' "${{ steps.previous.outputs.sha || 'none' }}"
+            printf -- '- Mobile dispatched: `%s`\n' "${{ steps.classify.outputs.mobile }}"
+            printf -- '\nServer, Discord, desktop and VS Code are promoted by the smart-host poller\n'
+            printf -- 'from the green Fork CI run, independently of this workflow.\n'
+          } >>"${GITHUB_STEP_SUMMARY}"
