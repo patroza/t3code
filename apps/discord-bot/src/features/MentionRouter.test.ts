@@ -2,6 +2,10 @@
 import * as NodeFS from "node:fs";
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import { it as effectIt } from "@effect/vitest";
 
 import {
   createHandledDiscordMessageTracker,
@@ -9,6 +13,7 @@ import {
   getContinuedConversationModelChangeError,
   isIncompleteDiscordLink,
   shouldShowThreadBootstrapReaction,
+  makeDiscordMessageDispatchQueue,
 } from "./MentionRouter.ts";
 
 const mentionRouterSource = NodeFS.readFileSync(
@@ -92,6 +97,38 @@ describe("createHandledDiscordMessageTracker", () => {
     tracker.mark("message-2");
     expect(tracker.claim("message-2")).toBe(false);
   });
+});
+
+describe("makeDiscordMessageDispatchQueue", () => {
+  effectIt.effect("keeps same-channel events FIFO while other channels remain independent", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const queue = yield* makeDiscordMessageDispatchQueue();
+        const releaseFirst = yield* Deferred.make<void>();
+        const firstStarted = yield* Deferred.make<void>();
+        const handled = yield* Ref.make<ReadonlyArray<string>>([]);
+        const record = (value: string) => Ref.update(handled, (values) => [...values, value]);
+
+        yield* queue.enqueue({
+          channelId: "channel-a",
+          handle: Deferred.succeed(firstStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirst)),
+            Effect.andThen(record("first")),
+          ),
+        });
+        yield* Deferred.await(firstStarted);
+        yield* queue.enqueue({ channelId: "channel-a", handle: record("second") });
+        yield* queue.enqueue({ channelId: "channel-b", handle: record("other-channel") });
+        yield* queue.drainKey("channel-b");
+
+        expect(yield* Ref.get(handled)).toEqual(["other-channel"]);
+
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* queue.drainKey("channel-a");
+        expect(yield* Ref.get(handled)).toEqual(["other-channel", "first", "second"]);
+      }),
+    ),
+  );
 });
 
 describe("isIncompleteDiscordLink", () => {

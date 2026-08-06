@@ -8,6 +8,7 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { DISCORD_LINK_REQUEST_MARKER } from "@t3tools/shared/providerModelSelection";
+import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 import { Discord, DiscordREST, Ix } from "dfx";
 import { DiscordGateway, InteractionsRegistry } from "dfx/gateway";
 import * as Clock from "effect/Clock";
@@ -19,6 +20,22 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+
+export interface DiscordMessageDispatch {
+  readonly channelId: string;
+  readonly handle: Effect.Effect<void>;
+}
+
+/**
+ * Discord's gateway dispatches events concurrently. Serialize the complete
+ * message lifecycle per channel so slower hydration for an earlier message
+ * cannot let a later create, update, or delete overtake it.
+ */
+export const makeDiscordMessageDispatchQueue = () =>
+  makeKeyedDrainableWorker<string, DiscordMessageDispatch, never, never>({
+    key: (dispatch) => dispatch.channelId,
+    process: (dispatch) => dispatch.handle,
+  });
 
 import type { DiscordBotConfig } from "../config.ts";
 import {
@@ -2653,47 +2670,67 @@ const make = (botConfig: DiscordBotConfig) =>
         }).pipe(Effect.catch((error) => reportError(discordThread.id, error)));
       }).pipe(Effect.catchCause(Effect.logError));
 
-    const handleMessages = gateway.handleDispatch("MESSAGE_CREATE", (event) =>
-      handleInboundMessage(event as GatewayMessageEvent, "create"),
-    );
-    const handleMessageUpdates = gateway.handleDispatch("MESSAGE_UPDATE", (event) =>
-      handleInboundMessage(event as GatewayMessageEvent, "update"),
-    );
+    const messageDispatchQueue = yield* makeDiscordMessageDispatchQueue();
+    const enqueueMessageDispatch = <R>(
+      channelId: string,
+      handle: Effect.Effect<void, never, R>,
+    ): Effect.Effect<void, never, R> =>
+      Effect.context<R>().pipe(
+        Effect.flatMap((context) =>
+          messageDispatchQueue.enqueue({
+            channelId,
+            handle: handle.pipe(Effect.provide(context)),
+          }),
+        ),
+      );
+
+    const handleMessages = gateway.handleDispatch("MESSAGE_CREATE", (event) => {
+      const message = event as GatewayMessageEvent;
+      return enqueueMessageDispatch(message.channel_id, handleInboundMessage(message, "create"));
+    });
+    const handleMessageUpdates = gateway.handleDispatch("MESSAGE_UPDATE", (event) => {
+      const message = event as GatewayMessageEvent;
+      return enqueueMessageDispatch(message.channel_id, handleInboundMessage(message, "update"));
+    });
     // User deletes their parked prompt → drop it from the server queue (and badge).
-    const handleMessageDeletes = gateway.handleDispatch("MESSAGE_DELETE", (event) =>
-      Effect.gen(function* () {
-        const messageId =
-          typeof event === "object" &&
-          event !== null &&
-          "id" in event &&
-          typeof (event as { id?: unknown }).id === "string"
-            ? (event as { id: string }).id
-            : null;
-        if (messageId === null) return;
-        const pending = queuedPrompts.forgetDiscordMessage(messageId);
-        if (pending === null) return;
-        yield* Effect.logInfo("Discord user deleted queued prompt; removing from server queue", {
-          discordMessageId: messageId,
-          t3ThreadId: pending.t3ThreadId,
-          t3MessageId: pending.t3MessageId,
-        });
-        yield* t3
-          .removeQueuedMessage({
-            threadId: pending.t3ThreadId,
-            messageId: pending.t3MessageId,
-          })
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Failed to remove queued prompt after Discord delete", {
-                t3ThreadId: pending.t3ThreadId,
-                t3MessageId: pending.t3MessageId,
-                error: String(error),
-              }),
-            ),
-          );
-        // Message is gone — reaction cleanup is unnecessary.
-      }).pipe(Effect.catchCause(Effect.logError)),
-    );
+    const handleMessageDeletes = gateway.handleDispatch("MESSAGE_DELETE", (event) => {
+      const deleted = event as { readonly channel_id: string; readonly id?: unknown };
+      return enqueueMessageDispatch(
+        deleted.channel_id,
+        Effect.gen(function* () {
+          const messageId =
+            typeof event === "object" &&
+            event !== null &&
+            "id" in event &&
+            typeof (event as { id?: unknown }).id === "string"
+              ? (event as { id: string }).id
+              : null;
+          if (messageId === null) return;
+          const pending = queuedPrompts.forgetDiscordMessage(messageId);
+          if (pending === null) return;
+          yield* Effect.logInfo("Discord user deleted queued prompt; removing from server queue", {
+            discordMessageId: messageId,
+            t3ThreadId: pending.t3ThreadId,
+            t3MessageId: pending.t3MessageId,
+          });
+          yield* t3
+            .removeQueuedMessage({
+              threadId: pending.t3ThreadId,
+              messageId: pending.t3MessageId,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Failed to remove queued prompt after Discord delete", {
+                  t3ThreadId: pending.t3ThreadId,
+                  t3MessageId: pending.t3MessageId,
+                  error: String(error),
+                }),
+              ),
+            );
+          // Message is gone — reaction cleanup is unnecessary.
+        }).pipe(Effect.catchCause(Effect.logError)),
+      );
+    });
 
     const approvalButton = Ix.messageComponent(
       Ix.idStartsWith("t3_approve:"),
