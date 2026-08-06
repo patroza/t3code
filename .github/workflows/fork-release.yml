@@ -31,10 +31,17 @@ on:
         default: fork/dev
 
 concurrency:
-  # Per SHA: two releases of different commits may safely overlap, and a queued
-  # release must not be cancelled by a newer one — each SHA gets its own outcome.
-  group: fork-release-${{ github.event.workflow_run.head_sha || inputs.sha }}
-  cancel-in-progress: false
+  # Per branch, superseding: back-to-back merges should release once, for the
+  # tip, not once per commit. Coalescing here rather than in Fork CI keeps every
+  # commit individually validated, so a red build still names the commit that
+  # broke it.
+  #
+  # Cancelling can only ever over-scope a later release, never under-scope it: a
+  # cancelled run is not "successful", so the next release still measures from
+  # the last SHA that genuinely released. Releasing a superset is wasteful;
+  # missing a change is not recoverable.
+  group: fork-release-${{ github.event.workflow_run.head_branch || inputs.release_branch }}
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -60,6 +67,27 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || inputs.sha }}
           fetch-depth: 0
+
+      - name: Cancel if superseded
+        # workflow_run ordering is not guaranteed, so an older release can still
+        # start after a newer one. Self-cancel rather than exit 0: a run that
+        # concludes success without dispatching would be picked up as the
+        # "previous released SHA" and silently shrink the next release's scope.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --quiet origin "${RELEASE_REF}"
+          tip="$(git rev-parse FETCH_HEAD)"
+          if [[ "${tip}" != "${RELEASE_SHA}" ]]; then
+            echo "Superseded: ${RELEASE_REF} is now at ${tip}, this run is for ${RELEASE_SHA}."
+            gh run cancel "${GITHUB_RUN_ID}"
+            # Cancellation is asynchronous. Block so nothing dispatches while it
+            # lands, and fail if it never does -- either conclusion keeps this
+            # run out of the successful-release history.
+            sleep 60
+            exit 1
+          fi
+          echo "${RELEASE_SHA} is the current ${RELEASE_REF} tip."
 
       - name: Confirm the SHA is green
         # workflow_dispatch bypasses the workflow_run gate, so re-check it here.
