@@ -216,8 +216,8 @@ represented as completely deployed.**
 ## Ops Repository Changes
 
 Deployment already promotes an exact CI-approved SHA, so the cutover is a _ref_ change, not a
-mechanism change. `aaaomega/ops` currently hardcodes `fork/integration` in the poller, deployer,
-clone preparation, failure notifier, and laptop catch-up.
+mechanism change. The private ops repository currently hardcodes `fork/integration` in the poller,
+deployer, clone preparation, failure notifier, and laptop catch-up.
 
 The prerequisite ops change is to make the trusted branch, CI workflow, and CI trigger event
 configurable, defaulting to today's values so nothing changes until the cutover:
@@ -228,7 +228,7 @@ T3CODE_DEPLOY_CI_WORKFLOW=fork-ci.yml
 T3CODE_DEPLOY_CI_EVENT=workflow_dispatch  # -> push at cutover
 ```
 
-Cutover is then a single `~/.config/t3code/deploy.env` edit on `smart` plus a poller restart, and
+Cutover is then a single `deploy.env` edit on the deployment host plus a poller restart, and
 reverting is the same edit.
 
 Component checkpoint state files (`fork-integration-<component>-sha`) keep their names across the
