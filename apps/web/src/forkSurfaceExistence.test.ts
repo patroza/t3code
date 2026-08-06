@@ -46,6 +46,20 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("attemptUnpin");
   });
 
+  it("Sidebar V2 View & filters keeps multi-env environment filter (shared storage)", () => {
+    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    // Restacked ownership work once dropped this; without it multi-env users
+    // cannot hide t3vm / secondary machines from the V2 inbox.
+    expect(sidebarV2).toContain('data-testid="sidebar-v2-view-options-trigger"');
+    expect(sidebarV2).toContain('data-testid="sidebar-v2-environment-filter-all"');
+    expect(sidebarV2).toContain("sidebar-v2-environment-filter-${environment.environmentId}");
+    expect(sidebarV2).toContain("LIST_ENVIRONMENT_FILTER_STORAGE_KEY");
+    expect(sidebarV2).toContain(
+      "matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds)",
+    );
+    expect(sidebarV2).toContain("toggleEnvironmentId");
+  });
+
   it("classic sidebar marks composer draft threads", () => {
     const sidebar = readSrc("components/Sidebar.tsx");
     expect(sidebar).toContain("ComposerDraftDot");
