@@ -139,6 +139,10 @@
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
     },
+    "./state/subagentRuntime": {
+      "types": "./src/state/subagentRuntime.ts",
+      "default": "./src/state/subagentRuntime.ts"
+    },
     "./state/thread-reducer": {
       "types": "./src/state/threadReducer.ts",
       "default": "./src/state/threadReducer.ts"
