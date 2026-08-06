@@ -9,18 +9,26 @@ import {
 export function withAgentIdentityAttribution(input: {
   readonly message: string;
   readonly source?: SourceRef | undefined;
+  readonly additionalSources?: ReadonlyArray<SourceRef | null | undefined> | undefined;
   readonly people: ReadonlyArray<IdentityMapPerson>;
 }): string {
-  const personId = input.source?.personId;
-  if (personId === undefined) return input.message;
-  const person = findPersonByPersonId(input.people, personId);
-  if (person === null) return input.message;
-  const trailer = formatCoAuthoredByTrailer(person);
-  if (trailer === null) return input.message;
-  const trailerBody = trailer.replace(/^Co-authored-by:\s*/iu, "").trim();
-  // Discord's existing turn context uses the compact `cab: Name <email>` form.
-  // Treat either representation as already attributed while old/new clients coexist.
-  if (input.message.toLowerCase().includes(trailerBody.toLowerCase())) return input.message;
+  const sources = [...(input.additionalSources ?? []), input.source];
+  const seenPeople = new Set<string>();
+  const attributions: Array<{ readonly username: string; readonly trailer: string }> = [];
+  for (const source of sources) {
+    const personId = source?.personId;
+    if (personId === undefined || seenPeople.has(personId)) continue;
+    seenPeople.add(personId);
+    const person = findPersonByPersonId(input.people, personId);
+    if (person === null) continue;
+    const trailer = formatCoAuthoredByTrailer(person);
+    if (trailer === null) continue;
+    const trailerBody = trailer.replace(/^Co-authored-by:\s*/iu, "").trim();
+    // Discord's legacy context uses the compact `cab: Name <email>` form.
+    if (input.message.toLowerCase().includes(trailerBody.toLowerCase())) continue;
+    attributions.push({ username: person.username, trailer });
+  }
+  if (attributions.length === 0) return input.message;
 
-  return `${input.message}\n\n<identity_attribution>\nThe server identity map attributes this turn to ${person.username}. Every git commit created for this work must include this exact trailer after a blank line:\n${trailer}\nKeep the environment's default author and committer.\n</identity_attribution>`;
+  return `${input.message}\n\n<identity_attribution>\nThe server identity map attributes this work to ${attributions.map(({ username }) => username).join(", ")}. Every git commit created for this work must include each exact trailer below after a blank line:\n${attributions.map(({ trailer }) => trailer).join("\n")}\nKeep the environment's default author and committer.\n</identity_attribution>`;
 }

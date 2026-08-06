@@ -1315,6 +1315,7 @@ const make = Effect.gen(function* () {
     const attributedMessageText = withAgentIdentityAttribution({
       message: message.text,
       source: message.source,
+      additionalSources: [thread.originSource],
       people: identityPeople,
     });
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
