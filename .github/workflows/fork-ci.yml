@@ -29,7 +29,8 @@ on:
   # Upstream Blacksmith CI must stay disabled_manually. fork/base supplies
   # GitHub-hosted runners + fork-ci.yml for all layers above it.
   #
-  # Keep overlay bases in sync with integrationOverlays in pr-stack.json.
+  # integrationOverlays is empty: the overlays were drained into fork/dev at
+  # cutover. Re-add bases here if one is ever registered again.
   pull_request:
     branches:
       - fork/base
@@ -38,11 +39,6 @@ on:
       - fork/changes
       # Stable contributor and release branch (docs/stable-dev-release-branch-handover.md).
       - fork/dev
-      # Registered integration overlays (same names as .github/pr-stack.json)
-      - t3-discord/f7d37879-desktop-deeplinks
-      - fork/discord
-      - fork/vscode
-      - fork/identity
   # fork/dev is never rebased, so its merge commits are the release candidates.
   # Deployment promotes an exact green SHA and keys on a successful run of this
   # workflow for that SHA, so every merge must produce one — a green PR tip is
