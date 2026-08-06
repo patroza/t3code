@@ -12,6 +12,7 @@ import {
   renderChannelInfoPin,
   resolveGitHubUrlForWorkspace,
 } from "../presentation/channelInfoPin.ts";
+import { SUPPRESS_EMBEDS_FLAG } from "../presentation/suppressEmbeds.ts";
 
 /** Detect the bot's own channel-info pin, including pre-rebrand (legacy) markers. */
 const isChannelInfoPin = (content: string | undefined): boolean => {
@@ -143,7 +144,7 @@ export const ensureChannelInfoPin = (input: {
               botToken,
               path: `/channels/${input.channelId}/messages/${existing.id}`,
               method: "PATCH",
-              body: { content: desiredContent },
+              body: { content: desiredContent, flags: SUPPRESS_EMBEDS_FLAG },
             }),
           catch: (cause) => cause,
         }).pipe(Effect.result);
@@ -162,7 +163,7 @@ export const ensureChannelInfoPin = (input: {
                 botToken,
                 path: `/channels/${input.channelId}/messages`,
                 method: "POST",
-                body: { content: desiredContent },
+                body: { content: desiredContent, flags: SUPPRESS_EMBEDS_FLAG },
               }),
             catch: (cause) => cause,
           });
@@ -197,7 +198,7 @@ export const ensureChannelInfoPin = (input: {
             botToken,
             path: `/channels/${input.channelId}/messages`,
             method: "POST",
-            body: { content: desiredContent },
+            body: { content: desiredContent, flags: SUPPRESS_EMBEDS_FLAG },
           }),
         catch: (cause) => cause,
       });
