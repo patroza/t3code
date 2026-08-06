@@ -139,9 +139,11 @@ re-architecture.
 2. Prove the initial trees are identical: `git diff --exit-code fork/integration fork/dev`.
 3. Record the incorporated `fork/candidates` checkpoint (commit + tree).
 4. Protect `fork/dev` against force-push and deletion; configure required checks.
-5. Make `fork/dev` the GitHub default branch and the base for ordinary contributor PRs.
-6. Point deployment at `fork/dev` (see [Ops Repository Changes](#ops-repository-changes)).
-7. Keep the old compose-and-deploy path installed as a temporary fallback.
+5. Set squash as the repository's default merge method (see
+   [Merge policy](#merge-policy-squash-decided)).
+6. Make `fork/dev` the GitHub default branch and the base for ordinary contributor PRs.
+7. Point deployment at `fork/dev` (see [Ops Repository Changes](#ops-repository-changes)).
+8. Keep the old compose-and-deploy path installed as a temporary fallback.
 
 ### Cutover consequence: overlays are landed, not skipped
 
@@ -244,13 +246,23 @@ After step 1 the normal path is:
 2. Open a PR against `fork/dev`.
 3. Run the mandatory local validation.
 4. Run GitHub CI for the exact PR and merge tip.
-5. Merge using the selected stable-history policy.
+5. Squash merge.
 6. Release immediately or in the next release cadence.
 
 No restack or overlay composition is required for an ordinary feature or fix.
 
-Squash merges are a reasonable default because they give each GitHub PR one stable commit on
-`fork/dev`. Merge commits can remain available where preserving a dependent series is valuable.
+### Merge policy: squash (decided)
+
+**Squash merge is the standard for PRs into `fork/dev`.** Every GitHub PR becomes exactly one stable
+commit, which is what makes the rest of this document work: the PR ledger maps one-to-one onto
+`fork/dev` history, release scope is a diff between two commits, and a later clean projection has a
+single unit to replay per PR.
+
+Exceptions are not defined yet. If a case appears where preserving a dependent series on `fork/dev`
+genuinely matters, it can be argued on its own merits then. Until that happens, treat squash as the
+only merge method — and set GitHub's repository default accordingly rather than relying on
+contributors picking the right button. Leaving the other merge methods enabled is fine while the
+exception question is open; making one the default is not.
 
 Release only the exact merge SHA after its required checks pass. A green PR tip is not sufficient if
 the resulting merge SHA differs or the base moved.
@@ -401,18 +413,23 @@ verify every rewritten layer, prove tree equivalence, and publish.
 2. Never merge a rewritten provenance tip directly into `fork/dev`; import its tree delta.
 3. Never require a clean projection rebuild to ship an unrelated urgent fix.
 4. Never release an untested `fork/dev` SHA; release the exact merge SHA, not the PR tip.
-5. Every ordinary product change enters through a GitHub PR.
+5. Every ordinary product change enters through a GitHub PR, squash merged.
 6. Daily contributors do not manually classify affected clients when paths and dependencies can.
 7. External imports record immutable source provenance at import time.
 8. If generated projection branches exist, never merge them into `fork/dev` and never use one as a
    PR base.
+
+## Settled Decisions
+
+- **Merge policy: squash.** Every PR into `fork/dev` becomes one commit. Whether any exception is
+  warranted is left open until a concrete case appears. See
+  [Merge policy](#merge-policy-squash-decided).
 
 ## Open Decisions
 
 None of these block step 1 or step 2:
 
 - Immediate, debounced, scheduled, or manual release cadence for each target.
-- Squash-only versus mixed merge policy on `fork/dev`.
 - Frequency of upstream/provenance synchronization.
 - Whether identity, Discord, or VS Code needs a stable subsystem staging branch.
 - Whether clean downstream projection is ever built, and if so on what trigger.
@@ -423,8 +440,9 @@ None of these block step 1 or step 2:
 
 Adopt the following operating principle:
 
-> Rebase external provenance; merge stable product development; release exact green `fork/dev`
-> checkpoints; generate clean downstream history separately — and only when it is actually needed.
+> Rebase external provenance; squash stable product development onto `fork/dev`; release exact green
+> `fork/dev` checkpoints; generate clean downstream history separately — and only when it is
+> actually needed.
 
 Steps 1 and 2 can land in a single day: cut `fork/dev` from the green `fork/integration` tip, drain
 the overlays, flip the ops deploy branch, and release from exact green SHAs. That removes daily
