@@ -1023,6 +1023,26 @@ const ThreadActivityAppendCommand = Schema.Struct({
 });
 
 /**
+ * Server-internal: append a transcript message without starting a turn.
+ * Used for untrusted integration context notes so operators (and later
+ * agent turns) can see platform context without granting host control.
+ */
+const ThreadMessageAppendCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.append"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literals(["user", "system"]),
+    text: Schema.String,
+    attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  }),
+  /** Server-authored only. */
+  source: Schema.optional(SourceRef),
+  createdAt: IsoDateTime,
+});
+
+/**
  * Server-internal: dispatch the queued-message head as a turn after a
  * natural (non-interrupted) turn completion. Rejected when the queue is
  * empty or the thread is busy again; the dispatcher ignores the rejection.
@@ -1076,6 +1096,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
+  ThreadMessageAppendCommand,
   ThreadQueueDrainCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,

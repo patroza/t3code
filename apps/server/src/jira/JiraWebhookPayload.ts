@@ -434,6 +434,25 @@ export function buildJiraTurnPrompt(invocation: JiraIssueInvocation): string {
 }
 
 /**
+ * Context-only transcript note for untrusted Jira actors (no agent turn).
+ */
+export function buildJiraContextOnlyPrompt(invocation: JiraIssueInvocation): string {
+  const requester = invocation.actorDisplayName ?? invocation.actorAccountId ?? "unknown";
+  const lines = [
+    ...jiraPromptHeaderLines(invocation),
+    "- Trust: context-only (Jira actor not in identity map; no agent run)",
+    "-->",
+    "",
+    `**Jira context note** (no agent run) from [${requester}] on [${invocation.issueKey}]${
+      invocation.commentUrl ? `(${invocation.commentUrl})` : ""
+    }:`,
+    "",
+    invocation.prompt,
+  ].filter((line): line is string => line !== null);
+  return lines.join("\n");
+}
+
+/**
  * Stable delivery id: creates dedupe on comment id; updates include updated-at / prompt
  * so redeliveries of the same edit collapse but new edits re-run.
  */
