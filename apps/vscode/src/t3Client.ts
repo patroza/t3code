@@ -470,6 +470,8 @@ export class T3Client {
     readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: string };
     readonly modelSelection?: ModelSelection;
     readonly attachments?: ReadonlyArray<UploadChatAttachment>;
+    /** Prefer a client-provided id so the webview can paint a pending queue chip. */
+    readonly messageId?: MessageId;
   }): Promise<void> {
     const thread = this.#activeThread;
     const modelSelection =
@@ -481,7 +483,7 @@ export class T3Client {
       commandId: newCommandId(),
       threadId: input.threadId,
       message: {
-        messageId: newMessageId(),
+        messageId: input.messageId ?? newMessageId(),
         role: "user",
         text: input.prompt,
         attachments: input.attachments ?? [],

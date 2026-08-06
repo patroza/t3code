@@ -23,6 +23,7 @@ import {
   type ComposerInputHistoryState,
 } from "@t3tools/shared/composerInputHistory";
 import type { ChangeRequestIndicator } from "@t3tools/shared/sourceControl";
+import { sendEntersSteeringQueue } from "@t3tools/shared/chatList";
 
 import { conversationRenderRevision } from "./conversationRevision.ts";
 import { splitEditorContext } from "./editorContext.ts";
@@ -74,6 +75,8 @@ interface ViewQueuedMessage {
   readonly text: string;
   readonly attachmentCount: number;
   readonly queuedAt: string;
+  /** Local-only: not yet acknowledged by the server as a queue entry. */
+  readonly pending?: boolean;
 }
 
 interface ViewMessage {
@@ -159,6 +162,9 @@ interface ViewState {
     readonly showPlanFollowUp: boolean;
     readonly activeProposedPlan: ViewActiveProposedPlan | null;
     readonly queuedMessages: ReadonlyArray<ViewQueuedMessage>;
+    /** Provider session status for queue-by-default prediction (running/starting/…). */
+    readonly sessionStatus: string | null;
+    readonly hasPendingTurnStart: boolean;
     readonly proposedPlans: ReadonlyArray<ViewProposedPlan>;
     readonly tasks: null | {
       readonly explanation: string | null;
@@ -276,6 +282,14 @@ let inputHistoryScopeKey = "__none__";
 let inputHistory: ComposerInputHistoryState = EMPTY_COMPOSER_INPUT_HISTORY;
 let editingQueuedMessage: { readonly messageId: string; readonly previousDraft: string } | null =
   null;
+/** Queued ids currently being steered (chip hidden, optimistic timeline bubble). */
+const steeringQueuedMessageIds = new Set<string>();
+/** Optimistic user rows for in-flight steers, keyed by message id. */
+const optimisticSteeredMessages = new Map<string, ViewMessage>();
+/** Local chips for mid-turn sends until the server lists them as queued. */
+const pendingQueuedMessages = new Map<string, ViewQueuedMessage>();
+/** Last steer attempt — used to roll back optimistic UI when the host rejects it. */
+let pendingSteerMessageId: string | null = null;
 interface PromptStashEntry {
   readonly id: string;
   readonly createdAt: string;
@@ -307,15 +321,95 @@ function restoreDraftAfterQueuedEdit(): void {
   renderComposerAction();
 }
 
+/**
+ * Match web/mobile: dequeue first so the server cannot drain the old queue
+ * entry while the user is editing, then recall text into the composer.
+ * Resubmit is a normal send (may re-queue).
+ */
 function editQueuedMessage(messageId: string, text: string): void {
   const previousDraft = editingQueuedMessage?.previousDraft ?? prompt.value;
   editingQueuedMessage = { messageId, previousDraft };
+  pendingQueuedMessages.delete(messageId);
+  post({ type: "removeQueuedMessage", messageId });
   inputHistory = recallComposerInputHistory(inputHistory, text, previousDraft);
   persistInputHistory(inputHistoryScopeKey, inputHistory);
   prompt.value = text;
   prompt.focus();
   prompt.setSelectionRange(text.length, text.length);
   renderComposerAction();
+}
+
+function randomClientMessageId(): string {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function settleQueueOverlays(state: ViewState): void {
+  const serverQueuedIds = new Set(
+    (state.activeThread?.queuedMessages ?? []).map((message) => message.messageId),
+  );
+  const serverMessageIds = new Set(
+    (state.activeThread?.messages ?? []).map((message) => message.id),
+  );
+
+  for (const messageId of Array.from(pendingQueuedMessages.keys())) {
+    if (serverQueuedIds.has(messageId) || serverMessageIds.has(messageId) || state.error) {
+      pendingQueuedMessages.delete(messageId);
+    }
+  }
+
+  for (const messageId of Array.from(steeringQueuedMessageIds)) {
+    const stillQueued = serverQueuedIds.has(messageId);
+    const persisted = serverMessageIds.has(messageId);
+    if (persisted || !stillQueued) {
+      steeringQueuedMessageIds.delete(messageId);
+      optimisticSteeredMessages.delete(messageId);
+      if (pendingSteerMessageId === messageId) pendingSteerMessageId = null;
+      continue;
+    }
+    // Steer rejected: host set error and the message is still queued.
+    if (!state.busy && state.error && pendingSteerMessageId === messageId) {
+      steeringQueuedMessageIds.delete(messageId);
+      optimisticSteeredMessages.delete(messageId);
+      pendingSteerMessageId = null;
+    }
+  }
+}
+
+function displayQueuedMessages(state: ViewState): ReadonlyArray<ViewQueuedMessage> {
+  const server = (state.activeThread?.queuedMessages ?? []).filter(
+    (message) => !steeringQueuedMessageIds.has(message.messageId),
+  );
+  const pending = [...pendingQueuedMessages.values()].filter(
+    (message) =>
+      !server.some((entry) => entry.messageId === message.messageId) &&
+      !steeringQueuedMessageIds.has(message.messageId),
+  );
+  return [...pending, ...server];
+}
+
+function displayTimelineMessages(state: ViewState): ReadonlyArray<ViewMessage> {
+  const server = state.activeThread?.messages ?? [];
+  const serverIds = new Set(server.map((message) => message.id));
+  const optimistic = [...optimisticSteeredMessages.values()].filter(
+    (message) => !serverIds.has(message.id),
+  );
+  if (optimistic.length === 0) return server;
+  return [...server, ...optimistic].toSorted((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
+}
+
+function willSendEnterSteeringQueue(state: ViewState | null): boolean {
+  if (state?.activeThread === null || state?.activeThread === undefined) return false;
+  return sendEntersSteeringQueue({
+    hasBootstrap: false,
+    sessionStatus: state.activeThread.sessionStatus,
+    hasPendingTurnStart: state.activeThread.hasPendingTurnStart,
+  });
 }
 
 function inputHistoryKeyForState(state: ViewState | null): string {
@@ -974,7 +1068,8 @@ function conversationRevision(state: ViewState): string {
         ? null
         : {
             id: state.activeThread.id,
-            messages: state.activeThread.messages,
+            // Include optimistic steers so Send now redraws the timeline.
+            messages: displayTimelineMessages(state),
             toolCalls: state.activeThread.toolCalls,
             resolvedUserInputs: state.activeThread.resolvedUserInputs,
             proposedPlans: state.activeThread.proposedPlans,
@@ -999,6 +1094,13 @@ function render(next: ViewState): void {
   const previousThreadId = previous?.activeThread?.id ?? null;
   const nextThreadId = next.activeThread?.id ?? null;
   const threadChanged = previousThreadId !== nextThreadId;
+  if (threadChanged) {
+    steeringQueuedMessageIds.clear();
+    optimisticSteeredMessages.clear();
+    pendingQueuedMessages.clear();
+    pendingSteerMessageId = null;
+  }
+  settleQueueOverlays(next);
   const nextConversationRevision = conversationRevision(next);
   const conversationChanged = renderedConversationRevision !== nextConversationRevision;
   renderedConversationRevision = nextConversationRevision;
@@ -1058,7 +1160,7 @@ function render(next: ViewState): void {
       messages.append(emptyMessage("Choose a provider and model, then send your first message."));
     } else if (
       next.activeThread === null ||
-      (next.activeThread.messages.length === 0 &&
+      (displayTimelineMessages(next).length === 0 &&
         next.activeThread.toolCalls.length === 0 &&
         next.activeThread.resolvedUserInputs.length === 0 &&
         next.activeThread.proposedPlans.length === 0)
@@ -1072,7 +1174,7 @@ function render(next: ViewState): void {
       );
     } else {
       const timeline = [
-        ...next.activeThread.messages.map((message) => ({
+        ...displayTimelineMessages(next).map((message) => ({
           kind: "message" as const,
           createdAt: message.createdAt,
           order: 0,
@@ -1206,10 +1308,11 @@ function render(next: ViewState): void {
 }
 
 function renderQueuedMessages(state: ViewState): void {
+  settleQueueOverlays(state);
   queuedMessages.replaceChildren();
-  for (const message of state.activeThread?.queuedMessages ?? []) {
+  for (const message of displayQueuedMessages(state)) {
     const row = document.createElement("div");
-    row.className = "queued-message";
+    row.className = message.pending ? "queued-message queued-message-pending" : "queued-message";
     row.title = message.text;
 
     const icon = document.createElement("span");
@@ -1224,20 +1327,39 @@ function renderQueuedMessages(state: ViewState): void {
 
     const steer = document.createElement("button");
     steer.type = "button";
-    steer.textContent = "Steer";
+    steer.textContent = "Send now";
     steer.title = "Send now, interrupting the current step";
-    steer.ariaLabel = "Steer queued message";
-    steer.disabled = state.busy;
-    steer.addEventListener("click", () =>
-      post({ type: "steerQueuedMessage", messageId: message.messageId }),
-    );
+    steer.ariaLabel = "Send queued message now";
+    // Pending local chips wait for server ack; in-flight steers are already
+    // out of this list. Don't blanket-disable on global busy (web/mobile).
+    steer.disabled = message.pending === true || steeringQueuedMessageIds.has(message.messageId);
+    steer.addEventListener("click", () => {
+      if (message.pending || steeringQueuedMessageIds.has(message.messageId)) return;
+      const steeredAt = new Date().toISOString();
+      steeringQueuedMessageIds.add(message.messageId);
+      pendingSteerMessageId = message.messageId;
+      optimisticSteeredMessages.set(message.messageId, {
+        id: message.messageId,
+        role: "user",
+        text: message.text,
+        streaming: false,
+        createdAt: steeredAt,
+        attachments: [],
+      });
+      post({ type: "steerQueuedMessage", messageId: message.messageId });
+      // Force conversation redraw so the optimistic bubble appears.
+      if (currentState) {
+        renderedConversationRevision = null;
+        render(currentState);
+      }
+    });
 
     const edit = document.createElement("button");
     edit.type = "button";
     edit.textContent = "Edit";
-    edit.title = "Edit or recall queued message";
+    edit.title = "Remove from queue and edit in composer";
     edit.ariaLabel = "Edit queued message";
-    edit.disabled = state.busy;
+    edit.disabled = message.pending === true;
     edit.addEventListener("click", () => editQueuedMessage(message.messageId, message.text));
 
     row.append(icon, text, steer, edit);
@@ -1770,15 +1892,14 @@ function renderModelOptions(state: ViewState): void {
 
 function submit(): void {
   if (editingQueuedMessage !== null) {
-    const editing = editingQueuedMessage;
+    // Edit already dequeued; empty cancel restores the previous draft, non-empty
+    // falls through to a normal send (same as web/mobile).
     const text = prompt.value.trim();
     if (text.length === 0) {
-      post({ type: "removeQueuedMessage", messageId: editing.messageId });
-    } else {
-      post({ type: "updateQueuedMessage", messageId: editing.messageId, text });
+      restoreDraftAfterQueuedEdit();
+      return;
     }
-    restoreDraftAfterQueuedEdit();
-    return;
+    editingQueuedMessage = null;
   }
   const slash = prompt.value.trim();
   if (slash.startsWith("/") && executeSlashCommand(slash)) return;
@@ -1789,12 +1910,14 @@ function submit(): void {
     return;
   }
   const images = uploadImages();
-  // The host echoes the outgoing message asynchronously. Remember that this
-  // render must follow the end even if the user submitted from older history.
-  followEndAfterSubmit = true;
-  hasUnreadActivity = false;
-  messages.scrollTop = messages.scrollHeight;
-  syncNewActivityButton();
+  const queuesFollowUp = willSendEnterSteeringQueue(currentState) && draftSelection === null;
+  // Queue-bound sends stay as chips — keep the reader's position (web/mobile).
+  if (!queuesFollowUp) {
+    followEndAfterSubmit = true;
+    hasUnreadActivity = false;
+    messages.scrollTop = messages.scrollHeight;
+    syncNewActivityButton();
+  }
   if (prompt.value.trim().length > 0) {
     inputHistory = pushComposerInputHistory(inputHistory, prompt.value);
     persistInputHistory(inputHistoryScopeKey, inputHistory);
@@ -1811,11 +1934,23 @@ function submit(): void {
     });
     return;
   }
+  const messageId = randomClientMessageId();
+  if (queuesFollowUp) {
+    pendingQueuedMessages.set(messageId, {
+      messageId,
+      text: prompt.value,
+      attachmentCount: images.length,
+      queuedAt: new Date().toISOString(),
+      pending: true,
+    });
+    if (currentState) renderQueuedMessages(currentState);
+  }
   post({
     type: "send",
     text: prompt.value,
     images,
     interactionMode: composerInteractionMode,
+    messageId,
   });
 }
 
