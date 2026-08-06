@@ -1573,6 +1573,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [...DESKTOP_FILE_EXCLUSIONS],
+    // electron-builder writes this into macOS CFBundleURLTypes and Linux
+    // x-scheme-handler metadata. Windows NSIS builds register the same scheme
+    // at runtime through app.setAsDefaultProtocolClient.
+    protocols: [
+      {
+        name: "T3 Code",
+        schemes: ["t3code"],
+      },
+    ],
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -1600,12 +1609,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
-        },
-      ],
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -1624,17 +1627,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       desktop: {
         entry: {
           StartupWMClass: "t3code",
-          // Register the external deep-link scheme so xdg-open can launch T3.
-          // electron-builder keeps %U on Exec when MimeType is present.
-          MimeType: "x-scheme-handler/t3code;",
         },
       },
-      protocols: [
-        {
-          name: "T3 Code",
-          schemes: ["t3code"],
-        },
-      ],
     };
   }
 
