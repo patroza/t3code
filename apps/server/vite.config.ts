@@ -36,7 +36,11 @@ export default mergeConfig(
       entry: ["src/bin.ts"],
       outDir: "dist",
       sourcemap: true,
-      clean: true,
+      // Never wipe dist/ wholesale: deploy builds the server while a live
+      // process is still serving dist/client. Full clean deletes that tree and
+      // desktop opens to an empty shell until (if) the client is recopied.
+      // cli.ts selectively removes non-client artifacts before pack instead.
+      clean: false,
       deps: {
         alwaysBundle: shouldBundleCliDependency,
         onlyBundle: false,
