@@ -2,15 +2,32 @@
 
 ## Status
 
-Staged plan. This document describes a migration away from using the continuously rebased fork
-stack as the daily contributor and release path.
+**Adopted and live since 2026-08-06.** `fork/dev` is the default branch, the contributor target and
+the release source. This document is the record of the model and of what the cutover surfaced, not a
+proposal.
 
-**Steps 1 and 2 deliver the entire daily benefit and are the only steps required to start.**
-Everything after them is optional, incremental, and can be deferred indefinitely without losing
-what steps 1 and 2 gained. In particular, generated clean downstream history and periodic
-projection releases are **not** prerequisites and are **not** on the critical path.
+What is in place:
 
-The intended outcome is:
+|                                                                                          |                                     |
+| ---------------------------------------------------------------------------------------- | ----------------------------------- |
+| `fork/dev` cut from the green `fork/integration` tip `21badd04e`, trees proven identical | tag `fork-dev/2026-08-06.1`         |
+| Default branch, ruleset, squash-only merges, required checks                             | live                                |
+| CI wired for `fork/dev` pull requests and merges                                         | #343                                |
+| Deployment promoting exact green `fork/dev` SHAs                                         | ops `deploy.env` on the deploy host |
+| Validation and release split into separate workflows                                     | #347, #349                          |
+| First provenance sync, upstream `2a04db134..a2ca89aa1`                                   | #345, tag `fork-dev/2026-08-06.2`   |
+| Upstream ancestry recorded so "behind" reads true                                        | `3a7e7a458`                         |
+| Integration overlays drained and deregistered                                            | #348                                |
+
+What is deliberately not done: clean downstream projection (see
+[Deferred](#deferred--clean-downstream-projection)), automated provenance sync, and retirement of the
+overlay machinery itself.
+
+`fork/changes` is frozen at `271c4b228` and `fork/integration` at `21badd04e`. Neither is a
+contributor target or a release source any longer; they are kept only until the remaining PRs still
+based on `fork/changes` are drained.
+
+The intended outcome, all of which now holds:
 
 - Contributors work against a stable branch whose history is never rewritten.
 - A green merge can be released immediately or according to a configurable cadence.
@@ -20,25 +37,23 @@ The intended outcome is:
 - Clean downstream history remains available as generated output rather than an authoring surface —
   if and when it is actually wanted.
 
-## Adopt Now, Defer the Rest
+## What Remains
 
-| Capability                                       | When       | Blocking? | Why                                                    |
-| ------------------------------------------------ | ---------- | --------- | ------------------------------------------------------ |
-| `fork/dev` stable branch, default PR base        | **Step 1** | Yes       | Removes rebase churn from every contributor            |
-| Deploy from an exact green `fork/dev` SHA        | **Step 1** | Yes       | Ops already deploys an exact SHA; only the ref changes |
-| Path/dependency-inferred check and release scope | **Step 2** | No        | Removes manual client labelling                        |
-| Per-target release records and cadence policy    | **Step 2** | No        | Lets bot/server ship faster than desktop/mobile        |
-| Overlay drain into `fork/dev`                    | Step 3     | No        | Happens naturally once overlays stop being rebased     |
-| Automated `fork/candidates` tree-delta sync      | Later      | No        | Manual sync is fine at the current upstream cadence    |
-| `fork/changes-clean` / `fork/integration-clean`  | If needed  | No        | Audit/upstreaming artifact, not a release input        |
-| Periodic clean projection and tree proofs        | If needed  | No        | Only useful when upstreaming or auditing is due        |
+| Work                                                                                                                             | State                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| PRs still based on `fork/changes`                                                                                                | #317, #226, #185 conflict on rebase; #237 and #238 live in an external fork and need their author        |
+| Retire `fork/changes` and `fork/integration`                                                                                     | blocked on the above                                                                                     |
+| Overlay machinery (`compose-integration`, `rebase-integration-overlays`, `force-update-overlay-tip`, `client-overlay-ownership`) | still present and passing its tests with an empty manifest; removal is ~20 files and a separate decision |
+| Automated provenance synchronization                                                                                             | manual, and fine at the current upstream cadence                                                         |
+| Clean downstream projection                                                                                                      | deferred indefinitely; nothing depends on it                                                             |
+| Per-target release cadence                                                                                                       | still immediate for everything                                                                           |
 
-The rebased provenance stack (`main → fork/base → fork/tim → fork/candidates`) keeps working exactly
-as it does today throughout. Nothing regresses if the clean-projection work is never built.
+The rebased provenance stack (`main → fork/base → fork/tim → fork/candidates`) works exactly as it
+did before and is unaffected by any of the above.
 
-## Current Problem
+## The Problem This Solved
 
-The current runnable branch is produced through a fully rewritten stack:
+The runnable branch used to be produced through a fully rewritten stack:
 
 ```text
 upstream/main
@@ -50,7 +65,7 @@ upstream/main
   -> fork/integration
 ```
 
-This gives the fork good provenance, but it couples ordinary development and releases to expensive
+That gave the fork good provenance, but coupled ordinary development and releases to expensive
 history maintenance:
 
 - Rebases change commit identities and invalidate contributor bases.
@@ -63,10 +78,10 @@ Git cannot provide stable commit identities and continuously rebased history on 
 The solution is to give stable development and clean projection different branches and different
 responsibilities.
 
-## Proposed Topology
+## Topology
 
-Retain a clean provenance stack through `fork/candidates`, then feed its changes into a stable,
-complete development branch:
+A clean provenance stack is retained through `fork/candidates`, and its changes are fed into a
+stable, complete development branch:
 
 ```text
 upstream/main
@@ -94,15 +109,17 @@ upstream/main
 
 ## Branch Responsibilities
 
-| Branch                   | Rewritten           | Contributor target | Release source | Purpose                                     |
-| ------------------------ | ------------------- | ------------------ | -------------- | ------------------------------------------- |
-| `main`                   | Yes, mirror-managed | No                 | No             | Exact upstream mirror                       |
-| `fork/base`              | Yes                 | No                 | No             | Fork repository and CI infrastructure       |
-| `fork/tim`               | Yes                 | No                 | No             | Selected Tim imports with provenance        |
-| `fork/candidates`        | Yes                 | No                 | No             | Selected unmerged upstream candidates       |
-| `fork/dev`               | Never               | Yes                | Yes            | Canonical complete downstream product       |
-| `fork/changes-clean`     | Yes                 | No                 | No (optional)  | Curated downstream projection, if built     |
-| `fork/integration-clean` | Yes                 | No                 | No (audit)     | Clean composed output matching a checkpoint |
+| Branch                   | Rewritten           | Contributor target | Release source | Purpose                                       |
+| ------------------------ | ------------------- | ------------------ | -------------- | --------------------------------------------- |
+| `main`                   | Yes, mirror-managed | No                 | No             | Exact upstream mirror                         |
+| `fork/base`              | Yes                 | No                 | No             | Fork repository and CI infrastructure         |
+| `fork/tim`               | Yes                 | No                 | No             | Selected Tim imports with provenance          |
+| `fork/candidates`        | Yes                 | No                 | No             | Selected unmerged upstream candidates         |
+| `fork/dev`               | Never               | Yes                | Yes            | Canonical complete downstream product         |
+| `fork/changes`           | Was                 | No, frozen         | No             | Superseded by `fork/dev`; retire once drained |
+| `fork/integration`       | Was                 | No, frozen         | No             | Superseded by `fork/dev`; retire once drained |
+| `fork/changes-clean`     | Yes                 | No                 | No (optional)  | Curated downstream projection, if built       |
+| `fork/integration-clean` | Yes                 | No                 | No (audit)     | Clean composed output matching a checkpoint   |
 
 The clean branch names are placeholders and only matter once that work is actually scheduled.
 
@@ -130,53 +147,102 @@ The clean branch names are placeholders and only matter once that work is actual
 - Rewritten provenance tips are never merged into `fork/dev`; their tree delta is imported instead.
 - Any generated clean branches are output only, may be rewritten safely, and are never merged back.
 
-## Step 1 — Cut Over to `fork/dev`
+## How the Cutover Was Done
 
-This is the whole of the immediate benefit. It is a ref change plus branch protection, not a
-re-architecture.
+A ref change plus branch protection, not a re-architecture.
 
-1. Create `fork/dev` from the current green `fork/integration` tip.
-2. Prove the initial trees are identical: `git diff --exit-code fork/integration fork/dev`.
-3. Record the incorporated `fork/candidates` checkpoint (commit + tree).
-4. Protect `fork/dev` against force-push and deletion. Add required checks **after** CI is wired to
-   run for `fork/dev` — requiring a check that cannot yet run blocks the very PR that enables it.
-5. Disable merge commits and rebase merging so squash is the only method (see
-   [Merge policy](#merge-policy-squash-decided)), and add the sync automation as a ruleset bypass
-   actor so provenance ancestry merges can still be pushed.
-6. Make `fork/dev` the GitHub default branch and the base for ordinary contributor PRs.
-7. Point deployment at `fork/dev` (see [Ops Repository Changes](#ops-repository-changes)).
-8. Keep the old compose-and-deploy path installed as a temporary fallback.
+1. `fork/dev` created from the green `fork/integration` tip `21badd04e`.
+2. Trees proven identical — `git diff --exit-code fork/integration fork/dev`, both `a8a2b757a`.
+3. Incorporated `fork/candidates` checkpoint recorded in tag `fork-dev/2026-08-06.1`.
+4. `fork/dev` protected by the ruleset _Protect fork/dev (PR + CI)_: `deletion`,
+   `required_linear_history`, `non_fast_forward`, `pull_request` restricted to squash, and required
+   checks `Check` / `Test` / `Mobile Native Static Analysis` / `Release Smoke`.
+5. Merge commits and rebase merging disabled repository-wide, so squash is the only method; the sync
+   automation holds a ruleset bypass actor so provenance ancestry merges can still be pushed.
+6. `fork/dev` made the GitHub default branch and the base for contributor PRs.
+7. Deployment pointed at `fork/dev` (see [Ops](#ops)).
 
-### Cutover consequence: overlays are landed, not skipped
+Required checks were added **after** CI was wired to run for `fork/dev`. Requiring a check that
+cannot yet run blocks the very PR that makes it runnable — the ordering matters.
 
-Because `fork/dev` is cut from `fork/integration` — not from `fork/changes` — **overlay content is
-already present in `fork/dev` from its first commit**. This is deliberate: the runnable product must
-not regress at cutover.
+`strict_required_status_checks_policy` is deliberately `false`. Strict would invalidate every open
+PR's checks on each merge; it is safe to relax because every merge SHA is validated by its own push
+run, and deployment only promotes green SHAs.
 
-The consequence is that every registered overlay must be drained rather than left open:
+### Overlays were landed, not skipped
 
-- An overlay whose content is fully contained in the cutover tip is **done**. Close its PR, remove
-  it from `.github/pr-stack.json`, and stop rebasing it.
-- An overlay with work not yet in the cutover tip is rebased **onto `fork/dev`** once, then merged
-  as an ordinary PR.
-- Leaving an overlay open against `fork/changes` after cutover will duplicate its commits the next
-  time anything composes. Drain first, then cut over — or cut over and drain the same day.
+Because `fork/dev` was cut from `fork/integration` — not from `fork/changes` — overlay content was
+present in `fork/dev` from its first commit. That was deliberate: the runnable product must not
+regress at cutover.
 
-This is the one ordering hazard in the migration. Everything else is additive.
+The consequence was that every registered overlay had to be drained rather than left open. Leaving
+one open against `fork/changes` would duplicate its commits the next time anything composed. All
+four were verified contained **by path**, not by subject — the only commits not present touched
+`pnpm-lock.yaml` alone, regeneration artifacts that compose discards by its own rule — then closed
+and deregistered in #348.
 
-## Step 2 — Release Directly from `fork/dev`
+### What the cutover surfaced
 
-1. Update release workflows to accept an exact green `fork/dev` SHA.
-2. Implement path/dependency-based scope classification (below).
-3. Track per-target release outcomes independently.
-4. Add immutable checkpoint tags for approved releases.
-5. Exercise bot, server, desktop, and mobile paths once.
-6. Stop requiring full-stack composition for routine releases.
+The old path hid several faults that only a real cutover could expose. They are recorded because
+each cost a round trip:
 
-### Inferring validation and release scope
+- **`fork/dev` had no CI path at all.** `fork-ci.yml` listed only the rebased stack layers and the
+  overlays as `pull_request` bases and had no `push` trigger, so required checks were impossible and
+  no run would ever exist for a merge SHA (#343).
+- **Mobile releases would have stopped silently.** The release jobs were gated on
+  `workflow_dispatch` + `fork/integration`; nothing errors when they simply never fire again (#343).
+- **Both mobile workflows hardcoded `ref: fork/integration`** and then asserted the requested SHA was
+  contained by that checkout, so every `fork/dev` SHA was rejected (#344, #346).
+- **A release failure could veto a validation verdict.** A failed EAS dispatch marked a valid SHA
+  unapprovable and stranded the whole fleet, which is why validation and release are now separate
+  workflows (#347).
+- **Every PR based on `fork/changes` was already broken.** Because `fork/changes` had been rebased,
+  GitHub reported them as 60–100 commits and 629–741 changed files. Each turned out to be one commit
+  of real work on stale history; the fix was to cherry-pick that commit onto `fork/dev`, not to
+  replay the branch.
 
-Daily contributors should not manually classify their work as web, mobile, desktop, server, or bot.
-Automation should derive affected surfaces from the diff and the workspace dependency graph.
+## Releasing from `fork/dev`
+
+Every release refers to an exact green `fork/dev` SHA. Two workflows, deliberately separate:
+
+| Workflow           | Answers                      | Consumed by                              |
+| ------------------ | ---------------------------- | ---------------------------------------- |
+| `fork-ci.yml`      | "is this SHA valid?"         | the deploy poller, and branch protection |
+| `fork-release.yml` | "release this validated SHA" | nothing — terminal                       |
+
+`fork-release` is chained on `workflow_run` and starts only after `fork-ci` **concludes success** for
+a `push` on `fork/dev`. Its manual `workflow_dispatch` path re-checks that green verdict against the
+API rather than trusting the operator.
+
+This split exists because a release action must never be able to veto a validation verdict. When
+mobile dispatch lived inside `fork-ci`, a failed EAS call marked a valid SHA unapprovable and
+stranded server, Discord, desktop and VS Code promotion of a perfectly good commit.
+
+Consequences worth knowing:
+
+- Release failures are recorded against the release run. The poller queries `fork-ci.yml` and never
+  sees them.
+- `workflow_run` only fires for workflow files on the **default branch**. This works because
+  `fork/dev` is the default branch; it would silently do nothing otherwise.
+- Server, Discord, desktop and VS Code are promoted by the poller pulling from the green `fork-ci`
+  run. Only mobile is dispatched by `fork-release`.
+
+The release summary reports what the SHA would move, classified by
+`scripts/classify-deployment-diff.sh` — the same script the poller runs, so the report and the fleet
+cannot disagree about what a diff means. It compares against the previous _released_ SHA, while the
+poller compares against the last SHA it actually _deployed_; when those diverge the poller selects a
+superset of the reported targets, never a subset.
+
+### Inferring release scope
+
+Daily contributors do not manually classify their work as web, mobile, desktop, server, or bot.
+`scripts/classify-deployment-diff.sh` derives the affected surfaces from the diff, and both the
+poller and `fork-release` run it, so no label is required to ship.
+
+**Check selection is not inferred and probably should not be.** Every PR into `fork/dev` runs all
+four required checks regardless of the paths it touches. That is the conservative choice, and until
+the suite is slow enough to hurt it is also the correct one: a path filter that is wrong in the
+narrow direction silently skips a check on a protected branch.
 
 Illustrative path rules:
 
@@ -192,9 +258,9 @@ packages/client-runtime/** -> web and mobile
 shared build/config paths  -> conservative full validation
 ```
 
-Unknown or ambiguous shared paths must fail safely by selecting broader checks, never by requiring a
-label. `scripts/classify-deployment-diff.sh` already performs this classification for deployment; the
-same classifier should drive PR check selection so the two cannot disagree.
+Unknown or ambiguous shared paths fail safely by selecting broader scope, never by requiring a
+label. If check selection is ever narrowed, it must be driven by this same classifier so the two
+cannot disagree about what a diff means.
 
 Labels remain appropriate only for exceptional intent that cannot be inferred from code — for
 example requesting an unusual release behaviour, or recording an unusual external import.
@@ -203,42 +269,46 @@ example requesting an unusual release behaviour, or recording an unusual externa
 
 `fork/dev` supports multiple release policies without changing the branch model.
 
-**Immediate:** after a merge, obtain CI for the exact resulting `fork/dev` SHA, infer affected
-targets from the previous approved SHA, dispatch, and record each outcome. Suitable for urgent bot,
-server, or desktop fixes.
+**Immediate — the current policy for every target.** After a merge, `fork-ci` validates the exact
+resulting SHA, `fork-release` infers affected targets from the previous released SHA and dispatches,
+and the poller promotes the rest within its 30-second cycle.
 
-**Lagged:** merges accumulate and are promoted after a debounce period, every few hours, daily, or
-at a manually selected checkpoint — and on different schedules per product. Bot and server can be
-frequent while desktop and mobile use a slower cadence. These are policy decisions requiring no
-additional integration branches.
+**Lagged — available, not adopted.** Merges could instead accumulate and be promoted after a
+debounce period, every few hours, daily, or at a manually selected checkpoint, on different schedules
+per product. That is a policy change in `fork-release` and the poller cadence; it needs no additional
+integration branches.
 
 Approved releases reference immutable checkpoints, for example `fork-dev/2026-08-06.1`. Each
 deployment record should include the `fork/dev` SHA, CI run and conclusion, calculated change scope,
 and independent bot / server / desktop / mobile status. **A partial multi-target release must not be
 represented as completely deployed.**
 
-## Ops Repository Changes
+## Ops
 
-Deployment already promotes an exact CI-approved SHA, so the cutover is a _ref_ change, not a
-mechanism change. The private ops repository currently hardcodes `fork/integration` in the poller,
-deployer, clone preparation, failure notifier, and laptop catch-up.
-
-The prerequisite ops change is to make the trusted branch, CI workflow, and CI trigger event
-configurable, defaulting to today's values so nothing changes until the cutover:
+Deployment already promoted an exact CI-approved SHA, so the cutover was a _ref_ change, not a
+mechanism change. The private ops repository had hardcoded `fork/integration` in the poller,
+deployer, clone preparation, failure notifier and laptop catch-up; those now resolve through one
+shared library:
 
 ```sh
-T3CODE_DEPLOY_BRANCH=fork/integration     # -> fork/dev at cutover
+T3CODE_DEPLOY_BRANCH=fork/dev             # default fork/integration
+T3CODE_DEPLOY_CI_EVENT=push               # default workflow_dispatch
+T3CODE_CONTRIBUTOR_BRANCH=fork/dev        # default fork/changes
 T3CODE_DEPLOY_CI_WORKFLOW=fork-ci.yml
-T3CODE_DEPLOY_CI_EVENT=workflow_dispatch  # -> push at cutover
 ```
 
-Cutover is then a single `deploy.env` edit on the deployment host plus a poller restart, and
-reverting is the same edit.
+Set in `deploy.env` on the deployment host, which the poller unit reads via `EnvironmentFile=-` and
+the library parses directly as plain `KEY=VALUE` — never sourced as shell, so a config file cannot
+execute code. Defaults reproduce the pre-cutover behaviour exactly, so reverting is deleting that
+file.
 
 Component checkpoint state files (`fork-integration-<component>-sha`) keep their names across the
 cutover on purpose. Their value is the last deployed SHA used for tree-diff classification, and
-because `fork/dev` starts at the `fork/integration` tip those SHAs remain valid ancestors — so the
-cutover does not trigger a full fleet redeploy.
+because `fork/dev` started at the `fork/integration` tip those SHAs remained valid ancestors — so the
+cutover did not trigger a full fleet redeploy.
+
+The poller keys on a successful `fork-ci` **push** run for the exact SHA. Because release actions
+were moved out of that workflow, a release failure can no longer withhold a fleet promotion.
 
 ## Daily Contributor Workflow
 
@@ -440,75 +510,76 @@ not duplicate the GitHub PR overview.
 The existing full stop-the-line per-layer gate is retained for this work. It is appropriate for
 periodic provenance maintenance and must not sit in the path of a routine product release.
 
-## Migration Plan
+## Remaining Migration Steps
 
-### Step 1 — Establish `fork/dev` (do now)
+Steps 1 and 2 — establishing `fork/dev` and releasing from it — are done; see
+[How the Cutover Was Done](#how-the-cutover-was-done) and
+[Releasing from `fork/dev`](#releasing-from-forkdev).
 
-See [Step 1](#step-1--cut-over-to-forkdev). Includes the ops deploy-branch parameterization and the
-overlay drain.
+### Finish draining `fork/changes`
 
-### Step 2 — Release from `fork/dev` (do now)
+The registered overlays are drained and deregistered. What is left are the ordinary PRs still based
+on `fork/changes`: #317, #226 and #185 conflict when their real commit is cherry-picked onto
+`fork/dev`, and #237 and #238 live in an external fork and need their author. Once those are
+resolved, `fork/changes` and `fork/integration` can be deleted and the composition workflows removed.
 
-See [Step 2](#step-2--release-directly-from-forkdev).
-
-### Step 3 — Simplify overlays (as they drain)
-
-1. Route new identity, Discord, and VS Code PRs directly to `fork/dev`.
-2. Move ownership to `CODEOWNERS` and path-based CI.
-3. Retire permanent composition overlays once no open work depends on them.
-4. Stop targeting `fork/changes` with contributor PRs and stop composing overlays after every merge.
-
-### Step 4 — Automate provenance synchronization (when manual becomes tedious)
+### Automate provenance synchronization (when manual becomes tedious)
 
 Persist the last imported candidates commit and tree, build the `C1..C2` sync branch automatically,
-open a reviewed PR, run the full gate, and update the checkpoint only after merge. Never merge a
-rewritten provenance branch directly into `fork/dev`.
+open a reviewed PR, run the full gate, push the ancestry merge, and update the checkpoint only after
+merge. Never merge a rewritten provenance branch directly into `fork/dev`.
 
-### Step 5 — Automate clean projection (only if needed)
+### Automate clean projection (only if needed)
 
-Only once the deferred projection above is actually wanted: query PRs between checkpoint tags, infer
+Only once the deferred projection below is actually wanted: query PRs between checkpoint tags, infer
 ordinary changes from commits and paths, replay into clean layers, apply durable conflict policies,
 verify every rewritten layer, prove tree equivalence, and publish.
 
 ## Operational Rules
 
 1. Never force-push or rebase `fork/dev`.
-2. Never merge a rewritten provenance tip directly into `fork/dev`; import its tree delta.
+2. Never merge a rewritten provenance tip directly into `fork/dev`; import its tree delta, then
+   record upstream ancestry with `merge -s ours`.
 3. Never require a clean projection rebuild to ship an unrelated urgent fix.
 4. Never release an untested `fork/dev` SHA; release the exact merge SHA, not the PR tip.
 5. Every ordinary product change enters through a GitHub PR, squash merged.
-6. Daily contributors do not manually classify affected clients when paths and dependencies can.
-7. External imports record immutable source provenance at import time.
-8. If generated projection branches exist, never merge them into `fork/dev` and never use one as a
+6. Never let a release action decide whether a SHA is valid.
+7. Daily contributors do not manually classify affected clients when paths and dependencies can.
+8. External imports record immutable source provenance at import time.
+9. If generated projection branches exist, never merge them into `fork/dev` and never use one as a
    PR base.
 
 ## Settled Decisions
 
-- **Merge policy: squash.** Every PR into `fork/dev` becomes one commit. Whether any exception is
-  warranted is left open until a concrete case appears. See
+- **Merge policy: squash.** Every PR into `fork/dev` becomes one commit, enforced by disabling merge
+  and rebase merging repository-wide and by the `fork/dev` ruleset. The one exception is the upstream
+  ancestry merge, pushed by an automation holding a ruleset bypass actor. See
   [Merge policy](#merge-policy-squash-decided).
+- **Validation and release are separate workflows.** `fork-ci` decides validity; `fork-release`
+  acts on it. See [Releasing from `fork/dev`](#releasing-from-forkdev).
+- **Upstream ancestry is recorded on `fork/dev`**, so "commits behind upstream" reads true. See
+  [Record upstream ancestry](#record-upstream-ancestry-so-behind-stays-readable).
 
 ## Open Decisions
 
-None of these block step 1 or step 2:
+None of these block anything currently running:
 
-- Immediate, debounced, scheduled, or manual release cadence for each target.
+- Release cadence per target. Everything is immediate today; lagged promotion is available.
 - Frequency of upstream/provenance synchronization.
 - Whether identity, Discord, or VS Code needs a stable subsystem staging branch.
 - Whether clean downstream projection is ever built, and if so on what trigger.
 - Naming of the generated clean branches.
 - Exact rules for mapping shared-package changes to downstream consumers.
+- When to delete `fork/changes` and `fork/integration`, and remove the overlay machinery.
 
-## Recommended Decision
-
-Adopt the following operating principle:
+## The Operating Principle
 
 > Rebase external provenance; squash stable product development onto `fork/dev`; release exact green
 > `fork/dev` checkpoints; generate clean downstream history separately — and only when it is
 > actually needed.
 
-Steps 1 and 2 can land in a single day: cut `fork/dev` from the green `fork/integration` tip, drain
-the overlays, flip the ops deploy branch, and release from exact green SHAs. That removes daily
-rebases from contributor and release workflows and removes routine label administration immediately,
-while preserving the ability to produce a clean, auditable downstream history later if it is ever
-worth the cost.
+The cutover took a single day: `fork/dev` cut from the green `fork/integration` tip, overlays
+drained, the ops deploy branch flipped, and releases running from exact green SHAs. It removed daily
+rebases from contributor and release workflows and removed routine label administration, while
+preserving the ability to produce a clean, auditable downstream history later if it is ever worth the
+cost.
