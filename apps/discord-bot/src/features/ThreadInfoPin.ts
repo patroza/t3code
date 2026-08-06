@@ -24,6 +24,7 @@ import {
   mergePullRequestUrls,
   normalizeGithubRepoSlug,
 } from "../presentation/prLinks.ts";
+import { SUPPRESS_EMBEDS_FLAG } from "../presentation/suppressEmbeds.ts";
 import {
   applyModelHistoryUpdate,
   formatModelSelectionLine,
@@ -441,7 +442,7 @@ export const ensureThreadInfoPin = (input: {
             botToken,
             path: `/channels/${input.channelId}/messages/${messageId}`,
             method: "PATCH",
-            body: { content: input.content },
+            body: { content: input.content, flags: SUPPRESS_EMBEDS_FLAG },
           }),
         catch: (cause) => cause,
       }).pipe(
@@ -459,7 +460,7 @@ export const ensureThreadInfoPin = (input: {
                 botToken,
                 path: `/channels/${input.channelId}/messages/${messageId}`,
                 method: "PATCH",
-                body: { content: input.content },
+                body: { content: input.content, flags: SUPPRESS_EMBEDS_FLAG },
               }),
             catch: (cause) => cause,
           });
@@ -475,7 +476,7 @@ export const ensureThreadInfoPin = (input: {
             botToken,
             path: `/channels/${input.channelId}/messages`,
             method: "POST",
-            body: { content: input.content },
+            body: { content: input.content, flags: SUPPRESS_EMBEDS_FLAG },
           }),
         catch: (cause) => cause,
       });

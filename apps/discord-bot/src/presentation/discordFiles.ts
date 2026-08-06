@@ -7,6 +7,8 @@
  */
 // @effect-diagnostics globalFetch:off globalFetchInEffect:off unknownInEffectCatch:off anyUnknownInErrorContext:off preferSchemaOverJson:off globalErrorInEffectCatch:off globalErrorInEffectFailure:off missingEffectError:off
 
+import { SUPPRESS_EMBEDS_FLAG } from "./suppressEmbeds.ts";
+
 export interface DiscordUploadFile {
   readonly name: string;
   readonly mimeType: string;
@@ -42,9 +44,12 @@ export async function createMessageWithAttachments(input: {
   const form = new FormData();
   const payload: {
     content: string;
+    flags: number;
     attachments?: ReadonlyArray<{ id: number; filename: string }>;
   } = {
     content,
+    // Suppress link embeds; attachments (files[]) are separate and unaffected.
+    flags: SUPPRESS_EMBEDS_FLAG,
   };
 
   if (files.length > 0) {

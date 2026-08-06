@@ -60,20 +60,28 @@ describe("slash reply helpers", () => {
     const publicReply = slashReply("hello");
     expect(publicReply).toEqual({
       type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "hello" },
+      data: {
+        content: "hello",
+        flags: Discord.MessageFlags.SuppressEmbeds,
+      },
     });
 
     const ephemeralReply = slashReply("secret", { ephemeral: true });
     expect(ephemeralReply).toEqual({
       type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: "secret", flags: Discord.MessageFlags.Ephemeral },
+      data: {
+        content: "secret",
+        flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+      },
     });
   });
 
   it("builds an ephemeral deferred ack for slow commands", () => {
     expect(slashDefer({ ephemeral: true })).toEqual({
       type: Discord.InteractionCallbackTypes.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { flags: Discord.MessageFlags.Ephemeral },
+      data: {
+        flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
+      },
     });
   });
 
@@ -115,7 +123,7 @@ describe("slash reply helpers", () => {
       type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
       data: {
         content: expect.stringContaining("Thread-talk is **off**"),
-        flags: Discord.MessageFlags.Ephemeral,
+        flags: Discord.MessageFlags.Ephemeral | Discord.MessageFlags.SuppressEmbeds,
       },
     });
   });
