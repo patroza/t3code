@@ -157,6 +157,7 @@ export function deriveBoardColumn(input: BoardColumnInput): BoardColumnId {
       return "review";
     case "Working":
     case "Connecting":
+    case "Monitoring":
       return "working";
     case null:
       break;
