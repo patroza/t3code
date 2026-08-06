@@ -137,6 +137,7 @@ interface ViewState {
   readonly busy: boolean;
   readonly error: string | null;
   readonly connected: boolean;
+  readonly supportsQueuedMessages: boolean;
   readonly environmentLabel: string;
   readonly changeRequest: ChangeRequestIndicator | null;
   readonly threads: ReadonlyArray<ViewThread>;
@@ -405,6 +406,7 @@ function displayTimelineMessages(state: ViewState): ReadonlyArray<ViewMessage> {
 
 function willSendEnterSteeringQueue(state: ViewState | null): boolean {
   if (state?.activeThread === null || state?.activeThread === undefined) return false;
+  if (!state.supportsQueuedMessages) return false;
   return sendEntersSteeringQueue({
     hasBootstrap: false,
     sessionStatus: state.activeThread.sessionStatus,
@@ -1647,6 +1649,7 @@ function renderComposerAction(): void {
   const planFollowUp = showPlanFollowUp();
   const stopping = isRunning() && !hasComposerInput() && !planFollowUp;
   stashNow.disabled = editingQueuedMessage !== null || !hasComposerInput();
+  send.disabled = false;
   if (stopping) {
     send.textContent = "Stop";
     send.title = "Stop active turn";
@@ -1655,9 +1658,15 @@ function renderComposerAction(): void {
     send.title =
       prompt.value.trim().length > 0 ? "Send plan feedback" : "Implement the proposed plan";
   } else {
+    const unsupportedFollowUp =
+      isRunning() && hasComposerInput() && !currentState?.supportsQueuedMessages;
     send.textContent = isRunning() && hasComposerInput() ? "Queue" : "Send";
-    send.title =
-      isRunning() && hasComposerInput() ? "Queue message after the active turn" : "Send message";
+    send.title = unsupportedFollowUp
+      ? "The connected upstream server does not support queued follow-ups"
+      : isRunning() && hasComposerInput()
+        ? "Queue message after the active turn"
+        : "Send message";
+    send.disabled = unsupportedFollowUp;
   }
   send.classList.toggle("stop-action", stopping);
   prompt.placeholder = planFollowUp
@@ -1904,6 +1913,7 @@ function submit(): void {
   const slash = prompt.value.trim();
   if (slash.startsWith("/") && executeSlashCommand(slash)) return;
   const planFollowUp = showPlanFollowUp();
+  if (isRunning() && hasComposerInput() && !currentState?.supportsQueuedMessages) return;
   if (!hasComposerInput() && !planFollowUp) return;
   if (isRunning() && !hasComposerInput() && !planFollowUp) {
     post({ type: "stop" });

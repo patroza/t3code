@@ -25,7 +25,12 @@ describe("VS Code queue / steer surface (align with web/mobile)", () => {
     expect(webviewSource).toContain("optimisticSteeredMessages");
     expect(webviewSource).toContain("pendingQueuedMessages");
     expect(webviewSource).toContain("willSendEnterSteeringQueue");
+    expect(webviewSource).toContain("!state.supportsQueuedMessages");
+    expect(webviewSource).toContain("upstream server does not support queued follow-ups");
     expect(providerSource).toContain("sessionStatus: thread.session?.status ?? null");
+    expect(providerSource).toContain(
+      "supportsQueuedMessages: this.client.serverCapabilities.queuedMessages",
+    );
     expect(providerSource).toContain("hasPendingTurnStart: thread.pendingTurnStart !== null");
     expect(clientSource).toContain("input.messageId ?? newMessageId()");
   });

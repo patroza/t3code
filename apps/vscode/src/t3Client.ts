@@ -56,6 +56,11 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "./ids.ts";
 import type { IdentitySnapshot, IdentityStatus, SessionIdentityClaim } from "./identity.ts";
+import {
+  detectServerCapabilities,
+  type ServerCapabilities,
+  UPSTREAM_SERVER_CAPABILITIES,
+} from "./serverCompatibility.ts";
 
 type ThreadListener = (thread: OrchestrationThread | null) => void;
 type ShellListener = (shell: OrchestrationShellSnapshot) => void;
@@ -112,6 +117,7 @@ export class T3Client {
   #activeThreadSequence: number | null = null;
   #activeThreadId: ThreadId | null = null;
   #serverConfig: ServerConfig | null = null;
+  #serverCapabilities: ServerCapabilities = UPSTREAM_SERVER_CAPABILITIES;
   #aiUsage: AiUsageSnapshot | null = null;
   #httpBaseUrl: string | null = null;
   #bearerToken: string | null = null;
@@ -142,6 +148,10 @@ export class T3Client {
 
   get aiUsage(): AiUsageSnapshot | null {
     return this.#aiUsage;
+  }
+
+  get serverCapabilities(): ServerCapabilities {
+    return this.#serverCapabilities;
   }
 
   onThreadChanged(listener: ThreadListener): { dispose(): void } {
@@ -194,7 +204,7 @@ export class T3Client {
    */
   async hostResourceSnapshot(): Promise<ServerHostResourceSnapshot | null> {
     const session = this.#session;
-    if (session === null) return null;
+    if (session === null || !this.#serverCapabilities.hostResources) return null;
     return this.#runtime.runPromise(session.client[WS_METHODS.serverGetHostResourceSnapshot]({}));
   }
 
@@ -204,6 +214,12 @@ export class T3Client {
   }
 
   async identityStatus(): Promise<IdentityStatus> {
+    if (!this.#serverCapabilities.identity) {
+      return {
+        snapshot: { enabled: false, claimRequired: false, people: [] },
+        claim: null,
+      };
+    }
     const client = this.#requireSession().client as unknown as CompatibilityRpcClient;
     const getSnapshot = client["identity.getSnapshot"];
     const getSessionClaim = client["identity.getSessionClaim"];
@@ -293,13 +309,23 @@ export class T3Client {
       this.#session = session;
       this.#connectionKey = key;
       this.#serverConfig = await this.#runtime.runPromise(session.initialConfig);
+      const compatibilityClient = session.client as unknown as CompatibilityRpcClient;
+      const identityProbe = compatibilityClient["identity.getSnapshot"];
+      this.#serverCapabilities = await detectServerCapabilities(() => {
+        if (identityProbe === undefined)
+          return Promise.reject(new Error("identity RPC unavailable"));
+        return this.#runtime.runPromise(identityProbe({}));
+      });
+      this.#log(
+        `server compatibility=${this.#serverCapabilities.forkExtensions ? "fork" : "upstream"}`,
+      );
       this.#log(`rpc ready in ${Date.now() - startedAt}ms endpoint=${normalizedBaseUrl}`);
       this.#httpBaseUrl = normalizedBaseUrl;
       this.#bearerToken = bearerToken ?? null;
       await this.#loadShellSnapshot(normalizedBaseUrl, bearerToken);
       this.#emitConnection(true);
       this.#startShellSubscription(session);
-      this.#startUsageSubscription(session);
+      if (this.#serverCapabilities.aiUsage) this.#startUsageSubscription(session);
       if (this.#vcsStatusCwd !== null)
         this.#startVcsStatusSubscription(session, this.#vcsStatusCwd);
       if (this.#activeThreadId !== null)
@@ -501,6 +527,8 @@ export class T3Client {
   }
 
   async steerQueuedMessage(messageId: MessageId): Promise<void> {
+    if (!this.#serverCapabilities.queuedMessages)
+      throw new Error("Queued follow-ups require the T3 Code fork server.");
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before steering its queue.");
     await this.#dispatch({
@@ -513,6 +541,8 @@ export class T3Client {
   }
 
   async removeQueuedMessage(messageId: MessageId): Promise<void> {
+    if (!this.#serverCapabilities.queuedMessages)
+      throw new Error("Queued follow-ups require the T3 Code fork server.");
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before changing its queue.");
     await this.#dispatch({
@@ -525,6 +555,8 @@ export class T3Client {
   }
 
   async updateQueuedMessage(messageId: MessageId, text: string): Promise<void> {
+    if (!this.#serverCapabilities.queuedMessages)
+      throw new Error("Queued follow-ups require the T3 Code fork server.");
     const thread = this.#activeThread;
     if (thread === null) throw new Error("Select a T3 Code thread before changing its queue.");
     await this.#dispatch({
@@ -876,6 +908,7 @@ export class T3Client {
     this.#activeThreadSequence = null;
     this.#shell = null;
     this.#serverConfig = null;
+    this.#serverCapabilities = UPSTREAM_SERVER_CAPABILITIES;
     this.#httpBaseUrl = null;
     this.#bearerToken = null;
     this.#connectionKey = "";
