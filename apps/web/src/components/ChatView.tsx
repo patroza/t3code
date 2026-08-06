@@ -65,6 +65,10 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import {
+  liveWindowOldestActivityId,
+  oldestActivityByChronology,
+} from "@t3tools/client-runtime/state/thread-reducer";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
@@ -214,6 +218,7 @@ import {
   primaryServerSettingsAtom,
   serverEnvironment,
 } from "../state/server";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -245,7 +250,7 @@ import {
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
-import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
+import { QueuedMessageChips } from "./chat/QueuedMessageChips";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
   DRAFT_HERO_TRANSITION_DURATION_MS,
@@ -259,7 +264,6 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
-  buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
@@ -281,11 +285,9 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
-  shouldWriteThreadErrorToCurrentServerThread,
   startNewThreadForProject,
   waitForStartedServerThread,
 } from "./ChatView.logic";
-import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerHandleContext } from "../composerHandleContext";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
@@ -313,6 +315,7 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import type { ThreadSyncPhase } from "../threadSync";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -476,9 +479,9 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
-      threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
       draftId?: never;
+      threadSyncPhase?: ThreadSyncPhase | null;
     }
   | {
       environmentId: EnvironmentId;
@@ -486,9 +489,9 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
-      threadSyncPhase?: never;
       routeKind: "draft";
       draftId: DraftId;
+      threadSyncPhase?: ThreadSyncPhase | null;
     };
 
 interface TerminalLaunchContext {
@@ -510,6 +513,20 @@ function useLocalDispatchState(input: {
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
   const latestUserMessageId =
     input.activeThread?.messages.findLast((message) => message.role === "user")?.id ?? null;
+  const activeThreadMessages = input.activeThread?.messages;
+  const activeThreadQueuedMessages = input.activeThread?.queuedMessages;
+  // Every server-projected id for this thread — timeline messages plus the
+  // held queue — so acknowledgment can match the exact dispatched message.
+  const projectedMessageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of activeThreadMessages ?? []) {
+      ids.add(message.id);
+    }
+    for (const queuedMessage of activeThreadQueuedMessages ?? []) {
+      ids.add(queuedMessage.messageId);
+    }
+    return ids;
+  }, [activeThreadMessages, activeThreadQueuedMessages]);
 
   const resetLocalDispatch = useCallback(() => {
     setLocalDispatch(null);
@@ -522,6 +539,7 @@ function useLocalDispatchState(input: {
         phase: input.phase,
         latestTurn: input.activeLatestTurn,
         latestUserMessageId,
+        projectedMessageIds,
         session: input.activeThread?.session ?? null,
         hasPendingApproval: input.activePendingApproval !== null,
         hasPendingUserInput: input.activePendingUserInput !== null,
@@ -535,12 +553,13 @@ function useLocalDispatchState(input: {
       input.phase,
       input.threadError,
       latestUserMessageId,
+      projectedMessageIds,
       localDispatch,
     ],
   );
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
   const beginLocalDispatch = useCallback(
-    (options?: { preparingWorktree?: boolean }) => {
+    (options?: { preparingWorktree?: boolean; messageId?: MessageId }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
       setLocalDispatch((current) => {
         const active = serverAcknowledgedLocalDispatch ? null : current;
@@ -1156,10 +1175,10 @@ function ChatViewContent(props: ChatViewProps) {
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
+    threadSyncPhase = null,
   } = props;
-  const draftId = routeKind === "draft" ? props.draftId : null;
-  const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
+  const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -1189,6 +1208,12 @@ function ChatViewContent(props: ChatViewProps) {
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  const steerQueuedThreadMessage = useAtomCommand(threadEnvironment.steerQueuedMessage, {
+    reportFailure: false,
+  });
+  const removeQueuedThreadMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
+    reportFailure: false,
+  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1216,16 +1241,7 @@ function ChatViewContent(props: ChatViewProps) {
         ? store.getDraftSession(draftId)
         : null,
   );
-  const routeServerThreadShell = useThreadShell(routeKind === "server" ? routeThreadRef : null);
   const serverThread = useThread(routeThreadRef, { waitForShell: draftThread !== null });
-  const loadingServerThread = useMemo(
-    () =>
-      threadDetailLoading && routeServerThreadShell
-        ? buildLoadingThreadFromShell(routeServerThreadShell)
-        : null,
-    [routeServerThreadShell, threadDetailLoading],
-  );
-  const activeServerThread = serverThread ?? loadingServerThread;
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore(
     (store) => store.threadLastVisitedAtById[routeThreadKey],
@@ -1409,7 +1425,7 @@ function ChatViewContent(props: ChatViewProps) {
     ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
     : null;
   const fallbackDraftProject = useProject(fallbackDraftProjectRef);
-  const localDraftError = activeServerThread
+  const localDraftError = serverThread
     ? null
     : ((draftId ? localDraftErrorsByDraftId[draftId]?.message : null) ?? null);
   const localServerError = localServerErrorsByThreadKey[routeThreadKey]?.message ?? null;
@@ -1418,7 +1434,7 @@ function ChatViewContent(props: ChatViewProps) {
   // a failed send would silently disappear on promotion. When both keys hold
   // an entry, the most recent write wins.
   useEffect(() => {
-    if (!activeServerThread || !draftId) {
+    if (!serverThread || !draftId) {
       return;
     }
     const pendingDraftEntry = localDraftErrorsByDraftId[draftId];
@@ -1447,7 +1463,7 @@ function ChatViewContent(props: ChatViewProps) {
         [routeThreadKey]: pendingDraftEntry,
       };
     });
-  }, [activeServerThread, draftId, localDraftErrorsByDraftId, routeThreadKey]);
+  }, [draftId, localDraftErrorsByDraftId, routeThreadKey, serverThread]);
   const localDraftThread = useMemo(
     () =>
       draftThread
@@ -1462,10 +1478,10 @@ function ChatViewContent(props: ChatViewProps) {
   // Promotion is data-driven: the draft route keeps rendering while the
   // server thread (same pre-allocated ref) starts, so live state must not
   // depend on which route is mounted.
-  const isServerThread = activeServerThread !== null;
-  const activeThread = activeServerThread ?? localDraftThread;
+  const isServerThread = serverThread !== null;
+  const activeThread = isServerThread ? serverThread : localDraftThread;
   const threadError = isServerThread
-    ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
+    ? (localServerError ?? serverThread?.session?.lastError ?? null)
     : localDraftError;
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -2059,7 +2075,170 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
-  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+
+  // ── Older-history lazy-load ────────────────────────────────────────────────
+  // The detail snapshot windows activities to the most recent page (the server
+  // sets `hasMoreActivities` when older ones exist); older pages are fetched on
+  // demand (infinite scroll-up) and prepended. Messages aren't windowed
+  // server-side, so this just back-fills the older tool activity.
+  const [olderActivities, setOlderActivities] = useState<
+    ReadonlyArray<OrchestrationThreadActivity>
+  >([]);
+  const [olderLoaded, setOlderLoaded] = useState(false);
+  const [olderHasMore, setOlderHasMore] = useState(false);
+  const [loadingOlderActivities, setLoadingOlderActivities] = useState(false);
+  const [olderHistoryCursorVersion, setOlderHistoryCursorVersion] = useState(0);
+  const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
+    reportFailure: false,
+  });
+  const activeThreadActivityRequestKey = activeThread
+    ? `${activeThread.environmentId}\u0000${activeThread.id}`
+    : null;
+  const liveThreadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  // Order-independent oldest boundary: `activities[0]` shifts when the reducer
+  // re-sorts unsequenced rows on the first live append, which would otherwise
+  // make a plain append look like a window reshape. See helper docs.
+  const liveOldestActivityId = useMemo(
+    () => liveWindowOldestActivityId(liveThreadActivities),
+    [liveThreadActivities],
+  );
+  const liveActivityCount = liveThreadActivities.length;
+  // Bumps on every lazy-load reset so a late in-flight load can't repopulate the
+  // freshly-cleared state (the thread key alone doesn't change on a same-thread
+  // window reshape).
+  const olderActivitiesGenRef = useRef(0);
+  // The request key of an in-flight older-history load — coalesces the duplicate
+  // dispatches a fast scroll-to-top fires before the loading state updates.
+  const inFlightOlderKeyRef = useRef<string | null>(null);
+  // The oldest row we've paged past. Advancing this (not re-deriving from the
+  // merged set) lets an all-overlap page keep paging when the server still
+  // reports `hasMore` — without it a page that dedupes to nothing would either
+  // terminate paging early or re-request the same cursor forever. Reset on reshape.
+  const olderCursorRef = useRef<OrchestrationThreadActivity | null>(null);
+  // Reset the lazy-loaded older pages when the live window is *reshaped* rather
+  // than purely appended-to: a different thread or a re-snapshot (reconnect)
+  // changes its oldest row, and a checkpoint revert removes rows so the count
+  // shrinks. A pure append (same thread, same oldest, larger count) keeps them.
+  const olderWindowRef = useRef({
+    key: activeThreadActivityRequestKey,
+    oldest: liveOldestActivityId,
+    count: liveActivityCount,
+  });
+  // useLayoutEffect (not useEffect) so the cleared state commits before paint:
+  // otherwise the new thread renders one frame with the previous thread's
+  // lazy-loaded pages still merged in, flashing stale work-log/approval rows.
+  useLayoutEffect(() => {
+    const prev = olderWindowRef.current;
+    olderWindowRef.current = {
+      key: activeThreadActivityRequestKey,
+      oldest: liveOldestActivityId,
+      count: liveActivityCount,
+    };
+    const reshaped =
+      activeThreadActivityRequestKey !== prev.key ||
+      liveOldestActivityId !== prev.oldest ||
+      liveActivityCount < prev.count;
+    if (!reshaped) {
+      return;
+    }
+    olderActivitiesGenRef.current += 1;
+    inFlightOlderKeyRef.current = null;
+    olderCursorRef.current = null;
+    setOlderActivities([]);
+    setOlderLoaded(false);
+    setOlderHasMore(false);
+    setLoadingOlderActivities(false);
+    setOlderHistoryCursorVersion((version) => version + 1);
+  }, [activeThreadActivityRequestKey, liveOldestActivityId, liveActivityCount]);
+
+  const threadActivities = useMemo(
+    () =>
+      olderActivities.length > 0
+        ? [...olderActivities, ...liveThreadActivities]
+        : liveThreadActivities,
+    [olderActivities, liveThreadActivities],
+  );
+  // Latest merged set, read inside the async load handler so dedup runs against
+  // the current state, not the snapshot captured when the load was dispatched.
+  const threadActivitiesRef = useRef(threadActivities);
+  threadActivitiesRef.current = threadActivities;
+  // Before any page is loaded, the server tells us whether older history exists
+  // beyond the windowed snapshot; afterwards the page `hasMore` is authoritative.
+  const hasMoreOlderActivities = olderLoaded
+    ? olderHasMore
+    : (activeThread?.hasMoreActivities ?? false);
+  const loadOlderActivities = useCallback(() => {
+    if (!activeThread || !hasMoreOlderActivities) {
+      return;
+    }
+    // Page from the explicit cursor (the oldest row we've already paged past) or,
+    // before any page, the chronologically-oldest loaded row — not
+    // `threadActivities[0]`: the reducer sorts unsequenced rows to the end, so
+    // index 0 can be a newer sequenced row whose `beforeSequence` cursor would
+    // skip older unsequenced history. This matches the reshape sentinel.
+    const oldestActivity = olderCursorRef.current ?? oldestActivityByChronology(threadActivities);
+    if (!oldestActivity || !activeThreadActivityRequestKey) {
+      return;
+    }
+    if (inFlightOlderKeyRef.current === activeThreadActivityRequestKey) {
+      return; // a load for this thread is already in flight
+    }
+    const cursorInput =
+      oldestActivity.sequence !== undefined
+        ? { beforeSequence: oldestActivity.sequence }
+        : { beforeCreatedAt: oldestActivity.createdAt, beforeActivityId: oldestActivity.id };
+    const requestKey = activeThreadActivityRequestKey;
+    const gen = olderActivitiesGenRef.current;
+    inFlightOlderKeyRef.current = requestKey;
+    setLoadingOlderActivities(true);
+    void loadThreadActivities({
+      environmentId: activeThread.environmentId,
+      input: { threadId: activeThread.id, ...cursorInput },
+    })
+      .then((result) => {
+        // The window/thread was reset while this was in flight — drop the page
+        // so it can't repopulate state cleared by the reset.
+        if (olderActivitiesGenRef.current !== gen) {
+          return;
+        }
+        if (result._tag !== "Success") {
+          return;
+        }
+        const page = result.value;
+        // Advance the cursor to this page's oldest row (pages are ascending, so
+        // [0] is oldest) even if every row dedupes away — the server cursor is
+        // strict, so the cursor strictly decreases and paging can't loop, while
+        // an all-overlap page no longer terminates paging that the server says
+        // has more.
+        const pageOldest = page.activities[0];
+        if (pageOldest) {
+          olderCursorRef.current = pageOldest;
+        }
+        // Dedup against the LATEST merged set (via ref) so a live append or a
+        // prior prepend that settled mid-flight can't leave duplicate ids.
+        const seen = new Set(threadActivitiesRef.current.map((activity) => activity.id));
+        const fresh = page.activities.filter((activity) => !seen.has(activity.id));
+        if (fresh.length > 0) {
+          setOlderActivities((prev) => [...fresh, ...prev]);
+        }
+        setOlderLoaded(true);
+        setOlderHasMore(page.hasMore);
+        setOlderHistoryCursorVersion((version) => version + 1);
+      })
+      .finally(() => {
+        if (olderActivitiesGenRef.current === gen) {
+          inFlightOlderKeyRef.current = null;
+          setLoadingOlderActivities(false);
+        }
+      });
+  }, [
+    activeThread,
+    activeThreadActivityRequestKey,
+    hasMoreOlderActivities,
+    threadActivities,
+    loadThreadActivities,
+  ]);
+
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
@@ -2606,11 +2785,10 @@ function ChatViewContent(props: ChatViewProps) {
       const nextError = sanitizeThreadErrorMessage(error);
       const nextEntry: LocalThreadErrorEntry = { message: nextError, at: Date.now() };
       if (
-        shouldWriteThreadErrorToCurrentServerThread({
-          activeServerThread,
-          routeThreadRef,
-          targetThreadId,
-        })
+        serverThread &&
+        targetThreadId === routeThreadRef.threadId &&
+        serverThread.environmentId === routeThreadRef.environmentId &&
+        serverThread.id === targetThreadId
       ) {
         setLocalServerErrorsByThreadKey((existing) => {
           if ((existing[routeThreadKey]?.message ?? null) === nextError) {
@@ -2634,7 +2812,7 @@ function ChatViewContent(props: ChatViewProps) {
         };
       });
     },
-    [activeServerThread, draftId, routeThreadKey, routeThreadRef],
+    [draftId, routeThreadKey, routeThreadRef, serverThread],
   );
 
   const focusComposer = useCallback(() => {
@@ -3902,10 +4080,16 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!activeThread?.id) return;
-    if (activeThread.messages.length === 0) {
+    if (activeThread.messages.length === 0 && activeThread.queuedMessages.length === 0) {
       return;
     }
-    const serverIds = new Set(activeThread.messages.map((message) => message.id));
+    // A queued message is server-acknowledged too — it renders as a chip
+    // above the composer, so its optimistic timeline copy must go.
+    const persistedMessageIds = new Set(activeThread.messages.map((message) => message.id));
+    const serverIds = new Set([
+      ...persistedMessageIds,
+      ...activeThread.queuedMessages.map((message) => message.messageId),
+    ]);
     const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
     if (removedMessages.length === 0) {
       return;
@@ -3917,7 +4101,10 @@ function ChatViewContent(props: ChatViewProps) {
     }, 0);
     for (const removedMessage of removedMessages) {
       const previewUrls = collectUserMessageBlobPreviewUrls(removedMessage);
-      if (previewUrls.length > 0) {
+      // Handoff keeps blob previews alive only for messages entering the
+      // timeline; a queued-only acknowledgment renders as a text chip, so
+      // its previews would never be promoted — revoke them instead.
+      if (previewUrls.length > 0 && persistedMessageIds.has(removedMessage.id)) {
         handoffAttachmentPreviews(removedMessage.id, previewUrls);
         continue;
       }
@@ -3926,7 +4113,13 @@ function ChatViewContent(props: ChatViewProps) {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
+  }, [
+    activeThread?.id,
+    activeThread?.messages,
+    activeThread?.queuedMessages,
+    handoffAttachmentPreviews,
+    optimisticUserMessages,
+  ]);
 
   useEffect(() => {
     setOptimisticUserMessages((existing) => {
@@ -4716,7 +4909,6 @@ function ChatViewContent(props: ChatViewProps) {
       !activeThread ||
       isSendBusy ||
       isConnecting ||
-      threadDetailLoading ||
       activeEnvironmentUnavailable ||
       sendInFlightRef.current
     ) {
@@ -4874,7 +5066,11 @@ function ChatViewContent(props: ChatViewProps) {
       void dockTransition.catch(() => resolveDockStarted?.());
       await dockStarted;
     }
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    const messageIdForSend = newMessageId();
+    beginLocalDispatch({
+      preparingWorktree: Boolean(baseBranchForWorktree),
+      messageId: messageIdForSend,
+    });
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
@@ -4893,7 +5089,6 @@ function ChatViewContent(props: ChatViewProps) {
       messageTextWithPreviewAnnotations,
       composerReviewCommentsSnapshot,
     );
-    const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
@@ -5062,7 +5257,7 @@ function ChatViewContent(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
+      beginLocalDispatch({ preparingWorktree: false, messageId: messageIdForSend });
       const startResult = await startThreadTurn({
         environmentId,
         input: {
@@ -5152,6 +5347,36 @@ function ChatViewContent(props: ChatViewProps) {
       setThreadError(
         activeThread.id,
         error instanceof Error ? error.message : "Failed to interrupt the current turn.",
+      );
+    }
+  };
+
+  const onSteerQueuedMessage = async (messageId: MessageId) => {
+    if (!activeThread) return;
+    const result = await steerQueuedThreadMessage({
+      environmentId,
+      input: { threadId: activeThread.id, messageId },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Failed to steer the queued message.",
+      );
+    }
+  };
+
+  const onRemoveQueuedMessage = async (messageId: MessageId) => {
+    if (!activeThread) return;
+    const result = await removeQueuedThreadMessage({
+      environmentId,
+      input: { threadId: activeThread.id, messageId },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Failed to remove the queued message.",
       );
     }
   };
@@ -5365,7 +5590,7 @@ function ChatViewContent(props: ChatViewProps) {
       });
 
       sendInFlightRef.current = true;
-      beginLocalDispatch({ preparingWorktree: false });
+      beginLocalDispatch({ preparingWorktree: false, messageId: messageIdForSend });
       setThreadError(threadIdForSend, null);
 
       // Position this sent row once LegendList has measured the anchored tail.
@@ -6030,6 +6255,10 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
+                hasMoreOlder={hasMoreOlderActivities}
+                loadingOlder={loadingOlderActivities}
+                olderHistoryCursorVersion={olderHistoryCursorVersion}
+                onLoadOlder={loadOlderActivities}
                 latestTurn={activeLatestTurn}
                 runningTurnId={
                   activeThread.session?.status === "running"
@@ -6055,7 +6284,7 @@ function ChatViewContent(props: ChatViewProps) {
                 contentInsetEndAdjustment={composerOverlayHeight}
                 onIsAtEndChange={onIsAtEndChange}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
-                hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                hideEmptyPlaceholder={isDraftHeroState}
                 topFadeEnabled={!hasTimelineTopBanner}
               />
 
@@ -6114,11 +6343,18 @@ function ChatViewContent(props: ChatViewProps) {
                       <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                     </div>
                   ) : (
-                    <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                    <>
+                      {isServerThread && activeThread ? (
+                        <QueuedMessageChips
+                          queuedMessages={activeThread.queuedMessages}
+                          disabled={Boolean(activeEnvironmentUnavailableState)}
+                          onSteer={(messageId) => void onSteerQueuedMessage(messageId)}
+                          onRemove={(messageId) => void onRemoveQueuedMessage(messageId)}
+                        />
+                      ) : null}
+                      <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                    </>
                   )}
-                  {threadSyncPhase && !activeEnvironmentUnavailable ? (
-                    <ThreadSyncStatusPill phase={threadSyncPhase} />
-                  ) : null}
                   <div
                     className="relative"
                     style={
@@ -6178,7 +6414,11 @@ function ChatViewContent(props: ChatViewProps) {
                               activeProject?.defaultModelSelection
                             }
                             activeThreadModelSelection={activeThread?.modelSelection}
-                            activeThreadActivities={activeThread?.activities}
+                            // Merged set (older pages + live window), not the windowed
+                            // live slice: the context meter scans for the latest
+                            // context-window.updated event, which can sit in a
+                            // lazy-loaded page on long threads.
+                            activeThreadActivities={threadActivities}
                             resolvedTheme={resolvedTheme}
                             settings={settings}
                             keybindings={keybindings}

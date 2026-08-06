@@ -13,6 +13,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
+import { isDefaultThreadTitle } from "@t3tools/shared/threadTitle";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -252,14 +253,13 @@ export function providerErrorLabelFromInstanceHint(input: {
 }
 
 function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolean {
-  const trimmedCurrentTitle = currentTitle.trim();
-  if (trimmedCurrentTitle === DEFAULT_THREAD_TITLE) {
+  if (isDefaultThreadTitle(currentTitle)) {
     return true;
   }
 
   const trimmedTitleSeed = titleSeed?.trim();
   return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
+    ? currentTitle.trim() === trimmedTitleSeed
     : false;
 }
 
@@ -941,7 +941,14 @@ const make = Effect.gen(function* () {
       return { _tag: "Superseded" } as const;
     }
 
-    const { message, attachments } = formatThreadTitleContext(thread.messages);
+    const { message, attachments } = formatThreadTitleContext([
+      ...thread.messages,
+      ...thread.queuedMessages.map((queued) => ({
+        role: "user" as const,
+        text: queued.text,
+        attachments: queued.attachments,
+      })),
+    ]);
     if (message.length === 0) {
       return { _tag: "Completed", title: undefined } as const;
     }

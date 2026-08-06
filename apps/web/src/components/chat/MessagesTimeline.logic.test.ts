@@ -4,8 +4,96 @@ import {
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
+  resolveOlderHistoryAutoLoad,
   resolveAssistantMessageCopyState,
 } from "./MessagesTimeline.logic";
+
+describe("resolveOlderHistoryAutoLoad", () => {
+  it("does not retry continuously while a failed request leaves the viewport at the start", () => {
+    const first = resolveOlderHistoryAutoLoad({
+      armed: true,
+      hasMore: true,
+      isAtStart: true,
+      loading: false,
+      observedProgressVersion: 0,
+      progressVersion: 0,
+    });
+    expect(first).toEqual({
+      armed: false,
+      observedProgressVersion: 0,
+      shouldLoad: true,
+    });
+
+    const afterFailure = resolveOlderHistoryAutoLoad({
+      armed: first.armed,
+      hasMore: true,
+      isAtStart: true,
+      loading: false,
+      observedProgressVersion: first.observedProgressVersion,
+      progressVersion: 0,
+    });
+    expect(afterFailure).toEqual({
+      armed: false,
+      observedProgressVersion: 0,
+      shouldLoad: false,
+    });
+
+    const afterLeavingStart = resolveOlderHistoryAutoLoad({
+      armed: afterFailure.armed,
+      hasMore: true,
+      isAtStart: false,
+      loading: false,
+      observedProgressVersion: afterFailure.observedProgressVersion,
+      progressVersion: 0,
+    });
+    expect(afterLeavingStart).toEqual({
+      armed: true,
+      observedProgressVersion: 0,
+      shouldLoad: false,
+    });
+
+    expect(
+      resolveOlderHistoryAutoLoad({
+        armed: afterLeavingStart.armed,
+        hasMore: true,
+        isAtStart: true,
+        loading: false,
+        observedProgressVersion: afterLeavingStart.observedProgressVersion,
+        progressVersion: 0,
+      }),
+    ).toEqual({
+      armed: false,
+      observedProgressVersion: 0,
+      shouldLoad: true,
+    });
+  });
+
+  it("rearms at the start only after a page successfully advances the cursor", () => {
+    const afterFirstAttempt = resolveOlderHistoryAutoLoad({
+      armed: true,
+      hasMore: true,
+      isAtStart: true,
+      loading: false,
+      observedProgressVersion: 0,
+      progressVersion: 0,
+    });
+
+    expect(
+      resolveOlderHistoryAutoLoad({
+        armed: afterFirstAttempt.armed,
+        hasMore: true,
+        isAtStart: true,
+        loading: false,
+        observedProgressVersion: afterFirstAttempt.observedProgressVersion,
+        progressVersion: 1,
+      }),
+    ).toEqual({
+      armed: false,
+      observedProgressVersion: 1,
+      shouldLoad: true,
+    });
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -1010,6 +1098,152 @@ describe("deriveMessagesTimelineRows", () => {
     expect(expandedRows.find((row) => row.kind === "work-toggle")).toMatchObject({
       expanded: true,
     });
+  });
+
+  it("keeps a clarifying-question exchange out of the collapsed work group", () => {
+    const userInput = {
+      requestId: "req-1",
+      answered: true,
+      questions: [
+        {
+          id: "Approach?",
+          header: "Approach",
+          question: "Approach?",
+          multiSelect: false,
+          options: [{ label: "Ship it", description: "Merge as-is" }],
+          selectedLabels: ["Ship it"],
+        },
+      ],
+    };
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "work-entry-1",
+          kind: "work" as const,
+          createdAt: "2026-01-01T00:00:01Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:01Z",
+            label: "read",
+            tone: "tool" as const,
+          },
+        },
+        {
+          id: "user-input-entry",
+          kind: "work" as const,
+          createdAt: "2026-01-01T00:00:02Z",
+          entry: {
+            id: "user-input-1",
+            createdAt: "2026-01-01T00:00:02Z",
+            label: "Question: Approach",
+            tone: "info" as const,
+            userInput,
+          },
+        },
+        {
+          id: "work-entry-2",
+          kind: "work" as const,
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "work-2",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "edit",
+            tone: "tool" as const,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["work-entry-1", "user-input-entry", "work-entry-2"]);
+    expect(rows.find((row) => row.kind === "user-input")).toMatchObject({ userInput });
+  });
+
+  it("keeps a clarifying-question exchange visible after its turn folds", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: "user-1" as never,
+            role: "user" as const,
+            text: "ship the fix",
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-entry-1",
+          kind: "work" as const,
+          createdAt: "2026-01-01T00:00:05Z",
+          entry: {
+            id: "work-1",
+            createdAt: "2026-01-01T00:00:05Z",
+            turnId: "turn-1" as never,
+            label: "Ran command",
+            tone: "tool" as const,
+          },
+        },
+        {
+          id: "user-input-entry",
+          kind: "work" as const,
+          createdAt: "2026-01-01T00:00:08Z",
+          entry: {
+            id: "user-input-1",
+            createdAt: "2026-01-01T00:00:08Z",
+            turnId: "turn-1" as never,
+            label: "Question: Approach",
+            tone: "info" as const,
+            userInput: {
+              requestId: "req-1",
+              answered: true,
+              questions: [
+                {
+                  id: "Approach?",
+                  header: "Approach",
+                  question: "Approach?",
+                  multiSelect: false,
+                  options: [{ label: "Ship it", description: "Merge as-is" }],
+                  selectedLabels: ["Ship it"],
+                },
+              ],
+            },
+          },
+        },
+        {
+          id: "assistant-final-entry",
+          kind: "message" as const,
+          createdAt: "2026-01-01T00:00:20Z",
+          message: {
+            id: "assistant-final" as never,
+            role: "assistant" as const,
+            text: "Shipped",
+            turnId: "turn-1" as never,
+            createdAt: "2026-01-01T00:00:20Z",
+            updatedAt: "2026-01-01T00:00:22Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "user-entry",
+      "turn-fold:turn-1",
+      "user-input-entry",
+      "assistant-final-entry",
+    ]);
   });
 });
 

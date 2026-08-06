@@ -10,9 +10,25 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { OrchestrationThread, OrchestrationThreadActivity } from "@t3tools/contracts";
 
-import { applyThreadDetailEvent } from "./threadReducer.ts";
+import {
+  applyThreadDetailEvent,
+  liveWindowOldestActivityId,
+  oldestActivityByChronology,
+} from "./threadReducer.ts";
+
+const activity = (id: string, createdAt: string, sequence?: number): OrchestrationThreadActivity =>
+  ({
+    id,
+    tone: "tool",
+    kind: "command",
+    summary: id,
+    payload: {},
+    turnId: TurnId.make("turn-1"),
+    createdAt,
+    ...(sequence !== undefined ? { sequence } : {}),
+  }) as unknown as OrchestrationThreadActivity;
 
 const baseEventFields = {
   eventId: EventId.make("event-1"),
@@ -39,6 +55,8 @@ const baseThread: OrchestrationThread = {
   settledAt: null,
   deletedAt: null,
   messages: [],
+  queuedMessages: [],
+  pendingTurnStart: null,
   proposedPlans: [],
   activities: [],
   checkpoints: [],
@@ -451,6 +469,79 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.latestTurn?.state).toBe("running");
         expect(result.thread.latestTurn?.completedAt).toBeNull();
       }
+    });
+  });
+
+  describe("thread.message-queued / thread.queued-message-removed", () => {
+    const queuedPayload = {
+      threadId: ThreadId.make("thread-1"),
+      messageId: MessageId.make("queued-1"),
+      text: "Queued follow-up",
+      attachments: [],
+      queuedAt: "2026-04-01T06:00:00.000Z",
+    };
+
+    it("appends a queued message and replaces an existing messageId", () => {
+      const queued = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: "2026-04-01T06:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-queued",
+        payload: queuedPayload,
+      });
+
+      expect(queued.kind).toBe("updated");
+      if (queued.kind !== "updated") return;
+      expect(queued.thread.queuedMessages).toHaveLength(1);
+      expect(queued.thread.queuedMessages[0]?.text).toBe("Queued follow-up");
+
+      const replaced = applyThreadDetailEvent(queued.thread, {
+        ...baseEventFields,
+        sequence: 7,
+        occurredAt: "2026-04-01T06:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-queued",
+        payload: { ...queuedPayload, text: "Edited follow-up" },
+      });
+
+      expect(replaced.kind).toBe("updated");
+      if (replaced.kind !== "updated") return;
+      expect(replaced.thread.queuedMessages).toHaveLength(1);
+      expect(replaced.thread.queuedMessages[0]?.text).toBe("Edited follow-up");
+    });
+
+    it("removes a queued message and leaves others intact", () => {
+      const threadWithQueue: OrchestrationThread = {
+        ...baseThread,
+        queuedMessages: [
+          { ...queuedPayload, messageId: MessageId.make("queued-1") },
+          { ...queuedPayload, messageId: MessageId.make("queued-2") },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(threadWithQueue, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T06:02:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.queued-message-removed",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("queued-1"),
+          reason: "dispatched",
+          removedAt: "2026-04-01T06:02:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.queuedMessages.map((entry) => entry.messageId)).toEqual([
+        MessageId.make("queued-2"),
+      ]);
     });
   });
 
@@ -899,6 +990,63 @@ describe("applyThreadDetailEvent", () => {
         },
       } as any);
       expect(result.kind).toBe("unchanged");
+    });
+  });
+
+  describe("liveWindowOldestActivityId", () => {
+    it("returns null for an empty window", () => {
+      expect(liveWindowOldestActivityId([])).toBeNull();
+    });
+
+    it("returns the chronologically-oldest id regardless of array position", () => {
+      // Reducer order places the unsequenced legacy row (oldest) LAST while the
+      // server snapshot would list it first; the helper picks it either way.
+      const window = [
+        activity("seq-1", "2026-04-01T10:00:01.000Z", 1),
+        activity("seq-2", "2026-04-01T10:00:02.000Z", 2),
+        activity("legacy", "2026-04-01T09:00:00.000Z"),
+      ];
+      expect(liveWindowOldestActivityId(window)).toBe("legacy");
+    });
+
+    it("breaks createdAt ties by id", () => {
+      const window = [
+        activity("b", "2026-04-01T10:00:00.000Z", 2),
+        activity("a", "2026-04-01T10:00:00.000Z", 1),
+      ];
+      expect(liveWindowOldestActivityId(window)).toBe("a");
+    });
+
+    it("is stable when a newer activity is appended (no false reshape)", () => {
+      const before = [
+        activity("legacy", "2026-04-01T09:00:00.000Z"),
+        activity("seq-1", "2026-04-01T10:00:01.000Z", 1),
+      ];
+      // A live append is the newest activity and is unsequenced in the payload;
+      // it must not change the detected oldest boundary.
+      const after = [...before, activity("appended", "2026-04-01T11:00:00.000Z")];
+      expect(liveWindowOldestActivityId(after)).toBe(liveWindowOldestActivityId(before));
+      expect(liveWindowOldestActivityId(after)).toBe("legacy");
+    });
+  });
+
+  describe("oldestActivityByChronology", () => {
+    it("returns null for an empty set", () => {
+      expect(oldestActivityByChronology([])).toBeNull();
+    });
+
+    it("returns the unsequenced legacy row so the pagination cursor agrees with the sentinel", () => {
+      // The reducer placed the legacy (unsequenced, oldest) row at the END; paging
+      // must cursor from it (createdAt cursor), not from index 0's sequenced row.
+      const merged = [
+        activity("seq-5", "2026-04-01T10:00:05.000Z", 5),
+        activity("seq-6", "2026-04-01T10:00:06.000Z", 6),
+        activity("legacy", "2026-04-01T09:00:00.000Z"),
+      ];
+      const oldest = oldestActivityByChronology(merged);
+      expect(oldest?.id).toBe("legacy");
+      expect(oldest?.sequence).toBeUndefined(); // → drives the unsequenced cursor
+      expect(liveWindowOldestActivityId(merged)).toBe(oldest?.id); // sentinel agrees
     });
   });
 });

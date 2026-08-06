@@ -5,7 +5,6 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationReadModel,
   type OrchestrationSession,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -14,6 +13,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
@@ -24,8 +24,8 @@ function makeReadModel(
   session: OrchestrationSession | null = null,
   activities: OrchestrationThread["activities"] = [],
   messages: OrchestrationThread["messages"] = [],
-): OrchestrationReadModel {
-  return {
+): CommandReadModel {
+  return fromWireReadModel({
     snapshotSequence: 0,
     projects: [],
     threads: [
@@ -46,6 +46,8 @@ function makeReadModel(
         settledAt: settledOverride === "settled" ? SETTLED_AT : null,
         deletedAt: null,
         messages,
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities,
         checkpoints: [],
@@ -53,7 +55,7 @@ function makeReadModel(
       },
     ],
     updatedAt: NOW,
-  };
+  });
 }
 
 function makeSession(status: OrchestrationSession["status"]): OrchestrationSession {
@@ -373,6 +375,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       const turnEvents = Array.isArray(turnResult) ? turnResult : [turnResult];
       expect(turnEvents.map((event) => event.type)).toEqual([
         "thread.unsettled",
+        "thread.unsnoozed",
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);
@@ -421,6 +424,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       // activity resets it to neutral, restoring the default lifecycle.
       expect(turnEvents.map((event) => event.type)).toEqual([
         "thread.unsettled",
+        "thread.unsnoozed",
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);

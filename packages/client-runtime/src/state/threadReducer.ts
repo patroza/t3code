@@ -54,6 +54,45 @@ function isResolvableContextWindowActivity(activity: OrchestrationThreadActivity
 }
 
 /**
+ * The oldest activity in a set, by chronology (`createdAt`, then `id`) rather
+ * than array position.
+ *
+ * `activities[0]` is not a stable "oldest": {@link activityOrder} sorts
+ * unsequenced rows to the end (a missing `sequence` is treated as newest) while
+ * the server snapshot lists legacy unsequenced rows first, so the first live
+ * append re-sorts the array and shifts index 0. Both the lazy-load *reshape*
+ * sentinel ({@link liveWindowOldestActivityId}) and the lazy-load *pagination
+ * cursor* derive from this so they agree on which row is oldest regardless of
+ * the reducer's placement of unsequenced rows. Returns `null` when empty.
+ */
+export function oldestActivityByChronology(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadActivity | null {
+  let oldest: OrchestrationThreadActivity | null = null;
+  for (const activity of activities) {
+    if (
+      oldest === null ||
+      activity.createdAt < oldest.createdAt ||
+      (activity.createdAt === oldest.createdAt && activity.id < oldest.id)
+    ) {
+      oldest = activity;
+    }
+  }
+  return oldest;
+}
+
+/**
+ * The id of {@link oldestActivityByChronology}, used as the lazy-load reshape
+ * sentinel (a reconnect re-snapshot or checkpoint revert changes it; a plain
+ * append does not). Returns `null` when empty.
+ */
+export function liveWindowOldestActivityId(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadActivity["id"] | null {
+  return oldestActivityByChronology(activities)?.id ?? null;
+}
+
+/**
  * Apply a single orchestration event to an `OrchestrationThread`, returning
  * the updated thread, a deletion signal, or an "unchanged" marker when the
  * event doesn't affect this thread.
@@ -96,6 +135,8 @@ export function applyThreadDetailEvent(
           snoozedAt: null,
           deletedAt: null,
           messages: [],
+          queuedMessages: [],
+          pendingTurnStart: null,
           proposedPlans: [],
           activities: [],
           checkpoints: [],
@@ -239,6 +280,10 @@ export function applyThreadDetailEvent(
             : {}),
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          pendingTurnStart: {
+            messageId: event.payload.messageId,
+            requestedAt: event.payload.createdAt,
+          },
           updatedAt: event.occurredAt,
         },
       };
@@ -364,6 +409,45 @@ export function applyThreadDetailEvent(
       };
     }
 
+    // ── Queued messages ─────────────────────────────────────────────
+    case "thread.message-queued": {
+      const queuedMessage = {
+        messageId: event.payload.messageId,
+        text: event.payload.text,
+        attachments: event.payload.attachments,
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        ...(event.payload.sourceProposedPlan !== undefined
+          ? { sourceProposedPlan: event.payload.sourceProposedPlan }
+          : {}),
+        queuedAt: event.payload.queuedAt,
+      };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages: [
+            ...thread.queuedMessages.filter((entry) => entry.messageId !== queuedMessage.messageId),
+            queuedMessage,
+          ],
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.queued-message-removed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages: thread.queuedMessages.filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
+
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {
       // Leaving the "running" session status is the turn-end signal: settle a
@@ -401,12 +485,25 @@ export function applyThreadDetailEvent(
               }
             : thread.latestTurn;
 
+      // Mirrors the server projections' pending-turn-start clearing: a
+      // running session with an active turn adopts it; terminal statuses
+      // abandon it.
+      const sessionStatus = event.payload.session.status;
+      const pendingTurnStart =
+        (sessionStatus === "running" && event.payload.session.activeTurnId !== null) ||
+        sessionStatus === "error" ||
+        sessionStatus === "stopped" ||
+        sessionStatus === "interrupted"
+          ? null
+          : thread.pendingTurnStart;
+
       return {
         kind: "updated",
         thread: {
           ...thread,
           session: event.payload.session,
           latestTurn,
+          pendingTurnStart,
           updatedAt: event.occurredAt,
         },
       };
