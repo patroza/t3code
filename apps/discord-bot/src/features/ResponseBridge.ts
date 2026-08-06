@@ -69,6 +69,7 @@ import {
   stripMarkdownImages,
   type MarkdownImageRef,
 } from "../presentation/markdownImages.ts";
+import { rewriteMarkdownTablesForDiscord } from "../presentation/markdownTables.ts";
 import {
   chunkDiscordContent,
   formatInProgressChunk,
@@ -3368,10 +3369,12 @@ export const runBridge = (
             }
           }
 
-          const tipDisplayText = activeStreamTipText(fullDisplayText, streamBreakPrefix);
-          const previousTipDisplayText = activeStreamTipText(
-            previousFullDisplayText,
-            streamBreakPrefix,
+          // Discord cannot render GFM pipe tables — rewrite complete tables to bullets.
+          const tipDisplayText = rewriteMarkdownTablesForDiscord(
+            activeStreamTipText(fullDisplayText, streamBreakPrefix),
+          );
+          const previousTipDisplayText = rewriteMarkdownTablesForDiscord(
+            activeStreamTipText(previousFullDisplayText, streamBreakPrefix),
           );
 
           // After a tip break, always keep a post-break Working tip for liveness even when
@@ -3775,18 +3778,21 @@ export const runBridge = (
 
         // Final channel text: strip image embeds but keep readable local file references.
         // Never leave Working.. or the stream placeholder.
-        // Keep Discord markdown as-is (links stay clickable). Do not ASCII-ify tables.
+        // Keep Discord markdown as-is (links stay clickable). GFM pipe tables → bullets
+        // (Discord does not render tables; ASCII grids were tried and removed).
         // Stats footer always gets · [T3](deep link) when the web UI base is configured.
-        const finalText = rewriteMarkdownLocalFileLinksForDiscord({
-          text: stripWorkingIndicator(stripMarkdownImages(text)),
-          githubUrlsBySrc,
-          attachedFileNames,
-          oversizedByName,
-        })
-          .replace(/_\(attachment will attach when done\)_/giu, "")
-          .replace(/_\(\d+ attachments will attach when done\)_/giu, "")
-          .replace(/\n{3,}/g, "\n\n")
-          .trim();
+        const finalText = rewriteMarkdownTablesForDiscord(
+          rewriteMarkdownLocalFileLinksForDiscord({
+            text: stripWorkingIndicator(stripMarkdownImages(text)),
+            githubUrlsBySrc,
+            attachedFileNames,
+            oversizedByName,
+          })
+            .replace(/_\(attachment will attach when done\)_/giu, "")
+            .replace(/_\(\d+ attachments will attach when done\)_/giu, "")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim(),
+        );
         const finalInlineGitHubUrlsByToken = yield* resolveGitHubLinksForInlinePathCodeSpans(
           extractInlinePathCodeSpanRefs(finalText),
           worktreePath,
@@ -4764,7 +4770,8 @@ export const runBridge = (
           if (yield* isStreamTipDisplaced(tipId)) return;
 
           // Epoch FSM: awaiting → dots only; streaming → current epoch streamText only.
-          const tipDisplay = hb.tipBody;
+          // Same GFM→bullets rewrite as the primary stream path.
+          const tipDisplay = rewriteMarkdownTablesForDiscord(hb.tipBody);
           if (state.streamBreakPrefix !== "" && tipDisplay.trim() === "") return;
 
           const chunks =
