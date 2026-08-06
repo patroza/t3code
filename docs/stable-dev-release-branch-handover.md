@@ -2,8 +2,13 @@
 
 ## Status
 
-Design proposal. This document describes a migration away from using the continuously rebased fork
+Staged plan. This document describes a migration away from using the continuously rebased fork
 stack as the daily contributor and release path.
+
+**Steps 1 and 2 deliver the entire daily benefit and are the only steps required to start.**
+Everything after them is optional, incremental, and can be deferred indefinitely without losing
+what steps 1 and 2 gained. In particular, generated clean downstream history and periodic
+projection releases are **not** prerequisites and are **not** on the critical path.
 
 The intended outcome is:
 
@@ -12,7 +17,24 @@ The intended outcome is:
 - The useful upstream, base, Tim, and candidate provenance layers remain clean and rebased.
 - Routine work does not require contributors to label desktop, mobile, server, or other affected
   clients manually.
-- Clean downstream history remains available as generated output rather than an authoring surface.
+- Clean downstream history remains available as generated output rather than an authoring surface —
+  if and when it is actually wanted.
+
+## Adopt Now, Defer the Rest
+
+| Capability                                       | When       | Blocking? | Why                                                    |
+| ------------------------------------------------ | ---------- | --------- | ------------------------------------------------------ |
+| `fork/dev` stable branch, default PR base        | **Step 1** | Yes       | Removes rebase churn from every contributor            |
+| Deploy from an exact green `fork/dev` SHA        | **Step 1** | Yes       | Ops already deploys an exact SHA; only the ref changes |
+| Path/dependency-inferred check and release scope | **Step 2** | No        | Removes manual client labelling                        |
+| Per-target release records and cadence policy    | **Step 2** | No        | Lets bot/server ship faster than desktop/mobile        |
+| Overlay drain into `fork/dev`                    | Step 3     | No        | Happens naturally once overlays stop being rebased     |
+| Automated `fork/candidates` tree-delta sync      | Later      | No        | Manual sync is fine at the current upstream cadence    |
+| `fork/changes-clean` / `fork/integration-clean`  | If needed  | No        | Audit/upstreaming artifact, not a release input        |
+| Periodic clean projection and tree proofs        | If needed  | No        | Only useful when upstreaming or auditing is due        |
+
+The rebased provenance stack (`main → fork/base → fork/tim → fork/candidates`) keeps working exactly
+as it does today throughout. Nothing regresses if the clean-projection work is never built.
 
 ## Current Problem
 
@@ -64,9 +86,10 @@ upstream/main
              +-- VS Code work
              +-- web/mobile/desktop/server/bot work
 
-fork/dev checkpoint
-  -> fork/changes-clean
-  -> fork/integration-clean    periodic generated projection, never a PR base
+  (optional, later)
+  fork/dev checkpoint
+    -> fork/changes-clean
+    -> fork/integration-clean    generated on demand, never a PR base
 ```
 
 ## Branch Responsibilities
@@ -78,11 +101,10 @@ fork/dev checkpoint
 | `fork/tim`               | Yes                 | No                 | No             | Selected Tim imports with provenance        |
 | `fork/candidates`        | Yes                 | No                 | No             | Selected unmerged upstream candidates       |
 | `fork/dev`               | Never               | Yes                | Yes            | Canonical complete downstream product       |
-| `fork/changes-clean`     | Yes                 | No                 | Optional       | Curated downstream projection               |
-| `fork/integration-clean` | Yes                 | No                 | Optional/audit | Clean composed output matching a checkpoint |
+| `fork/changes-clean`     | Yes                 | No                 | No (optional)  | Curated downstream projection, if built     |
+| `fork/integration-clean` | Yes                 | No                 | No (audit)     | Clean composed output matching a checkpoint |
 
-The clean branch names are placeholders. Existing names may be retained if their generated nature
-is made unmistakable and tooling prevents contributors from targeting them.
+The clean branch names are placeholders and only matter once that work is actually scheduled.
 
 ## Core Invariants
 
@@ -105,123 +127,49 @@ is made unmistakable and tooling prevents contributors from targeting them.
 ### Clean provenance
 
 - `main`, `fork/base`, `fork/tim`, and `fork/candidates` retain their current provenance roles.
-- Generated clean branches are output only and may be rewritten safely.
-- Generated branches are never merged back into `fork/dev`.
-- For a selected checkpoint, the final clean projection must reproduce the checkpoint's product
-  tree, apart from narrowly documented generated metadata.
+- Rewritten provenance tips are never merged into `fork/dev`; their tree delta is imported instead.
+- Any generated clean branches are output only, may be rewritten safely, and are never merged back.
 
-```text
-tree(fork/integration-clean) == tree(tagged fork/dev checkpoint)
-```
+## Step 1 — Cut Over to `fork/dev`
 
-## Synchronizing the Rebased Stack into `fork/dev`
+This is the whole of the immediate benefit. It is a ref change plus branch protection, not a
+re-architecture.
 
-Rewritten provenance branches must not be repeatedly merged into `fork/dev`. After a rebase, their
-commits have new identities; merging the rewritten tip would duplicate history and produce avoidable
-conflicts.
+1. Create `fork/dev` from the current green `fork/integration` tip.
+2. Prove the initial trees are identical: `git diff --exit-code fork/integration fork/dev`.
+3. Record the incorporated `fork/candidates` checkpoint (commit + tree).
+4. Protect `fork/dev` against force-push and deletion; configure required checks.
+5. Make `fork/dev` the GitHub default branch and the base for ordinary contributor PRs.
+6. Point deployment at `fork/dev` (see [Ops Repository Changes](#ops-repository-changes)).
+7. Keep the old compose-and-deploy path installed as a temporary fallback.
 
-Instead, synchronize the net tree change.
+### Cutover consequence: overlays are landed, not skipped
 
-Assume:
+Because `fork/dev` is cut from `fork/integration` — not from `fork/changes` — **overlay content is
+already present in `fork/dev` from its first commit**. This is deliberate: the runnable product must
+not regress at cutover.
 
-- `C1` is the `fork/candidates` tree currently incorporated into `fork/dev`.
-- `C2` is the latest rebuilt and verified `fork/candidates` tree.
+The consequence is that every registered overlay must be drained rather than left open:
 
-The synchronization process should:
+- An overlay whose content is fully contained in the cutover tip is **done**. Close its PR, remove
+  it from `.github/pr-stack.json`, and stop rebasing it.
+- An overlay with work not yet in the cutover tip is rebased **onto `fork/dev`** once, then merged
+  as an ordinary PR.
+- Leaving an overlay open against `fork/changes` after cutover will duplicate its commits the next
+  time anything composes. Drain first, then cut over — or cut over and drain the same day.
 
-1. Create a sync branch from `fork/dev`.
-2. Calculate the tree delta from `C1` to `C2`.
-3. Apply that delta to the sync branch.
-4. Resolve integration conflicts against the current `fork/dev` product tree.
-5. Run the full required checks.
-6. Open a normal PR into `fork/dev`.
-7. Merge it without rewriting `fork/dev`.
-8. Record `C2` as the newly imported provenance checkpoint.
+This is the one ordering hazard in the migration. Everything else is additive.
 
-The PR should be recognizable without requiring daily contributor metadata, for example:
+## Step 2 — Release Directly from `fork/dev`
 
-```text
-sync(provenance): import upstream stack C1..C2
-```
+1. Update release workflows to accept an exact green `fork/dev` SHA.
+2. Implement path/dependency-based scope classification (below).
+3. Track per-target release outcomes independently.
+4. Add immutable checkpoint tags for approved releases.
+5. Exercise bot, server, desktop, and mobile paths once.
+6. Stop requiring full-stack composition for routine releases.
 
-The imported checkpoint may be recorded in an immutable tag or a small machine-owned state file:
-
-```json
-{
-  "importedCandidatesCommit": "<commit>",
-  "importedCandidatesTree": "<tree>",
-  "importedUpstreamCommit": "<commit>"
-}
-```
-
-This is stack synchronization state, not a manual product ledger.
-
-## Daily Contributor Workflow
-
-The normal path becomes:
-
-1. Create a feature branch from `fork/dev`.
-2. Open a PR against `fork/dev`.
-3. Run the mandatory local validation.
-4. Run GitHub CI for the exact PR and merge tip.
-5. Merge using the selected stable-history policy.
-6. Release immediately or include the merge in the next release cadence.
-
-No restack or overlay composition is required for an ordinary feature or fix.
-
-Squash merges are a reasonable default because they give each GitHub PR one stable commit on
-`fork/dev`. Merge commits can remain available where preserving a dependent series is valuable.
-
-## Identity, Discord, and VS Code
-
-Identity, Discord, and VS Code remain meaningful ownership areas, but they do not necessarily need
-permanent composition overlays.
-
-### Preferred model
-
-Their feature PRs target `fork/dev` directly. Ownership and validation are inferred from paths and
-dependency impact:
-
-- Discord's separate application/package directories naturally select Discord checks and owners.
-- VS Code's separate extension directories naturally select VS Code checks and owners.
-- Identity-owned paths and shared integration points select identity checks and owners.
-- Shared package changes expand validation to affected consumers.
-
-Use path-based workflow filters and `CODEOWNERS` instead of requiring contributors to apply client
-labels.
-
-### Optional subsystem staging branches
-
-If one of these areas genuinely needs independent staging, it may use a stable branch such as:
-
-```text
-fork/discord-dev
-fork/vscode-dev
-fork/identity-dev
-```
-
-These branches must also never be rebased. Work is merged into `fork/dev`, and `fork/dev` is merged
-back afterward so the subsystem branch stays current.
-
-This adds merge topology and administration, so it should only be introduced where separate staging
-provides a concrete benefit. Clear folders alone are not sufficient justification.
-
-## Ordinary Cross-Cutting Features
-
-Features such as the desktop URL-handler enhancement should be ordinary commits or squash-merged
-PRs on `fork/dev`, not permanent layers.
-
-For example:
-
-```text
-feat(desktop): support remote URL handling
-```
-
-The changed files determine validation and release scope. A dedicated layer is justified only when
-work has independent external provenance or must remain independently staged—not simply because it
-is identifiable as a feature.
-
-## Inferring Validation and Release Scope
+### Inferring validation and release scope
 
 Daily contributors should not manually classify their work as web, mobile, desktop, server, or bot.
 Automation should derive affected surfaces from the diff and the workspace dependency graph.
@@ -240,35 +188,133 @@ packages/client-runtime/** -> web and mobile
 shared build/config paths  -> conservative full validation
 ```
 
-Path rules should be generated from workspace ownership/dependency data where practical. Unknown or
-ambiguous shared paths should fail safely by selecting broader checks, not by requiring labels.
+Unknown or ambiguous shared paths must fail safely by selecting broader checks, never by requiring a
+label. `scripts/classify-deployment-diff.sh` already performs this classification for deployment; the
+same classifier should drive PR check selection so the two cannot disagree.
 
-Labels remain appropriate only for exceptional intent that cannot be inferred from code:
+Labels remain appropriate only for exceptional intent that cannot be inferred from code — for
+example requesting an unusual release behaviour, or recording an unusual external import.
 
-- Explicitly excluding a change from a clean projection.
-- Associating a repair with an earlier feature for history folding.
-- Recording an unusual external import.
-- Requesting a special release behavior.
+### Release policies
+
+`fork/dev` supports multiple release policies without changing the branch model.
+
+**Immediate:** after a merge, obtain CI for the exact resulting `fork/dev` SHA, infer affected
+targets from the previous approved SHA, dispatch, and record each outcome. Suitable for urgent bot,
+server, or desktop fixes.
+
+**Lagged:** merges accumulate and are promoted after a debounce period, every few hours, daily, or
+at a manually selected checkpoint — and on different schedules per product. Bot and server can be
+frequent while desktop and mobile use a slower cadence. These are policy decisions requiring no
+additional integration branches.
+
+Approved releases reference immutable checkpoints, for example `fork-dev/2026-08-06.1`. Each
+deployment record should include the `fork/dev` SHA, CI run and conclusion, calculated change scope,
+and independent bot / server / desktop / mobile status. **A partial multi-target release must not be
+represented as completely deployed.**
+
+## Ops Repository Changes
+
+Deployment already promotes an exact CI-approved SHA, so the cutover is a _ref_ change, not a
+mechanism change. `aaaomega/ops` currently hardcodes `fork/integration` in the poller, deployer,
+clone preparation, failure notifier, and laptop catch-up.
+
+The prerequisite ops change is to make the trusted branch, CI workflow, and CI trigger event
+configurable, defaulting to today's values so nothing changes until the cutover:
+
+```sh
+T3CODE_DEPLOY_BRANCH=fork/integration     # -> fork/dev at cutover
+T3CODE_DEPLOY_CI_WORKFLOW=fork-ci.yml
+T3CODE_DEPLOY_CI_EVENT=workflow_dispatch  # -> push at cutover
+```
+
+Cutover is then a single `~/.config/t3code/deploy.env` edit on `smart` plus a poller restart, and
+reverting is the same edit.
+
+Component checkpoint state files (`fork-integration-<component>-sha`) keep their names across the
+cutover on purpose. Their value is the last deployed SHA used for tree-diff classification, and
+because `fork/dev` starts at the `fork/integration` tip those SHAs remain valid ancestors — so the
+cutover does not trigger a full fleet redeploy.
+
+## Daily Contributor Workflow
+
+After step 1 the normal path is:
+
+1. Create a feature branch from `fork/dev`.
+2. Open a PR against `fork/dev`.
+3. Run the mandatory local validation.
+4. Run GitHub CI for the exact PR and merge tip.
+5. Merge using the selected stable-history policy.
+6. Release immediately or in the next release cadence.
+
+No restack or overlay composition is required for an ordinary feature or fix.
+
+Squash merges are a reasonable default because they give each GitHub PR one stable commit on
+`fork/dev`. Merge commits can remain available where preserving a dependent series is valuable.
+
+Release only the exact merge SHA after its required checks pass. A green PR tip is not sufficient if
+the resulting merge SHA differs or the base moved.
+
+## Identity, Discord, and VS Code
+
+Identity, Discord, and VS Code remain meaningful ownership areas, but they do not need permanent
+composition overlays.
+
+Their feature PRs target `fork/dev` directly. Ownership and validation are inferred from paths and
+dependency impact — Discord's and VS Code's separate directories naturally select their own checks
+and owners; shared package changes expand validation to affected consumers. Use path-based workflow
+filters and `CODEOWNERS` instead of requiring contributors to apply client labels.
+
+If one of these areas genuinely needs independent staging, it may later use a stable, never-rebased
+branch such as `fork/discord-dev`. Work merges into `fork/dev`, and `fork/dev` merges back
+afterwards. This adds merge topology and administration, so introduce it only where separate staging
+provides a concrete benefit. Clear folders alone are not sufficient justification.
+
+Likewise, ordinary cross-cutting features — the desktop URL-handler enhancement, for example —
+become ordinary squash-merged PRs on `fork/dev`, not permanent layers. A dedicated layer is
+justified only when work has independent external provenance or must remain independently staged.
+
+## Synchronizing the Rebased Stack into `fork/dev`
+
+Rewritten provenance branches must not be repeatedly merged into `fork/dev`. After a rebase their
+commits have new identities; merging the rewritten tip would duplicate history and produce avoidable
+conflicts. Synchronize the net tree change instead.
+
+Assume `C1` is the `fork/candidates` tree currently incorporated into `fork/dev`, and `C2` is the
+latest rebuilt and verified `fork/candidates` tree. Then:
+
+1. Create a sync branch from `fork/dev`.
+2. Calculate the tree delta from `C1` to `C2` and apply it to the sync branch.
+3. Resolve integration conflicts against the current `fork/dev` product tree.
+4. Run the full required checks.
+5. Open a normal PR into `fork/dev`, titled for example
+   `sync(provenance): import upstream stack C1..C2`.
+6. Merge it without rewriting `fork/dev`.
+7. Record `C2` as the newly imported provenance checkpoint.
+
+**This is a manual procedure to begin with, and that is fine.** At the current upstream cadence it
+runs rarely enough that automation is a convenience, not a prerequisite. The imported checkpoint may
+be recorded in an immutable tag or a small machine-owned state file:
+
+```json
+{
+  "importedCandidatesCommit": "<commit>",
+  "importedCandidatesTree": "<tree>",
+  "importedUpstreamCommit": "<commit>"
+}
+```
+
+Automate it later by persisting the last imported commit and tree, building the `C1..C2` sync branch
+automatically, opening a reviewed PR, and updating the checkpoint only after that PR merges.
 
 ## GitHub PRs as the Development Ledger
 
 GitHub PR history is the primary daily ledger. Do not create a second manifest containing every
-normal contributor PR.
+normal contributor PR. Merge order, stable squash commits, changed paths, PR relationships, and
+checkpoint tags already carry the information.
 
-The projection process can use:
-
-- Merge order and timestamps.
-- Stable squash or merge commits on `fork/dev`.
-- Changed paths.
-- PR relationships and referenced issues.
-- External provenance recorded on import PRs.
-- Checkpoint tags defining the projection interval.
-
-Explicit metadata is required only when the work cannot speak for itself.
-
-### External imports
-
-Tim and candidate import PRs should record immutable source information:
+Explicit metadata is required only when the work cannot speak for itself. Tim and candidate import
+PRs should record immutable source information:
 
 ```text
 Source-Repository: <owner/repository>
@@ -277,263 +323,99 @@ Source-SHA: <commit>
 Fork-Layer: tim|candidate
 ```
 
-### Folding later repairs
+This is worth adopting immediately even though the projection work is deferred — the trailers cost
+nothing on an import PR and are hard to reconstruct afterwards.
 
-A repair that should be folded into an earlier clean-history feature may record:
+## Deferred — Clean Downstream Projection
 
-```text
-Projection-Fold-Into: <fork PR number>
-```
+**Not required to reap the benefits above.** Skip this entire section until there is a concrete
+need: upstreaming a series, an external audit, or a major release that wants a curated history.
+Nothing in steps 1–3 depends on it.
 
-This is exceptional projection metadata, not a label required on normal work.
-
-### Minimal manifest
-
-A small manifest remains useful for machine policy that GitHub cannot reliably infer:
-
-- Layer ordering.
-- External import sources.
-- Persistent conflict-resolution rules.
-- Explicit exclusions.
-- Required ordering constraints.
-- Fix-to-feature folding overrides.
-- Exceptional commits that did not originate in a PR.
-
-It should not duplicate the GitHub PR overview.
-
-## Release Workflow
-
-`fork/dev` supports multiple release policies without changing the branch model.
-
-### Immediate releases
-
-After a merge:
-
-1. Obtain or run CI for the exact resulting `fork/dev` SHA.
-2. Infer affected release targets from the previous approved SHA and the new SHA.
-3. Dispatch releases for affected targets.
-4. Record the outcome independently for each target.
-
-This is suitable for urgent bot, server, or desktop fixes.
-
-### Lagged releases
-
-Merges may instead accumulate and be promoted:
-
-- After a debounce period.
-- Every few hours.
-- Daily.
-- At a manually selected checkpoint.
-- On different schedules for different products.
-
-For example, bot/server releases can be frequent while desktop or mobile uses a slower promotion
-cadence. These are release-policy decisions and do not require additional integration branches.
-
-### Checkpoints
-
-Approved releases and clean projections should reference immutable `fork/dev` checkpoints, for
-example:
-
-```text
-fork-dev/2026-08-06.1
-fork-dev/2026-08-06.2
-```
-
-Each deployment record should include:
-
-- `fork/dev` SHA.
-- CI run and conclusion.
-- Calculated change scope.
-- Bot deployment status.
-- Server deployment status.
-- Desktop build/publication status.
-- Mobile build/publication status.
-
-A partial multi-target release must not be represented as completely deployed.
-
-## Periodic Clean Downstream Projection
-
-Clean downstream history can be generated monthly, twice monthly, before major releases, or on
-demand. It is not part of the routine release critical path.
-
-### Inputs
-
-- Latest selected upstream commit.
-- Rebuilt and verified `fork/base`, `fork/tim`, and `fork/candidates`.
-- A tagged, green `fork/dev` checkpoint.
-- GitHub PRs merged between projection checkpoints.
-- Exceptional projection metadata and conflict policies.
-
-### Process
+When it is scheduled, clean downstream history is generated on demand from a tagged, green
+`fork/dev` checkpoint plus rebuilt `fork/base`, `fork/tim`, and `fork/candidates`:
 
 1. Select and tag a green `fork/dev` checkpoint.
-2. Update the upstream mirror.
-3. Rebuild and verify `fork/base`.
-4. Rebuild and verify `fork/tim`.
-5. Rebuild and verify `fork/candidates`.
-6. Select downstream PRs represented in the checkpoint.
-7. Exclude provenance-sync commits because their content is already represented below.
-8. Replay downstream features into `fork/changes-clean`.
-9. Fold explicitly linked repairs into their owning feature commits.
-10. Generate any still-required client projections.
-11. Compose `fork/integration-clean`.
-12. Run the complete per-layer gate in stop-the-line order.
-13. Verify tree equivalence with the selected `fork/dev` checkpoint.
-14. Publish generated branches only after all checks pass.
+2. Update the upstream mirror; rebuild and verify `fork/base`, `fork/tim`, and `fork/candidates`.
+3. Select the downstream PRs represented in the checkpoint, excluding provenance-sync commits whose
+   content is already represented below.
+4. Replay downstream features into `fork/changes-clean`, folding explicitly linked repairs
+   (`Projection-Fold-Into: <fork PR number>`) into their owning feature commits.
+5. Compose `fork/integration-clean` and run the per-layer gate in stop-the-line order.
+6. Verify tree equivalence with the selected checkpoint:
 
-### Failure behavior
+   ```bash
+   git diff --exit-code <fork-dev-checkpoint> <fork-integration-clean>
+   ```
 
-A projection failure:
+7. Publish generated branches only after all checks pass.
 
-- Blocks publication of the generated clean stack.
-- Does not rewrite or block `fork/dev`.
-- Does not block unrelated releases from an already-green `fork/dev` SHA.
-- Produces an actionable report identifying the PR, layer, commit, and conflicting paths.
+Expected differences must be narrowly documented and machine-verifiable; broad path exclusions are
+not acceptable, because they are how a projection silently drops downstream behaviour.
 
-## Tree-Equivalence Verification
+A projection failure blocks publication of the generated clean stack only. It does not rewrite or
+block `fork/dev`, does not block releases from an already-green `fork/dev` SHA, and produces an
+actionable report identifying the PR, layer, commit, and conflicting paths.
 
-The clean projection must prove it did not drop downstream behavior.
+A small manifest remains useful for machine policy GitHub cannot infer — layer ordering, external
+import sources, persistent conflict-resolution rules, explicit exclusions, ordering constraints,
+fix-to-feature folding overrides, and exceptional commits that did not originate in a PR. It should
+not duplicate the GitHub PR overview.
 
-At minimum, compare the selected trees:
-
-```bash
-git diff --exit-code <fork-dev-checkpoint> <fork-integration-clean>
-```
-
-Any expected differences must be narrowly documented and machine-verifiable. Do not accept broad
-path exclusions.
-
-The projection gate should additionally verify:
-
-- Package manifest and lockfile consistency.
-- Migration namespace integrity.
-- Web and mobile fork-surface existence tests.
-- Server and bot behavioral tests.
-- Desktop build and preload verification.
-- Identity, Discord, and VS Code behavior.
-- Release smoke tests.
-
-## CI Responsibilities
-
-### PRs targeting `fork/dev`
-
-Run the complete product gate appropriate to the inferred impact:
-
-- Formatting and lint.
-- Full monorepo typecheck.
-- Unit and behavior tests.
-- Desktop build and preload checks when affected.
-- Mobile native static analysis when affected.
-- Release smoke checks when affected.
-- Conservative full validation for ambiguous shared changes.
-
-### Merges into `fork/dev`
-
-Release only the exact merge SHA after its required checks pass. A green PR tip is not sufficient if
-the resulting merge SHA differs or the base moved.
-
-### Rebased provenance and clean projection layers
-
-Retain the existing full, stop-the-line per-layer gate:
-
-```text
-main
-  -> fork/base
-  -> fork/tim
-  -> fork/candidates
-  -> fork/changes-clean
-  -> optional generated projections
-  -> fork/integration-clean
-```
-
-This expensive process is appropriate for periodic provenance maintenance. It should not sit in the
-path of every routine product release.
+The existing full stop-the-line per-layer gate is retained for this work. It is appropriate for
+periodic provenance maintenance and must not sit in the path of a routine product release.
 
 ## Migration Plan
 
-### Phase 1: Establish `fork/dev`
+### Step 1 — Establish `fork/dev` (do now)
 
-1. Create `fork/dev` from the current green `fork/integration` tip.
-2. Prove the initial trees are identical.
-3. Record the incorporated `fork/candidates` checkpoint.
-4. Protect `fork/dev` against force-pushes and deletion.
-5. Configure required checks and merge policy.
-6. Make `fork/dev` the default base for ordinary contributor PRs.
-7. Keep the old release path temporarily as a fallback.
+See [Step 1](#step-1--cut-over-to-forkdev). Includes the ops deploy-branch parameterization and the
+overlay drain.
 
-### Phase 2: Release from `fork/dev`
+### Step 2 — Release from `fork/dev` (do now)
 
-1. Update release workflows to accept an exact green `fork/dev` SHA.
-2. Implement path/dependency-based scope classification.
-3. Track per-target release outcomes.
-4. Add immutable release/checkpoint records.
-5. Exercise bot, server, desktop, and mobile paths.
-6. Stop requiring full-stack composition for routine releases after validation.
+See [Step 2](#step-2--release-directly-from-forkdev).
 
-### Phase 3: Simplify overlays
+### Step 3 — Simplify overlays (as they drain)
 
-1. Route new identity, Discord, and VS Code PRs directly to `fork/dev` unless independent staging is
-   demonstrably required.
+1. Route new identity, Discord, and VS Code PRs directly to `fork/dev`.
 2. Move ownership to `CODEOWNERS` and path-based CI.
-3. Land current overlay content into `fork/dev` through reviewed migration PRs.
-4. Retire permanent composition overlays once no open work depends on them.
-5. Convert small cross-cutting overlays, including the desktop URL handler, into ordinary stable
-   feature history.
+3. Retire permanent composition overlays once no open work depends on them.
+4. Stop targeting `fork/changes` with contributor PRs and stop composing overlays after every merge.
 
-### Phase 4: Automate provenance synchronization
+### Step 4 — Automate provenance synchronization (when manual becomes tedious)
 
-1. Persist the last imported candidates commit and tree.
-2. Build the `C1..C2` tree-delta sync branch automatically.
-3. Open a reviewed PR into `fork/dev`.
-4. Run the complete product gate.
-5. Update the checkpoint only after the PR merges.
-6. Never merge a rewritten provenance branch directly into `fork/dev`.
+Persist the last imported candidates commit and tree, build the `C1..C2` sync branch automatically,
+open a reviewed PR, run the full gate, and update the checkpoint only after merge. Never merge a
+rewritten provenance branch directly into `fork/dev`.
 
-### Phase 5: Automate clean projection
+### Step 5 — Automate clean projection (only if needed)
 
-1. Query GitHub PRs between checkpoint tags.
-2. Infer ordinary changes from their commits and paths.
-3. Read explicit metadata only for imports and projection exceptions.
-4. Replay changes into clean layers.
-5. Fold explicitly related repairs.
-6. Apply durable conflict policies.
-7. Verify every rewritten layer.
-8. Prove final tree equivalence.
-9. Publish generated branches.
-
-### Phase 6: Retire the old critical path
-
-After the new release and projection workflows are proven:
-
-- Stop targeting `fork/changes` with contributor PRs.
-- Stop composing permanent overlays after every product merge.
-- Mark generated branches clearly as non-authoring surfaces.
-- Keep clean reconstruction available without coupling it to normal releases.
+Only once the deferred projection above is actually wanted: query PRs between checkpoint tags, infer
+ordinary changes from commits and paths, replay into clean layers, apply durable conflict policies,
+verify every rewritten layer, prove tree equivalence, and publish.
 
 ## Operational Rules
 
 1. Never force-push or rebase `fork/dev`.
-2. Never merge generated projection branches into `fork/dev`.
-3. Never merge a rewritten provenance tip directly into `fork/dev`; import its tree delta.
-4. Never require a clean projection rebuild to ship an unrelated urgent fix.
-5. Never release an untested `fork/dev` SHA.
-6. Every ordinary product change enters through a GitHub PR.
-7. Daily contributors do not manually classify affected clients when paths and dependencies can do
-   so.
-8. External imports record immutable source provenance.
-9. Projection exceptions are explicit and rare.
-10. A generated integration is not successful until it matches its selected `fork/dev` checkpoint.
+2. Never merge a rewritten provenance tip directly into `fork/dev`; import its tree delta.
+3. Never require a clean projection rebuild to ship an unrelated urgent fix.
+4. Never release an untested `fork/dev` SHA; release the exact merge SHA, not the PR tip.
+5. Every ordinary product change enters through a GitHub PR.
+6. Daily contributors do not manually classify affected clients when paths and dependencies can.
+7. External imports record immutable source provenance at import time.
+8. If generated projection branches exist, never merge them into `fork/dev` and never use one as a
+   PR base.
 
 ## Open Decisions
 
-These decisions can be made independently after the branch topology is accepted:
+None of these block step 1 or step 2:
 
 - Immediate, debounced, scheduled, or manual release cadence for each target.
 - Squash-only versus mixed merge policy on `fork/dev`.
 - Frequency of upstream/provenance synchronization.
-- Frequency of clean downstream projection.
 - Whether identity, Discord, or VS Code needs a stable subsystem staging branch.
-- Whether clean projection is mandatory for major releases or purely an audit/upstreaming artifact.
+- Whether clean downstream projection is ever built, and if so on what trigger.
 - Naming of the generated clean branches.
 - Exact rules for mapping shared-package changes to downstream consumers.
 
@@ -542,8 +424,10 @@ These decisions can be made independently after the branch topology is accepted:
 Adopt the following operating principle:
 
 > Rebase external provenance; merge stable product development; release exact green `fork/dev`
-> checkpoints; generate clean downstream history separately.
+> checkpoints; generate clean downstream history separately — and only when it is actually needed.
 
-This retains the valuable structure of `main -> base -> Tim -> candidates`, removes daily rebases
-from contributor and release workflows, avoids routine label administration, and preserves the
-ability to produce a clean, auditable downstream history when it is actually needed.
+Steps 1 and 2 can land in a single day: cut `fork/dev` from the green `fork/integration` tip, drain
+the overlays, flip the ops deploy branch, and release from exact green SHAs. That removes daily
+rebases from contributor and release workflows and removes routine label administration immediately,
+while preserving the ability to produce a clean, auditable downstream history later if it is ever
+worth the cost.
