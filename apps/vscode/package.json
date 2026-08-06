@@ -130,6 +130,11 @@
         "category": "T3 Code"
       },
       {
+        "command": "t3Code.pair",
+        "title": "Pair with Server…",
+        "category": "T3 Code"
+      },
+      {
         "command": "t3Code.setBearerToken",
         "title": "T3 Code: Set Server Bearer Token",
         "category": "T3 Code"
@@ -194,6 +199,7 @@
     "onCommand:t3Code.newThread",
     "onCommand:t3Code.openChat",
     "onCommand:t3Code.openInT3",
+    "onCommand:t3Code.pair",
     "onCommand:t3Code.selectThread",
     "onCommand:t3Code.setBearerToken",
     "onCommand:t3Code.showDiagnostics",
