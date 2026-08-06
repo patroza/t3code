@@ -32,12 +32,17 @@ on:
   # integrationOverlays is empty: the overlays were drained into fork/dev at
   # cutover. Re-add bases here if one is ever registered again.
   pull_request:
-    # Explicit, because the default set (opened, synchronize, reopened) misses
-    # both ways a PR can become eligible without a new commit: being marked
-    # ready, and being retargeted onto a listed base. A PR retargeted from a
-    # branch this workflow does not watch would otherwise sit forever on
-    # required checks that can never report.
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    # Explicit, to add ready_for_review: a PR marked ready without a new commit
+    # would otherwise sit forever on required checks that can never report.
+    #
+    # "edited" is deliberately absent. It was added to cover retargeting, but it
+    # also fires for title and body edits, and a job-level guard that skips those
+    # is worse than not triggering: a skipped job still publishes a check run,
+    # GitHub counts a skipped required check as satisfied, and the skipped run
+    # supersedes the real one. Editing the title of a red PR would clear its
+    # failures. Retarget without a push is rarer and recoverable -- close and
+    # reopen fires "reopened", which is watched.
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - fork/base
       - fork/tim
@@ -64,11 +69,6 @@ concurrency:
 jobs:
   check:
     name: Check
-    # "edited" also fires for title and body edits, which must not spend a full
-    # CI run. github.event.changes.base is present only when the base changed.
-    if: >-
-      github.event_name != 'pull_request' || github.event.action != 'edited' ||
-      github.event.changes.base != null
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -120,11 +120,6 @@ jobs:
 
   test:
     name: Test
-    # "edited" also fires for title and body edits, which must not spend a full
-    # CI run. github.event.changes.base is present only when the base changed.
-    if: >-
-      github.event_name != 'pull_request' || github.event.action != 'edited' ||
-      github.event.changes.base != null
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -148,11 +143,6 @@ jobs:
 
   mobile_native_static_analysis:
     name: Mobile Native Static Analysis
-    # "edited" also fires for title and body edits, which must not spend a full
-    # CI run. github.event.changes.base is present only when the base changed.
-    if: >-
-      github.event_name != 'pull_request' || github.event.action != 'edited' ||
-      github.event.changes.base != null
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -191,11 +181,6 @@ jobs:
 
   release_smoke:
     name: Release Smoke
-    # "edited" also fires for title and body edits, which must not spend a full
-    # CI run. github.event.changes.base is present only when the base changed.
-    if: >-
-      github.event_name != 'pull_request' || github.event.action != 'edited' ||
-      github.event.changes.base != null
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
