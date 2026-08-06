@@ -304,6 +304,19 @@ Rewritten provenance branches must not be repeatedly merged into `fork/dev`. Aft
 commits have new identities; merging the rewritten tip would duplicate history and produce avoidable
 conflicts. Synchronize the net tree change instead.
 
+### GitHub will report `fork/dev` as behind upstream. Never "Sync fork"
+
+Because the delta lands as one squashed commit, `fork/dev` carries upstream's _content_ without
+upstream's _commit objects_, and GitHub computes ahead/behind purely by reachability. The branch page
+will therefore always read `N commits behind pingdotgg/t3code:main`, and `N` grows with every import.
+That is expected, not drift: commit-level provenance lives on `main → fork/base → fork/tim →
+fork/candidates`, which is where currency should be checked.
+
+**Do not press the "Sync fork" button.** It merges upstream `main` into `fork/dev`, which is exactly
+the duplicate-history failure above — the content is already present, so the merge conflicts en masse
+and leaves two representations of the same changes. Verify currency by confirming that the imported
+upstream commit recorded in the latest checkpoint matches the upstream tip.
+
 Assume `C1` is the `fork/candidates` tree currently incorporated into `fork/dev`, and `C2` is the
 latest rebuilt and verified `fork/candidates` tree. Then:
 
