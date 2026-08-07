@@ -90,6 +90,15 @@ const isolatedUnitTestFiles = [
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
+  // Tests that mock `react` itself and drive components through
+  // reactHookHarness need their own module registry: under `isolate: false`
+  // the component graph may already be bound to the real react/compiler
+  // runtime by an earlier file in the same worker, and the mock then never
+  // applies — the compiled component reports a memo-cache hit and skips the
+  // hooks these tests assert on. Upstream ships these without isolation
+  // because it does not share registries; the fork does.
+  "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
+  "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   "src/connection/storage.test.ts",
   "src/contextMenuFallback.test.ts",
   "src/environments/primary/bootstrap.test.ts",
