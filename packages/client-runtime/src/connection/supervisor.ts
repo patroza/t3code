@@ -27,7 +27,6 @@ import {
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
-import * as ConnectionDiagnosticsLog from "./diagnosticsLog.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
 const RETRY_DELAYS_MS = [3_000, 4_000, 8_000, 16_000] as const;
@@ -226,28 +225,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
-  const diagnosticsLog = yield* Effect.serviceOption(
-    ConnectionDiagnosticsLog.ConnectionDiagnosticsLog,
-  );
-
-  const recordDiagnostic = (input: {
-    readonly kind: ConnectionDiagnosticsLog.ConnectionDiagnosticKind;
-    readonly error: ConnectionAttemptError;
-    readonly attempt: number;
-  }) =>
-    Option.match(diagnosticsLog, {
-      onNone: () => Effect.void,
-      onSome: (log) =>
-        log.record({
-          environmentId: target.environmentId,
-          label: target.label,
-          kind: input.kind,
-          reason: input.error.reason,
-          detail: input.error.detail,
-          traceId: input.error.traceId,
-          attempt: input.attempt,
-        }),
-    });
   const initialIntent: SupervisorIntent = {
     desired: options?.initiallyDesired ?? false,
     network: yield* connectivity.status,
@@ -456,18 +433,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
                     }),
                   ),
               }),
-              Effect.catch((error) =>
-                Effect.logWarning(
-                  "Foreground connection health check failed; keeping the open WebSocket lease.",
-                ).pipe(
-                  Effect.annotateLogs({
-                    "environment.id": target.environmentId,
-                    "environment.label": target.label,
-                    "connection.probe.reason": error.reason,
-                    "connection.probe.detail": error.detail,
-                  }),
-                ),
-              ),
               Effect.forkChild,
             );
             for (;;) {
@@ -733,21 +698,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
 
       const attemptSpan: Option.Option<Tracer.Span> = outcome.failure.attemptSpan;
-      let error: ConnectionAttemptError = outcome.failure.error;
-      // Attach the environment label to short transport messages from the RPC layer.
-      if (
-        error._tag === "ConnectionTransientError" &&
-        (error.detail === "ping timeout" || error.detail === "ping timeout.")
-      ) {
-        error = new ConnectionTransientError({
-          reason: error.reason,
-          detail: `${target.label} ping timeout.`,
-          ...(error.traceId !== undefined ? { traceId: error.traceId } : {}),
-        });
-      }
+      const error: ConnectionAttemptError = outcome.failure.error;
       latestFailure = error;
       if (error._tag === "ConnectionBlockedError") {
-        yield* recordDiagnostic({ kind: "blocked", error, attempt });
         const blockedIntent = yield* Ref.get(intent);
         yield* setState({
           desired: blockedIntent.desired,
@@ -784,11 +737,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         delayMs,
         reason: error.reason,
       }));
-      yield* recordDiagnostic({
-        kind: outcome.established ? "disconnect" : "connect_failed",
-        error,
-        attempt,
-      });
       const failedIntent = yield* Ref.get(intent);
       yield* setState({
         desired: failedIntent.desired,
@@ -807,23 +755,18 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     }
   });
 
-  const applyNetworkStatus = Effect.fnUntraced(function* (network: NetworkStatus) {
-    const changed = yield* Ref.modify(intent, (current) =>
-      current.network === network ? [false, current] : ([true, { ...current, network }] as const),
-    );
-    if (changed) {
-      yield* signal({ _tag: "NetworkChanged", network });
-    }
-  });
-
-  // The offline branch of `run` only waits for signals and re-reads the same
-  // cached network value, so a transition dropped while the app was suspended
-  // would otherwise strand this supervisor until the app restarted.
-  yield* Connectivity.followNetworkStatus({
-    connectivity,
-    wakeups,
-    apply: applyNetworkStatus,
-  });
+  yield* connectivity.changes.pipe(
+    Stream.runForEach((network) =>
+      Ref.modify(intent, (current) =>
+        current.network === network ? [false, current] : ([true, { ...current, network }] as const),
+      ).pipe(
+        Effect.flatMap((changed) =>
+          changed ? signal({ _tag: "NetworkChanged", network }) : Effect.void,
+        ),
+      ),
+    ),
+    Effect.forkScoped,
+  );
   yield* wakeups.changes.pipe(
     Stream.runForEach((reason) => signal({ _tag: "Wakeup", reason })),
     Effect.forkScoped,
