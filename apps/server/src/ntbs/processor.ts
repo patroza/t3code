@@ -85,20 +85,66 @@ type NTBSProcessorRequirements =
    */
   | Crypto.Crypto;
 
+/**
+ * Creates a new T3 thread for an external request.
+ *
+ * Does nothing if the adapter has already handled the request.
+ * Otherwise starts the thread, records it, posts an acknowledgement, and records that message.
+ */
 declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
   request: NTBS.RequestAccepted<P>,
   t3Context: T3Context,
 ) => Effect.Effect<void, NTBSProcessorError>;
 
+/**
+ * Provider runtimes (like Claude Code) emit `turn.completed` but
+ * T3 consumes those internally and represents the result externally emitting only a `thread.session-set` event.
+ * This works for non-NTBS surfaces as they are notified to simply
+ * rerender the latest projection.
+ *
+ * But it does not work for NTBS ones that do not consume projections.
+ *
+ * Thus, we need to listen for re-emitted `thread.session-set` events and manually check the state of the thread.
+ *
+ * We read the project thread identified by the session event.
+ * - return `null` if the thread isn't done.
+ * - return final assistant text or plain error text otherwise.
+ * Reads the projected thread identified by the session event.
+ */
+declare const resolveT3Outcome: (
+  event: Extract<OrchestrationEvent, { type: "thread.session-set" }>,
+) => Effect.Effect<
+  { readonly threadId: ThreadId; readonly text: string } | null,
+  NTBSProcessorError
+>;
+
+/**
+ * Handles T3 events that may indicate that a turn has ended.
+ *
+ * Ignores other events, threads with no adapter record, and responses that have been already posted.
+ *
+ * When a turn has ended, reads its result, posts it through the adapter and updates the lifecycle.
+ */
 declare const processT3Event: <P extends NTBS.PlatformData>(
   event: OrchestrationEvent,
 ) => Effect.Effect<void, NTBSProcessorError>;
 
+/**
+ * Creates an isolated worktree and a new T3 thread from the source snapshot.
+ *
+ * Starts the first turn and returns the new thread ID.
+ * Does not read platform data or call the adapter.
+ */
 declare const startT3thread: (
   snapshot: string,
   t3Context: T3Context,
 ) => Effect.Effect<ThreadId, NTBSProcessorError>;
 
+/**
+ * Creates an NTBS processor for one adapter.
+ *
+ * Resolves the required T3 services and returns processor operations with no remaining requirements.
+ */
 declare const makeProcessor: <P extends NTBS.PlatformData>(
   adapter: NTBSAdapter<P>,
 ) => Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements>;
