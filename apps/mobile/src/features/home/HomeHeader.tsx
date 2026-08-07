@@ -22,6 +22,10 @@ import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import {
+  getConnectionAwareBrandHeaderOptions,
+  WorkspaceConnectionTitle,
+} from "./WorkspaceConnectionTitle";
+import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
   type HomeListFilterMenuProject,
@@ -83,6 +87,7 @@ export function HomeHeader(props: {
   readonly onHideSettledThreadsChange: (hide: boolean) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
 }) {
@@ -336,17 +341,27 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       >
         <View className="w-full max-w-[720px] self-center gap-3">
           <View className="flex-row items-center gap-2.5">
-            <View className="flex-1 flex-row items-center gap-2">
-              <T3Wordmark color={iconColor} height={15} />
-              <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
-                Code
-              </RNText>
-              <View className="rounded-full bg-subtle px-2 py-0.75">
-                <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                  Alpha
-                </RNText>
-              </View>
-            </View>
+            {/* Brand slot doubles as the connection status surface: while an
+                environment reconnects, the lockup fades to a status label in
+                place (no layout shift in the list below). */}
+            <WorkspaceConnectionTitle
+              grow
+              onPress={props.onOpenEnvironments}
+              brand={
+                <View className="flex-row items-center gap-2">
+                  {/* Mirrors the desktop SidebarBrand: T3 mark + muted "Code". */}
+                  <T3Wordmark color={iconColor} height={15} />
+                  <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
+                    Code
+                  </RNText>
+                  <View className="rounded-full bg-subtle px-2 py-0.75">
+                    <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
+                      {stageLabel}
+                    </RNText>
+                  </View>
+                </View>
+              }
+            />
 
             {alternateModes.map((mode) => (
               <Pressable
@@ -506,8 +521,19 @@ function IosHomeHeader(props: HomeHeaderProps) {
       <NativeStackScreenOptions
         optionsVersion={[filterMenu.items, props.listMode, headerTitle, useSolidBoardHeader]}
         options={{
-          title: headerTitle,
-          headerTitle,
+          // The iOS Home header owns the native title, so the connection
+          // status has to swap in here — the in-flow header above (Android)
+          // is not mounted on this path. The list-mode title is passed
+          // through so it survives the swap.
+          ...getConnectionAwareBrandHeaderOptions({
+            onOpenEnvironments: props.onOpenEnvironments,
+            title: headerTitle,
+            brand: (
+              <RNText className="text-[18px] font-t3-bold text-foreground" numberOfLines={1}>
+                {headerTitle}
+              </RNText>
+            ),
+          }),
           headerTintColor: iconColor,
           // Explicitly toggle glass ↔ solid when switching modes so board
           // underlap does not stick after leaving Board, and vice versa.

@@ -84,8 +84,6 @@ import {
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
-import { WorkspaceConnectionStatus } from "./WorkspaceConnectionStatus";
-import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-status";
 
 /* ─── Types ──────────────────────────────────────────────────────────── */
 
@@ -123,7 +121,6 @@ interface HomeScreenProps {
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onAddConnection: () => void;
-  readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
@@ -1194,20 +1191,13 @@ export function HomeScreen(props: HomeScreenProps) {
     }
     return map;
   }, [props.savedConnectionsById]);
-  const shouldShowConnectionStatus = shouldShowWorkspaceConnectionStatus(props.catalogState);
+  // Connection state surfaces in the header title slot
+  // (WorkspaceConnectionTitle) — nothing renders inside the list, so
+  // reconnects never shift the rows.
   const emptyState = deriveEmptyState({
     catalogState: props.catalogState,
     projectCount: props.projects.length,
   });
-  const connectionStatus =
-    shouldShowConnectionStatus && Platform.OS !== "ios" ? (
-      <View
-        className="absolute left-0 right-0 items-center"
-        style={{ bottom: Math.max(insets.bottom, 18) + 76 }}
-      >
-        <WorkspaceConnectionStatus state={props.catalogState} onPress={props.onOpenEnvironments} />
-      </View>
-    ) : null;
 
   // Board owns its empty chrome; connection-level empty still applies below
   // for Recent/Projects when the workspace has no threads at all.
@@ -1228,41 +1218,17 @@ export function HomeScreen(props: HomeScreenProps) {
             onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
             variant="plain"
           />
-          {emptyState.loading && !shouldShowConnectionStatus ? (
+          {emptyState.loading ? (
             <View className="mt-4 items-center">
               <ActivityIndicator color={accentColor} />
             </View>
           ) : null}
-          {shouldShowConnectionStatus && Platform.OS === "ios" ? (
-            <View className="mt-4">
-              <WorkspaceConnectionStatus
-                state={props.catalogState}
-                onPress={props.onOpenEnvironments}
-                variant="sidebar"
-              />
-            </View>
-          ) : null}
         </View>
-        {connectionStatus}
       </View>
     );
   }
 
-  const listHeader = (
-    <>
-      {Platform.OS === "ios" ? null : <HomeTopContentSpacer />}
-
-      {shouldShowConnectionStatus && Platform.OS === "ios" ? (
-        <View className="pb-4">
-          <WorkspaceConnectionStatus
-            state={props.catalogState}
-            onPress={props.onOpenEnvironments}
-            variant="sidebar"
-          />
-        </View>
-      ) : null}
-    </>
-  );
+  const listHeader = Platform.OS === "ios" ? null : <HomeTopContentSpacer />;
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).
@@ -1343,7 +1309,6 @@ export function HomeScreen(props: HomeScreenProps) {
           onSettleThread={props.onSettleThread}
           onUnsettleThread={props.onUnsettleThread}
         />
-        {connectionStatus}
       </View>
     );
   }
@@ -1394,7 +1359,6 @@ export function HomeScreen(props: HomeScreenProps) {
             }}
           />
         </SwipeableScrollGateProvider>
-        {connectionStatus}
       </View>
     );
   }
@@ -1465,7 +1429,6 @@ export function HomeScreen(props: HomeScreenProps) {
           }
         />
       </SwipeableScrollGateProvider>
-      {connectionStatus}
     </View>
   );
 }
