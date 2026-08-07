@@ -555,6 +555,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   // flag must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarV2Status(thread);
+  // Screen-reader status for an in-flight title regeneration: the v2 rows are
+  // a fork rewrite of upstream's row, so this never came across with the rest
+  // of that surface even though the projection field did.
+  const isRegeneratingTitle = thread.titleRegeneration != null;
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
   // an explicit act, so unlike Done, a never-visited woke thread still
@@ -958,6 +962,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             </span>
             {title}
             {terminalStatusIcon}
+            {isRegeneratingTitle ? (
+              <span role="status" className="sr-only">
+                Regenerating title
+              </span>
+            ) : null}
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -1186,9 +1195,27 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 ) : null}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0">{title}</div>
+            <div className="mt-1 flex min-w-0">
+              {title}
+              {isRegeneratingTitle ? (
+                <span role="status" className="sr-only">
+                  Regenerating title
+                </span>
+              ) : null}
+            </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-              {thread.branch ? (
+              {/* While working, the current plan step outranks the branch:
+                  it's the one line that says what the thread is doing. */}
+              {status === "working" && thread.planProgress ? (
+                <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                  {thread.planProgress.step}
+                  {/* Completed count, matching the transcript chip's n/m. */}
+                  <span className="text-muted-foreground/50 tabular-nums">
+                    {" "}
+                    {thread.planProgress.completedSteps}/{thread.planProgress.totalSteps}
+                  </span>
+                </span>
+              ) : thread.branch ? (
                 <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
               ) : (
                 <span className="flex-1" />

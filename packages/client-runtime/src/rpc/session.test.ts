@@ -280,8 +280,10 @@ describe("RpcSessionFactory", () => {
         yield* completeInitialConfig(socket);
         yield* Fiber.join(readyFiber);
 
-        // Effect RPC pinger: first 5s sends ping; second 5s without pong opens the timeout latch.
-        yield* TestClock.adjust("10 seconds");
+        // Patched Effect RPC pinger: a ping every 5s, closing only once two
+        // pong windows have been missed (upstream #5561), so the latch opens
+        // in the fourth window rather than the second.
+        yield* TestClock.adjust("20 seconds");
         const error = yield* Effect.flip(session.closed);
 
         expect(error).toBeInstanceOf(ConnectionTransientError);
@@ -333,6 +335,69 @@ describe("RpcSessionFactory", () => {
       );
 
       expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
+    }),
+  );
+
+  it.effect("tolerates two missed pong windows before closing the session", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      yield* TestClock.adjust("15 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+      expect(socket.sent.slice(1).map((request) => decodeJson(request))).toEqual([
+        { _tag: "Ping" },
+        { _tag: "Ping" },
+        { _tag: "Ping" },
+      ]);
+
+      yield* TestClock.adjust("5 seconds");
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      // Fork: a missed-pong close is reported as a labelled ping timeout, not
+      // a bare transport disconnect (see the ping-timeout test above).
+      expect(error).toMatchObject({ reason: "timeout" });
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("reaches ready when a newer server sends unknown config members", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+
+      const shortcut = {
+        key: "p",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        modKey: true,
+      };
+      yield* completeInitialConfig(socket, {
+        ...ENCODED_SERVER_CONFIG,
+        keybindings: [
+          { command: "someFuture.toggle", shortcut },
+          { command: "terminal.toggle", shortcut },
+        ],
+        issues: [{ kind: "keybindings.future-issue", message: "From a newer server" }],
+        availableEditors: ["some-future-editor", "zed"],
+      });
+      yield* Fiber.join(readyFiber);
+
+      const config = yield* session.initialConfig;
+      expect(config.keybindings).toEqual([{ command: "terminal.toggle", shortcut }]);
+      expect(config.issues).toEqual([]);
+      expect(config.availableEditors).toEqual(["zed"]);
     }),
   );
 

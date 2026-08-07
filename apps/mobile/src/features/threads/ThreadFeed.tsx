@@ -1337,8 +1337,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const foldSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const headerMaterialVisibleRef = useRef(false);
-  const isAtEndRef = useRef(true);
-  const userNavigationInProgressRef = useRef(false);
   const previousLatestTurnRef = useRef(props.latestTurn);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
@@ -1347,8 +1345,30 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [viewportHeight, setViewportHeight] = useState(0);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
-  const [isAtEnd, setIsAtEnd] = useState(true);
+  // Live-follow latch. LegendList's maintainScrollAtEnd alone re-pins the feed
+  // whenever the viewport drifts back inside its geometric threshold, which
+  // yanked users off history they were reading every time a stream chunk grew
+  // a row. Follow breaks when the user scrolls up and away, and re-arms only
+  // when the list actually returns to the end (or on send / thread switch).
+  const [endFollowEnabled, setEndFollowEnabled] = useState(true);
+  const endFollowEnabledRef = useRef(true);
+  // A "user scroll session" spans from drag start through the end of its
+  // momentum; only motion inside a session can break follow, so MVCP
+  // compensations and programmatic scrolls never strand a follower.
+  const userScrollSessionRef = useRef(false);
+  // Fork: the scroll-to-latest pill reports whether anything arrived while the
+  // reader was away, so returning to the live edge always clears it.
   const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
+  const setEndFollow = useCallback((enabled: boolean) => {
+    if (enabled) {
+      setHasUnreadActivity(false);
+    }
+    if (endFollowEnabledRef.current === enabled) {
+      return;
+    }
+    endFollowEnabledRef.current = enabled;
+    setEndFollowEnabled(enabled);
+  }, []);
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
@@ -1467,28 +1487,44 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      const { contentInset, contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
       nearListEnd.value =
         contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
-      const distanceFromEnd =
-        contentSize.height + contentInset.bottom - contentOffset.y - layoutMeasurement.height;
-      const nextIsAtEnd = distanceFromEnd <= FEED_END_THRESHOLD;
-      if (nextIsAtEnd) {
-        userNavigationInProgressRef.current = false;
-      }
-      if (
-        isAtEndRef.current !== nextIsAtEnd &&
-        (nextIsAtEnd || userNavigationInProgressRef.current)
-      ) {
-        isAtEndRef.current = nextIsAtEnd;
-        setIsAtEnd(nextIsAtEnd);
-      }
-      if (nextIsAtEnd) {
-        setHasUnreadActivity(false);
+
+      // Latch bookkeeping. LegendList recomputes its inset-aware end distance
+      // before invoking this handler, so getState() is current. Returning to
+      // the end re-arms follow no matter who scrolled (the user, or our own
+      // scroll-to-end); moving away breaks it only during a user-initiated
+      // scroll session, so MVCP compensations and programmatic repositioning
+      // can never strand a follower.
+      const listState = props.listRef.current?.getState();
+      if (listState) {
+        if (listState.isWithinMaintainScrollAtEndThreshold) {
+          setEndFollow(true);
+        } else if (userScrollSessionRef.current) {
+          setEndFollow(false);
+        }
       }
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd],
+    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd, props.listRef, setEndFollow],
   );
+  const handleScrollBeginDrag = useCallback(() => {
+    userScrollSessionRef.current = true;
+  }, []);
+  // The session must survive past finger-lift so momentum that carries the
+  // user away from the end still breaks follow; a drag released with no
+  // momentum ends its session at the release itself, otherwise at momentum
+  // end. Leaving a session open would let a later animated maintain-scroll
+  // read as user motion and break follow spuriously.
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = event.nativeEvent.velocity?.y ?? 0;
+    if (Math.abs(velocity) < 0.05) {
+      userScrollSessionRef.current = false;
+    }
+  }, []);
+  const handleMomentumScrollEnd = useCallback(() => {
+    userScrollSessionRef.current = false;
+  }, []);
 
   // Gated variant of the 180ms feed layout slide. Instant while browsing
   // history: maintainVisibleContentPosition compensates the scroll offset in
@@ -1517,9 +1553,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       };
     };
   }, [nearListEnd]);
-  const handleScrollBeginDrag = useCallback(() => {
-    userNavigationInProgressRef.current = true;
-  }, []);
   const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -1530,6 +1563,34 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   useEffect(() => {
     reportHeaderMaterialVisibility(false);
   }, [props.threadId, reportHeaderMaterialVisibility]);
+
+  // A thread switch opens pinned to the end; a send explicitly returns to the
+  // live edge (ThreadDetailScreen scrolls the new message into place). Both
+  // re-arm follow regardless of where the user had scrolled before.
+  useEffect(() => {
+    userScrollSessionRef.current = false;
+    setEndFollow(true);
+  }, [props.threadId, setEndFollow]);
+  useEffect(() => {
+    if (props.anchorMessageId !== null) {
+      userScrollSessionRef.current = false;
+      setEndFollow(true);
+    }
+  }, [props.anchorMessageId, setEndFollow]);
+
+  // Mark unread only for activity that lands while follow is broken; a thread
+  // switch re-arms follow above and clears the flag through setEndFollow.
+  const observedActivityRef = useRef({ feed: props.feed, latestTurn: props.latestTurn });
+  useEffect(() => {
+    const previous = observedActivityRef.current;
+    observedActivityRef.current = { feed: props.feed, latestTurn: props.latestTurn };
+    if (
+      (previous.feed !== props.feed || previous.latestTurn !== props.latestTurn) &&
+      !endFollowEnabledRef.current
+    ) {
+      setHasUnreadActivity(true);
+    }
+  }, [props.feed, props.latestTurn]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1558,39 +1619,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ],
   );
 
-  const observedActivityRef = useRef({
-    threadId: props.threadId,
-    feed: props.feed,
-    latestTurn: props.latestTurn,
-  });
-  useEffect(() => {
-    const previous = observedActivityRef.current;
-    observedActivityRef.current = {
-      threadId: props.threadId,
-      feed: props.feed,
-      latestTurn: props.latestTurn,
-    };
-    if (previous.threadId !== props.threadId) {
-      isAtEndRef.current = true;
-      setIsAtEnd(true);
-      setHasUnreadActivity(false);
-      return;
-    }
-    if (
-      (previous.feed !== props.feed || previous.latestTurn !== props.latestTurn) &&
-      !isAtEndRef.current
-    ) {
-      setHasUnreadActivity(true);
-    }
-  }, [props.feed, props.latestTurn, props.threadId]);
-
   const scrollToLatest = useCallback(() => {
-    isAtEndRef.current = true;
-    userNavigationInProgressRef.current = false;
-    setIsAtEnd(true);
-    setHasUnreadActivity(false);
+    userScrollSessionRef.current = false;
+    setEndFollow(true);
     props.listRef.current?.scrollToEnd({ animated: true });
-  }, [props.listRef]);
+  }, [props.listRef, setEndFollow]);
 
   // Remount empty→filled once per thread open so initialScrollAtEnd lands under
   // automatic insets. After the first filled mount for this threadId, keep the
@@ -1921,7 +1954,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // anchor scrolls also lets it correct a scroll that landed on a
             // stale end target once the anchor row finishes measuring.
             maintainScrollAtEnd={
-              disclosureToggleSettling || !isAtEnd
+              disclosureToggleSettling || !endFollowEnabled
                 ? false
                 : {
                     animated: true,
@@ -1973,6 +2006,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             initialScrollAtEnd
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
+            onScrollEndDrag={handleScrollEndDrag}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
             // Under automatic insets the spacer is UIKit's job, but the
             // older-history spinner still belongs at the top of the content.
@@ -1997,7 +2032,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               paddingHorizontal: contentHorizontalPadding,
             }}
           />
-          {!isAtEnd ? (
+          {!endFollowEnabled ? (
             <View
               pointerEvents="box-none"
               className="absolute inset-x-0 items-center"
