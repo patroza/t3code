@@ -760,12 +760,14 @@ function ThreadRouteContent(
   });
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = (showActionControls: boolean) => (
-    <>
+    // A real flex host (not a fragment) keeps the thread body filling the
+    // screen so the absolute composer overlay anchors to the true bottom.
+    <View testID="thread-conversation-surface" className="flex-1 bg-screen" style={{ flex: 1 }}>
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
 
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
-      <View className="flex-1 bg-screen">
+      <View className="flex-1" style={{ flex: 1 }}>
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
@@ -785,6 +787,7 @@ function ThreadRouteContent(
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           loadEarlier={loadEarlierTurns}
+          sendEntersQueue={composer.sendEntersQueue}
           activeThreadBusy={composer.activeThreadBusy}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
@@ -810,7 +813,7 @@ function ThreadRouteContent(
           onSubmitUserInput={requests.onSubmitUserInput}
         />
       </View>
-    </>
+    </View>
   );
 
   return (

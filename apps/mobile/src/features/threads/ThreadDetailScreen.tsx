@@ -63,6 +63,8 @@ export interface ThreadDetailScreenProps {
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  /** True when the next send will be held in the server steering queue. */
+  readonly sendEntersQueue?: boolean;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
@@ -296,17 +298,29 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     selectedThreadKey,
   ]);
 
+  const sendEntersQueue = props.sendEntersQueue === true;
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
+    const sendWillQueue = sendEntersQueue;
     const messageId = await props.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
     }
 
-    setAnchorMessageId(messageId);
+    // A send the server holds in the steering queue stays a composer chip: it
+    // never becomes a feed row, so moving the feed for it would both yank a
+    // reader out of history now and leave the anchor armed to fire whenever
+    // the queue finally drains.
+    if (!sendWillQueue) {
+      // Rejoin the physical live edge before the outgoing-row anchor is
+      // applied. Enabling end maintenance alone is ineffective when the list
+      // was scrolled into older history.
+      listRef.current?.scrollToEnd({ animated: false });
+      setAnchorMessageId(messageId);
+    }
     composerEditorRef.current?.blur();
     return messageId;
-  }, [props.onSendMessage, selectedThreadKey]);
+  }, [props.onSendMessage, selectedThreadKey, sendEntersQueue]);
 
   const collapseComposer = useCallback(() => {
     composerEditorRef.current?.blur();
