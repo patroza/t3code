@@ -6,12 +6,12 @@
  * a bot, etc) `source` and `responseDestination` hold the details
  * necessary to process the what and why.
  */
-type PlatformData<Source = unknown, ResponseDestination = unknown> = {
+export type PlatformData<Source = unknown, ResponseDestination = unknown> = {
   source: Source;
   responseDestination: ResponseDestination;
 };
 
-type LifecycleEvent<P extends PlatformData> = {
+export type LifecycleEvent<P extends PlatformData> = {
   /**
    * Each NTBSEvent carries the adapter-defined external data.
    * T3 never inspects it. Only the adapter deals with it.
@@ -24,43 +24,42 @@ type LifecycleEvent<P extends PlatformData> = {
   snapshot: string;
 };
 
-type ThreadEvent<P extends PlatformData> = LifecycleEvent<P> & {
-  /** The T3 IDs created by the adapter */
+export type ThreadEvent<P extends PlatformData> = LifecycleEvent<P> & {
   t3Data: {
     /** The T3 thread created by the lifecycle event */
     threadId: string;
   };
 };
 
-type RequestAccepted<P extends PlatformData> = LifecycleEvent<P> & {
+export type RequestAccepted<P extends PlatformData> = LifecycleEvent<P> & {
   state: "request.accepted";
 };
 
-type ThreadStarted<P extends PlatformData> = ThreadEvent<P> & {
+export type ThreadStarted<P extends PlatformData> = ThreadEvent<P> & {
   /** T3 has created the new thread from the source snapshot */
   state: "thread.started";
 };
 
-type ThreadStartedAcknowledgement<P extends PlatformData> = ThreadEvent<P> & {
+export type ThreadStartedAcknowledgement<P extends PlatformData> = ThreadEvent<P> & {
   state: "thread.started.acknowledged";
   /** the external's platform identification of the acknowledgment message */
   acknowledgementMessageId: string;
 };
 
-type ResponseAvailable<P extends PlatformData> = ThreadEvent<P> & {
+export type ResponseAvailable<P extends PlatformData> = ThreadEvent<P> & {
   state: "thread.response.available";
   /** the external's platform identification of the acknowledgment message */
   acknowledgementMessageId: string;
 };
 
-type ResponsePosted<P extends PlatformData> = ThreadEvent<P> & {
+export type ResponsePosted<P extends PlatformData> = ThreadEvent<P> & {
   state: "thread.response.posted";
   /** the external's platform identification of the acknowledgment message */
   acknowledgementMessageId: string;
   responseMessageId: string;
 };
 
-type NTBSLifecycle<P extends PlatformData> =
+export type NTBSLifecycle<P extends PlatformData> =
   | RequestAccepted<P>
   | ThreadStarted<P>
   | ThreadStartedAcknowledgement<P>
