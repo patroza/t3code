@@ -1,7 +1,11 @@
-import { type OrchestrationEvent, type ProjectId } from "@t3tools/contracts";
+import { ThreadId, type OrchestrationEvent, type ProjectId } from "@t3tools/contracts";
 import type * as NTBS from "./schemas.ts";
-import { Context, Data, Effect } from "effect";
+import { Context, Crypto, Data, Effect } from "effect";
 import type { NTBSAdapter } from "./adapter.ts";
+import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import type { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import type { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import type { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 
 /*
   NTBS architectural description:
@@ -57,6 +61,30 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
 export const makeNTBSProcessor = <P extends NTBS.PlatformData>(key: string) =>
   Context.Service<NTBSProcessor<P>>(key);
 
+type NTBSProcessorRequirements =
+  /*
+    Dispatches thread creation and turn-start commands.
+    Provides the T3 event stream used to detect outcomes.
+   */
+  | OrchestrationEngineService
+  /*
+    Loads the selected T3 project and reads the completed thread
+    state and response tex.
+  */
+  | ProjectionSnapshotQuery
+  /*
+    Creates the isolated branch and worktree for each accepted external request.
+  */
+  | GitWorkflowService
+  /*
+    Runs the project setup scripts in the newly created worktree before agent work begins.
+  */
+  | ProjectSetupScriptRunner
+  /*
+    Generates unique identifiers for the new thread, message, commands, and worktree branch.
+   */
+  | Crypto.Crypto;
+
 declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
   request: NTBS.RequestAccepted<P>,
   t3Context: T3Context,
@@ -65,6 +93,11 @@ declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
 declare const processT3Event: <P extends NTBS.PlatformData>(
   event: OrchestrationEvent,
 ) => Effect.Effect<void, NTBSProcessorError>;
+
+declare const startT3thread: (
+  snapshot: string,
+  t3Context: T3Context,
+) => Effect.Effect<ThreadId, NTBSProcessorError>;
 
 declare const makeProcessor: <P extends NTBS.PlatformData>(
   adapter: NTBSAdapter<P>,
