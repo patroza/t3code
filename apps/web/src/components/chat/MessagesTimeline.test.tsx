@@ -758,36 +758,32 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Tool call failed"');
   });
 
-  it("offers a 'Load older history' control when older activity remains", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Hi")]}
-        hasMoreOlder
-      />,
-    );
-    expect(markup).toContain("Load older history");
-  });
-
-  it("shows a loading indicator while older history is being fetched", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Hi")]}
-        hasMoreOlder
-        loadingOlder
-      />,
-    );
-    expect(markup).toContain("Loading older history");
-  });
-
-  it("renders no older-history control when none remains", async () => {
+  it("renders no load-earlier control when no older turns remain", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry("Hi")]} />,
     );
-    expect(markup).not.toContain("older history");
+    expect(markup).not.toContain("Load earlier turns");
+  });
+
+  it("renders the load-earlier header when older turns exist", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hi")]}
+        loadEarlier={{ loading: false, onLoadEarlier: () => {} }}
+      />,
+    );
+    expect(markup).toContain("Load earlier turns");
+
+    const loadingMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Hi")]}
+        loadEarlier={{ loading: true, onLoadEarlier: () => {} }}
+      />,
+    );
+    expect(loadingMarkup).toContain("Loading earlier turns");
   });
 });

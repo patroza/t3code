@@ -931,6 +931,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             event.payload.session.activeTurnId ?? existingRow.value.latestTurnId;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
+            // activeTurnId describes current work; a terminal session must not erase history.
             latestTurnId: nextLatestTurnId,
             updatedAt: event.occurredAt,
           });

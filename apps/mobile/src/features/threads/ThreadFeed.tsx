@@ -165,10 +165,11 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
-  /** Older history beyond the live activity window can be lazy-loaded on scroll-up. */
-  readonly hasMoreOlder?: boolean;
-  readonly loadingOlder?: boolean;
-  readonly onLoadOlder?: () => void;
+  /** Non-null when older turns exist beyond the loaded window. */
+  readonly loadEarlier?: {
+    readonly loading: boolean;
+    readonly onLoadEarlier: () => void;
+  } | null;
 }
 
 function MessageAttachmentImage(props: {
@@ -1636,15 +1637,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       ? props.latestTurn.turnId
       : null;
 
-  // Reaching the top (oldest) lazy-loads older history. The hook keys an
-  // in-flight guard by thread, so repeated fires during scroll coalesce.
-  const { hasMoreOlder, loadingOlder, onLoadOlder } = props;
-  const onStartReachedOlderHistory = useCallback(() => {
-    if (hasMoreOlder && !loadingOlder) {
-      onLoadOlder?.();
-    }
-  }, [hasMoreOlder, loadingOlder, onLoadOlder]);
-
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
     previousLatestTurnRef.current = props.latestTurn;
@@ -1980,22 +1972,25 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
-            onStartReached={onStartReachedOlderHistory}
-            onStartReachedThreshold={0.5}
             onScrollBeginDrag={handleScrollBeginDrag}
             scrollEventThrottle={16}
             // Under automatic insets the spacer is UIKit's job, but the
             // older-history spinner still belongs at the top of the content.
             ListHeaderComponent={
-              usesNativeAutomaticInsets ? (
-                loadingOlder ? (
-                  <ActivityIndicator style={{ marginTop: 8 }} />
-                ) : null
-              ) : (
-                <View style={{ height: topContentInset }}>
-                  {loadingOlder ? <ActivityIndicator style={{ marginTop: 8 }} /> : null}
-                </View>
-              )
+              <>
+                {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
+                {props.loadEarlier != null ? (
+                  <Pressable
+                    onPress={props.loadEarlier.onLoadEarlier}
+                    disabled={props.loadEarlier.loading}
+                    className="items-center py-2"
+                  >
+                    <Text className="text-xs text-foreground-secondary">
+                      {props.loadEarlier.loading ? "Loading earlier turns…" : "Load earlier turns"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </>
             }
             contentContainerStyle={{
               paddingTop: 12,
@@ -2041,25 +2036,27 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             </View>
           ) : null}
         </View>
-        {props.feed.length === 0 && hasMoreOlder ? (
+        {props.feed.length === 0 && props.loadEarlier != null ? (
           // The window can derive zero visible entries while older history
-          // exists — without scrollable content `onStartReached` can never
-          // fire, so give the user an explicit affordance instead of the
+          // exists — give the user an explicit affordance instead of the
           // empty-state placeholder.
           <View style={StyleSheet.absoluteFill}>
             <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-              {loadingOlder ? (
+              {props.loadEarlier.loading ? (
                 <ActivityIndicator />
               ) : (
-                <TouchableOpacity accessibilityRole="button" onPress={() => onLoadOlder?.()}>
-                  <Text className="text-sm text-muted-foreground">Load older history</Text>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  onPress={props.loadEarlier.onLoadEarlier}
+                >
+                  <Text className="text-sm text-muted-foreground">Load earlier turns</Text>
                 </TouchableOpacity>
               )}
             </View>
           </View>
         ) : null}
         {props.feed.length === 0 &&
-        !hasMoreOlder &&
+        props.loadEarlier == null &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
