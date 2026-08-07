@@ -62,7 +62,13 @@ concurrency:
   # Push runs are keyed by SHA and never cancelled: the conclusion of a push run
   # is what approves that exact commit for deployment, so cancelling one as
   # superseded would leave that merge SHA permanently unapprovable.
-  group: ci-${{ github.event.pull_request.number || inputs.checkout_ref ||
+  #
+  # The "v2-" generation exists to escape a wedged run. A run that GitHub will
+  # not cancel ("Cannot cancel a workflow re-run that has not yet queued") keeps
+  # holding its group indefinitely, and no later run in that group can start.
+  # Bumping the generation puts every new run in a fresh namespace. Bump it
+  # again if this recurs; nothing depends on the literal value.
+  group: ci-v2-${{ github.event.pull_request.number || inputs.checkout_ref ||
     (github.event_name == 'push' && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
