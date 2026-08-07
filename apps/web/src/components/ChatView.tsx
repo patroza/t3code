@@ -2064,46 +2064,79 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
-    const resumingServerUpdate =
-      serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
-    if (activeEnvironmentUnavailableState && !resumingServerUpdate) {
-      const connection = activeEnvironmentUnavailableState.connection;
-      const isReconnecting =
-        connection.phase === "connecting" || connection.phase === "reconnecting";
-      items.push({
-        id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
-        variant: connection.phase === "error" ? "error" : "warning",
-        icon: <WifiOffIcon />,
-        title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusTitle(connection)}`,
-        description:
-          connection.error ??
-          "Reconnect this environment before sending messages or running actions.",
-        actions: (
-          <>
-            <Button
-              size="xs"
-              disabled={isReconnecting}
-              onClick={() =>
-                void handleReconnectActiveEnvironment(
-                  activeEnvironmentUnavailableState.environmentId,
-                )
-              }
-            >
-              {isReconnecting ? "Reconnecting..." : "Reconnect"}
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void navigate({ to: "/settings/connections" })}
-            >
-              Connections
-            </Button>
-          </>
-        ),
-      });
+    const updateRunning = serverUpdateState.status === "running";
+    const unavailableConnection = activeEnvironmentUnavailableState?.connection ?? null;
+    const environmentReconnecting =
+      unavailableConnection !== null &&
+      (unavailableConnection.phase === "connecting" ||
+        unavailableConnection.phase === "reconnecting");
+    // Reconnecting to a version-skewed server with no update in flight
+    // usually means the server is restarting mid-update and a refresh wiped
+    // the in-memory update state. Fold the reconnect and version banners
+    // into one calm line instead of stacking "Failed to connect" on
+    // "versions differ". A failed update never folds: its error and retry
+    // action must stay visible.
+    const reconnectingThroughVersionSkew =
+      serverUpdateState.status === "idle" && environmentReconnecting && versionMismatch !== null;
+    // While an update runs, transient connect blips are expected (the server
+    // restarts) and the update banner already shows progress. Hard failure
+    // phases still surface so the Reconnect action stays reachable.
+    const suppressUnavailableBanner = updateRunning && environmentReconnecting;
+    if (activeEnvironmentUnavailableState && unavailableConnection && !suppressUnavailableBanner) {
+      if (reconnectingThroughVersionSkew) {
+        items.push({
+          id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
+          variant: "default",
+          // Live connection status: calm styling, but it must front the stack.
+          urgent: true,
+          icon: (
+            <span
+              className="size-1.5 animate-status-pulse rounded-full bg-foreground"
+              aria-hidden="true"
+            />
+          ),
+          title: `${unavailableConnection.phase === "connecting" ? "Connecting" : "Reconnecting"} to ${activeEnvironmentUnavailableState.label}`,
+          description: "It may be finishing an update. One moment.",
+        });
+      } else {
+        items.push({
+          id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
+          variant: unavailableConnection.phase === "error" ? "error" : "warning",
+          icon: <WifiOffIcon />,
+          title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusTitle(unavailableConnection)}`,
+          description:
+            unavailableConnection.error ??
+            "Reconnect this environment before sending messages or running actions.",
+          actions: (
+            <>
+              <Button
+                size="xs"
+                disabled={environmentReconnecting}
+                onClick={() =>
+                  void handleReconnectActiveEnvironment(
+                    activeEnvironmentUnavailableState.environmentId,
+                  )
+                }
+              >
+                {environmentReconnecting ? "Reconnecting..." : "Reconnect"}
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void navigate({ to: "/settings/connections" })}
+              >
+                Connections
+              </Button>
+            </>
+          ),
+        });
+      }
     }
     if (
       serverUpdateEnvironmentId &&
+      // The skew fold above already narrates this state as one calm line;
+      // stacking the version/update offer on top would undo #5595.
+      !reconnectingThroughVersionSkew &&
       (serverUpdateState.status !== "idle" ||
         (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey))
     ) {
@@ -2111,7 +2144,10 @@ function ChatViewContent(props: ChatViewProps) {
       const updateFailed = serverUpdateState.status === "failed";
       items.push({
         id: `server-version:${serverUpdateEnvironmentId}`,
-        variant: updateFailed ? "error" : "info",
+        variant: updateFailed ? "error" : "default",
+        // A running update is live progress the user is waiting on; only the
+        // idle "update available" offer is calm enough to stack behind.
+        urgent: updateInProgress,
         // In-flight and failed states carry their own status dot inside
         // ServerUpdateProgress; only the idle offer needs an icon.
         icon:
@@ -3699,12 +3735,8 @@ function ChatViewContent(props: ChatViewProps) {
   const activeTimelineAnchorIndexRef = useRef<number | null>(null);
   const anchorUserScrollGenerationRef = useRef(0);
   const liveFollowUserScrollGenerationRef = useRef<number | null>(0);
-  const pendingAnchorScrollRestoreRef = useRef<{
-    readonly messageId: MessageId;
-    readonly offset: number;
-    readonly userScrollGeneration: number;
-  } | null>(null);
-  const anchorScrollRestoreFrameRef = useRef<number | null>(null);
+  // Manual navigation stops live-follow without removing anchored end space.
+  // Collapsing that space during a gesture clamps the viewport back to the end.
   const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
     anchorUserScrollGenerationRef.current += 1;
     timelineScrollModeRef.current = "free-scrolling";
@@ -3714,11 +3746,6 @@ function ChatViewContent(props: ChatViewProps) {
     positionedTimelineAnchorRef.current = null;
     settledTimelineAnchorRef.current = null;
     activeTimelineAnchorIndexRef.current = null;
-    pendingAnchorScrollRestoreRef.current = null;
-    if (anchorScrollRestoreFrameRef.current !== null) {
-      cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
-      anchorScrollRestoreFrameRef.current = null;
-    }
   }, []);
   const cancelTimelineLiveFollowForUserNavigationRef = useRef(
     cancelTimelineLiveFollowForUserNavigation,
@@ -3774,7 +3801,6 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [composerOverlayHeight],
   );
-
   // Live-follow stays active after send/thread-open until an actual list scroll
   // gesture opts out.
   const scrollToEnd = useCallback((animated = false) => {
@@ -3787,7 +3813,12 @@ function ChatViewContent(props: ChatViewProps) {
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     setHasUnreadTimelineActivity(false);
-    void legendListRef.current?.scrollToEnd?.({ animated });
+    setTimelineAnchor((current) =>
+      current.messageId === null ? current : { ...current, messageId: null },
+    );
+    requestAnimationFrame(() => {
+      void legendListRef.current?.scrollToEnd?.({ animated });
+    });
   }, []);
   useEffect(() => {
     let removeListeners: (() => void) | null = null;
@@ -3926,74 +3957,22 @@ function ChatViewContent(props: ChatViewProps) {
           }
           return;
         }
-        const scrollNode = list.getScrollableNode();
-        let finished = false;
-        const finishAnimatedPositioning = () => {
-          if (finished) {
-            return;
-          }
-          finished = true;
-          window.clearTimeout(fallbackTimer);
-          scrollNode.removeEventListener("scrollend", finishAnimatedPositioning);
-          if (positionedTimelineAnchorRef.current !== messageId) {
-            return;
-          }
-          const scrollOffset = list.getState().scroll;
-          void list.scrollToOffset({ offset: scrollOffset, animated: false });
-          settledTimelineAnchorRef.current = messageId;
-        };
-        const fallbackTimer = window.setTimeout(finishAnimatedPositioning, 750);
-        scrollNode.addEventListener("scrollend", finishAnimatedPositioning, { once: true });
-        void list.scrollToIndex({
-          index: anchorIndex,
-          animated: true,
-          viewPosition: 0,
-          viewOffset: CHAT_LIST_ANCHOR_OFFSET,
-        });
+        void list
+          .scrollToIndex({
+            index: anchorIndex,
+            animated: true,
+            viewPosition: 0,
+            viewOffset: CHAT_LIST_ANCHOR_OFFSET,
+          })
+          .then(() => {
+            if (positionedTimelineAnchorRef.current !== messageId) {
+              return;
+            }
+            settledTimelineAnchorRef.current = messageId;
+          });
       });
     };
     requestAnimationFrame(() => positionAnchor(12));
-  }, []);
-  const onTimelineAnchorSizeChanged = useCallback((messageId: MessageId) => {
-    if (settledTimelineAnchorRef.current !== messageId) {
-      return;
-    }
-    if (liveFollowUserScrollGenerationRef.current === anchorUserScrollGenerationRef.current) {
-      return;
-    }
-    const scrollOffset = legendListRef.current?.getState().scroll;
-    if (scrollOffset === undefined) {
-      return;
-    }
-    if (pendingAnchorScrollRestoreRef.current === null) {
-      pendingAnchorScrollRestoreRef.current = {
-        messageId,
-        offset: scrollOffset,
-        userScrollGeneration: anchorUserScrollGenerationRef.current,
-      };
-    }
-    if (anchorScrollRestoreFrameRef.current !== null) {
-      return;
-    }
-    anchorScrollRestoreFrameRef.current = requestAnimationFrame(() => {
-      anchorScrollRestoreFrameRef.current = null;
-      const pending = pendingAnchorScrollRestoreRef.current;
-      pendingAnchorScrollRestoreRef.current = null;
-      if (
-        pending &&
-        settledTimelineAnchorRef.current === pending.messageId &&
-        pending.userScrollGeneration === anchorUserScrollGenerationRef.current
-      ) {
-        const list = legendListRef.current;
-        const currentScrollOffset = list?.getState().scroll;
-        if (
-          typeof currentScrollOffset === "number" &&
-          Math.abs(currentScrollOffset - pending.offset) <= 2
-        ) {
-          void list?.scrollToOffset({ offset: pending.offset, animated: false });
-        }
-      }
-    });
   }, []);
 
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
@@ -4022,6 +4001,9 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, []);
 
+  // Anchored end space intentionally disables LegendList's normal end-follow so
+  // the sent message can stay near the top. T3 only owns streaming adjustments
+  // during that mode; LegendList owns ordinary end-follow everywhere else.
   const observedTimelineRef = useRef({
     threadId: activeThread?.id ?? null,
     entries: timelineEntries,
@@ -4052,6 +4034,9 @@ function ChatViewContent(props: ChatViewProps) {
     if (liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current) {
       return;
     }
+    if (timelineScrollModeRef.current !== "anchoring-new-turn") {
+      return;
+    }
 
     let secondFrame: number | null = null;
     const frame = requestAnimationFrame(() => {
@@ -4073,28 +4058,13 @@ function ChatViewContent(props: ChatViewProps) {
           return;
         }
 
-        if (timelineScrollModeRef.current === "anchoring-new-turn") {
-          const metrics = getActiveTimelineTurnMetrics(list);
-          if (!metrics) {
-            return;
-          }
-          if (metrics.scrollDeltaToRevealEnd <= 1) {
-            return;
-          }
-
-          const nextOffset = list.getState().scroll + metrics.scrollDeltaToRevealEnd;
-          void list.scrollToOffset({ offset: nextOffset, animated: false });
+        const metrics = getActiveTimelineTurnMetrics(list);
+        if (!metrics || metrics.scrollDeltaToRevealEnd <= 1) {
           return;
         }
 
-        if (timelineScrollModeRef.current !== "following-end") {
-          return;
-        }
-        if (!timelineRealContentOverflowsViewport(list)) {
-          return;
-        }
-
-        void list.scrollToEnd?.({ animated: false });
+        const nextOffset = list.getState().scroll + metrics.scrollDeltaToRevealEnd;
+        void list.scrollToOffset({ offset: nextOffset, animated: false });
       });
     });
 
@@ -4104,12 +4074,7 @@ function ChatViewContent(props: ChatViewProps) {
         cancelAnimationFrame(secondFrame);
       }
     };
-  }, [
-    activeThread?.id,
-    timelineEntries,
-    getActiveTimelineTurnMetrics,
-    timelineRealContentOverflowsViewport,
-  ]);
+  }, [activeThread?.id, timelineEntries, getActiveTimelineTurnMetrics]);
 
   useEffect(() => {
     setPullRequestDialogState(null);
@@ -4673,8 +4638,12 @@ function ChatViewContent(props: ChatViewProps) {
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
   // The stack renders items[0] front-most and tucks the rest behind hover, so
-  // ordering is priority: system banners, then the branch-mismatch notice,
-  // and the informational parked-thread banner last — it must never cover another.
+  // ordering is priority: urgent system banners (error/warning variants plus
+  // calm-styled live states flagged `urgent`, like update progress), then
+  // background liveness — its Stop button is the only stop affordance for
+  // settled turns, so a passive "update available" notice must not cover it —
+  // then calm system banners, the woke and branch-mismatch notices, and the
+  // informational parked-thread banner last — it must never cover another.
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {
       return null;
@@ -4724,21 +4693,27 @@ function ChatViewContent(props: ChatViewProps) {
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    const isUrgentSystemItem = (item: ComposerBannerStackItem) =>
+      item.urgent === true || item.variant === "error" || item.variant === "warning";
+    const urgentSystemItems = systemComposerBannerItems.filter(isUrgentSystemItem);
+    const calmSystemItems = systemComposerBannerItems.filter((item) => !isUrgentSystemItem(item));
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
-        ...systemComposerBannerItems,
+        ...urgentSystemItems,
         ...backgroundLivenessItems,
+        ...calmSystemItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
       ];
     }
     return [
-      ...systemComposerBannerItems,
+      ...urgentSystemItems,
       ...backgroundLivenessItems,
+      ...calmSystemItems,
       ...wokeThreadItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -6580,6 +6555,8 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
+            isServerThread={isServerThread}
+            changeRequestState={activeThreadPr?.state ?? null}
             activeProjectName={activeProject?.title}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
             openInCwd={gitCwd}
@@ -6664,7 +6641,6 @@ function ChatViewContent(props: ChatViewProps) {
                 skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
                 anchorMessageId={timelineAnchorMessageId}
                 onAnchorReady={onTimelineAnchorReady}
-                onAnchorSizeChanged={onTimelineAnchorSizeChanged}
                 contentInsetEndAdjustment={composerOverlayHeight}
                 liveFollowEnabled={timelineLiveFollowEnabled}
                 onIsAtEndChange={onIsAtEndChange}

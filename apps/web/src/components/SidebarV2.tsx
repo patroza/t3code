@@ -121,6 +121,7 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat"
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { ThreadIdentityMark } from "./identity/ParticipantStack";
+import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   isIdentityClaimRequiredMessage,
   requestIdentityClaimGate,
@@ -137,7 +138,6 @@ import {
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
   buildBulkTitleRegenerationContextMenuItem,
-  buildSidebarV2ThreadContextMenuItems,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
@@ -2766,18 +2766,20 @@ export default function SidebarV2() {
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildSidebarV2ThreadContextMenuItems({
-              branch: thread.branch,
-              supportsPinning,
+            buildThreadActionMenuItems({
+              branch: thread.branch ?? null,
               isPinned,
-              supportsSettlement,
               isSettled,
-              supportsSnooze,
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              snoozePresets,
-              supportsTitleRegeneration,
               isRegeneratingTitle,
+              supports: {
+                settlement: supportsSettlement,
+                snooze: supportsSnooze,
+                pinning: supportsPinning,
+                titleRegeneration: supportsTitleRegeneration,
+              },
+              snoozePresets,
             }),
             position,
           ),
