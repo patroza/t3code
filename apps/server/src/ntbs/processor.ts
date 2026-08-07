@@ -1,6 +1,6 @@
 import type { OrchestrationEvent, ProjectId } from "@t3tools/contracts";
 import type * as NTBS from "./schemas.ts";
-import { Data, Effect, Scope } from "effect";
+import { Context, Data, Effect, Scope } from "effect";
 
 export type T3Context = {
   readonly projectId: ProjectId;
@@ -27,3 +27,6 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
 
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }
+
+export const makeNTBSProcessor = <P extends NTBS.PlatformData>(key: string) =>
+  Context.Service<NTBSProcessor<P>>(key);
