@@ -1122,16 +1122,24 @@ const makeWsRpcLayer = (
                   : undefined;
                 worktreeBaseRefName = undefined;
               } else if (prepareWorktree.startFromOrigin) {
-                yield* gitWorkflow.fetchRemote({
+                // No origin remote: fall back to the local base branch instead of
+                // hanging on fetch/resolve of a missing remote.
+                const hasOrigin = yield* gitWorkflow.remoteExists({
                   cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
                 });
-                const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
-                  cwd: prepareWorktree.projectCwd,
-                  refName: prepareWorktree.baseBranch,
-                  fallbackRemoteName: "origin",
-                });
-                worktreeBaseRef = resolvedRemoteBase.commitSha;
+                if (hasOrigin) {
+                  yield* gitWorkflow.fetchRemote({
+                    cwd: prepareWorktree.projectCwd,
+                    remoteName: "origin",
+                  });
+                  const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                    cwd: prepareWorktree.projectCwd,
+                    refName: prepareWorktree.baseBranch,
+                    fallbackRemoteName: "origin",
+                  });
+                  worktreeBaseRef = resolvedRemoteBase.commitSha;
+                }
               }
               const worktree = yield* gitWorkflow.createWorktree({
                 cwd: prepareWorktree.projectCwd,

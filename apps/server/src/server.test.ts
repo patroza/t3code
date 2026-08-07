@@ -8292,6 +8292,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 }),
               readEvents: () => Stream.empty,
             },
+            projectionSnapshotQuery: {
+              getThreadShellById: (threadId) =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      id: threadId,
+                      branch: "t3code/bootstrap-refName",
+                      worktreePath: "/tmp/bootstrap-worktree",
+                    }),
+                  ),
+                ),
+            },
           },
         });
 
