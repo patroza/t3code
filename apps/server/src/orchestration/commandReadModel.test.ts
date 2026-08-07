@@ -44,7 +44,6 @@ function makeThread(
     settledAt: null,
     snoozedUntil: null,
     snoozedAt: null,
-    hasMoreActivities: false,
     latestTurn: null,
     messages: [],
     queuedMessages: [],

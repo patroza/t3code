@@ -34,7 +34,6 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
-  OrchestrationGetThreadActivitiesError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
@@ -1123,16 +1122,24 @@ const makeWsRpcLayer = (
                   : undefined;
                 worktreeBaseRefName = undefined;
               } else if (prepareWorktree.startFromOrigin) {
-                yield* gitWorkflow.fetchRemote({
+                // No origin remote: fall back to the local base branch instead of
+                // hanging on fetch/resolve of a missing remote.
+                const hasOrigin = yield* gitWorkflow.remoteExists({
                   cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
                 });
-                const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
-                  cwd: prepareWorktree.projectCwd,
-                  refName: prepareWorktree.baseBranch,
-                  fallbackRemoteName: "origin",
-                });
-                worktreeBaseRef = resolvedRemoteBase.commitSha;
+                if (hasOrigin) {
+                  yield* gitWorkflow.fetchRemote({
+                    cwd: prepareWorktree.projectCwd,
+                    remoteName: "origin",
+                  });
+                  const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                    cwd: prepareWorktree.projectCwd,
+                    refName: prepareWorktree.baseBranch,
+                    fallbackRemoteName: "origin",
+                  });
+                  worktreeBaseRef = resolvedRemoteBase.commitSha;
+                }
               }
               const worktree = yield* gitWorkflow.createWorktree({
                 cwd: prepareWorktree.projectCwd,
@@ -1371,20 +1378,6 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new OrchestrationGetTurnDiffError({
                     message: "Failed to load turn diff",
-                    cause,
-                  }),
-              ),
-            ),
-            { "rpc.aggregate": "orchestration" },
-          ),
-        [ORCHESTRATION_WS_METHODS.getThreadActivities]: (input) =>
-          observeRpcEffect(
-            ORCHESTRATION_WS_METHODS.getThreadActivities,
-            projectionSnapshotQuery.getThreadActivitiesPage(input).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationGetThreadActivitiesError({
-                    message: "Failed to load thread activities page",
                     cause,
                   }),
               ),
@@ -1635,7 +1628,14 @@ const makeWsRpcLayer = (
               }
 
               const snapshot = yield* projectionSnapshotQuery
-                .getThreadDetailSnapshot(input.threadId)
+                .getThreadDetailSnapshot(
+                  input.threadId,
+                  // Windowing the fallback snapshot is opt-in per subscription:
+                  // clients that don't send turnLimit (including all
+                  // pre-pagination clients) get the full thread, since they
+                  // have no way to load older pages.
+                  input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
+                )
                 .pipe(
                   Effect.mapError(
                     (cause) =>

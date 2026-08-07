@@ -5,6 +5,7 @@ import { MigrationError } from "effect/unstable/sql/Migrator";
 import { forkMigrationTable } from "./ForkMigrations.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadTitleRegeneration.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
+import Migration0037 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 
 export const upstreamMigrationTable = "effect_sql_migrations";
 export const legacyMigrationBackupTable = "effect_sql_migrations_backup_v1";
@@ -49,6 +50,7 @@ const upstreamNames = new Map<number, string>([
   [34, "ProjectionThreadsSnoozed"],
   [35, "ProjectionThreadTitleRegeneration"],
   [36, "ProjectionThreadsPinned"],
+  [37, "ProjectionTurnsKeysetIndex"],
 ]);
 
 const knownForkNames = new Map([
@@ -188,6 +190,7 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
   if (tail.length > 0) {
     yield* Migration0035;
     yield* Migration0036;
+    yield* Migration0037;
   }
 
   const forkNames = new Set(legacyRows.map(({ name }) => name));
@@ -231,7 +234,7 @@ const bootstrapLegacyLedger = Effect.fn("MigrationBootstrap.bootstrapLegacyLedge
     yield* sql`INSERT INTO ${sql(upstreamMigrationTable)} ${sql.insert(copiedUpstreamRows)}`;
   }
   if (tail.length > 0) {
-    const reconciledRows = [35, 36]
+    const reconciledRows = [35, 36, 37]
       .filter((migration_id) => migration_id > canonicalPrefix)
       .map((migration_id) => ({ migration_id, name: upstreamNames.get(migration_id)! }));
     if (reconciledRows.length > 0) {

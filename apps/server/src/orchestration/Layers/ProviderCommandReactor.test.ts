@@ -1727,6 +1727,9 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+    // Queue-by-default holds follow-up turn.start commands while a session is
+    // still starting/running; settle so each message lands in the transcript.
+    await harness.settleSession();
     await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -1751,6 +1754,7 @@ describe("ProviderCommandReactor", () => {
         createdAt: "2026-01-01T00:00:01.000Z",
       }),
     );
+    await harness.settleSession();
     await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -1775,6 +1779,7 @@ describe("ProviderCommandReactor", () => {
         createdAt: "2026-01-01T00:00:02.000Z",
       }),
     );
+    await harness.settleSession();
     await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.meta.update",

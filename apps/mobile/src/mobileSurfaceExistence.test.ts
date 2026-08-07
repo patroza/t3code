@@ -67,7 +67,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
     // The feed and the chip list both read the promoted detail, so one piece
     // of state moves the message and one revert puts it back.
     expect(composerState).toContain("promoteSteeredQueuedMessages(selectedThreadDetail");
-    expect(composerState).toMatch(/buildThreadFeed\(\{ \.\.\.steeredDetail/);
+    expect(composerState).toContain("buildThreadFeed(steeredDetail)");
     expect(composerState).toMatch(/timelineIds = new Set\(steeredDetail\?\.messages/);
     // Failure puts it back rather than leaving a bubble the agent never got.
     expect(composerState).toMatch(

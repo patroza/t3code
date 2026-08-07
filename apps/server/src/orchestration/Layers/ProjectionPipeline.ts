@@ -28,7 +28,6 @@ import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
-import { ProjectionQueuedMessageRepository } from "../../persistence/Services/ProjectionQueuedMessages.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
   type ProjectionTurn,
@@ -41,12 +40,10 @@ import { ProjectionStateRepositoryLive } from "../../persistence/Layers/Projecti
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
-import { ProjectionQueuedMessageRepositoryLive } from "../../persistence/Layers/ProjectionQueuedMessages.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
-import * as PrLookupFreeze from "../../git/PrLookupFreeze.ts";
 import {
   OrchestrationProjectionPipeline,
   type OrchestrationProjectionPipelineShape,
@@ -62,7 +59,6 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
-  queuedMessages: "projection.queued-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
@@ -333,7 +329,7 @@ function retainProjectionProposedPlansAfterRevert(
 
 function collectThreadAttachmentRelativePaths(
   threadId: string,
-  messages: ReadonlyArray<Pick<ProjectionThreadMessage, "attachments">>,
+  messages: ReadonlyArray<ProjectionThreadMessage>,
 ): Set<string> {
   const threadSegment = toSafeThreadAttachmentSegment(threadId);
   if (!threadSegment) {
@@ -480,7 +476,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
-    const projectionQueuedMessageRepository = yield* ProjectionQueuedMessageRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -489,7 +484,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
-    const prLookupFreeze = yield* PrLookupFreeze.PrLookupFreeze;
 
     const applyProjectsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyProjectsProjection",
@@ -568,11 +562,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       ]);
 
       let latestUserMessageAt: string | null = null;
-      // Rebuild origin + participants from projected user messages so shell stays
-      // consistent after resync/replay (not only first-write stamps).
-      type ParticipantRow = NonNullable<(typeof existingRow.value)["participantSummaries"]>[number];
-      const rebuiltParticipants: Array<ParticipantRow> = [];
-      let rebuiltOrigin = existingRow.value.originSource ?? null;
       for (const message of messages) {
         if (
           message.role === "user" &&
@@ -580,53 +569,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         ) {
           latestUserMessageAt = message.createdAt;
         }
-        if (message.role !== "user" || message.source === undefined) {
-          continue;
-        }
-        if (rebuiltOrigin === null || rebuiltOrigin === undefined) {
-          rebuiltOrigin = message.source;
-        }
-        if (message.source.personId !== undefined && message.source.username !== undefined) {
-          const personId = message.source.personId;
-          const existingParticipantIndex = rebuiltParticipants.findIndex(
-            (entry) => entry.personId === personId,
-          );
-          if (existingParticipantIndex === -1) {
-            rebuiltParticipants.push({
-              personId,
-              username: message.source.username,
-              firstChannel: message.source.channel,
-              channels: [message.source.channel],
-              firstParticipatedAt: message.createdAt,
-            });
-          } else {
-            const existingParticipant = rebuiltParticipants[existingParticipantIndex]!;
-            if (!existingParticipant.channels?.includes(message.source.channel)) {
-              rebuiltParticipants[existingParticipantIndex] = {
-                ...existingParticipant,
-                channels: [
-                  ...(existingParticipant.channels ??
-                    (existingParticipant.firstChannel === undefined
-                      ? []
-                      : [existingParticipant.firstChannel])),
-                  message.source.channel,
-                ],
-              };
-            }
-          }
-        }
       }
-      // Origin person first when present.
-      if (rebuiltOrigin?.personId !== undefined) {
-        const originId = rebuiltOrigin.personId;
-        rebuiltParticipants.sort((left, right) => {
-          if (left.personId === originId) return -1;
-          if (right.personId === originId) return 1;
-          return left.firstParticipatedAt.localeCompare(right.firstParticipatedAt);
-        });
-      }
-      const originSource = rebuiltOrigin;
-      const participantSummaries = rebuiltParticipants;
 
       const pendingApprovalCount = pendingApprovals.filter(
         (approval) => approval.status === "pending",
@@ -643,8 +586,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         pendingApprovalCount,
         pendingUserInputCount,
         hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
-        originSource: originSource ?? null,
-        participantSummaries,
       });
     });
 
@@ -720,17 +661,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          const wasSettled = existingRow.value.settledOverride === "settled";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             settledOverride: "settled",
             settledAt: event.payload.settledAt,
             updatedAt: event.payload.updatedAt,
           });
-          // Idempotent re-settles must not double-count freeze interest.
-          if (!wasSettled) {
-            yield* prLookupFreeze.noteWorktreeSettled(existingRow.value.worktreePath);
-          }
           return;
         }
 
@@ -741,16 +677,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          const wasSettled = existingRow.value.settledOverride === "settled";
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             settledOverride: event.payload.reason === "user" ? "active" : null,
             settledAt: null,
             updatedAt: event.payload.updatedAt,
           });
-          if (wasSettled) {
-            yield* prLookupFreeze.noteWorktreeUnsettled(existingRow.value.worktreePath);
-          }
           return;
         }
 
@@ -891,8 +823,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.message-sent":
-        case "thread.message-queued":
-        case "thread.queued-message-removed":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -907,9 +837,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
+          // Streaming assistant deltas can arrive many times per second; skip the
+          // full shell history rescan (messages + activities + plans) for them.
           if (
             event.type !== "thread.message-sent" ||
-            event.payload.role !== "assistant" ||
+            !("streaming" in event.payload) ||
             !event.payload.streaming
           ) {
             yield* refreshThreadShellSummary(event.payload.threadId);
@@ -924,14 +856,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          // Keep the completed turn pointer when the session clears activeTurnId
-          // (ready/idle/interrupted). Wiping latest_turn_id made response bridges
-          // that key off latestTurn miss already-finished turns after restart.
-          const nextLatestTurnId =
-            event.payload.session.activeTurnId ?? existingRow.value.latestTurnId;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: nextLatestTurnId,
+            // activeTurnId describes current work; a terminal session must not erase history.
+            latestTurnId: event.payload.session.activeTurnId ?? existingRow.value.latestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
@@ -1032,6 +960,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             isStreaming: event.payload.streaming,
+            // Preserve identity provenance on first write; keep prior source when
+            // a streaming delta omits it so commit attribution still works.
             ...(event.payload.source !== undefined
               ? { source: event.payload.source }
               : previousMessage?.source !== undefined
@@ -1040,58 +970,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
-          return;
-        }
-
-        case "thread.messages-resynced": {
-          // Rebuild the transcript tail from an authoritative external source.
-          // Everything up to and including `afterMessageId` is known-good and is
-          // kept as-is; only what follows is replaced.
-          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
-            threadId: event.payload.threadId,
-          });
-          const anchorIndex =
-            event.payload.afterMessageId === null
-              ? -1
-              : existingRows.findIndex((row) => row.messageId === event.payload.afterMessageId);
-          if (event.payload.afterMessageId !== null && anchorIndex === -1) {
-            // Anchor is gone (already reverted/pruned): applying the tail would
-            // graft it onto an unknown prefix, so leave the projection alone.
-            yield* Effect.logWarning(
-              "Skipping thread.messages-resynced: anchor message is not in the projection.",
-              {
-                threadId: event.payload.threadId,
-                afterMessageId: event.payload.afterMessageId,
-                reason: event.payload.reason,
-              },
-            );
-            return;
-          }
-          const keptRows = existingRows.slice(0, anchorIndex + 1);
-          const tailRows = event.payload.messages.map(
-            (message) =>
-              ({
-                messageId: message.id,
-                threadId: event.payload.threadId,
-                turnId: message.turnId,
-                role: message.role,
-                text: message.text,
-                ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-                isStreaming: message.streaming,
-                createdAt: message.createdAt,
-                updatedAt: message.updatedAt,
-              }) satisfies ProjectionThreadMessage,
-          );
-          yield* projectionThreadMessageRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          yield* Effect.forEach(
-            [...keptRows, ...tailRows],
-            projectionThreadMessageRepository.upsert,
-            {
-              concurrency: 1,
-            },
-          ).pipe(Effect.asVoid);
           return;
         }
 
@@ -1121,81 +999,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert, {
             concurrency: 1,
           }).pipe(Effect.asVoid);
-          // Queued messages survive a revert (they are not part of the
-          // timeline), so their attachment files must survive pruning too.
-          const queuedRows = yield* projectionQueuedMessageRepository.listByThreadId({
-            threadId: event.payload.threadId,
-          });
           attachmentSideEffects.prunedThreadRelativePaths.set(
             event.payload.threadId,
-            collectThreadAttachmentRelativePaths(event.payload.threadId, [
-              ...keptRows,
-              ...queuedRows,
-            ]),
+            collectThreadAttachmentRelativePaths(event.payload.threadId, keptRows),
           );
           return;
         }
-
-        default:
-          return;
-      }
-    });
-
-    const applyQueuedMessagesProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyQueuedMessagesProjection",
-    )(function* (event, attachmentSideEffects) {
-      switch (event.type) {
-        case "thread.message-queued":
-          yield* projectionQueuedMessageRepository.upsert({
-            messageId: event.payload.messageId,
-            threadId: event.payload.threadId,
-            text: event.payload.text,
-            attachments: event.payload.attachments,
-            modelSelection: event.payload.modelSelection ?? null,
-            sourceProposedPlanThreadId: event.payload.sourceProposedPlan?.threadId ?? null,
-            sourceProposedPlanId: event.payload.sourceProposedPlan?.planId ?? null,
-            queuedAt: event.payload.queuedAt,
-          });
-          return;
-
-        case "thread.queued-message-removed": {
-          // A user removal orphans the removed message's attachment files —
-          // prune to what the timeline and remaining queue still reference.
-          // Dispatch removals keep everything: the same attachments re-enter
-          // the timeline via the paired thread.message-sent.
-          const removedQueuedMessage =
-            event.payload.reason === "user"
-              ? (yield* projectionQueuedMessageRepository.listByThreadId({
-                  threadId: event.payload.threadId,
-                })).find((entry) => entry.messageId === event.payload.messageId)
-              : undefined;
-          yield* projectionQueuedMessageRepository.deleteByMessageId({
-            threadId: event.payload.threadId,
-            messageId: event.payload.messageId,
-          });
-          if (removedQueuedMessage && (removedQueuedMessage.attachments?.length ?? 0) > 0) {
-            const retainedMessageRows = yield* projectionThreadMessageRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            });
-            const retainedQueuedRows = yield* projectionQueuedMessageRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            });
-            attachmentSideEffects.prunedThreadRelativePaths.set(
-              event.payload.threadId,
-              collectThreadAttachmentRelativePaths(event.payload.threadId, [
-                ...retainedMessageRows,
-                ...retainedQueuedRows,
-              ]),
-            );
-          }
-          return;
-        }
-
-        case "thread.deleted":
-          yield* projectionQueuedMessageRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          return;
 
         default:
           return;
@@ -1341,22 +1150,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
           if (turnId === null || event.payload.session.status !== "running") {
-            // Leaving the "running" session status is the turn-end signal:
-            // settle still-running turns so their duration reflects the whole
-            // turn rather than the last assistant message.
-            const settledTurnState = settledTurnStateForSessionStatus(event.payload.session.status);
-            // Any settled status abandons an unadopted pending turn start —
-            // including "ready": a mid-turn steer re-arms the pending row
-            // without a fresh adoption, and a stale row would block queue
-            // drains (and re-arm the read model's pendingTurnStart flag on
-            // restart hydration). Ready-with-genuinely-pending starts never
-            // reach this projection: ingestion maps that shape to
-            // "starting" before dispatching the session set.
-            if (settledTurnState !== null) {
+            if (
+              event.payload.session.status === "error" ||
+              event.payload.session.status === "stopped" ||
+              event.payload.session.status === "interrupted"
+            ) {
               yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
                 threadId: event.payload.threadId,
               });
             }
+            // Leaving the "running" session status is the turn-end signal:
+            // settle still-running turns so their duration reflects the whole
+            // turn rather than the last assistant message.
+            const settledTurnState = settledTurnStateForSessionStatus(event.payload.session.status);
             if (settledTurnState === null) {
               return;
             }
@@ -1792,14 +1598,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,
       },
-      // queuedMessages must bootstrap before threadMessages: the revert
-      // handler in threadMessages reads the queued-message projection to
-      // retain queued attachments, so on replay that table has to be
-      // populated first or the prune deletes files still referenced.
-      {
-        name: ORCHESTRATION_PROJECTOR_NAMES.queuedMessages,
-        apply: applyQueuedMessagesProjection,
-      },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
         apply: applyThreadMessagesProjection,
@@ -1930,13 +1728,9 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
-  Layer.provideMerge(ProjectionQueuedMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
-  // Shared with GitManager via the same layer value at the server root
-  // (PrLookupFreezeLive). Tests that mount this layer alone provide their own.
-  Layer.provide(PrLookupFreeze.layer),
 );

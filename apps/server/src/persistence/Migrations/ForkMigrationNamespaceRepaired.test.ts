@@ -39,8 +39,8 @@ layer("fork migration namespace for a repaired database", (it) => {
         SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream.slice(-2), [
-        { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
+        { migration_id: 37, name: "ProjectionTurnsKeysetIndex" },
       ]);
       assert.deepStrictEqual(fork, [
         { migration_id: 1, name: "ProjectionQueuedMessages" },

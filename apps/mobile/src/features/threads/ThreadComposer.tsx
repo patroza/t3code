@@ -103,6 +103,8 @@ export interface ThreadComposerProps {
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
+  readonly queueCount: number;
+  readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
   readonly editorRef?: RefObject<ComposerEditorHandle | null>;
@@ -112,7 +114,7 @@ export interface ThreadComposerProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
-  readonly onStartNewThread: () => void;
+  readonly onStartNewThread?: () => void;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -269,6 +271,9 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
 });
 
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
+  // Upstream surface: queue depth + busy gate used by detail screen.
+  void props.queueCount;
+  void props.activeThreadBusy;
   const isDarkMode = useColorScheme() === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
   const bodyText = useScaledTextRole("body");
@@ -530,7 +535,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const handleSend = useCallback(async () => {
     if (parseStandaloneComposerSlashCommand(draftMessage) === "new") {
       onChangeDraftMessage("");
-      onStartNewThread();
+      onStartNewThread?.();
       return;
     }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
@@ -588,7 +593,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         );
         setComposerSelection({ start: result.cursor, end: result.cursor });
         onChangeDraftMessage(result.text);
-        onStartNewThread();
+        onStartNewThread?.();
         return;
       }
 

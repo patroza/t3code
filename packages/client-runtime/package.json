@@ -147,10 +147,6 @@
       "types": "./src/state/threadReducer.ts",
       "default": "./src/state/threadReducer.ts"
     },
-    "./state/older-thread-activities": {
-      "types": "./src/state/olderThreadActivities.ts",
-      "default": "./src/state/olderThreadActivities.ts"
-    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

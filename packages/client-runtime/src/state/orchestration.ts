@@ -20,10 +20,6 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       idleTtlMs: 300_000,
     }),
     // Imperative lazy-load of older thread activities (infinite scroll-up).
-    loadThreadActivities: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:orchestration:thread-activities",
-      tag: ORCHESTRATION_WS_METHODS.getThreadActivities,
-    }),
     fullThreadDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:full-thread-diff",
       tag: ORCHESTRATION_WS_METHODS.getFullThreadDiff,
