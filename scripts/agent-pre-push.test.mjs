@@ -1,6 +1,9 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { isCodingAgent } from "./agent-pre-push.mjs";
-import { requiresShipGate, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
+import { findRealGh, requiresShipGate, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
 import {
   classifyPrPayload,
   parseRepoSlug,
@@ -288,4 +291,51 @@ it("ship-gate cache: static does not demote complete", () => {
   const cache = readShipGateCache(root, io);
   assert.equal(cache?.sha, sha);
   assert.equal(isShipGateShaCached(sha, cache), true);
+});
+
+// A host that fronts `gh` with the GitHub App wrapper also exports
+// T3_GITHUB_REAL_GH so children that reorder PATH keep minting config. That
+// variable names the *unauthenticated* binary the wrapper execs after minting,
+// so preferring it makes every shimmed `gh` call fail with "gh auth login" —
+// which is exactly how server-side PR lookups lost their badges.
+it("findRealGh prefers the App-aware gh on PATH over the raw T3_GITHUB_REAL_GH binary", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "agent-gh-real-"));
+  const wrapperDir = NodePath.join(root, "wrapper");
+  const rawDir = NodePath.join(root, "raw");
+  NodeFS.mkdirSync(wrapperDir);
+  NodeFS.mkdirSync(rawDir);
+  const wrapper = NodePath.join(wrapperDir, "gh");
+  const raw = NodePath.join(rawDir, "gh");
+  for (const file of [wrapper, raw]) {
+    NodeFS.writeFileSync(file, "#!/bin/sh\nexit 0\n");
+    NodeFS.chmodSync(file, 0o755);
+  }
+
+  assert.equal(
+    findRealGh({
+      env: { PATH: wrapperDir, T3_GITHUB_REAL_GH: raw },
+      selfPath: NodePath.join(root, "agent-gh.mjs"),
+    }),
+    wrapper,
+  );
+
+  // Still usable as a last resort when PATH offers no gh at all.
+  assert.equal(
+    findRealGh({
+      env: { PATH: NodePath.join(root, "empty"), T3_GITHUB_REAL_GH: raw },
+      selfPath: NodePath.join(root, "agent-gh.mjs"),
+    }),
+    raw,
+  );
+
+  // An explicit override still wins over both.
+  assert.equal(
+    findRealGh({
+      env: { PATH: wrapperDir, AGENT_GH_REAL: raw, T3_GITHUB_REAL_GH: raw },
+      selfPath: NodePath.join(root, "agent-gh.mjs"),
+    }),
+    raw,
+  );
+
+  NodeFS.rmSync(root, { recursive: true, force: true });
 });
