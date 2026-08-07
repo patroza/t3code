@@ -1,6 +1,7 @@
 import { type OrchestrationEvent, type ProjectId } from "@t3tools/contracts";
 import type * as NTBS from "./schemas.ts";
 import { Context, Data, Effect } from "effect";
+import type { NTBSAdapter } from "./adapter.ts";
 
 /*
   NTBS architectural description:
@@ -50,7 +51,7 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
 export interface NTBSProcessor<P extends NTBS.PlatformData> {
   readonly process: (event: ProcessorEvent<P>) => Effect.Effect<void, NTBSProcessorError>;
 
-  readonly subscribeToT3Events: () => Effect.Effect<void>;
+  readonly subscribeToT3Events: Effect.Effect<void>;
 }
 
 export const makeNTBSProcessor = <P extends NTBS.PlatformData>(key: string) =>
@@ -64,3 +65,7 @@ declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
 declare const processT3Event: <P extends NTBS.PlatformData>(
   event: OrchestrationEvent,
 ) => Effect.Effect<void, NTBSProcessorError>;
+
+declare const makeProcessor: <P extends NTBS.PlatformData>(
+  adapter: NTBSAdapter<P>,
+) => Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements>;
