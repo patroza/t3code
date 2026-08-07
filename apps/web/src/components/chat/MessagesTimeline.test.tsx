@@ -9,7 +9,6 @@ vi.mock("@legendapp/list/react", async () => {
 
   const LegendList = (props: {
     data: Array<{ id: string }>;
-    extraData?: unknown;
     keyExtractor: (item: { id: string }) => string;
     renderItem: (args: { item: { id: string } }) => ReactNode;
     ListHeaderComponent?: ReactNode;
@@ -49,7 +48,6 @@ vi.mock("@legendapp/list/react", async () => {
     return (
       <div
         data-testid={legendListTestId}
-        data-extra-data-matches-rows={props.extraData === props.data}
         data-anchor-index={props.anchoredEndSpace?.anchorIndex}
         data-anchor-max-size={props.anchoredEndSpace?.anchorMaxSize}
         data-anchor-offset={props.anchoredEndSpace?.anchorOffset}
@@ -196,7 +194,7 @@ function buildProps() {
     onAnchorReady: () => {},
     onAnchorSizeChanged: () => {},
     contentInsetEndAdjustment: 0,
-    maintainScrollAtEnd: true,
+    liveFollowEnabled: true,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
   };
@@ -299,7 +297,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
-  it("uses LegendList isNearEnd when deciding whether the live edge is visible", async () => {
+  it("treats only the strict list end as the live edge", async () => {
     const {
       resolveTimelineIsAtEnd,
       resolveTimelineMinimapHasPersistentGutter,
@@ -310,10 +308,36 @@ describe("MessagesTimeline", () => {
       resolveTimelineMinimapTopPercent,
     } = await import("./MessagesTimeline.logic");
 
-    expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(true);
-    expect(resolveTimelineIsAtEnd({ isNearEnd: false, isAtEnd: true })).toBe(false);
     expect(resolveTimelineIsAtEnd({ isAtEnd: true })).toBe(true);
     expect(resolveTimelineIsAtEnd(undefined)).toBeUndefined();
+    // Within the pixel band above the content bottom counts as the end...
+    expect(
+      resolveTimelineIsAtEnd({
+        isAtEnd: false,
+        contentLength: 2000,
+        scroll: 1170,
+        scrollLength: 800,
+      }),
+    ).toBe(true);
+    // ...but half a viewport up (LegendList's isNearEnd territory) does not.
+    expect(
+      resolveTimelineIsAtEnd({
+        isAtEnd: false,
+        contentLength: 2000,
+        scroll: 900,
+        scrollLength: 800,
+      }),
+    ).toBe(false);
+    // The composer inset is part of contentLength and must not count as
+    // distance-to-end.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: false, contentLength: 2100, scroll: 1170, scrollLength: 800 },
+        100,
+      ),
+    ).toBe(true);
+    // Geometry missing (older state shape): fall back to the strict flag.
+    expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
 
     expect(resolveTimelineMinimapHeightStyle(5)).toBe("min(32px, calc(100vh - 18rem))");
     expect(resolveTimelineMinimapTopPercent(2, 5)).toBe(50);
@@ -398,7 +422,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-anchor-on-ready="true"');
     expect(markup).not.toContain("data-anchor-max-size=");
     expect(markup).toContain('data-content-inset-end="144"');
-    expect(markup).toContain('data-extra-data-matches-rows="true"');
     expect(markup).toContain("[overflow-anchor:none]");
     expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
     expect(markup).toContain('data-maintain-visible-content-position="object"');
@@ -428,22 +451,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-footer="true"');
   });
 
-  it("disables end maintenance after the user scrolls away", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        maintainScrollAtEnd={false}
-        timelineEntries={[buildUserTimelineEntry("Earlier prompt.")]}
-      />,
-    );
-
-    expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
-    expect(markup).toContain('data-maintain-visible-content-position="object"');
-  });
-
-  it("does not render collapse controls for short user messages", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
+  it("does not render collapse controls for short user messages", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -544,89 +552,6 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Context compacted");
     expect(markup).toContain("Work Log");
-  });
-
-  it("renders a clarifying question with the answer it received", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[
-          {
-            id: "entry-1",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Question: Approach",
-              tone: "info",
-              userInput: {
-                requestId: "req-1",
-                answered: true,
-                questions: [
-                  {
-                    id: "How should we proceed?",
-                    header: "Approach",
-                    question: "How should we proceed?",
-                    multiSelect: false,
-                    options: [
-                      { label: "Ship it", description: "Merge as-is" },
-                      { label: "Iterate", description: "Another review round" },
-                    ],
-                    selectedLabels: ["Iterate"],
-                  },
-                ],
-              },
-            },
-          },
-        ]}
-      />,
-    );
-
-    expect(markup).toContain("Approach");
-    expect(markup).toContain("How should we proceed?");
-    expect(markup).toContain("Iterate");
-    expect(markup).toContain("Show options");
-    // The chosen answer reads on its own; alternatives stay behind the toggle.
-    expect(markup).not.toContain("Another review round");
-  });
-
-  it("marks an unanswered clarifying question as awaiting a reply", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[
-          {
-            id: "entry-1",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-1",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Question: Approach",
-              tone: "info",
-              userInput: {
-                requestId: "req-1",
-                answered: false,
-                questions: [
-                  {
-                    id: "How should we proceed?",
-                    header: "Approach",
-                    question: "How should we proceed?",
-                    multiSelect: false,
-                    options: [{ label: "Ship it", description: "Merge as-is" }],
-                    selectedLabels: [],
-                  },
-                ],
-              },
-            },
-          },
-        ]}
-      />,
-    );
-
-    expect(markup).toContain("Awaiting your answer");
-    expect(markup).not.toContain("Work Log");
   });
 
   it("formats changed file paths from the workspace root", () => {
@@ -756,38 +681,5 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("lucide-x");
     expect(markup).toContain('aria-label="Tool call failed"');
-  });
-
-  it("offers a 'Load older history' control when older activity remains", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Hi")]}
-        hasMoreOlder
-      />,
-    );
-    expect(markup).toContain("Load older history");
-  });
-
-  it("shows a loading indicator while older history is being fetched", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Hi")]}
-        hasMoreOlder
-        loadingOlder
-      />,
-    );
-    expect(markup).toContain("Loading older history");
-  });
-
-  it("renders no older-history control when none remains", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry("Hi")]} />,
-    );
-    expect(markup).not.toContain("older history");
   });
 });

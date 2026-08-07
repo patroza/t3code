@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import { MessageId, type EnvironmentId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
@@ -139,7 +139,6 @@ const WORKING_ROW_VERTICAL_EXTRAS = 24; // py-1 (8) + mb-4 (16)
 // remounts rows when they scroll back into view, and replaying an entrance for
 // old content would be its own kind of jank.
 const FRESH_ENTRY_WINDOW_MS = 3_000;
-const FEED_END_THRESHOLD = 48;
 function isFreshTimestamp(input: string): boolean {
   const timestamp = Date.parse(input);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
@@ -165,10 +164,11 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
-  /** Older history beyond the live activity window can be lazy-loaded on scroll-up. */
-  readonly hasMoreOlder?: boolean;
-  readonly loadingOlder?: boolean;
-  readonly onLoadOlder?: () => void;
+  /** Non-null when older turns exist beyond the loaded window. */
+  readonly loadEarlier?: {
+    readonly loading: boolean;
+    readonly onLoadEarlier: () => void;
+  } | null;
 }
 
 function MessageAttachmentImage(props: {
@@ -890,7 +890,6 @@ function renderFeedEntry(
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = formatMessageTime(isUser ? message.createdAt : message.updatedAt);
     const attachments = message.attachments ?? [];
-    const previewAttachments = entry.previewAttachments ?? [];
     const hasReviewCommentContext = message.text.includes("<review_comment");
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
@@ -937,14 +936,6 @@ function renderFeedEntry(
                 />
               );
             })}
-            {previewAttachments.map((attachment) => (
-              <Image
-                key={attachment.id}
-                source={{ uri: attachment.previewUri }}
-                className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
-                resizeMode="cover"
-              />
-            ))}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
@@ -1336,8 +1327,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const foldSettleSecondFrameRef = useRef<number | null>(null);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const headerMaterialVisibleRef = useRef(false);
-  const isAtEndRef = useRef(true);
-  const userNavigationInProgressRef = useRef(false);
   const previousLatestTurnRef = useRef(props.latestTurn);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
@@ -1346,8 +1335,24 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [viewportHeight, setViewportHeight] = useState(0);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
-  const [isAtEnd, setIsAtEnd] = useState(true);
-  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
+  // Live-follow latch. LegendList's maintainScrollAtEnd alone re-pins the feed
+  // whenever the viewport drifts back inside its geometric threshold, which
+  // yanked users off history they were reading every time a stream chunk grew
+  // a row. Follow breaks when the user scrolls up and away, and re-arms only
+  // when the list actually returns to the end (or on send / thread switch).
+  const [endFollowEnabled, setEndFollowEnabled] = useState(true);
+  const endFollowEnabledRef = useRef(true);
+  // A "user scroll session" spans from drag start through the end of its
+  // momentum; only motion inside a session can break follow, so MVCP
+  // compensations and programmatic scrolls never strand a follower.
+  const userScrollSessionRef = useRef(false);
+  const setEndFollow = useCallback((enabled: boolean) => {
+    if (endFollowEnabledRef.current === enabled) {
+      return;
+    }
+    endFollowEnabledRef.current = enabled;
+    setEndFollowEnabled(enabled);
+  }, []);
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
@@ -1390,10 +1395,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ? navigationHeaderHeight || insets.top + 44
     : topContentInset;
 
-  const isDarkMode = useColorScheme() === "dark";
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const userBubbleColor = useThemeColor("--color-user-bubble");
-  const scrollToLatestBackground = useThemeColor("--color-card");
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
       const presentation = resolveMarkdownLinkPresentation(href);
@@ -1466,28 +1469,44 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      const { contentInset, contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
       nearListEnd.value =
         contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
-      const distanceFromEnd =
-        contentSize.height + contentInset.bottom - contentOffset.y - layoutMeasurement.height;
-      const nextIsAtEnd = distanceFromEnd <= FEED_END_THRESHOLD;
-      if (nextIsAtEnd) {
-        userNavigationInProgressRef.current = false;
-      }
-      if (
-        isAtEndRef.current !== nextIsAtEnd &&
-        (nextIsAtEnd || userNavigationInProgressRef.current)
-      ) {
-        isAtEndRef.current = nextIsAtEnd;
-        setIsAtEnd(nextIsAtEnd);
-      }
-      if (nextIsAtEnd) {
-        setHasUnreadActivity(false);
+
+      // Latch bookkeeping. LegendList recomputes its inset-aware end distance
+      // before invoking this handler, so getState() is current. Returning to
+      // the end re-arms follow no matter who scrolled (the user, or our own
+      // scroll-to-end); moving away breaks it only during a user-initiated
+      // scroll session, so MVCP compensations and programmatic repositioning
+      // can never strand a follower.
+      const listState = props.listRef.current?.getState();
+      if (listState) {
+        if (listState.isWithinMaintainScrollAtEndThreshold) {
+          setEndFollow(true);
+        } else if (userScrollSessionRef.current) {
+          setEndFollow(false);
+        }
       }
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd],
+    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd, props.listRef, setEndFollow],
   );
+  const handleScrollBeginDrag = useCallback(() => {
+    userScrollSessionRef.current = true;
+  }, []);
+  // The session must survive past finger-lift so momentum that carries the
+  // user away from the end still breaks follow; a drag released with no
+  // momentum ends its session at the release itself, otherwise at momentum
+  // end. Leaving a session open would let a later animated maintain-scroll
+  // read as user motion and break follow spuriously.
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = event.nativeEvent.velocity?.y ?? 0;
+    if (Math.abs(velocity) < 0.05) {
+      userScrollSessionRef.current = false;
+    }
+  }, []);
+  const handleMomentumScrollEnd = useCallback(() => {
+    userScrollSessionRef.current = false;
+  }, []);
 
   // Gated variant of the 180ms feed layout slide. Instant while browsing
   // history: maintainVisibleContentPosition compensates the scroll offset in
@@ -1516,9 +1535,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       };
     };
   }, [nearListEnd]);
-  const handleScrollBeginDrag = useCallback(() => {
-    userNavigationInProgressRef.current = true;
-  }, []);
   const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -1529,6 +1545,20 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   useEffect(() => {
     reportHeaderMaterialVisibility(false);
   }, [props.threadId, reportHeaderMaterialVisibility]);
+
+  // A thread switch opens pinned to the end; a send explicitly returns to the
+  // live edge (ThreadDetailScreen scrolls the new message into place). Both
+  // re-arm follow regardless of where the user had scrolled before.
+  useEffect(() => {
+    userScrollSessionRef.current = false;
+    setEndFollow(true);
+  }, [props.threadId, setEndFollow]);
+  useEffect(() => {
+    if (props.anchorMessageId !== null) {
+      userScrollSessionRef.current = false;
+      setEndFollow(true);
+    }
+  }, [props.anchorMessageId, setEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1557,53 +1587,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ],
   );
 
-  const observedActivityRef = useRef({
-    threadId: props.threadId,
-    feed: props.feed,
-    latestTurn: props.latestTurn,
-  });
-  useEffect(() => {
-    const previous = observedActivityRef.current;
-    observedActivityRef.current = {
-      threadId: props.threadId,
-      feed: props.feed,
-      latestTurn: props.latestTurn,
-    };
-    if (previous.threadId !== props.threadId) {
-      isAtEndRef.current = true;
-      setIsAtEnd(true);
-      setHasUnreadActivity(false);
-      return;
-    }
-    if (
-      (previous.feed !== props.feed || previous.latestTurn !== props.latestTurn) &&
-      !isAtEndRef.current
-    ) {
-      setHasUnreadActivity(true);
-    }
-  }, [props.feed, props.latestTurn, props.threadId]);
-
-  const scrollToLatest = useCallback(() => {
-    isAtEndRef.current = true;
-    userNavigationInProgressRef.current = false;
-    setIsAtEnd(true);
-    setHasUnreadActivity(false);
-    props.listRef.current?.scrollToEnd({ animated: true });
-  }, [props.listRef]);
-
-  // Remount empty→filled once per thread open so initialScrollAtEnd lands under
-  // automatic insets. After the first filled mount for this threadId, keep the
-  // filled key even if the feed briefly empties during sync — remounting then
-  // feels like "conversation cleared and reloaded from scratch".
-  const listMountThreadIdRef = useRef(props.threadId);
-  const sawFilledFeedRef = useRef(props.feed.length > 0);
-  if (listMountThreadIdRef.current !== props.threadId) {
-    listMountThreadIdRef.current = props.threadId;
-    sawFilledFeedRef.current = props.feed.length > 0;
-  } else if (props.feed.length > 0) {
-    sawFilledFeedRef.current = true;
-  }
-  const listMountKey = `${props.threadId}:${sawFilledFeedRef.current ? "filled" : "empty"}`;
+  // The empty↔filled key below remounts the list, which resets its imperative
+  // content-inset override — and useKeyboardChatComposerInset (mounted above
+  // the remount boundary) deduplicates by height, so it never re-reports the
+  // composer inset to the fresh instance. Without this, the remounted list's
+  // initial scroll-to-end computes with a zero end inset and rests one
+  // composer-height short of the end. Layout effect: it must land before the
+  // list's first positioning tick or the one-shot initial scroll misses it.
+  const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
@@ -1635,15 +1626,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (props.latestTurn.completedAt === null || props.latestTurn.state === "running")
       ? props.latestTurn.turnId
       : null;
-
-  // Reaching the top (oldest) lazy-loads older history. The hook keys an
-  // in-flight guard by thread, so repeated fires during scroll coalesce.
-  const { hasMoreOlder, loadingOlder, onLoadOlder } = props;
-  const onStartReachedOlderHistory = useCallback(() => {
-    if (hasMoreOlder && !loadingOlder) {
-      onLoadOlder?.();
-    }
-  }, [hasMoreOlder, loadingOlder, onLoadOlder]);
 
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
@@ -1929,7 +1911,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // anchor scrolls also lets it correct a scroll that landed on a
             // stale end target once the anchor row finishes measuring.
             maintainScrollAtEnd={
-              disclosureToggleSettling || !isAtEnd
+              disclosureToggleSettling || !endFollowEnabled
                 ? false
                 : {
                     animated: true,
@@ -1940,8 +1922,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                     },
                   }
             }
-            // maintainVisibleContentPosition also keeps the viewport anchored
-            // when older history prepends at the top.
             maintainVisibleContentPosition={maintainVisibleContentPosition}
             data={presentedFeed}
             extraData={listAppearanceData}
@@ -1980,86 +1960,33 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
-            onStartReached={onStartReachedOlderHistory}
-            onStartReachedThreshold={0.5}
             onScrollBeginDrag={handleScrollBeginDrag}
+            onScrollEndDrag={handleScrollEndDrag}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
-            // Under automatic insets the spacer is UIKit's job, but the
-            // older-history spinner still belongs at the top of the content.
             ListHeaderComponent={
-              usesNativeAutomaticInsets ? (
-                loadingOlder ? (
-                  <ActivityIndicator style={{ marginTop: 8 }} />
-                ) : null
-              ) : (
-                <View style={{ height: topContentInset }}>
-                  {loadingOlder ? <ActivityIndicator style={{ marginTop: 8 }} /> : null}
-                </View>
-              )
+              <>
+                {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
+                {props.loadEarlier != null ? (
+                  <Pressable
+                    onPress={props.loadEarlier.onLoadEarlier}
+                    disabled={props.loadEarlier.loading}
+                    className="items-center py-2"
+                  >
+                    <Text className="text-xs text-foreground-secondary">
+                      {props.loadEarlier.loading ? "Loading earlier turns…" : "Load earlier turns"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </>
             }
             contentContainerStyle={{
               paddingTop: 12,
               paddingHorizontal: contentHorizontalPadding,
             }}
           />
-          {!isAtEnd ? (
-            <View
-              pointerEvents="box-none"
-              className="absolute inset-x-0 items-center"
-              style={{ bottom: bottomContentInset + 8 }}
-            >
-              <Pressable
-                accessibilityLabel={
-                  hasUnreadActivity ? "New activity. Scroll to latest" : "Scroll to latest"
-                }
-                accessibilityRole="button"
-                onPress={scrollToLatest}
-                // Use the real card token — `bg-background` is not defined in the
-                // mobile theme, so the chip rendered as a transparent outline and
-                // looked like floating text over the feed.
-                className="flex-row items-center gap-1.5 rounded-full border border-border bg-card px-3 py-2 active:opacity-70"
-                style={{
-                  backgroundColor: String(scrollToLatestBackground),
-                  shadowColor: "#000000",
-                  shadowOpacity: isDarkMode ? 0.35 : 0.14,
-                  shadowRadius: 10,
-                  shadowOffset: { width: 0, height: 4 },
-                  elevation: 6,
-                }}
-              >
-                <SymbolView
-                  name={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
-                  size={13}
-                  tintColor={iconSubtleColor}
-                  type="monochrome"
-                />
-                {hasUnreadActivity ? <View className="size-1.5 rounded-full bg-blue-500" /> : null}
-                <Text className="font-t3-medium text-xs text-foreground-secondary">
-                  {hasUnreadActivity ? "New activity" : "Scroll to latest"}
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
         </View>
-        {props.feed.length === 0 && hasMoreOlder ? (
-          // The window can derive zero visible entries while older history
-          // exists — without scrollable content `onStartReached` can never
-          // fire, so give the user an explicit affordance instead of the
-          // empty-state placeholder.
-          <View style={StyleSheet.absoluteFill}>
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-              {loadingOlder ? (
-                <ActivityIndicator />
-              ) : (
-                <TouchableOpacity accessibilityRole="button" onPress={() => onLoadOlder?.()}>
-                  <Text className="text-sm text-muted-foreground">Load older history</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        ) : null}
         {props.feed.length === 0 &&
-        !hasMoreOlder &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>

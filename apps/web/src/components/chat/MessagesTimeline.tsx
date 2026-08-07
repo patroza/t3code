@@ -76,7 +76,6 @@ import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
-  resolveOlderHistoryAutoLoad,
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
@@ -159,6 +158,33 @@ const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FADE_HEADER = <div className="h-10 sm:h-12" />;
+
+// Header row shown when older turns exist beyond the loaded window. Plain
+// button, no spinner animation; the label change is the loading indicator.
+function TimelineLoadEarlierHeader({
+  loading,
+  onLoadEarlier,
+  fade,
+}: {
+  loading: boolean;
+  onLoadEarlier: () => void;
+  fade: boolean;
+}) {
+  return (
+    <div className={fade ? "pt-10 sm:pt-12" : "pt-3 sm:pt-4"}>
+      <div className="mx-auto w-full max-w-3xl pb-2">
+        <button
+          type="button"
+          onClick={onLoadEarlier}
+          disabled={loading}
+          className="w-full py-1.5 text-xs text-muted-foreground/60 hover:text-foreground disabled:cursor-default"
+        >
+          {loading ? "Loading earlier turns…" : "Load earlier turns"}
+        </button>
+      </div>
+    </div>
+  );
+}
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 
@@ -193,17 +219,19 @@ interface MessagesTimelineProps {
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
   contentInsetEndAdjustment: number;
-  maintainScrollAtEnd: boolean;
+  /**
+   * Whether the timeline should keep pinning to the live edge as content
+   * grows. Off while the user is reading history; LegendList's own
+   * maintainScrollAtEnd would otherwise re-pin regardless of ChatView's
+   * scroll-mode refs whenever the user drifts near the bottom.
+   */
+  liveFollowEnabled: boolean;
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
-  /** Older history beyond the live activity window can be lazy-loaded. */
-  hasMoreOlder?: boolean;
-  loadingOlder?: boolean;
-  /** Increments after the older-history cursor advances or is reset. */
-  olderHistoryCursorVersion?: number;
-  onLoadOlder?: () => void;
+  /** Non-null when older turns exist beyond the loaded window. */
+  loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,15 +265,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onAnchorReady,
   onAnchorSizeChanged,
   contentInsetEndAdjustment,
-  maintainScrollAtEnd,
+  liveFollowEnabled,
   onIsAtEndChange,
   onManualNavigation,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
-  hasMoreOlder = false,
-  loadingOlder = false,
-  olderHistoryCursorVersion = 0,
-  onLoadOlder,
+  loadEarlier = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -357,19 +382,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
-  const olderHistoryAutoLoadArmedRef = useRef(true);
-  const olderHistoryObservedProgressVersionRef = useRef(olderHistoryCursorVersion);
-  const requestOlderHistory = useCallback(() => {
-    // Disarm before both automatic and explicit requests. If a request fails,
-    // prop changes while the viewport remains at the start must not trigger an
-    // immediate retry loop; the header button still permits a deliberate retry.
-    olderHistoryAutoLoadArmedRef.current = false;
-    onLoadOlder?.();
-  }, [onLoadOlder]);
-  useEffect(() => {
-    olderHistoryAutoLoadArmedRef.current = true;
-    olderHistoryObservedProgressVersionRef.current = olderHistoryCursorVersion;
-  }, [routeThreadKey, olderHistoryCursorVersion]);
   const handleAnchorReady = useCallback(
     (info: { anchorIndex: number | undefined }) => {
       if (anchorMessageId !== null && info.anchorIndex !== undefined) {
@@ -397,24 +409,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const handleScroll = useCallback(() => {
     const state = listRef.current?.getState?.();
-    const isAtEnd = resolveTimelineIsAtEnd(state);
+    const isAtEnd = resolveTimelineIsAtEnd(state, contentInsetEndAdjustment);
     if (isAtEnd !== undefined) {
       onIsAtEndChange(isAtEnd);
-    }
-    // Reaching the top lazy-loads older history; maintainVisibleContentPosition
-    // (set on the list) keeps the viewport anchored when rows prepend.
-    const olderHistoryDecision = resolveOlderHistoryAutoLoad({
-      armed: olderHistoryAutoLoadArmedRef.current,
-      hasMore: hasMoreOlder,
-      isAtStart: state?.isAtStart ?? false,
-      loading: loadingOlder,
-      observedProgressVersion: olderHistoryObservedProgressVersionRef.current,
-      progressVersion: olderHistoryCursorVersion,
-    });
-    olderHistoryAutoLoadArmedRef.current = olderHistoryDecision.armed;
-    olderHistoryObservedProgressVersionRef.current = olderHistoryDecision.observedProgressVersion;
-    if (olderHistoryDecision.shouldLoad) {
-      requestOlderHistory();
     }
     if (!state || minimapItems.length === 0) {
       return;
@@ -438,16 +435,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       strip.dataset.inView = inView ? "true" : "false";
     }
-  }, [
-    listRef,
-    minimapItems,
-    minimapStripMap,
-    onIsAtEndChange,
-    hasMoreOlder,
-    loadingOlder,
-    olderHistoryCursorVersion,
-    requestOlderHistory,
-  ]);
+  }, [contentInsetEndAdjustment, listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(handleScroll);
@@ -478,28 +466,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       observer.disconnect();
     };
   }, [timelineViewportElement, rows.length]);
-
-  const listHeader = useMemo(() => {
-    if (loadingOlder) {
-      return (
-        <div className="flex items-center justify-center py-2 text-xs text-muted-foreground">
-          Loading older history…
-        </div>
-      );
-    }
-    if (hasMoreOlder) {
-      return (
-        <button
-          type="button"
-          onClick={requestOlderHistory}
-          className="flex w-full cursor-pointer items-center justify-center py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Load older history
-        </button>
-      );
-    }
-    return topFadeEnabled ? TIMELINE_LIST_FADE_HEADER : TIMELINE_LIST_HEADER;
-  }, [loadingOlder, hasMoreOlder, requestOlderHistory, topFadeEnabled]);
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
@@ -550,11 +516,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div
-        key={item.id}
-        className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip"
-        data-timeline-root="true"
-      >
+      <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip" data-timeline-root="true">
         <TimelineRowContent row={item} />
       </div>
     ),
@@ -565,21 +527,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (hideEmptyPlaceholder) {
       return null;
     }
-    // Only short-circuit to the empty state when there is genuinely nothing to
-    // fetch: the window can derive zero VISIBLE rows (e.g. only tool-neutral work
-    // entries) while older history still exists — the list must render then so
-    // its "Load older history" header stays reachable.
-    if (hasMoreOlder || loadingOlder) {
-      // Keep the list mounted so its older-history control remains reachable.
-    } else {
-      return (
-        <div className="flex h-full items-center justify-center">
-          <p className="text-sm text-muted-foreground/30">
-            Send a message to start the conversation.
-          </p>
-        </div>
-      );
-    }
+    return (
+      <div className="flex h-full items-center justify-center">
+        <p className="text-sm text-muted-foreground/30">
+          Send a message to start the conversation.
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -589,12 +543,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <LegendList<MessagesTimelineRow>
             ref={listRef}
             data={rows}
-            // LegendList can retain a mounted container's previous child while
-            // anchored end-space is recomputed around a newly inserted turn.
-            // Re-running mounted renderers on each logical row-set change keeps
-            // the container content aligned with its current item key; memoized
-            // TimelineRowContent still skips unchanged rows.
-            extraData={rows}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             renderItem={renderItem}
@@ -603,7 +551,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
             maintainScrollAtEnd={
-              anchoredEndSpace || !maintainScrollAtEnd
+              anchoredEndSpace || !liveFollowEnabled
                 ? false
                 : {
                     animated: false,
@@ -623,7 +571,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
               topFadeEnabled && "chat-timeline-scroll-fade",
             )}
-            ListHeaderComponent={listHeader}
+            ListHeaderComponent={
+              loadEarlier !== null ? (
+                <TimelineLoadEarlierHeader
+                  loading={loadEarlier.loading}
+                  onLoadEarlier={loadEarlier.onLoadEarlier}
+                  fade={topFadeEnabled}
+                />
+              ) : topFadeEnabled ? (
+                TIMELINE_LIST_FADE_HEADER
+              ) : (
+                TIMELINE_LIST_HEADER
+              )
+            }
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
           <TimelineMinimap
@@ -942,10 +902,6 @@ type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
 type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
-type TimelineUserInputQuestion = Extract<
-  MessagesTimelineRow,
-  { kind: "user-input" }
->["userInput"]["questions"][number];
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
   return (
@@ -973,7 +929,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
-      {row.kind === "user-input" ? <UserInputTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1343,113 +1298,6 @@ function WorkGroupToggleTimelineRow({
         </span>
       )}
     </button>
-  );
-}
-
-/**
- * A clarifying-question round trip: what the agent asked and what the user
- * picked. The interactive prompt lives in the composer, so this row is the
- * thread's only lasting record of the exchange.
- */
-const UserInputTimelineRow = memo(function UserInputTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "user-input" }>;
-}) {
-  const [showOptions, setShowOptions] = useState(false);
-  const { userInput } = row;
-  const hasUnpickedOptions = userInput.questions.some(
-    (question) => question.options.length > question.selectedLabels.length,
-  );
-
-  return (
-    <section
-      className="rounded-lg border border-border/45 bg-muted/16 px-3 py-2.5"
-      aria-label={row.entry.label}
-    >
-      {userInput.questions.map((question, index) => (
-        <div key={question.id} className={cn(index > 0 && "mt-3 border-t border-border/40 pt-3")}>
-          <div className="flex items-center gap-1.5 text-muted-foreground/60">
-            <MessageCircleIcon className="size-3.5 shrink-0 stroke-[1.8]" aria-hidden />
-            <span className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-widest">
-              {question.header}
-            </span>
-          </div>
-          <p className="mt-1.5 text-[13px] leading-5 text-foreground/85">{question.question}</p>
-          <UserInputAnswer answered={userInput.answered} question={question} />
-          {showOptions && question.options.length > 0 ? (
-            <ul className="mt-2 space-y-1">
-              {question.options.map((option) => {
-                const picked = question.selectedLabels.includes(option.label);
-                return (
-                  <li
-                    key={option.label}
-                    className={cn(
-                      "rounded-md px-2 py-1 text-[12px] leading-4",
-                      picked ? "bg-primary/8 text-foreground/85" : "text-muted-foreground/70",
-                    )}
-                  >
-                    <span className="font-medium">{option.label}</span>
-                    {option.description && option.description !== option.label ? (
-                      <span className="ms-1.5 text-muted-foreground/60">{option.description}</span>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-        </div>
-      ))}
-      {hasUnpickedOptions ? (
-        <button
-          type="button"
-          className="mt-2 flex cursor-pointer items-center gap-1 rounded-md text-[11px] text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70"
-          aria-expanded={showOptions}
-          onClick={() => setShowOptions((value) => !value)}
-        >
-          <ChevronDownIcon
-            className={cn("size-3 transition-transform duration-200", showOptions && "rotate-180")}
-            aria-hidden
-          />
-          {showOptions ? "Hide options" : "Show options"}
-        </button>
-      ) : null}
-    </section>
-  );
-});
-
-function UserInputAnswer({
-  answered,
-  question,
-}: {
-  answered: boolean;
-  question: TimelineUserInputQuestion;
-}) {
-  const { selectedLabels, customAnswer } = question;
-
-  if (selectedLabels.length === 0 && !customAnswer) {
-    return (
-      <p className="mt-2 text-[12px] italic leading-5 text-muted-foreground/60">
-        {answered ? "No answer recorded" : "Awaiting your answer"}
-      </p>
-    );
-  }
-
-  return (
-    <div className="mt-2 space-y-1">
-      {selectedLabels.map((label) => (
-        <p key={label} className="flex items-start gap-1.5 text-[12px] leading-5 text-foreground">
-          <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden />
-          <span className="min-w-0 font-medium">{label}</span>
-        </p>
-      ))}
-      {customAnswer ? (
-        <p className="flex items-start gap-1.5 text-[12px] leading-5 text-foreground/90">
-          <CheckIcon className="mt-0.5 size-3 shrink-0 text-primary" aria-hidden />
-          <span className="min-w-0 whitespace-pre-wrap italic">{customAnswer}</span>
-        </p>
-      ) : null}
-    </div>
   );
 }
 
