@@ -13,7 +13,6 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
-  autoOpenPlanSidebar: false,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   confirmWorktreeRemoval: true,
@@ -43,6 +42,7 @@ const clientSettings: ClientSettings = {
     },
   ],
   preferredOpenWith: { type: "custom", id: OpenWithEntryId.make("terminal") },
+  planModeEnabled: false,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",
