@@ -22,6 +22,7 @@ import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLa
 import { IdentityClaimGate } from "../components/identity/IdentityClaimGate";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { hasThreadDeepLinkIntent } from "../deepLinkStore";
+import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { Button } from "../components/ui/button";
 import {
   AnchoredToastProvider,
@@ -147,6 +148,9 @@ function RootRouteView() {
           <IdentityClaimGate />
         ) : null}
         {appShell}
+        {/* Above the router: a theme draft is judged by walking the app, so the
+            editor has to survive navigation away from settings. */}
+        <ThemeEditorHost />
       </AnchoredToastProvider>
     </ToastProvider>
   );

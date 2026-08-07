@@ -31,6 +31,9 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  FileSearchIcon,
+  PaletteIcon,
+  TextSearchIcon,
   SettingsIcon,
   SquareKanbanIcon,
   SquarePenIcon,
@@ -53,8 +56,11 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useClientSettings } from "../hooks/useSettings";
+import { isPreviewFocused } from "../lib/previewFocus";
+import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
+import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
@@ -111,12 +117,18 @@ import {
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
+  reduceCommandPaletteUiState,
+  type CommandPaletteOpenIntent,
+  type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ProjectFilePicker } from "./files/ProjectFilePicker";
+import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
+import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
@@ -361,54 +373,35 @@ function errorMessage(error: unknown): string {
   return "An error occurred.";
 }
 
-interface CommandPaletteOpenIntent {
-  readonly kind: "add-project" | "new-thread-in";
-}
+const OVERLAY_MODE_BY_COMMAND = {
+  "commandPalette.toggle": "command",
+  "filePicker.toggle": "files",
+  "projectSearch.toggle": "content",
+} as const satisfies Partial<Record<string, SearchOverlayMode>>;
 
-interface CommandPaletteUiState {
-  readonly open: boolean;
-  readonly openIntent: CommandPaletteOpenIntent | null;
-}
-
-type CommandPaletteUiAction =
-  | { readonly _tag: "SetOpen"; readonly open: boolean }
-  | { readonly _tag: "Toggle" }
-  | { readonly _tag: "OpenAddProject" }
-  | { readonly _tag: "OpenNewThreadIn" }
-  | { readonly _tag: "ClearOpenIntent" };
-
-function reduceCommandPaletteUiState(
-  state: CommandPaletteUiState,
-  action: CommandPaletteUiAction,
-): CommandPaletteUiState {
-  switch (action._tag) {
-    case "SetOpen":
-      return {
-        open: action.open,
-        openIntent: action.open ? state.openIntent : null,
-      };
-    case "Toggle":
-      return { open: !state.open, openIntent: null };
-    case "OpenAddProject":
-      return { open: true, openIntent: { kind: "add-project" } };
-    case "OpenNewThreadIn":
-      return { open: true, openIntent: { kind: "new-thread-in" } };
-    case "ClearOpenIntent":
-      return state.openIntent ? { ...state, openIntent: null } : state;
-  }
+function overlayModeForCommand(command: string | null): SearchOverlayMode | null {
+  if (command === null) return null;
+  return command in OVERLAY_MODE_BY_COMMAND
+    ? OVERLAY_MODE_BY_COMMAND[command as keyof typeof OVERLAY_MODE_BY_COMMAND]
+    : null;
 }
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
+    mode: "command",
     openIntent: null,
   });
   const setOpen = useCallback((open: boolean) => dispatch({ _tag: "SetOpen", open }), []);
-  const toggleOpen = useCallback(() => dispatch({ _tag: "Toggle" }), []);
+  const toggleMode = useCallback(
+    (mode: SearchOverlayMode) => dispatch({ _tag: "ToggleMode", mode }),
+    [],
+  );
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
   const routeTarget = useParams({
     strict: false,
@@ -420,6 +413,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
+  const previewOpen = useRightPanelStore((state) =>
+    routeThreadRef
+      ? selectActiveRightPanel(state.byThreadKey, routeThreadRef) === "preview"
+      : false,
+  );
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -428,18 +426,31 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         context: {
           terminalFocus: isTerminalFocused(),
           terminalOpen,
+          previewFocus: isPreviewFocused(),
+          previewOpen,
         },
       });
-      if (command !== "commandPalette.toggle") {
+      if (command === "themeEditor.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleThemeEditorForTheme({
+          theme,
+          themeHalves,
+          initialAppearance: resolvedTheme,
+        });
+        return;
+      }
+      const mode = overlayModeForCommand(command);
+      if (mode === null) {
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      toggleOpen();
+      toggleMode(mode);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, terminalOpen, toggleOpen]);
+  }, [keybindings, resolvedTheme, terminalOpen, theme, themeHalves, toggleMode]);
 
   useEffect(
     () =>
@@ -457,11 +468,25 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 
   return (
     <ComposerHandleContext value={composerHandleRef}>
-      <CommandDialog open={state.open} onOpenChange={setOpen}>
+      <CommandDialog
+        open={state.open}
+        onOpenChange={(open, eventDetails) => {
+          // The overlays render an "Esc Back" affordance, so escape returns to
+          // command mode instead of dismissing the whole dialog.
+          if (!open && eventDetails.reason === "escape-key" && state.mode !== "command") {
+            eventDetails.cancel();
+            toggleMode("command");
+            return;
+          }
+          setOpen(open);
+        }}
+      >
         {children}
         <CommandPaletteDialog
           open={state.open}
+          mode={state.mode}
           openIntent={state.openIntent}
+          openOverlayMode={toggleMode}
           setOpen={setOpen}
           clearOpenIntent={clearOpenIntent}
         />
@@ -472,18 +497,51 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 
 function CommandPaletteDialog(props: {
   readonly open: boolean;
+  readonly mode: SearchOverlayMode;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
+  readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
 }) {
+  const composerHandleRef = useComposerHandleContext();
+
   if (!props.open) {
     return null;
+  }
+
+  // The file picker and content search are siblings of the palette, not views
+  // inside it: this fork's OpenCommandPaletteDialog owns its own popup, so the
+  // overlays bring their own rather than the popup being lifted out of it.
+  if (props.mode === "files" || props.mode === "content") {
+    return (
+      <CommandDialogPopup
+        aria-label={props.mode === "files" ? "File picker" : "Search project contents"}
+        className={cn("overflow-hidden p-0", props.mode === "content" && "h-105")}
+        data-command-palette="true"
+        data-palette-mode={props.mode}
+        data-testid="command-palette"
+        finalFocus={() => {
+          composerHandleRef?.current?.focusAtEnd();
+          return false;
+        }}
+        onBackdropPointerDown={() => {
+          props.setOpen(false);
+        }}
+      >
+        {props.mode === "files" ? (
+          <ProjectFilePicker setOpen={props.setOpen} />
+        ) : (
+          <ProjectContentSearchDialog onOpenChange={props.setOpen} />
+        )}
+      </CommandDialogPopup>
+    );
   }
 
   return (
     <OpenCommandPaletteDialog
       openIntent={props.openIntent}
       setOpen={props.setOpen}
+      openOverlayMode={props.openOverlayMode}
       clearOpenIntent={props.clearOpenIntent}
     />
   );
@@ -500,10 +558,11 @@ function renderThreadTrailingContent(thread: EnvironmentThreadShell) {
 function OpenCommandPaletteDialog(props: {
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
+  readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, openIntent, setOpen } = props;
+  const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const composerHandleRef = useComposerHandleContext();
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -529,6 +588,7 @@ function OpenCommandPaletteDialog(props: {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const { theme, themeHalves, resolvedTheme } = useTheme();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
@@ -1406,6 +1466,48 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "board.open",
     run: async () => {
       await navigate({ to: "/board" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:open-file-picker",
+    searchTerms: ["go to file", "open file", "file picker", "find file", "quick open"],
+    title: "Go to file",
+    icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
+    keepOpen: true,
+    shortcutCommand: "filePicker.toggle",
+    run: async () => {
+      openOverlayMode("files");
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:search-project-contents",
+    searchTerms: ["search project", "find in files", "grep", "content search", "text search"],
+    title: "Search project contents",
+    icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
+    keepOpen: true,
+    shortcutCommand: "projectSearch.toggle",
+    run: async () => {
+      openOverlayMode("content");
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:theme-editor",
+    searchTerms: ["theme", "appearance", "colors", "palette", "customize"],
+    title: "Toggle theme editor",
+    icon: <PaletteIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "themeEditor.toggle",
+    run: async () => {
+      toggleThemeEditorForTheme({
+        theme,
+        themeHalves,
+        initialAppearance: resolvedTheme,
+      });
     },
   });
 

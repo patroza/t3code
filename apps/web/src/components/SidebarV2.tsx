@@ -561,13 +561,34 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const isRegeneratingTitle = thread.titleRegeneration != null;
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
-  // an explicit act, so unlike Done, a never-visited woke thread still
-  // shows the pill; visiting clears it. An unparseable visit timestamp
-  // counts as never-visited — corrupt local data must not eat the wake
-  // signal.
+  // an explicit act, so the pill clears only when the user re-engages:
+  // reading a completion-triggered wake, clicking the pill, sending a
+  // message, settling, archiving — or finishing the work outright (merged
+  // or closed PR). Timer wakes survive a mere visit. An unparseable visit
+  // timestamp counts as never-visited — corrupt local data must not eat
+  // the wake signal.
+  const gitCwd = thread.worktreePath ?? props.projectCwd;
+  const gitStatus = useEnvironmentQuery(
+    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+      ? vcsEnvironment.listStatus({
+          environmentId: thread.environmentId,
+          input: { cwd: gitCwd },
+        })
+      : null,
+  );
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    gitStatus: gitStatus.data,
+  });
+  const prState = pr?.state ?? null;
+
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
-  const isWoke = wokeAtDate !== null && (lastVisitedDate === null || lastVisitedDate < wokeAtDate);
+  const isWoke =
+    wokeAtDate !== null &&
+    (lastVisitedDate === null || lastVisitedDate < wokeAtDate) &&
+    prState !== "merged" &&
+    prState !== "closed";
   // In-flight rows (working, or waiting on approval/input) fade as a whole:
   // there is nothing for the user to do yet, so prominence is reserved for
   // rows that need a human — done (unread), read-but-unsettled, failed, and
@@ -587,13 +608,17 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       ? {
           label: "Working",
           icon: "working" as const,
-          className:
-            "animate-sidebar-working-text text-sky-600 motion-reduce:animate-none dark:text-sky-400",
+          // No shimmer: a label that animates forever is noise in a sidebar
+          // full of them (and repaints every vsync on high-refresh displays).
+          // Working is a background state, so it rests at the dim end of what
+          // the old pulse cycled through; only the thread you have open gets
+          // the label at full strength.
+          className: cn("text-sky-600 dark:text-sky-400", !props.isActive && "opacity-75"),
         }
       : status === "monitoring"
         ? {
-            // Steady label, no duty-cycled shimmer: monitoring is calm
-            // background presence, not active progress (monitoring-pill D6).
+            // Monitoring is calm background presence, not active progress
+            // (monitoring-pill D6), so it keeps the label at full strength.
             label: "Monitoring",
             icon: null,
             className: "text-sky-600 dark:text-sky-400",
@@ -631,30 +656,16 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
-  const gitCwd = thread.worktreePath ?? props.projectCwd;
-  const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.listStatus({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const pr = resolveThreadPr({
-    threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
-  });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,
   // and a merged/closed PR auto-settles a thread — data only rows have.
-  const prState = pr?.state ?? null;
   useEffect(() => {
     onChangeRequestState(threadKey, prState);
   }, [onChangeRequestState, prState, threadKey]);
@@ -856,7 +867,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       ) : (
         <span
           className={cn(
-            "min-w-0 flex-1 text-sm",
+            "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
             shouldRecede ? "font-normal" : "font-medium",
             variant === "card"
               ? cn(
@@ -864,7 +875,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   isUnread || isWoke
                     ? "text-foreground"
                     : shouldRecede
-                      ? "text-muted-foreground/80"
+                      ? "text-secondary-label"
                       : status === "failed"
                         ? "text-foreground/95"
                         : "text-foreground/90",
@@ -875,8 +886,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     ? "text-foreground"
                     : isUnread
                       ? "text-muted-foreground"
-                      : "text-muted-foreground/70",
+                      : "text-secondary-label/70",
                 ),
+            isRegeneratingTitle && "opacity-[0.55]",
           )}
         >
           {thread.title}
@@ -903,8 +915,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           "shrink-0 text-xs tabular-nums hover:underline",
           variant === "slim" && variantAction === "unsettle"
             ? props.isActive
-              ? "text-muted-foreground/70"
-              : cn("text-muted-foreground/35 transition-colors", settledPrHoverClass)
+              ? "text-secondary-label"
+              : cn("text-secondary-label transition-colors", settledPrHoverClass)
             : prStatus.colorClass,
         )}
         aria-label={prStatus.tooltip}
@@ -974,7 +986,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
               <span
                 className={cn(
-                  "inline-flex justify-end tabular-nums text-muted-foreground/55 transition-opacity",
+                  "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
                   !isWoke && "group-hover/v2-row:opacity-0",
                 )}
               >
@@ -1085,7 +1097,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               {props.projectTitle ? (
                 <span
                   className={cn(
-                    "min-w-0 flex-1 truncate text-xs text-muted-foreground/85",
+                    "min-w-0 flex-1 truncate text-secondary-label text-xs",
                     shouldRecede ? "font-normal" : "font-medium",
                   )}
                 >
@@ -1114,7 +1126,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     isWokeStatus
                       ? "pointer-events-auto"
                       : "pointer-events-none group-has-[:focus-visible]/v2-status-slot:absolute group-has-[:focus-visible]/v2-status-slot:right-0 group-has-[:focus-visible]/v2-status-slot:opacity-0 group-hover/v2-row:absolute group-hover/v2-row:right-0 group-hover/v2-row:opacity-0",
-                    "self-center justify-self-end tabular-nums text-muted-foreground/65 transition-opacity",
+                    "self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
                     snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                   )}
                 >
@@ -1203,14 +1215,14 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 </span>
               ) : null}
             </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
               {/* While working, the current plan step outranks the branch:
                   it's the one line that says what the thread is doing. */}
               {status === "working" && thread.planProgress ? (
                 <span className="min-w-0 flex-1 truncate whitespace-nowrap">
                   {thread.planProgress.step}
                   {/* Completed count, matching the transcript chip's n/m. */}
-                  <span className="text-muted-foreground/50 tabular-nums">
+                  <span className="text-icon-muted tabular-nums">
                     {" "}
                     {thread.planProgress.completedSteps}/{thread.planProgress.totalSteps}
                   </span>
@@ -3036,7 +3048,9 @@ export default function SidebarV2() {
       <SidebarContent
         className="gap-0"
         fixedHeader={
-          <SidebarGroup className="gap-1 p-[var(--sidebar-content-inset)]">
+          // Lifted above the stage backdrop, whose fade bleeds below the
+          // header and would otherwise paint across the search row's outline.
+          <SidebarGroup className="relative z-[1] gap-1 p-[var(--sidebar-content-inset)]">
             <div className="flex items-center gap-1">
               <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
                 <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
@@ -3234,7 +3248,7 @@ export default function SidebarV2() {
                               type="button"
                               aria-label={`Project actions for ${project.displayName}`}
                               title={`Project actions for ${project.displayName}`}
-                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                               onPointerDown={(event) => event.stopPropagation()}
                               onClick={(event) => {
                                 void handleProjectActions(event, project);
