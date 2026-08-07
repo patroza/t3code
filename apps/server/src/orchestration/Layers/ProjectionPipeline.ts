@@ -837,7 +837,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          // Streaming assistant deltas can arrive many times per second; skip the
+          // full shell history rescan (messages + activities + plans) for them.
+          if (
+            event.type !== "thread.message-sent" ||
+            !("streaming" in event.payload) ||
+            !event.payload.streaming
+          ) {
+            yield* refreshThreadShellSummary(event.payload.threadId);
+          }
           return;
         }
 
@@ -952,6 +960,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
             isStreaming: event.payload.streaming,
+            // Preserve identity provenance on first write; keep prior source when
+            // a streaming delta omits it so commit attribution still works.
+            ...(event.payload.source !== undefined
+              ? { source: event.payload.source }
+              : previousMessage?.source !== undefined
+                ? { source: previousMessage.source }
+                : {}),
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
