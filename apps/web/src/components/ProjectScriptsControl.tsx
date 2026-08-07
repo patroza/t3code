@@ -356,6 +356,9 @@ export default function ProjectScriptsControl({
                   variant="outline"
                   className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
                   aria-label={`Run ${primaryScript.name}`}
+                  // The tooltip wrapper replaces data-slot="button", so themed
+                  // toolbar styling needs its own hook.
+                  data-toolbar-control=""
                   onClick={() => onRunScript(primaryScript)}
                 />
               }
@@ -458,6 +461,9 @@ export default function ProjectScriptsControl({
                 variant="outline"
                 className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
                 aria-label="Add action"
+                // The tooltip wrapper replaces data-slot="button", so themed
+                // toolbar styling needs its own hook.
+                data-toolbar-control=""
                 onClick={openAddDialog}
               />
             }
