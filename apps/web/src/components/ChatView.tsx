@@ -70,10 +70,6 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  useOlderThreadActivities,
-  type OlderActivitiesCursor,
-} from "@t3tools/client-runtime/state/older-thread-activities";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
@@ -241,7 +237,11 @@ import {
 } from "../state/server";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment } from "../state/threads";
+import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import {
+  requestOlderThreadTurns,
+  threadHasOlderTurns,
+} from "@t3tools/client-runtime/state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -267,6 +267,8 @@ import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
+  shouldShowComposerContextStrip,
+  shouldShowEnvironmentIndicator,
   type WorkspaceTarget,
 } from "./BranchToolbar.logic";
 import {
@@ -291,6 +293,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
@@ -1279,8 +1282,34 @@ function ChatViewContent(props: ChatViewProps) {
   );
   // Always resolve the pre-allocated route ref so draft routes can promote to a
   // live server thread without remounting (draft hero landing).
+  const routeServerThreadShell = useThreadShell(routeKind === "server" ? routeThreadRef : null);
+  const serverThreadShell = routeServerThreadShell;
   const serverThread = useThread(routeThreadRef, { waitForShell: draftThread !== null });
-  const serverThreadShell = useThreadShell(routeThreadRef);
+  const loadingServerThread = useMemo(
+    () =>
+      threadDetailLoading && routeServerThreadShell
+        ? buildLoadingThreadFromShell(routeServerThreadShell)
+        : null,
+    [routeServerThreadShell, threadDetailLoading],
+  );
+  const activeServerThread = serverThread ?? loadingServerThread;
+  // Pagination window state for the routed server thread: drives the
+  // "load earlier turns" header when the loaded window has older history.
+  const routeThreadState = useEnvironmentThread(
+    routeKind === "server" ? routeThreadRef.environmentId : null,
+    routeKind === "server" ? routeThreadRef.threadId : null,
+  );
+  const loadEarlierTurns = useMemo(() => {
+    if (routeKind !== "server" || !threadHasOlderTurns(routeThreadState)) {
+      return null;
+    }
+    return {
+      loading: routeThreadState.page._tag === "Some" && routeThreadState.page.value.loadingOlder,
+      onLoadEarlier: () => {
+        requestOlderThreadTurns(routeThreadRef.environmentId, routeThreadRef.threadId);
+      },
+    };
+  }, [routeKind, routeThreadRef, routeThreadState]);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const settings = useEnvironmentSettings(environmentId);
   // New-thread defaults live in the primary environment's settings.json (the
@@ -1536,19 +1565,19 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted. On server routes, also require the shell
   // so we don't treat a transient detail load as active without shell metadata.
   const isServerThread =
-    serverThread !== null &&
+    activeServerThread !== null &&
     (routeKind !== "server" ||
       shouldTreatServerThreadAsActive({
         hasServerThreadShell: serverThreadShell !== null,
         hasServerThreadDetail: true,
       }));
   const activeThread: Thread | undefined = isServerThread
-    ? (serverThread ?? undefined)
+    ? (activeServerThread ?? undefined)
     : localDraftThread;
   const threadError = isServerThread
     ? resolveServerThreadError({
         localError: localServerError,
-        serverError: serverThread?.session?.lastError,
+        serverError: activeServerThread?.session?.lastError,
         dismissedServerError: dismissedServerErrorsByThreadKey[routeThreadKey],
       })
     : localDraftError;
@@ -1896,6 +1925,14 @@ function ChatViewContent(props: ChatViewProps) {
     return envs;
   }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
+  const activeEnvironmentOption =
+    logicalProjectEnvironments.find(
+      (environment) => environment.environmentId === activeThread?.environmentId,
+    ) ?? null;
+  const showComposerEnvironmentIndicator = shouldShowEnvironmentIndicator({
+    activeEnvironment: activeEnvironmentOption,
+    canPickEnvironment: hasMultipleEnvironments,
+  });
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -2172,45 +2209,7 @@ function ChatViewContent(props: ChatViewProps) {
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
 
-  // ── Older-history lazy-load ────────────────────────────────────────────────
-  // The detail snapshot windows activities to the most recent page (the server
-  // sets `hasMoreActivities` when older ones exist); older pages are fetched on
-  // demand (infinite scroll-up) and prepended by the shared engine. Messages
-  // aren't windowed server-side, so this just back-fills the older tool
-  // activity.
-  const loadThreadActivities = useAtomCommand(orchestrationEnvironment.loadThreadActivities, {
-    reportFailure: false,
-  });
-  const activeThreadEnvironmentIdForActivities = activeThread?.environmentId ?? null;
-  const activeThreadIdForActivities = activeThread?.id ?? null;
-  const loadOlderActivitiesPage = useCallback(
-    async (cursor: OlderActivitiesCursor) => {
-      if (activeThreadEnvironmentIdForActivities === null || activeThreadIdForActivities === null) {
-        return null;
-      }
-      const result = await loadThreadActivities({
-        environmentId: activeThreadEnvironmentIdForActivities,
-        input: { threadId: activeThreadIdForActivities, ...cursor },
-      });
-      // Failures stay silent on web (the "Load older history" affordance itself
-      // is the retry surface); returning null keeps `hasMore` for the retry.
-      return result._tag === "Success" ? result.value : null;
-    },
-    [activeThreadEnvironmentIdForActivities, activeThreadIdForActivities, loadThreadActivities],
-  );
-  const {
-    mergedActivities: threadActivities,
-    hasMoreOlder: hasMoreOlderActivities,
-    loadingOlder: loadingOlderActivities,
-    progressVersion: olderHistoryCursorVersion,
-    loadOlder: loadOlderActivities,
-  } = useOlderThreadActivities({
-    threadKey: activeThread ? `${activeThread.environmentId}\u0000${activeThread.id}` : null,
-    liveActivities: activeThread?.activities ?? EMPTY_ACTIVITIES,
-    hasMoreLiveActivities: activeThread?.hasMoreActivities ?? false,
-    loadPage: loadOlderActivitiesPage,
-  });
-
+  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
@@ -2730,7 +2729,11 @@ function ChatViewContent(props: ChatViewProps) {
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
-  const showComposerContextStrip = isGitRepo && activeProject !== null;
+  const showComposerContextStrip = shouldShowComposerContextStrip({
+    hasActiveProject: activeProject !== null,
+    isGitRepo,
+    showEnvironmentIndicator: showComposerEnvironmentIndicator,
+  });
   const initialDiffPanelGitScope =
     gitStatusQuery.data?.hasWorkingTreeChanges === true ? "unstaged" : "branch";
   const diffPanelGitStatusResolutionKey = gitStatusQuery.data ? "resolved" : "pending";
@@ -6585,10 +6588,6 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
-                hasMoreOlder={hasMoreOlderActivities}
-                loadingOlder={loadingOlderActivities}
-                olderHistoryCursorVersion={olderHistoryCursorVersion}
-                onLoadOlder={loadOlderActivities}
                 latestTurn={activeLatestTurn}
                 runningTurnId={
                   activeThread.session?.status === "running"
@@ -6615,8 +6614,9 @@ function ChatViewContent(props: ChatViewProps) {
                 maintainScrollAtEnd={maintainTimelineAtEnd}
                 onIsAtEndChange={onIsAtEndChange}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
-                hideEmptyPlaceholder={isDraftHeroState}
+                hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
+                loadEarlier={loadEarlierTurns}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -6804,6 +6804,7 @@ function ChatViewContent(props: ChatViewProps) {
                               <BranchToolbar
                                 environmentId={activeThread.environmentId}
                                 threadId={activeThread.id}
+                                showGitControls={isGitRepo}
                                 {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                 onWorkspaceTargetChange={onWorkspaceTargetChange}
                                 startFromOrigin={startFromOrigin}

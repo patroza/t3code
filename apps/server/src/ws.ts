@@ -1122,7 +1122,17 @@ const makeWsRpcLayer = (
                   ? deriveLocalBranchNameFromRemoteRef(prepareWorktree.baseBranch)
                   : undefined;
                 worktreeBaseRefName = undefined;
-              } else if (prepareWorktree.startFromOrigin) {
+              } else if (
+                prepareWorktree.startFromOrigin === true &&
+                // "Start from origin" is a stored default; repos without an
+                // origin remote fall back to the local base branch instead of
+                // failing the whole bootstrap on `git fetch origin`. Checked
+                // lazily so the reuse path never touches the remote.
+                (yield* gitWorkflow.remoteExists({
+                  cwd: prepareWorktree.projectCwd,
+                  remoteName: "origin",
+                }))
+              ) {
                 yield* gitWorkflow.fetchRemote({
                   cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
@@ -1223,6 +1233,7 @@ const makeWsRpcLayer = (
           settings,
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
+          threadSnapshotPagination: true,
         };
       });
 
@@ -1635,7 +1646,14 @@ const makeWsRpcLayer = (
               }
 
               const snapshot = yield* projectionSnapshotQuery
-                .getThreadDetailSnapshot(input.threadId)
+                .getThreadDetailSnapshot(
+                  input.threadId,
+                  // Windowing the fallback snapshot is opt-in per subscription:
+                  // clients that don't send turnLimit (including all
+                  // pre-pagination clients) get the full thread, since they
+                  // have no way to load older pages.
+                  input.turnLimit === undefined ? undefined : { turnLimit: input.turnLimit },
+                )
                 .pipe(
                   Effect.mapError(
                     (cause) =>

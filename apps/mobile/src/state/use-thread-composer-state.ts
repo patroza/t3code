@@ -13,10 +13,6 @@ import {
 } from "@t3tools/contracts";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
-import {
-  useOlderThreadActivities,
-  type OlderActivitiesCursor,
-} from "@t3tools/client-runtime/state/older-thread-activities";
 import { sendEntersSteeringQueue } from "@t3tools/shared/chatList";
 import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
 
@@ -178,43 +174,6 @@ export function useThreadComposerState() {
   const removeServerQueuedMessage = useAtomCommand(threadEnvironment.removeQueuedMessage, {
     label: "remove queued message",
   });
-  const selectedEnvironmentIdForActivities = selectedThreadShell?.environmentId ?? null;
-  const selectedThreadIdForActivities = selectedThreadShell?.id ?? null;
-  const loadOlderActivitiesPage = useCallback(
-    async (cursor: OlderActivitiesCursor) => {
-      if (selectedEnvironmentIdForActivities === null || selectedThreadIdForActivities === null) {
-        return null;
-      }
-      const result = await loadThreadActivities({
-        environmentId: selectedEnvironmentIdForActivities,
-        input: { threadId: selectedThreadIdForActivities, ...cursor },
-      });
-      if (result._tag !== "Success") {
-        // Surface real failures (a spinner that quietly gives up reads as
-        // missing history); keep `hasMore` so scrolling back retries.
-        if (!isAtomCommandInterrupted(result)) {
-          setPendingConnectionError("Could not load older thread history.");
-        }
-        return null;
-      }
-      return result.value;
-    },
-    [selectedEnvironmentIdForActivities, selectedThreadIdForActivities, loadThreadActivities],
-  );
-  const {
-    mergedActivities,
-    hasMoreOlder: hasMoreOlderActivities,
-    loadingOlder: loadingOlderActivities,
-    loadOlder: onLoadOlderActivities,
-  } = useOlderThreadActivities({
-    threadKey: selectedThreadShell
-      ? `${selectedThreadShell.environmentId}\u0000${selectedThreadShell.id}`
-      : null,
-    liveActivities: selectedThreadDetail?.activities ?? EMPTY_ACTIVITIES,
-    hasMoreLiveActivities: selectedThreadDetail?.hasMoreActivities ?? false,
-    loadPage: loadOlderActivitiesPage,
-  });
-
   // "Send now" promotes a queued message into the conversation before the
   // server confirms the dispatch; the chip goes with it. See
   // promoteSteeredQueuedMessages.
@@ -232,8 +191,8 @@ export function useThreadComposerState() {
     if (!steeredDetail) {
       return [];
     }
-    return buildThreadFeed({ ...steeredDetail, activities: mergedActivities });
-  }, [steeredDetail, mergedActivities]);
+    return buildThreadFeed(steeredDetail);
+  }, [steeredDetail]);
 
   const composerQueueItems = useMemo(() => {
     type QueueItem = {
@@ -571,13 +530,6 @@ export function useThreadComposerState() {
     runtimeMode,
     interactionMode,
     sendEntersQueue,
-    // Lazy-loaded older pages + the live window — the full loaded activity set.
-    // Request derivations must run over this (not the windowed live set alone)
-    // so prompts pulled in by scroll-up still surface, matching web.
-    mergedActivities,
-    hasMoreOlderActivities,
-    loadingOlderActivities,
-    onLoadOlderActivities,
     onChangeDraftMessage,
     onPickDraftImages,
     onPasteIntoDraft,

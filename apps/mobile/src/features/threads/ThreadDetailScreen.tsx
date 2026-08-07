@@ -62,11 +62,10 @@ export interface ThreadDetailScreenProps {
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
+  /** Non-null when older turns exist beyond the loaded window. */
+  readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
   /** A send made now would be held in the steering queue, not open a turn. */
   readonly sendEntersQueue: boolean;
-  readonly hasMoreOlderActivities: boolean;
-  readonly loadingOlderActivities: boolean;
-  readonly onLoadOlderActivities: () => void;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
@@ -391,9 +390,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             usesAutomaticContentInsets={props.usesAutomaticContentInsets}
             onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
             skills={selectedProviderSkills}
-            hasMoreOlder={props.hasMoreOlderActivities}
-            loadingOlder={props.loadingOlderActivities}
-            onLoadOlder={props.onLoadOlderActivities}
+            loadEarlier={props.loadEarlier ?? null}
           />
         </View>
       ) : (

@@ -4,14 +4,18 @@
     {
       "upstreamPr": 4018,
       "sourceSha": "de8fd65934768173819b93adcd6b92af3e8c7fc3",
-      "status": "active",
-      "purpose": "Bound server thread history and lazily page older web activity"
+      "status": "superseded",
+      "purpose": "Bound server thread history and lazily page older web activity",
+      "supersededBy": "upstream #5493 (6b73b3def): user-anchored turn-window pagination",
+      "note": "Client usage removed in the 6b73b3def sync merge. The server getThreadActivities RPC is retained only for deployed mobile clients; remove it once fleet mobile builds predate it no longer."
     },
     {
       "upstreamPr": 3510,
       "sourceSha": "034f4936d7a1435887bb62ac3f2db61f08928cbf",
-      "status": "active",
-      "purpose": "Page mobile history and bound stale subscription catch-up"
+      "status": "partially-superseded",
+      "purpose": "Page mobile history and bound stale subscription catch-up",
+      "supersededBy": "upstream #5493 (6b73b3def): mobile paging replaced by loadEarlier turn windows",
+      "note": "The mobile scroll-up paging half was removed in the 6b73b3def sync merge. The server bounded-replay half in OrchestrationEngine remains active."
     },
     {
       "upstreamPr": 4176,

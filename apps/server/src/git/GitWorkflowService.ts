@@ -75,6 +75,10 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly remoteName: string;
     }) => Effect.Effect<void, GitCommandError>;
+    readonly remoteExists: (input: {
+      readonly cwd: string;
+      readonly remoteName: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
     readonly resolveRemoteTrackingCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -384,6 +388,10 @@ export const make = Effect.gen(function* () {
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.fetchRemote(input)),
+      ),
+    remoteExists: (input) =>
+      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(
+        Effect.andThen(git.remoteExists(input)),
       ),
     resolveRemoteTrackingCommit: (input) =>
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd, {
