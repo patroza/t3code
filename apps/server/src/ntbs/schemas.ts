@@ -36,7 +36,7 @@ export type RequestAccepted<P extends PlatformData> = LifecycleEvent<P> & {
 };
 
 export type ThreadStarted<P extends PlatformData> = ThreadEvent<P> & {
-  /** T3 has created the new thread from the source snapshot */
+  /** T3 has created the new thread. */
   state: "thread.started";
 };
 
