@@ -107,12 +107,18 @@ export const requiresShipGate = (argv, env = NodeProcess.env) => {
  */
 export const findRealGh = (opts = {}) => {
   const env = opts.env ?? NodeProcess.env;
+  // Set by this shim for its own child, so honour it first.
   if (env["AGENT_GH_REAL"] && NodeFS.existsSync(env["AGENT_GH_REAL"])) {
     return env["AGENT_GH_REAL"];
   }
-  if (env["T3_GITHUB_REAL_GH"] && NodeFS.existsSync(env["T3_GITHUB_REAL_GH"])) {
-    return env["T3_GITHUB_REAL_GH"];
-  }
+
+  // NOT T3_GITHUB_REAL_GH here: that names the *unauthenticated* binary the
+  // GitHub App wrapper execs after it mints an installation token, and hosts
+  // export it precisely so a child that reorders PATH keeps minting config.
+  // Delegating straight to it skips minting, so every `gh` call the shim
+  // fronts fails with "gh auth login" — which is how server-side PR lookups
+  // silently lost their badges. Prefer whatever PATH resolves (the App-aware
+  // `gh`), and fall back to the raw binary only when nothing else exists.
 
   const selfPath = opts.selfPath
     ? NodePath.resolve(opts.selfPath)
@@ -140,6 +146,12 @@ export const findRealGh = (opts = {}) => {
         // try next
       }
     }
+  }
+
+  // Only now consider the raw binary the App wrapper execs: better an
+  // unauthenticated `gh` than none, but never in preference to the wrapper.
+  if (env["T3_GITHUB_REAL_GH"] && NodeFS.existsSync(env["T3_GITHUB_REAL_GH"])) {
+    return env["T3_GITHUB_REAL_GH"];
   }
 
   // Last resort: ask the shell (may return us — caller must detect loops).
