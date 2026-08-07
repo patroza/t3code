@@ -86,10 +86,31 @@ type NTBSProcessorRequirements =
   | Crypto.Crypto;
 
 /**
- * Creates a new T3 thread for an external request.
+ * Creates an isolated worktree and a new T3 thread.
  *
- * Does nothing if the adapter has already handled the request.
- * Otherwise starts the thread, records it, posts an acknowledgement, and records that message.
+ * Does not start a turn, read platform data or call the adapter.
+ */
+declare const createT3Thread: (
+  snapshot: string,
+  t3Context: T3Context,
+) => Effect.Effect<ThreadId, NTBSProcessorError>;
+
+/**
+ * Stars the first turn in an existing T3 thread.
+ */
+declare const startT3Turn: (
+  threadId: ThreadId,
+  snapshot: string,
+) => Effect.Effect<void, NTBSProcessorError>;
+
+/**
+ * Handles an external request in this order:
+ *
+ * 1. Ask the adapter to accept it and stop if it is a duplicate.
+ * 2. Create the worktree and T3 thread.
+ * 3. Record `ThreadStarted`
+ * 4. Post and record the acknowledgement.
+ * 5. Start the first T3 turn with the source snapshot
  */
 declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
   request: NTBS.RequestAccepted<P>,
@@ -128,17 +149,6 @@ declare const resolveT3Outcome: (
 declare const processT3Event: <P extends NTBS.PlatformData>(
   event: OrchestrationEvent,
 ) => Effect.Effect<void, NTBSProcessorError>;
-
-/**
- * Creates an isolated worktree and a new T3 thread from the source snapshot.
- *
- * Starts the first turn and returns the new thread ID.
- * Does not read platform data or call the adapter.
- */
-declare const startT3thread: (
-  snapshot: string,
-  t3Context: T3Context,
-) => Effect.Effect<ThreadId, NTBSProcessorError>;
 
 /**
  * Creates an NTBS processor for one adapter.
