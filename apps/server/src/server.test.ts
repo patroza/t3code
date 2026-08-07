@@ -518,6 +518,9 @@ const buildAppUnderTest = (options?: {
       ...options?.layers?.vcsDriverRegistry,
     });
     const gitVcsDriverLayer = Layer.mock(GitVcsDriver.GitVcsDriver)({
+      // Default: assume origin exists so startFromOrigin bootstrap paths that
+      // only mock createWorktree keep working. Individual tests override.
+      remoteExists: () => Effect.succeed(true),
       ...options?.layers?.gitVcsDriver,
     });
     const gitManagerLayer = Layer.mock(GitManager.GitManager)({
