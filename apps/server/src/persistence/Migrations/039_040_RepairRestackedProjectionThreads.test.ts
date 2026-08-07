@@ -59,6 +59,10 @@ layer("b18 desktop migration namespace repair", (it) => {
       assert.ok(names.has("title_regeneration_request_id"));
       assert.ok(names.has("title_regeneration_started_at"));
       assert.ok(names.has("pinned_at"));
+      // Upstream 038 is asserted in the ledger above; assert its product
+      // effect too, so a repair that writes the row without applying the
+      // ALTER cannot pass.
+      assert.ok(names.has("pin_order_key"));
 
       const migrations = yield* sql<{
         readonly migration_id: number;
@@ -82,10 +86,11 @@ layer("b18 desktop migration namespace repair", (it) => {
         readonly migration_id: number;
         readonly name: string;
       }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id`;
-      assert.deepStrictEqual(upstreamMigrations.slice(-3), [
+      assert.deepStrictEqual(upstreamMigrations.slice(-4), [
         { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
         { migration_id: 37, name: "ProjectionTurnsKeysetIndex" },
+        { migration_id: 38, name: "ProjectionThreadsPinOrderKey" },
       ]);
 
       const forkMigrations = yield* sql<{

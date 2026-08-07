@@ -13,6 +13,7 @@ import {
   groupSortedThreadsByRecency,
   shouldShowRecencySectionHeaders,
 } from "@t3tools/client-runtime/state/thread-recency-groups";
+import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { threadMatchesAttributeQuery } from "@t3tools/shared/threadAttributeSearch";
 
@@ -472,8 +473,8 @@ export function buildThreadListV2Items(input: {
       input.changeRequestStateByKey?.get(`${thread.environmentId}:${thread.id}`) ?? null;
     // Visibility parity with web: snooze outranks everything, including a
     // pin — a snoozed thread leaves the list until it wakes (or raises its
-    // hand). The pin survives underneath, so a woken thread reappears at
-    // its original spot in the creation-ordered pinned block.
+    // hand). The pin (and its pinOrderKey) survives underneath, so a woken
+    // thread reappears at its exact spot in the pinned block.
     if (supportsSnooze && effectiveSnoozed(thread, { now: snoozeNow })) {
       snoozed.push(thread);
       if (
@@ -533,7 +534,9 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of orderActiveThreads(pinned)) {
+  // Pins carry an explicit user order (#5581); only the unpinned rows follow
+  // the fork's grouping preference.
+  for (const thread of sortPinnedThreadsByOrderKey(pinned)) {
     items.push({
       thread,
       variant: "card",
