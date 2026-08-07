@@ -1380,6 +1380,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           text,
           attachments_json AS "attachments",
           is_streaming AS "isStreaming",
+          source_json AS "source",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
