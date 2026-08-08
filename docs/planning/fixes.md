@@ -2,10 +2,18 @@
 
 This document collects the units of work identified by the adversarial review of the NTBS design.
 
-## 1. Recover accepted requests whose T3 thread was not recorded as started
+## 1. Remove the pre-thread lifecycle state
 
-The adapter records `RequestAccepted` before the processor creates the T3 thread. If the server stops after accepting the request but before recording `ThreadStarted`, the request remains unfinished. A repeated delivery cannot safely solve this by starting fresh because it is treated as a duplicate, and the previous attempt may already have created a T3 thread.
+`RequestAccepted` exists to recover a request when the server stops before recording `ThreadStarted`. Supporting that narrow failure window requires planned thread IDs, searches for unfinished requests, startup retries, and rules for resuming duplicates.
 
-The request must retain a planned T3 thread ID before thread creation begins. Every creation attempt for that request must use the same thread ID, making a retry safe even if the previous attempt created the thread but failed before recording `ThreadStarted`.
+Do not add that machinery in the first implementation. Remove `RequestAccepted` and make `ThreadStarted` the first stored lifecycle state. Record it as soon as the basic T3 thread exists, before slower worktree preparation or project setup begins.
 
-The adapter must expose accepted requests that have no recorded `ThreadStarted`. When the processor starts, it must find those requests and retry thread creation using their stored thread IDs. A duplicate delivery must not create another thread; it may resume the existing unfinished request.
+This deliberately accepts one limitation: if the server stops before `ThreadStarted` is saved, the request may be lost. The user receives no acknowledgement and can send the request again. If this becomes a real problem, each adapter can later inspect recent platform messages and recover missing requests using the capabilities of that platform.
+
+## 2. Make acknowledgements independent from the shared lifecycle
+
+The acknowledgement is a platform message such as "working on it." It improves feedback for the user, but the current types make its message ID mandatory for `ResponseAvailable` and `ResponsePosted`. If posting the acknowledgement fails, the processor cannot represent or post the final response even though T3 work can continue.
+
+After creating the T3 thread, the processor records `ThreadStarted`. Starting the T3 work and attempting to post the acknowledgement are then independent operations. A failed acknowledgement must not prevent the work from starting, completing, or returning its final response.
+
+Remove `ThreadStartedAcknowledgement` from the shared lifecycle and remove `acknowledgementMessageId` from later lifecycle states. An adapter may retain the acknowledgement ID in its own storage and retry posting when appropriate, but final-response processing must not depend on it.
