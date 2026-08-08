@@ -1,39 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
-
-import {
-  formatPendingPrimaryActionLabel,
-  shouldDisableCollapsedComposerSubmitAction,
-  shouldShowComposerInterruptAction,
-} from "./ComposerPrimaryActions";
-
-describe("shouldShowComposerInterruptAction", () => {
-  it("shows interrupt while running with an empty composer", () => {
-    expect(
-      shouldShowComposerInterruptAction({
-        isRunning: true,
-        hasSendableContent: false,
-        promptHasText: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("shows submit while running once the composer has sendable content", () => {
-    expect(
-      shouldShowComposerInterruptAction({
-        isRunning: true,
-        hasSendableContent: true,
-        promptHasText: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldShowComposerInterruptAction({
-        isRunning: true,
-        hasSendableContent: false,
-        promptHasText: true,
-      }),
-    ).toBe(false);
-  });
-});
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 describe("shouldDisableCollapsedComposerSubmitAction", () => {
   it("keeps the collapsed mobile submit button disabled while a turn is running", () => {
@@ -58,6 +25,67 @@ describe("shouldDisableCollapsedComposerSubmitAction", () => {
     ).toBe(false);
   });
 });
+vi.mock("~/hooks/useSettings", () => ({
+  useEnvironmentIdentificationMode: () => "none",
+}));
+vi.mock("../SidebarStageBackdrop", () => ({
+  StageBackdropButtonArt: () => null,
+  useSidebarStageBackdropVariant: () => null,
+}));
+
+import {
+  ComposerPrimaryActions,
+  formatPendingPrimaryActionLabel,
+  shouldDisableCollapsedComposerSubmitAction,
+} from "./ComposerPrimaryActions";
+
+function renderPendingActions(isRunning: boolean) {
+  return renderToStaticMarkup(
+    createElement(ComposerPrimaryActions, {
+      compact: true,
+      pendingAction: {
+        questionIndex: 0,
+        isLastQuestion: true,
+        canAdvance: true,
+        isResponding: false,
+        isComplete: true,
+      },
+      isRunning,
+      showPlanFollowUpPrompt: false,
+      promptHasText: false,
+      isSendBusy: false,
+      sendDisabledReason: null,
+      isConnecting: false,
+      isEnvironmentUnavailable: false,
+      isPreparingWorktree: false,
+      hasSendableContent: false,
+      onPreviousPendingQuestion: () => {},
+      onInterrupt: () => {},
+      onImplementPlanInNewThread: () => {},
+    }),
+  );
+}
+
+function renderStandaloneStop() {
+  return renderToStaticMarkup(
+    createElement(ComposerPrimaryActions, {
+      compact: true,
+      pendingAction: null,
+      isRunning: true,
+      showPlanFollowUpPrompt: false,
+      promptHasText: false,
+      isSendBusy: false,
+      sendDisabledReason: null,
+      isConnecting: false,
+      isEnvironmentUnavailable: false,
+      isPreparingWorktree: false,
+      hasSendableContent: false,
+      onPreviousPendingQuestion: () => {},
+      onInterrupt: () => {},
+      onImplementPlanInNewThread: () => {},
+    }),
+  );
+}
 
 describe("formatPendingPrimaryActionLabel", () => {
   it("returns 'Submitting...' while responding", () => {
@@ -146,5 +174,21 @@ describe("formatPendingPrimaryActionLabel", () => {
         questionIndex: 5,
       }),
     ).toBe("Submit answers");
+  });
+});
+
+describe("ComposerPrimaryActions", () => {
+  it("offers Stop generation while a running turn is waiting for user input", () => {
+    expect(renderPendingActions(true)).toContain('aria-label="Stop generation"');
+  });
+
+  it("does not offer Stop generation for a pending request without a running turn", () => {
+    expect(renderPendingActions(false)).not.toContain('aria-label="Stop generation"');
+  });
+
+  it("matches the small pending action size without changing the standalone size", () => {
+    expect(renderPendingActions(true)).toContain("size-8 sm:size-7");
+    expect(renderStandaloneStop()).toContain("size-8 sm:h-8 sm:w-8");
+    expect(renderStandaloneStop()).not.toContain("sm:size-7");
   });
 });

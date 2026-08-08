@@ -58,6 +58,7 @@ import {
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
+  resolveThreadListV2Enabled,
 } from "../threads/threadListV2";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
 import { matchesEnvironmentFilter } from "./homeEnvironmentFilter";
@@ -232,10 +233,15 @@ export function HomeScreen(props: HomeScreenProps) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   // Grouping changes V2 ordering only; the cards, pin block, and shelves are
   // shared across project and recency modes.
+  // v2 is the default list since #5672; the legacy grouped list is the opt-in.
   const threadListV2Enabled =
     props.listMode === "threads" &&
-    AsyncResult.isSuccess(preferencesResult) &&
-    preferencesResult.value.threadListV2Enabled === true;
+    resolveThreadListV2Enabled({
+      legacyPreference: AsyncResult.isSuccess(preferencesResult)
+        ? preferencesResult.value.legacyThreadListEnabled
+        : undefined,
+      preferencesLoaded: AsyncResult.isSuccess(preferencesResult),
+    });
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);

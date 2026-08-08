@@ -13,7 +13,7 @@ import type { Project, SidebarThreadSummary } from "../../types";
 import { useUiStateStore } from "../../uiStateStore";
 import {
   hasUnseenCompletion,
-  resolveSidebarV2Status,
+  resolveSidebarThreadStatus,
   resolveSidebarV2TopStatus,
 } from "../Sidebar.logic";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
@@ -101,7 +101,7 @@ function BoardCardBody({
   });
   const prStatus = prStatusIndicator(pr, appliedGitStatus?.sourceControlProvider);
   const topStatus = resolveSidebarV2TopStatus({
-    status: resolveSidebarV2Status(thread),
+    status: resolveSidebarThreadStatus(thread),
     isUnread: hasUnseenCompletion({ ...thread, lastVisitedAt }),
   });
   const relativeTimeLabel = formatRelativeTimeLabel(

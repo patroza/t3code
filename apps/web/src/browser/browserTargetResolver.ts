@@ -12,7 +12,8 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { previewEnvironment } from "~/state/preview";
 import { readPreparedConnection } from "~/state/session";
 
-const normalizeHostname = (host: string): string => host.toLowerCase().replace(/^\[|\]$/g, "");
+export const normalizeHostname = (host: string): string =>
+  host.toLowerCase().replace(/^\[|\]$/g, "");
 
 const parseIpv4Address = (host: string): readonly number[] | null => {
   const parts = normalizeHostname(host).split(".").map(Number);
@@ -22,7 +23,7 @@ const parseIpv4Address = (host: string): readonly number[] | null => {
     : null;
 };
 
-const isLocalLoopbackHost = (host: string): boolean => {
+export const isLocalLoopbackHost = (host: string): boolean => {
   const normalized = normalizeHostname(host);
   if (normalized === "localhost" || normalized === "::1") return true;
   return parseIpv4Address(normalized)?.[0] === 127;
