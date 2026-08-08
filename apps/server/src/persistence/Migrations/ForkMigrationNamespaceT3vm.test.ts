@@ -28,12 +28,13 @@ layer("t3vm migration namespace repair", (it) => {
       const upstream = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-5), [
+      assert.deepStrictEqual(upstream.slice(-6), [
         { migration_id: 33, name: "ProjectionThreadsSettled" },
         { migration_id: 34, name: "ProjectionThreadsSnoozed" },
         { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
         { migration_id: 37, name: "ProjectionTurnsKeysetIndex" },
+        { migration_id: 38, name: "ProjectionThreadsPinOrderKey" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id

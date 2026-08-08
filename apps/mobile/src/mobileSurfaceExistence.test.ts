@@ -75,6 +75,37 @@ describe("mobile surface existence (anti stack-drop)", () => {
     );
   });
 
+  it("keeps list-mode titles under the connection-status title swap", () => {
+    // Upstream's connection-aware header hardcodes the brand lockup and the
+    // literal "Threads" (#5372). This fork's headers show a list-mode title
+    // (Threads / Projects / Board), so every surface that adopts the swap has
+    // to pass its own title through — a plain adoption silently renames Board
+    // and Projects to "Threads", which is exactly what slipped through once.
+    const sidebar = NodeFS.readFileSync(
+      NodePath.join(root, "features/threads/ThreadNavigationSidebar.tsx"),
+      "utf8",
+    );
+    const homeHeader = NodeFS.readFileSync(
+      NodePath.join(root, "features/home/HomeHeader.tsx"),
+      "utf8",
+    );
+
+    // Native header slot (iOS split) and the custom large title (Android split).
+    expect(sidebar).toMatch(
+      /getConnectionAwareBrandHeaderOptions\(\{[\s\S]*?title: HOME_LIST_MODE_TITLES\[options\.listMode\]/,
+    );
+    expect(sidebar).toMatch(
+      /<WorkspaceConnectionTitle[\s\S]*?\{HOME_LIST_MODE_TITLES\[options\.listMode\]\}/,
+    );
+    // iOS Home owns its native title, so the swap has to live there too.
+    expect(homeHeader).toMatch(
+      /getConnectionAwareBrandHeaderOptions\(\{[\s\S]*?title: headerTitle/,
+    );
+    // No surface may render the deleted in-list status pill again.
+    expect(sidebar).not.toContain("WorkspaceConnectionStatus");
+    expect(homeHeader).not.toContain("WorkspaceConnectionStatus");
+  });
+
   it("keys markdown nodes uniquely even when parser spans collide", () => {
     const nodeKey = NodeFS.readFileSync(
       NodePath.join(root, "../modules/t3-markdown-text/src/markdownNodeKey.ts"),

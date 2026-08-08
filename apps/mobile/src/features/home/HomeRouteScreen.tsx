@@ -9,7 +9,6 @@ import {
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getCompactBrandHeaderOptions } from "../../components/CompactBrandTitle";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
 import {
@@ -57,6 +56,7 @@ export function HomeRouteScreen() {
     unsnoozeThread,
     pinThread,
     unpinThread,
+    movePinnedThread,
     unsettleThread,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
@@ -187,7 +187,9 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Title is owned by HomeHeader (tracks list mode). */}
+        {/* Title is owned by HomeHeader (tracks list mode), which carries the
+            connection-aware brand slot — no native-stack title to avoid
+            showing the status twice. */}
         <HomeHeader
           environments={environments}
           projects={projectFilterOptions}
@@ -209,6 +211,9 @@ export function HomeRouteScreen() {
           onOwnershipFilterChange={setOwnershipFilter}
           onOwnershipRelationChange={setOwnershipRelation}
           onHideSettledThreadsChange={setHideSettledThreads}
+          onOpenEnvironments={() =>
+            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+          }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
@@ -235,10 +240,8 @@ export function HomeRouteScreen() {
           onUnpinThread={unpinThread}
           onClearEnvironments={clearSelectedEnvironments}
           onToggleEnvironment={toggleSelectedEnvironmentId}
+          onMovePinnedThread={movePinnedThread}
           onProjectChange={setSelectedProjectKey}
-          onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
-          }
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}

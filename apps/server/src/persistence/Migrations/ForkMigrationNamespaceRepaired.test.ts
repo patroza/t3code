@@ -38,10 +38,11 @@ layer("fork migration namespace for a repaired database", (it) => {
       const backup = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(legacyMigrationBackupTable)} ORDER BY migration_id
       `;
-      assert.deepStrictEqual(upstream.slice(-3), [
+      assert.deepStrictEqual(upstream.slice(-4), [
         { migration_id: 35, name: "ProjectionThreadTitleRegeneration" },
         { migration_id: 36, name: "ProjectionThreadsPinned" },
         { migration_id: 37, name: "ProjectionTurnsKeysetIndex" },
+        { migration_id: 38, name: "ProjectionThreadsPinOrderKey" },
       ]);
       assert.deepStrictEqual(fork, [
         { migration_id: 1, name: "ProjectionQueuedMessages" },
