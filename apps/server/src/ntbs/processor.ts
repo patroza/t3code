@@ -163,6 +163,6 @@ declare const processT3Event: (
  *
  * Resolves the required T3 services and returns processor operations with no remaining requirements.
  */
-declare const makeNTBSProcessor: <P extends NTBS.PlatformData>(
+export declare const makeNTBSProcessor: <P extends NTBS.PlatformData>(
   adapter: NTBSAdapter<P>,
 ) => Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements>;
