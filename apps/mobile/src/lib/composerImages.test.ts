@@ -3,6 +3,9 @@ import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 
 const files = new Map<string, { base64: string; deleted: boolean }>();
 
+const requestMediaLibraryPermissionsAsync = vi.fn();
+const launchImageLibraryAsync = vi.fn();
+
 vi.mock("expo-file-system", () => ({
   File: class {
     readonly uri: string;
@@ -32,6 +35,11 @@ vi.mock("expo-file-system", () => ({
   },
 }));
 
+vi.mock("expo-image-picker", () => ({
+  requestMediaLibraryPermissionsAsync,
+  launchImageLibraryAsync,
+}));
+
 vi.mock("./uuid", () => ({
   uuidv4: () => "attachment-id",
 }));
@@ -39,6 +47,7 @@ vi.mock("./uuid", () => ({
 import {
   convertPastedImagesToAttachments,
   isOwnedPastedImageUri,
+  pickComposerImages,
   toUploadChatImageAttachments,
 } from "./composerImages";
 
@@ -65,6 +74,86 @@ describe("toUploadChatImageAttachments", () => {
         dataUrl: "data:image/png;base64,AA==",
       },
     ]);
+  });
+});
+
+describe("pickComposerImages", () => {
+  beforeEach(() => {
+    requestMediaLibraryPermissionsAsync.mockReset();
+    launchImageLibraryAsync.mockReset();
+  });
+
+  it("opens the system image library without requesting media-library permission", async () => {
+    launchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [
+        {
+          uri: "file:///tmp/photo.png",
+          fileName: "photo.png",
+          mimeType: "image/png",
+          base64: "aGVsbG8=",
+          fileSize: 5,
+        },
+      ],
+    });
+
+    const result = await pickComposerImages({ existingCount: 0 });
+
+    expect(requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+    expect(launchImageLibraryAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        base64: true,
+      }),
+    );
+    expect(result).toEqual({
+      images: [
+        expect.objectContaining({
+          id: "attachment-id",
+          type: "image",
+          name: "photo.png",
+          mimeType: "image/png",
+          sizeBytes: 5,
+          dataUrl: "data:image/png;base64,aGVsbG8=",
+          previewUri: "file:///tmp/photo.png",
+        }),
+      ],
+      error: null,
+    });
+  });
+
+  it("returns no images when the user cancels the picker", async () => {
+    launchImageLibraryAsync.mockResolvedValue({
+      canceled: true,
+      assets: null,
+    });
+
+    await expect(pickComposerImages({ existingCount: 0 })).resolves.toEqual({
+      images: [],
+      error: null,
+    });
+    expect(requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured error when the image library fails to open", async () => {
+    launchImageLibraryAsync.mockRejectedValue(new Error("picker unavailable"));
+
+    await expect(pickComposerImages({ existingCount: 0 })).resolves.toEqual({
+      images: [],
+      error: "picker unavailable",
+    });
+    expect(requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  it("rejects picks when the attachment limit is already full", async () => {
+    await expect(
+      pickComposerImages({ existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }),
+    ).resolves.toEqual({
+      images: [],
+      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`,
+    });
+    expect(launchImageLibraryAsync).not.toHaveBeenCalled();
   });
 });
 

@@ -65,21 +65,28 @@ export async function pickComposerImages(input: { readonly existingCount: number
     };
   }
 
-  const permission = await imagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) {
+  // Do not call requestMediaLibraryPermissionsAsync(). The app ships with
+  // photosPermission: false (no NSPhotoLibraryUsageDescription), and modern
+  // system pickers (PHPicker / Android photo picker) do not need library
+  // access. Requesting permission without a usage string hard-crashes iOS.
+  let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
+  try {
+    result = await imagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: remainingSlots,
+      base64: true,
+      quality: 1,
+    });
+  } catch (error) {
     return {
       images: [],
-      error: "Allow photo library access to attach images.",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not open the photo library to attach images.",
     };
   }
-
-  const result = await imagePicker.launchImageLibraryAsync({
-    mediaTypes: ["images"],
-    allowsMultipleSelection: true,
-    selectionLimit: remainingSlots,
-    base64: true,
-    quality: 1,
-  });
 
   if (result.canceled) {
     return {
