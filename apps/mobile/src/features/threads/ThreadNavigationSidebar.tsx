@@ -106,6 +106,7 @@ import {
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
+  resolveThreadListV2Enabled,
 } from "./threadListV2";
 
 /** The sidebar list serves both lists: v1 grouped items or, when the Thread
@@ -292,10 +293,16 @@ function ThreadNavigationSidebarPane(
   );
   // Grouping changes V2 ordering only; it must never swap in a different row
   // renderer or remove pinning / shelves.
+  // v2 is the default list since #5672; legacyThreadListEnabled is the opt-out.
+  // Must match HomeScreen, or this surface and Home disagree about the list.
   const threadListV2Enabled =
     options.listMode === "threads" &&
-    AsyncResult.isSuccess(preferencesResult) &&
-    preferencesResult.value.threadListV2Enabled === true;
+    resolveThreadListV2Enabled({
+      legacyPreference: AsyncResult.isSuccess(preferencesResult)
+        ? preferencesResult.value.legacyThreadListEnabled
+        : undefined,
+      preferencesLoaded: AsyncResult.isSuccess(preferencesResult),
+    });
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
     ? resolveHideSettledOnRecent(preferencesResult.value)
     : true;

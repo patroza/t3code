@@ -19,7 +19,7 @@ function readSrc(relativePath: string): string {
 
 describe("fork surface existence (anti stack-drop)", () => {
   it("classic sidebar keeps the collapsible Settled shelf chrome", () => {
-    const sidebar = readSrc("components/Sidebar.tsx");
+    const sidebar = readSrc("components/LegacySidebar.tsx");
     expect(sidebar).toContain('data-testid="sidebar-v1-settled-shelf-toggle"');
     expect(sidebar).toContain("Hide settled");
     expect(sidebar).toContain('data-testid="sidebar-v1-settled-recency-headers"');
@@ -36,23 +36,23 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("Sidebar V2 keeps Settled shelf labeling and new-thread affordance", () => {
-    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const sidebarV2 = readSrc("components/Sidebar.tsx");
     expect(sidebarV2).toContain("Settled shelf");
     expect(sidebarV2).toMatch(/New thread|new thread/i);
-    expect(sidebarV2).toContain("sidebar-v2-pinned-divider");
-    expect(sidebarV2).toContain("sidebar-v2-snoozed-shelf-toggle");
-    expect(sidebarV2).toContain("sidebar-v2-settled-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-pinned-divider");
+    expect(sidebarV2).toContain("sidebar-snoozed-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-settled-shelf-toggle");
     expect(sidebarV2).toContain("attemptPin");
     expect(sidebarV2).toContain("attemptUnpin");
   });
 
   it("Sidebar V2 View & filters keeps multi-env environment filter (shared storage)", () => {
-    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const sidebarV2 = readSrc("components/Sidebar.tsx");
     // Restacked ownership work once dropped this; without it multi-env users
     // cannot hide t3vm / secondary machines from the V2 inbox.
-    expect(sidebarV2).toContain('data-testid="sidebar-v2-view-options-trigger"');
-    expect(sidebarV2).toContain('data-testid="sidebar-v2-environment-filter-all"');
-    expect(sidebarV2).toContain("sidebar-v2-environment-filter-${environment.environmentId}");
+    expect(sidebarV2).toContain('data-testid="sidebar-view-options-trigger"');
+    expect(sidebarV2).toContain('data-testid="sidebar-environment-filter-all"');
+    expect(sidebarV2).toContain("sidebar-environment-filter-${environment.environmentId}");
     expect(sidebarV2).toContain("LIST_ENVIRONMENT_FILTER_STORAGE_KEY");
     expect(sidebarV2).toContain(
       "matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds)",
@@ -61,7 +61,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("classic sidebar marks composer draft threads", () => {
-    const sidebar = readSrc("components/Sidebar.tsx");
+    const sidebar = readSrc("components/LegacySidebar.tsx");
     expect(sidebar).toContain("ComposerDraftDot");
     expect(sidebar).toContain("hasComposerDraftMessage");
   });
@@ -123,7 +123,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("classic sidebar thread rows keep provider usage dots + stats", () => {
-    const sidebar = readSrc("components/Sidebar.tsx");
+    const sidebar = readSrc("components/LegacySidebar.tsx");
     expect(sidebar).toContain("useAiUsageSnapshot");
     expect(sidebar).toContain("resolveDriverUsage");
     expect(sidebar).toContain("usageDotFillClass");
@@ -132,7 +132,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("Sidebar V2 thread rows keep provider usage dots + stats", () => {
-    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const sidebarV2 = readSrc("components/Sidebar.tsx");
     expect(sidebarV2).toContain("useAiUsageSnapshot");
     expect(sidebarV2).toContain("resolveDriverUsage");
     expect(sidebarV2).toContain("usageDotFillClass");
@@ -142,18 +142,18 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("Sidebar V2 grouping changes ordering and headers without changing its row surface", () => {
-    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const sidebarV2 = readSrc("components/Sidebar.tsx");
     const webGrouping = readSrc("components/listEnvironmentFilter.ts");
     const mobileGrouping = readSrc("../../mobile/src/features/home/homeListMode.ts");
     const orderingContract = readSrc("../../../docs/sidebar-v2.md");
-    expect(sidebarV2).toContain("sidebar-v2-thread-grouping-${grouping}");
-    expect(sidebarV2).toContain('data-testid="sidebar-v2-thread-grouping"');
+    expect(sidebarV2).toContain("sidebar-thread-grouping-${grouping}");
+    expect(sidebarV2).toContain('data-testid="sidebar-thread-grouping"');
     expect(sidebarV2).toMatch(/size="icon"\s+type="button"\s+aria-label={`Thread ordering:/);
     expect(sidebarV2).toContain('aria-label="Filter threads by project"');
     expect(sidebarV2).toContain('grouping !== "none"');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
-    expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebarV2(active))");
-    expect(sidebarV2).toContain("sidebar-v2-${section}-recency-${group.id}");
+    expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebar(active))");
+    expect(sidebarV2).toContain("sidebar-${section}-recency-${group.id}");
     expect(sidebarV2).toContain('const rowVariant = isCard ? "card" : "slim"');
     expect(webGrouping).toContain('project: "Group by default"');
     expect(mobileGrouping).toContain('project: "Group by default"');
@@ -233,8 +233,8 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(stack).toContain(
       "<SourceChannelGlyph channel={props.channel ?? lead.firstChannel} overlay",
     );
-    const sidebarV1 = readSrc("components/Sidebar.tsx");
-    const sidebarV2 = readSrc("components/SidebarV2.tsx");
+    const sidebarV1 = readSrc("components/LegacySidebar.tsx");
+    const sidebarV2 = readSrc("components/Sidebar.tsx");
     expect(sidebarV1).toContain("environmentId={thread.environmentId}");
     expect(sidebarV2).toContain("environmentId={thread.environmentId}");
     const root = readSrc("routes/__root.tsx");
@@ -242,14 +242,14 @@ describe("fork surface existence (anti stack-drop)", () => {
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toContain("requestIdentityClaimGate");
     expect(sidebarV2).toContain("ThreadIdentityMark");
-    expect(sidebarV2).toContain("sidebar-v2-ownership-filter-");
+    expect(sidebarV2).toContain("sidebar-ownership-filter-");
     expect(sidebarV1).toContain("ThreadIdentityMark");
     expect(sidebarV1).not.toContain("ThreadIdentityLeading");
     expect(sidebarV2).not.toContain("ThreadIdentityLeading");
   });
 
   it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {
-    const sidebar = readSrc("components/SidebarV2.tsx");
+    const sidebar = readSrc("components/Sidebar.tsx");
     expect(sidebar).toContain("vcsEnvironment.listStatus({");
     expect(sidebar).not.toContain("vcsEnvironment.status({");
   });

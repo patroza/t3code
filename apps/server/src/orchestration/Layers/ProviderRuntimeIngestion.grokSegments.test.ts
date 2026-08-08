@@ -395,7 +395,7 @@ describe("ProviderRuntimeIngestion Grok multi-segment assistant bubbles", () => 
 
   async function runGrokStatusSandwichTurn(options: { readonly streaming: boolean }) {
     const harness = await createHarness({
-      serverSettings: { enableAssistantStreaming: options.streaming },
+      serverSettings: { enableLegacyTokenStreaming: options.streaming },
     });
     const turnId = asTurnId("turn-grok-sandwich");
     const sessionId = "019f8373-fa8d-7982-a0d7-caf8b866b523";
@@ -504,7 +504,7 @@ describe("ProviderRuntimeIngestion Grok multi-segment assistant bubbles", () => 
     // Grok AcpSessionRuntime item ids already start with `assistant:…`. Ingestion
     // must not create a second message row from the completion fallback id path.
     const harness = await createHarness({
-      serverSettings: { enableAssistantStreaming: true },
+      serverSettings: { enableLegacyTokenStreaming: true },
     });
     const turnId = asTurnId("turn-id-prefix");
     const sessionId = "sess-1";
@@ -582,7 +582,7 @@ describe("ProviderRuntimeIngestion Grok multi-segment assistant bubbles", () => 
 
   it("drops a buffered assistant segment that repeats the previous status text", async () => {
     const harness = await createHarness({
-      serverSettings: { enableAssistantStreaming: false },
+      serverSettings: { enableLegacyTokenStreaming: false },
     });
     const turnId = asTurnId("turn-dup-status");
     const sessionId = "sess-dup";
