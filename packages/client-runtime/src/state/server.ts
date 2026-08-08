@@ -730,6 +730,13 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:host-resource-snapshot",
       tag: WS_METHODS.serverGetHostResourceSnapshot,
     }),
+    // A cold transcript scan is measured in seconds, so keep the result around
+    // long enough that switching windows or re-rendering does not rescan.
+    usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:usage-summary",
+      tag: WS_METHODS.serverGetUsageSummary,
+      staleTimeMs: 60_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
