@@ -33,4 +33,5 @@ export * from "./aiUsage.ts";
 export * from "./hostResources.ts";
 export * from "./background.ts";
 export * from "./resourceTelemetry.ts";
+export * from "./usage.ts";
 export * from "./rpc.ts";
