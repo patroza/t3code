@@ -1,3 +1,5 @@
+import type { ThreadId } from "@t3tools/contracts";
+
 /**
  * Describes the platform-specific data of a
  * Non-Turn-Based-Surface.
@@ -27,7 +29,7 @@ export type LifecycleEvent<P extends PlatformData> = {
 export type ThreadEvent<P extends PlatformData> = LifecycleEvent<P> & {
   t3Data: {
     /** The T3 thread created by the lifecycle event */
-    threadId: string;
+    threadId: ThreadId;
   };
 };
 
