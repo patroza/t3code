@@ -17,3 +17,9 @@ The acknowledgement is a platform message such as "working on it." It improves f
 After creating the T3 thread, the processor records `ThreadStarted`. Starting the T3 work and attempting to post the acknowledgement are then independent operations. A failed acknowledgement must not prevent the work from starting, completing, or returning its final response.
 
 Remove `ThreadStartedAcknowledgement` from the shared lifecycle and remove `acknowledgementMessageId` from later lifecycle states. An adapter may retain the acknowledgement ID in its own storage and retry posting when appropriate, but final-response processing must not depend on it.
+
+## 3. Resolve the response for the correct T3 message
+
+The processor currently stores only the T3 thread ID and reads the latest turn when looking for the final response. If someone continues that thread from a native T3 client, the latest turn may belong to different work and its answer could be posted back to the original external request.
+
+Store the ID of the first T3 user message with `ThreadStarted`. Resolve the final response for that specific message instead of reading the latest turn in the thread. Record the corresponding turn ID later when T3 provides it.
