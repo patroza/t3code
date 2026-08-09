@@ -329,7 +329,13 @@ export function UsagePage() {
                   <tbody>
                     {recentDays.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-6 text-center text-muted-foreground">
+                        <td
+                          // Day + one column per provider + Total + Tokens. A
+                          // literal here silently stops spanning the row the
+                          // moment a provider is added.
+                          colSpan={PROVIDER_ORDER.length + 3}
+                          className="py-6 text-center text-muted-foreground"
+                        >
                           No activity in this window.
                         </td>
                       </tr>

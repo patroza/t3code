@@ -303,6 +303,38 @@ describe("parseKimiLine", () => {
     expect(record?.dedupeKey).toBe("msg-1");
   });
 
+  it("sums across turns, because each response re-bills its whole context", () => {
+    // A second turn re-sends the grown context, so its input side legitimately
+    // repeats the first turn's tokens — that is what was billed. Treating the
+    // counts as a running session total and taking only the last would
+    // undercount every turn before it.
+    const state = initialKimiScanState("session");
+    const first = parseKimiLine(
+      statusUpdate({ input_other: 15296, output: 129, input_cache_read: 2304 }, "msg-1"),
+      state,
+    );
+    const second = parseKimiLine(
+      statusUpdate({ input_other: 15400, output: 240, input_cache_read: 2304 }, "msg-2"),
+      state,
+    );
+
+    expect(first?.dedupeKey).toBe("msg-1");
+    expect(second?.dedupeKey).toBe("msg-2");
+    // Distinct responses, so nothing collapses them.
+    expect(second?.totals.outputTokens).toBe(240);
+  });
+
+  it("gives a refreshed status the same dedupe key so it collapses", () => {
+    // Kimi re-emits a status without a new round trip; both copies carry the
+    // same message_id, which is what the caller de-duplicates on.
+    const state = initialKimiScanState("session");
+    const a = parseKimiLine(statusUpdate({ input_other: 100, output: 10 }, "msg-1"), state);
+    const b = parseKimiLine(statusUpdate({ input_other: 100, output: 10 }, "msg-1"), state);
+
+    expect(a?.dedupeKey).toBe("msg-1");
+    expect(b?.dedupeKey).toBe(a?.dedupeKey);
+  });
+
   it("ignores the wire log's other frames", () => {
     const state = initialKimiScanState("session");
     expect(
