@@ -96,6 +96,9 @@ const UNPRICEABLE_MODELS = new Set([
   "sonnet",
   "haiku",
   "fable",
+  // Kimi's wire log names no model, so its turns arrive under this sentinel
+  // rather than a guess. Reporting them unpriced keeps the cost honest.
+  "kimi",
 ]);
 
 export function lookupRate(table: RateTable, model: string): ModelRate | null {

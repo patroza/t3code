@@ -1,8 +1,8 @@
 /**
  * Pure parsers for the provider CLIs' on-disk session transcripts.
  *
- * Both parsers are line-at-a-time reducers so callers can stream large files
- * without materialising them. Neither touches the filesystem.
+ * Every parser is a line-at-a-time reducer so callers can stream large files
+ * without materialising them. None touches the filesystem.
  *
  * @module usageTranscripts
  */
@@ -68,7 +68,16 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  return provider === "claude" ? line.includes('"usage"') : line.includes('"token_count"');
+  switch (provider) {
+    case "claude":
+      return line.includes('"usage"');
+    case "codex":
+      return line.includes('"token_count"');
+    case "grok":
+      return line.includes('"prompt_tokens"');
+    case "kimi":
+      return line.includes('"token_usage"');
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -240,6 +249,185 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     reportedCostUsd: null,
     // Rollout files are unique per session, so events need no global dedup.
     dedupeKey: null,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Grok                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Rolling state for Grok's unified log.
+ *
+ * Unlike the other providers, Grok records usage in one process-wide log
+ * (`<grok home>/logs/unified.jsonl`) rather than per-session files, so lines
+ * from concurrent sessions interleave. `shell.turn.inference_done` carries no
+ * model, so the model is carried forward per session id — a single scalar
+ * would attribute one session's turns to whichever session switched model
+ * last.
+ */
+export interface GrokScanState {
+  readonly modelBySession: Map<string, string>;
+}
+
+export function initialGrokScanState(): GrokScanState {
+  return { modelBySession: new Map<string, string>() };
+}
+
+/**
+ * Feeds one line of Grok's unified log into `state`, returning a record when
+ * the line was an inference-completion event.
+ *
+ * Grok emits one `shell.turn.inference_done` per model round trip, each
+ * carrying that request's own counts, so these sum without de-duplication.
+ */
+export function parseGrokLine(line: string, state: GrokScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const record = parsed as Record<string, unknown>;
+  const sessionId = record["sid"];
+  if (typeof sessionId !== "string" || sessionId.length === 0) return null;
+  const context = record["ctx"];
+  if (typeof context !== "object" || context === null) return null;
+  const contextRecord = context as Record<string, unknown>;
+
+  // `model changed` is emitted at session start as well as on a switch, so
+  // every session's first usage event already has a model to carry.
+  if (record["msg"] === "model changed") {
+    const model = contextRecord["model"];
+    if (typeof model === "string" && model.length > 0) state.modelBySession.set(sessionId, model);
+    return null;
+  }
+
+  if (record["msg"] !== "shell.turn.inference_done") return null;
+
+  const timestampMs = parseTimestampMs(record["ts"]);
+  if (timestampMs === null) return null;
+  const model = state.modelBySession.get(sessionId);
+  if (model === undefined) return null;
+
+  const promptTokens = int(contextRecord["prompt_tokens"]);
+  const cachedInputTokens = int(contextRecord["cached_prompt_tokens"]);
+  const outputTokens = int(contextRecord["completion_tokens"]);
+
+  const totals: UsageTokenTotals = {
+    // Grok reports `prompt_tokens` inclusive of the cached portion.
+    uncachedInputTokens: Math.max(0, promptTokens - cachedInputTokens),
+    cachedInputTokens,
+    // Grok does not report cache writes separately.
+    cacheCreationTokens: 0,
+    outputTokens,
+    // Reported inside completion_tokens, surfaced separately for the mix.
+    reasoningTokens: Math.min(outputTokens, int(contextRecord["reasoning_tokens"])),
+  };
+
+  if (totalTokens(totals) === 0) return null;
+
+  return {
+    provider: "grok",
+    timestampMs,
+    model,
+    sessionId,
+    totals,
+    // Grok does not report cost in the log.
+    reportedCostUsd: null,
+    // One event per round trip in a single append-only log; no cross-file
+    // repeats to collapse.
+    dedupeKey: null,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Kimi                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The model recorded for Kimi turns.
+ *
+ * Kimi's wire log names no model on any record, and the CLI's configured model
+ * at scan time says nothing about what served a turn weeks ago. Rather than
+ * attribute — and therefore price — turns against a guess, they are recorded
+ * under a sentinel that `usagePricing` treats as unpriceable, so Kimi shows
+ * real token counts and an honest "unpriced" share instead of a fabricated
+ * cost.
+ */
+export const KIMI_UNKNOWN_MODEL = "kimi";
+
+/** Rolling state for a single Kimi `wire.jsonl`. */
+export interface KimiScanState {
+  sessionId: string;
+}
+
+export function initialKimiScanState(sessionId: string): KimiScanState {
+  return { sessionId };
+}
+
+/**
+ * Feeds one line of a Kimi wire log into `state`, returning a record when the
+ * line was a status update carrying token usage.
+ *
+ * Each `StatusUpdate` reports the counts for one served response — the input
+ * side re-states the whole context because that is what the request billed —
+ * so these sum across turns. `message_id` de-duplicates the repeats Kimi emits
+ * when a status is refreshed without a new round trip.
+ */
+export function parseKimiLine(line: string, state: KimiScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const record = parsed as Record<string, unknown>;
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const messageRecord = message as Record<string, unknown>;
+  if (messageRecord["type"] !== "StatusUpdate") return null;
+
+  const payload = messageRecord["payload"];
+  if (typeof payload !== "object" || payload === null) return null;
+  const payloadRecord = payload as Record<string, unknown>;
+  const usage = payloadRecord["token_usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+
+  // Kimi timestamps are epoch seconds with a fractional part.
+  const timestamp = record["timestamp"];
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) return null;
+  const timestampMs = Math.trunc(timestamp * 1000);
+
+  const outputTokens = int(usageRecord["output"]);
+  const totals: UsageTokenTotals = {
+    // `input_other` already excludes the cached and cache-creation portions.
+    uncachedInputTokens: int(usageRecord["input_other"]),
+    cachedInputTokens: int(usageRecord["input_cache_read"]),
+    cacheCreationTokens: int(usageRecord["input_cache_creation"]),
+    outputTokens,
+    // Kimi does not break reasoning out of the output count.
+    reasoningTokens: 0,
+  };
+
+  if (totalTokens(totals) === 0) return null;
+
+  const messageId = payloadRecord["message_id"];
+
+  return {
+    provider: "kimi",
+    timestampMs,
+    model: KIMI_UNKNOWN_MODEL,
+    sessionId: state.sessionId,
+    totals,
+    // Kimi does not report cost in the wire log.
+    reportedCostUsd: null,
+    dedupeKey: typeof messageId === "string" && messageId.length > 0 ? messageId : null,
   };
 }
 

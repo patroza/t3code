@@ -36,6 +36,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
+import { resolveGrokHomePath, resolveKimiHomePath } from "../provider/Drivers/GrokKimiHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
@@ -217,10 +218,16 @@ export const make = Effect.gen(function* () {
     const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
     const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
     const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
+    const grokHome = yield* resolveGrokHomePath();
+    const kimiHome = yield* resolveKimiHomePath();
 
     return [
       { provider: "claude" as const, dir: claudeDir },
       { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
+      // Grok logs every session's usage into one process-wide file rather than
+      // per-session transcripts, so the log directory is the scan root.
+      { provider: "grok" as const, dir: path.join(grokHome, "logs") },
+      { provider: "kimi" as const, dir: path.join(kimiHome, "sessions") },
     ];
   });
 

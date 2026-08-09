@@ -19,9 +19,13 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import {
   initialCodexScanState,
+  initialGrokScanState,
+  initialKimiScanState,
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
+  parseGrokLine,
+  parseKimiLine,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -98,9 +102,9 @@ export async function readDirectoryVolumeId(path: string): Promise<string> {
  * under the same `(size, mtime)` key would silently drop that file's usage
  * until the file next changes.
  *
- * Codex carries the active model on `turn_context` lines that hold no usage of
- * their own, so those still have to pass through the reducer to keep model
- * attribution correct.
+ * Codex and Grok carry the active model on lines that hold no usage of their
+ * own (`turn_context`, `model changed`), so those still have to pass through
+ * the reducer to keep model attribution correct.
  */
 export async function readTranscriptRecords(
   filePath: string,
@@ -108,6 +112,10 @@ export async function readTranscriptRecords(
 ): Promise<readonly UsageRecord[] | null> {
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
+  const grokState = initialGrokScanState();
+  // Kimi names no session on any record; the wire log's own directory is the
+  // session, which is what `distinctSessions` counts.
+  const kimiState = initialKimiScanState(NodePath.basename(NodePath.dirname(filePath)));
 
   try {
     const lines = NodeReadline.createInterface({
@@ -125,6 +133,23 @@ export async function readTranscriptRecords(
           continue;
         }
         const record = parseCodexLine(line, codexState);
+        if (record !== null) records.push(record);
+        continue;
+      }
+
+      if (provider === "grok") {
+        // `model changed` carries no usage of its own but is what makes the
+        // following inference events attributable, so it must reach the
+        // reducer.
+        if (!mightCarryUsage(line, provider) && !line.includes('"model changed"')) continue;
+        const record = parseGrokLine(line, grokState);
+        if (record !== null) records.push(record);
+        continue;
+      }
+
+      if (provider === "kimi") {
+        if (!mightCarryUsage(line, provider)) continue;
+        const record = parseKimiLine(line, kimiState);
         if (record !== null) records.push(record);
         continue;
       }
