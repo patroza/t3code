@@ -236,6 +236,7 @@ export function useNewThreadHandler() {
                 envMode: defaultEnvMode,
                 newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
               }),
+              reuseBaseBranch: false,
             };
           }
           if (workspaceContext) {

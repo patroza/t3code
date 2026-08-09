@@ -4130,10 +4130,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment
       // files; siblings like secrets/ and state.sqlite stay ungranted.
-      const additionalDirectories = [
-        ...(input.cwd ? [input.cwd] : []),
-        serverConfig.attachmentsDir,
-      ];
+      // `cwd` (resolved/trimmed), not the raw `input.cwd`: the grant has to
+      // name the same path the query actually runs in.
+      const additionalDirectories = [...(cwd ? [cwd] : []), serverConfig.attachmentsDir];
       const queryOptions: ClaudeQueryOptions = {
         ...(cwd ? { cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),

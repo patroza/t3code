@@ -40,6 +40,7 @@ import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { readLocalApi } from "../../localApi";
 import {
   buildProjectScript,
+  clearConflictingLifecycleFlags,
   commandForProjectScript,
   nextProjectScriptId,
 } from "../../projectScripts";
@@ -532,24 +533,16 @@ function ProjectDetail({
           scripts.map((script) => script.id),
         );
         const nextScript = buildProjectScript(nextId, input);
-        const nextScripts = input.runOnWorktreeCreate
-          ? [
-              ...scripts.map((script) =>
-                script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-              ),
-              nextScript,
-            ]
-          : [...scripts, nextScript];
+        const nextScripts = [
+          ...scripts.map((script) => clearConflictingLifecycleFlags(script, input)),
+          nextScript,
+        ];
         return persistScripts(nextScripts, input.keybinding, commandForProjectScript(nextId));
       }
 
       const updatedScript = buildProjectScript(scriptId, input);
       const nextScripts = scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
+        script.id === scriptId ? updatedScript : clearConflictingLifecycleFlags(script, input),
       );
       return persistScripts(nextScripts, input.keybinding, commandForProjectScript(scriptId));
     },

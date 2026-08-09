@@ -175,6 +175,9 @@ export function ProjectScriptEditorDialog({
     setCommand(request.initial.command);
     setIcon(request.initial.icon);
     setIconPickerOpen(false);
+    // A confirm left open from the previous request would name that script
+    // while deleting this one.
+    setDeleteConfirmOpen(false);
     setRunOnWorktreeCreate(request.initial.runOnWorktreeCreate);
     setRunOnWorktreeRemove(request.initial.runOnWorktreeRemove);
     setRunOnPrMerged(request.initial.runOnPrMerged);
