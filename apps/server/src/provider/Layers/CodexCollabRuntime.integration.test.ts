@@ -192,6 +192,7 @@ describe("CodexSessionRuntime collab integration", () => {
         Effect.sync(() => {
           NodeFS.rmSync(scriptPath, { force: true });
           NodeFS.rmSync(interruptsPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.turns`, { force: true });
         }),
       );
 
@@ -241,6 +242,115 @@ describe("CodexSessionRuntime collab integration", () => {
       );
       assert.isTrue(interruptedThreads.has(CHILD_B), "registered child B must be interrupted");
       assert.isTrue(interruptedThreads.has(ROOT), "parent turn must be interrupted last");
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("Stop targets the active turn when Codex has accepted a queued follow-up", () =>
+    Effect.gen(function* () {
+      const activeTurnId = "019fe3e8-f908-7f31-8d51-283f4a47897a";
+      const queuedTurnId = "019fe3eb-8faf-7de3-a85b-ac64c7f9c8c3";
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        onlyFirstTurnStarts: true,
+        // The fork steers the running turn first; rejecting the steer is what
+        // sends the follow-up back through turn/start, which is the path
+        // whose response carries the queued turn id.
+        rejectSteer: true,
+        turnIds: [activeTurnId, queuedTurnId],
+        expectedActiveTurnId: activeTurnId,
+        notifications: [],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const interruptsPath = `${scriptPath}.interrupts`;
+      NodeFS.rmSync(interruptsPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(interruptsPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.turns`, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-queued-stop"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "keep working" });
+      yield* runtime.sendTurn({ input: "queued follow-up" });
+      yield* runtime.interruptTurn();
+
+      const interrupts = NodeFS.readFileSync(interruptsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { threadId?: string; turnId?: string });
+      assert.deepEqual(interrupts.at(-1), {
+        threadId: ROOT,
+        turnId: activeTurnId,
+      });
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+  it.live("Stop targets the steered turn when Codex accepts a mid-turn follow-up", () =>
+    Effect.gen(function* () {
+      const activeTurnId = "019fe3e8-f908-7f31-8d51-283f4a47897a";
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        onlyFirstTurnStarts: true,
+        turnIds: [activeTurnId],
+        expectedActiveTurnId: activeTurnId,
+        notifications: [],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const interruptsPath = `${scriptPath}.interrupts`;
+      NodeFS.rmSync(interruptsPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(interruptsPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.turns`, { force: true });
+        }),
+      );
+
+      const turnsPath = `${scriptPath}.turns`;
+      NodeFS.rmSync(turnsPath, { force: true });
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-steered-stop"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "keep working" });
+      // Steered, not a second turn: the follow-up never opens a new turn id.
+      yield* runtime.sendTurn({ input: "steered follow-up" });
+      yield* runtime.interruptTurn();
+
+      const interrupts = NodeFS.readFileSync(interruptsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { threadId?: string; turnId?: string });
+      assert.deepEqual(interrupts.at(-1), {
+        threadId: ROOT,
+        turnId: activeTurnId,
+      });
+      // An accepted steer must not open a second provider turn.
+      const turns = NodeFS.readFileSync(turnsPath, "utf8").trim().split("\n");
+      assert.equal(turns.length, 1);
 
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

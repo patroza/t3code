@@ -16,6 +16,7 @@ const fixture = JSON.parse(
 const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT, "utf8"));
 
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+let turnStartCount = 0;
 
 const rl = NodeReadline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -43,14 +44,26 @@ rl.on("line", (line) => {
     return;
   }
   if (method === "turn/start") {
-    write({ id, result: fixture.responses.turnStart });
+    const turnId = script.turnIds?.[turnStartCount];
+    const turn = turnId
+      ? { ...fixture.responses.turnStart.turn, id: turnId }
+      : fixture.responses.turnStart.turn;
+    turnStartCount += 1;
+    // Append-only sidecar the tests read to tell a steered follow-up (no new
+    // turn) apart from one that opened a second provider turn.
+    NodeFS.appendFileSync(
+      `${process.env.T3_CODEX_COLLAB_SCRIPT}.turns`,
+      `${JSON.stringify({ turnId: turn.id })}\n`,
+    );
+    write({ id, result: { ...fixture.responses.turnStart, turn } });
     const rootThreadId = script.rootThreadId;
-    const turn = fixture.responses.turnStart.turn;
-    write({
-      jsonrpc: "2.0",
-      method: "turn/started",
-      params: { threadId: rootThreadId, turn },
-    });
+    if (script.onlyFirstTurnStarts !== true || turnStartCount === 1) {
+      write({
+        jsonrpc: "2.0",
+        method: "turn/started",
+        params: { threadId: rootThreadId, turn },
+      });
+    }
     for (const notification of script.notifications) {
       write({ jsonrpc: "2.0", method: notification.method, params: notification.params });
     }
@@ -66,6 +79,18 @@ rl.on("line", (line) => {
     }
     return;
   }
+  if (method === "turn/steer") {
+    // The fork appends follow-up input to the running turn instead of
+    // opening a second provider turn. `rejectSteer` models a turn that
+    // cannot accept steering (review, manual compact), which sends the
+    // runtime back to turn/start.
+    if (script.rejectSteer === true) {
+      write({ id, error: { code: -32000, message: "turn is not steerable" } });
+      return;
+    }
+    write({ id, result: { turnId: message.params?.expectedTurnId } });
+    return;
+  }
   if (method === "turn/interrupt") {
     // Record which thread/turn was interrupted (append-only sidecar file the
     // test reads) so Stop coverage can assert every live child was reached.
@@ -75,6 +100,20 @@ rl.on("line", (line) => {
       `${process.env.T3_CODEX_COLLAB_SCRIPT}.interrupts`,
       `${JSON.stringify({ threadId: target, turnId: message.params?.turnId })}\n`,
     );
+    if (
+      script.expectedActiveTurnId &&
+      message.params?.threadId === script.rootThreadId &&
+      message.params?.turnId !== script.expectedActiveTurnId
+    ) {
+      write({
+        id,
+        error: {
+          code: -32000,
+          message: `expected active turn id ${message.params?.turnId} but found ${script.expectedActiveTurnId}`,
+        },
+      });
+      return;
+    }
     if (script.failInterruptFor && script.failInterruptFor === target) {
       write({ id, error: { code: -32000, message: "thread already closed" } });
       return;
