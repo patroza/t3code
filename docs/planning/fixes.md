@@ -2,18 +2,6 @@
 
 This document collects the units of work identified by the adversarial review of the NTBS design.
 
-## 5. Preserve platform actor checks in the adapters
-
-The current Jira and GitHub integrations check whether the external account is allowed to start agent work, but the NTBS skeleton does not mention this behavior. Without carrying it into the new adapters, porting those integrations would silently remove an existing check.
-
-Each adapter must apply its platform-specific actor checks before sending a request to the shared processor. Input that fails those checks does not enter the NTBS lifecycle. The shared processor does not need an actor-trust model or any additional trust data.
-
-## 6. Remove the shared platform-handler abstraction
-
-`NTBSPlatformHandler` only states that a platform has a `handle` function. Each platform receives a different input type, and no shared code uses these handlers interchangeably, so the interface and its Effect tag add no shared behavior.
-
-Delete `platform-handler.ts`. Each platform adapter instead exposes its own concrete inbound function, such as a Jira webhook handler or Discord message handler. That function verifies and parses the platform input, applies its trigger and actor checks, builds the generic NTBS request and `T3Context`, and calls the shared processor. Keep `NTBSAdapter` limited to the storage and outbound operations used by the processor.
-
 ## 7. Pass a response union to the adapter
 
 The processor currently reduces every T3 outcome to plain text before calling the adapter. The adapter therefore cannot distinguish a normal answer from a failure, timeout, or cancellation when applying its platform-specific rendering.

@@ -62,7 +62,10 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
   /**
    * Routes adapter requests and T3 events through the shared NTBS workflow.
    *
-   * `process` accepts concurrent requests and applies no queue, concurrency cap
+   * Platform requests must already have passed their platform-specific trigger
+   * and actor checks. The processor does not perform those.
+   *
+   * Accepts concurrent requests and applies no queue, concurrency cap
    * or backpressure for the time being. This choice can be reviewed later.
    */
   readonly process: (event: ProcessorEvent<P>) => Effect.Effect<void, NTBSProcessorError>;
