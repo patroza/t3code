@@ -11,6 +11,11 @@ export class AdapterError extends Data.TaggedError("AdapterError")<{
   readonly reason: string;
 }> {}
 
+export type NTBSResponse = {
+  readonly type: "answer" | "failure" | "timeout" | "cancellation";
+  readonly text: string;
+};
+
 /**
  * Defines the platform-specific operations used by the shared NTBS processor.
  *
@@ -55,7 +60,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    */
   readonly postResponse: (
     state: NTBS.ThreadStarted<P>,
-    text: string,
+    response: NTBSResponse,
   ) => Effect.Effect<string, AdapterError>;
   /**
    * Finds the latest lifecycle state associated with a T3 thread.
