@@ -2,28 +2,6 @@
 
 This document collects the units of work identified by the adversarial review of the NTBS design.
 
-## 1. Defer snapshot retention to adapter implementation
-
-An adapter stores external content in `snapshot`, and that copy may remain after the original comment or message is deleted from its platform.
-
-Document this as a data-retention concern. Retention periods, storage limits, and handling source deletions are adapter implementation and deployment choices, so do not define them in the shared processor lifecycle yet.
-
-## 2. Keep fork-specific provenance out of NTBS
-
-`SourceChannel`, `SourceRef`, `sourceHint`, `originSource`, and the related identity behavior were added by this fork. They are not part of upstream T3 and must not become requirements of the generic NTBS processor.
-
-Do not add these fields to `T3Context` or the NTBS lifecycle. The adapter already retains the platform data needed to connect an external message with its T3 work. Any integration with the fork's separate identity features can be handled outside the shared NTBS machinery.
-
-## 3. Document the snapshot limit and review attachments
-
-Document on the `snapshot` field that it is used as the first T3 message and must fit T3's current 120,000-character input limit. Do not add truncation behavior yet. Review attachment support separately before implementation so that keeping `snapshot` text-only is an explicit decision rather than an accidental limitation.
-
-## 4. Make lifecycle naming consistent
-
-The current skeleton mixes schemas, events, records, and states when referring to the same stored lifecycle data. This makes the small lifecycle harder to understand and leaves the code and planning documents using different names.
-
-Rename `schemas.ts` to `lifecycle.ts`, because it contains TypeScript lifecycle types rather than Effect schemas. Use lifecycle-state terminology consistently in the file, comments, and dependent APIs. Align the code and documentation with the remaining `ThreadStarted` and `ResponsePosted` states, and fix the existing comment typos. Keep the established `NTBS` acronym casing.
-
 ## 5. Preserve platform actor checks in the adapters
 
 The current Jira and GitHub integrations check whether the external account is allowed to start agent work, but the NTBS skeleton does not mention this behavior. Without carrying it into the new adapters, porting those integrations would silently remove an existing check.
@@ -41,30 +19,6 @@ Delete `platform-handler.ts`. Each platform adapter instead exposes its own conc
 The processor currently reduces every T3 outcome to plain text before calling the adapter. The adapter therefore cannot distinguish a normal answer from a failure, timeout, or cancellation when applying its platform-specific rendering.
 
 Define a small response union with `answer`, `failure`, `timeout`, and `cancellation` cases, each carrying its response text. The processor determines which case occurred and passes it to `postResponse`; the adapter decides how that case is rendered on its platform. This response union is not an additional persisted lifecycle state.
-
-## 8. Remove `ResponseAvailable` from the lifecycle
-
-`ResponseAvailable` does not currently enable a distinct recovery action because it stores no response. Recovery must still inspect T3 to determine the outcome, so persisting this extra transition adds little value.
-
-Keep the durable lifecycle limited to `ThreadStarted` and `ResponsePosted`. While a record remains `ThreadStarted`, the processor checks T3 and continues waiting or attempts to post the resolved outcome. After posting succeeds, it saves `ResponsePosted`.
-
-Add a durable pending-response state later only if real delivery retries require storing the exact outbound outcome independently from T3.
-
-## 9. Make acknowledgements independent from the shared lifecycle
-
-The acknowledgement is a platform message such as "working on it." It improves feedback for the user, but the current types make its message ID mandatory for `ResponseAvailable` and `ResponsePosted`. If posting the acknowledgement fails, the processor cannot represent or post the final response even though T3 work can continue.
-
-After creating the T3 thread, the processor records `ThreadStarted`. Starting the T3 work and attempting to post the acknowledgement are then independent operations. A failed acknowledgement must not prevent the work from starting, completing, or returning its final response.
-
-Remove `ThreadStartedAcknowledgement` from the shared lifecycle and remove `acknowledgementMessageId` from later lifecycle states. An adapter may retain the acknowledgement ID in its own storage and retry posting when appropriate, but final-response processing must not depend on it.
-
-## 10. Remove the pre-thread lifecycle state
-
-`RequestAccepted` exists to recover a request when the server stops before recording `ThreadStarted`. Supporting that narrow failure window requires planned thread IDs, searches for unfinished requests, startup retries, and rules for resuming duplicates.
-
-Do not add that machinery in the first implementation. Remove `RequestAccepted` and make `ThreadStarted` the first stored lifecycle state. Record it as soon as the basic T3 thread exists, before slower worktree preparation or project setup begins.
-
-This deliberately accepts one limitation: if the server stops before `ThreadStarted` is saved, the request may be lost. The user receives no acknowledgement and can send the request again. If this becomes a real problem, each adapter can later inspect recent platform messages and recover missing requests using the capabilities of that platform.
 
 ## 11. Define the shared thread defaults
 

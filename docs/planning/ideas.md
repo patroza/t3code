@@ -19,3 +19,9 @@ The shared sequence becomes:
 `Create the T3 thread → record ThreadStarted → start the work and attempt the acknowledgement independently`
 
 The processor does not use acknowledgement success as a condition for continuing. Posting may happen alongside the start of T3 work, and an adapter may retry a failed acknowledgement, but the final answer always remains tied to the original response destination. If a platform benefits from replying to the acknowledgement, its adapter can use the identifier stored in its own data without adding that dependency to the shared lifecycle.
+
+## Remove fork-specific provenance after the NTBS migration
+
+Keep `SourceChannel`, `SourceRef`, `sourceHint`, `originSource`, and related fork-specific provenance out of the NTBS design. Adapters already retain the platform data needed to connect external messages with T3 work.
+
+Once every external platform has moved to NTBS, remove these fields and the old integration logic that depends on them.
