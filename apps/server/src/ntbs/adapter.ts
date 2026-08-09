@@ -1,5 +1,5 @@
 import type { ThreadId } from "@t3tools/contracts";
-import * as NTBS from "./schemas.ts";
+import * as NTBS from "./lifecycle.ts";
 import { Context, Data, Effect } from "effect";
 
 export class ThreadNotFound extends Data.TaggedError("ThreadNotFound") {}
@@ -17,6 +17,11 @@ export class AdapterError extends Data.TaggedError("AdapterError")<{
  * The adapter detects duplicate requests, stores lifecycle data, finds that data
  * from a T3 thread ID, and posts acknowledgements and responses.
  *
+ * The adapter owns its storage and retention policy. A stored snapshot may
+ * outlive the original platform message. E.g. a message on Discord gets deleted
+ * but its still persisted in the original snapshot.
+ * Verify retention policies.
+ *
  * It does not create T3 threads or interpret T3 events.
  */
 export interface NTBSAdapter<P extends NTBS.PlatformData> {
@@ -24,11 +29,9 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * Stores the request before any T3 work begins.
    *
    * Returns `"duplicate"` if the same platform request was already stored.
-   *
-   * Returning `"accepted"` means this `RequestAccepted` state has been stored.
    */
   readonly accept: (
-    event: NTBS.RequestAccepted<P>,
+    event: NTBS.NTBSInput<P>,
   ) => Effect.Effect<"accepted" | "duplicate", AdapterError>;
   /**
    * Stores a lifecycle state. Does not perform any other business logic.
@@ -39,11 +42,9 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * described by the event.
    *
    * Returns the platform's identifier for the posted message.
-   *
-   * The processor uses that identifier to save `ThreadStartedAcknowledgement`.
    */
   readonly postAcknowledgement: (
-    event: NTBS.ThreadStarted<P>,
+    state: NTBS.ThreadStarted<P>,
   ) => Effect.Effect<string, AdapterError>;
   /**
    * Posts the final T3 outcome at the response destination described
@@ -53,7 +54,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * The processor uses that identifier to save `ResponsePosted`.
    */
   readonly postResponse: (
-    event: NTBS.ResponseAvailable<P>,
+    state: NTBS.ThreadStarted<P>,
     text: string,
   ) => Effect.Effect<string, AdapterError>;
   /**
@@ -64,10 +65,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    */
   readonly findByThreadId: (
     threadId: ThreadId,
-  ) => Effect.Effect<
-    Exclude<NTBS.NTBSLifecycle<P>, NTBS.RequestAccepted<P>>,
-    ThreadNotFound | AdapterError
-  >;
+  ) => Effect.Effect<NTBS.NTBSLifecycle<P>, ThreadNotFound | AdapterError>;
 }
 
 export const makeNTBSAdapterTag = <P extends NTBS.PlatformData>(key: string) =>

@@ -1,5 +1,10 @@
-import { ThreadId, type OrchestrationEvent, type ProjectId } from "@t3tools/contracts";
-import type * as NTBS from "./schemas.ts";
+import {
+  type ChatAttachment,
+  type OrchestrationEvent,
+  type ProjectId,
+  type ThreadId,
+} from "@t3tools/contracts";
+import type * as NTBS from "./lifecycle.ts";
 import { Context, Crypto, Data, Effect } from "effect";
 import type { NTBSAdapter } from "./adapter.ts";
 import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -8,29 +13,29 @@ import type { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import type { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 
 /*
-  NTBS architectural description:
+  NTBS architecture:
+
   1. Generic NTBS processor:
-    - Contains the shared workflow for every adapter. The business logic, regardless of the actual NTBS is identical
-    - Makes queries to the specific platform adapter
-    - Uses private T3-specific effect to create a fresh worktree and T3 thread
-    - Saves `ThreadStarted`
-    - Posts the acknowledgment through the adapter and saves `ThreadStartedAcknowledgement`
-    - Starts the first turn with `snapshot`
-
+    - Runs the shared workflow for every platform.
+    - Asks the adapter to detect duplicate input.
+    - Creates a fresh worktree and T3 thread.
+    - Saves `ThreadStarted`.
+    - Starts the first turn with the snapshot and attachments.
+    - Attempts to post the acknowledgement independently.
     - Watches T3 events for completed work.
-    - Finds the adapter record by T3 thread ID, posts the final result
-    and saves `ResponseAvailable` and `ResponsePosted`
+    - Posts the final result through the adapter and saves `ResponsePosted`.
 
-  2. Platform handler
-    - Receives raw platform data (Jira, Discord, Github, Teams)
-    - Builds `RequestAccepted<P> and `T3Context`
-    - Calls the processor
+  2. Platform-specific inbound code:
+    - Receives raw platform data from Jira, Discord, GitHub, or Teams.
+    - Applies platform trigger and actor checks.
+    - Builds `NTBSInput<P>` and `T3Context`.
+    - Calls the processor.
 
   3. Adapter
-    - Owns platform storage, duplicate detection and platform API calls
-    - Knows how to post acknowledgments and responses
-    - Knows how platform identifiers are represented
-    - Knows nothing about creating T3 threads or interpreting T3 events
+    - Owns platform storage, duplicate detection, and platform API calls.
+    - Posts acknowledgements and responses.
+    - Knows how platform identifiers are represented.
+    - Knows nothing about creating T3 threads or interpreting T3 events.
 */
 
 export type T3Context = {
@@ -41,7 +46,7 @@ export type T3Context = {
 export type ProcessorEvent<P extends NTBS.PlatformData> =
   | {
       readonly source: "adapter";
-      readonly event: NTBS.RequestAccepted<P>;
+      readonly event: NTBS.NTBSInput<P>;
       readonly t3Context: T3Context;
     }
   | {
@@ -82,7 +87,7 @@ type NTBSProcessorRequirements =
   | OrchestrationEngineService
   /*
     Loads the selected T3 project and reads the completed thread
-    state and response tex.
+    state and response text.
   */
   | ProjectionSnapshotQuery
   /*
@@ -113,6 +118,7 @@ declare const createT3Thread: (t3Context: T3Context) => Effect.Effect<ThreadId, 
 declare const startT3Turn: (
   threadId: ThreadId,
   snapshot: string,
+  attachments: ReadonlyArray<ChatAttachment>,
 ) => Effect.Effect<void, NTBSProcessorError>;
 
 /**
@@ -120,12 +126,12 @@ declare const startT3Turn: (
  *
  * 1. Ask the adapter to accept it and stop if it is a duplicate.
  * 2. Create the worktree and T3 thread.
- * 3. Record `ThreadStarted`
- * 4. Post and record the acknowledgement.
- * 5. Start the first T3 turn with the source snapshot
+ * 3. Record `ThreadStarted`.
+ * 4. Start the first T3 turn with the snapshot and attachments.
+ * 5. Attempt to post the acknowledgement independently.
  */
 declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
-  request: NTBS.RequestAccepted<P>,
+  request: NTBS.NTBSInput<P>,
   t3Context: T3Context,
 ) => Effect.Effect<void, NTBSProcessorError>;
 
@@ -154,8 +160,8 @@ declare const resolveT3Outcome: (
  * 2. Find the adapter record by thread ID.
  * 3. Stop if no record exists or the response was already posted.
  * 4. Resolve the T3 outcome and stop if the turn has not ended.
- * 5. Record `ResponseAvailable`.
- * 6. Post the response and record `ResponsePosted`.
+ * 5. Post the response.
+ * 6. Record `ResponsePosted`.
  */
 declare const processT3Event: (
   event: OrchestrationEvent,
