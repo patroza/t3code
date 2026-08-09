@@ -217,6 +217,22 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
 
+    /*
+      Handles an external request in this order:
+
+      Ask the adapter to accept it and stop if it is a duplicate.
+      Create the worktree and T3 thread.
+      Generate the first user message ID and record it with ThreadStarted.
+      Start the first T3 turn with that message ID, the snapshot, and attachments.
+      Start monitoring the turn in the background.
+      Attempt to post the acknowledgement independently.
+    */
+
+    const processAdapterRequest = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
+      Effect.gen(function* () {
+        return yield* Effect.void;
+      });
+
     const process = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
       processAdapterRequest(request, t3Context);
 

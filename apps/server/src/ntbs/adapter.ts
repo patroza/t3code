@@ -31,14 +31,6 @@ export type NTBSResponse = {
  */
 export interface NTBSAdapter<P extends NTBS.PlatformData> {
   /**
-   * Stores the request before any T3 work begins.
-   *
-   * Returns `"duplicate"` if the same platform request was already stored.
-   */
-  readonly accept: (
-    event: NTBS.NTBSInput<P>,
-  ) => Effect.Effect<"accepted" | "duplicate", AdapterError>;
-  /**
    * Stores a lifecycle state. Does not perform any other business logic.
    */
   readonly save: (lifecycleEvent: NTBS.NTBSLifecycle<P>) => Effect.Effect<void, AdapterError>;
