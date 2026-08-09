@@ -46,32 +46,24 @@ export type T3Context = {
   readonly revision: string;
 };
 
-export type ProcessorEvent<P extends NTBS.PlatformData> =
-  | {
-      readonly source: "adapter";
-      readonly event: NTBS.NTBSInput<P>;
-      readonly t3Context: T3Context;
-    }
-  | {
-      readonly source: "t3";
-      readonly event: OrchestrationEvent;
-    };
-
 export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
   reason: string;
 }> {}
 
 export interface NTBSProcessor<P extends NTBS.PlatformData> {
   /**
-   * Routes adapter requests and T3 events through the shared NTBS workflow.
+   * Processes a request received by a platform adapter.
    *
-   * Platform requests must already have passed their platform-specific trigger
-   * and actor checks. The processor does not perform those.
+   * The request must already have passed its platform-specific trigger and actor
+   * checks. The processor does not perform those.
    *
    * Accepts concurrent requests and applies no queue, concurrency cap
    * or backpressure for the time being. This choice can be reviewed later.
    */
-  readonly process: (event: ProcessorEvent<P>) => Effect.Effect<void, NTBSProcessorError>;
+  readonly process: (
+    request: NTBS.NTBSInput<P>,
+    t3Context: T3Context,
+  ) => Effect.Effect<void, NTBSProcessorError>;
 
   /**
    * Consumes T3 events and passes them to `processT3Event`.
@@ -163,7 +155,7 @@ declare const monitorT3Turn: <P extends NTBS.PlatformData>(
  * 5. Start monitoring the turn in the background.
  * 6. Attempt to post the acknowledgement independently.
  */
-declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
+declare const processAdapterRequest: <P extends NTBS.PlatformData>(
   request: NTBS.NTBSInput<P>,
   t3Context: T3Context,
 ) => Effect.Effect<void, NTBSProcessorError>;
@@ -219,6 +211,19 @@ declare const processT3Event: (
  *
  * Resolves the required T3 services and returns processor operations with no remaining requirements.
  */
-export declare const makeNTBSProcessor: <P extends NTBS.PlatformData>(
+export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
   adapter: NTBSAdapter<P>,
-) => Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements>;
+): Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements> =>
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
+
+    const process = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
+      processAdapterRequest(request, t3Context);
+
+    const subscribeToT3Events = Effect.void;
+
+    return {
+      process,
+      subscribeToT3Events,
+    };
+  });
