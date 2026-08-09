@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import type * as NTBS from "./lifecycle.ts";
 import { Context, Crypto, Data, Effect } from "effect";
-import type { NTBSAdapter } from "./adapter.ts";
+import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
 import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { GitWorkflowService } from "../git/GitWorkflowService.ts";
@@ -147,12 +147,12 @@ declare const processAcceptedRequest: <P extends NTBS.PlatformData>(
  *
  * This function reads the projected thread identified by the session event.
  * It returns `null` if the latest turn has not ended.
- * Otherwise it returns the final assistant text or plain text error.
+ * Otherwise it returns the response and its type.
  */
 declare const resolveT3Outcome: (
   event: Extract<OrchestrationEvent, { type: "thread.session-set" }>,
 ) => Effect.Effect<
-  { readonly threadId: ThreadId; readonly text: string } | null,
+  { readonly threadId: ThreadId; readonly response: NTBSResponse } | null,
   NTBSProcessorError
 >;
 

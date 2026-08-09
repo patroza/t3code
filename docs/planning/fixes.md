@@ -2,12 +2,6 @@
 
 This document collects the units of work identified by the adversarial review of the NTBS design.
 
-## 7. Pass a response union to the adapter
-
-The processor currently reduces every T3 outcome to plain text before calling the adapter. The adapter therefore cannot distinguish a normal answer from a failure, timeout, or cancellation when applying its platform-specific rendering.
-
-Define a small response union with `answer`, `failure`, `timeout`, and `cancellation` cases, each carrying its response text. The processor determines which case occurred and passes it to `postResponse`; the adapter decides how that case is rendered on its platform. This response union is not an additional persisted lifecycle state.
-
 ## 11. Define the shared thread defaults
 
 T3 requires an initial title, model selection, runtime mode, and interaction mode when creating a thread. `T3Context` currently provides only the project and revision, so the implementation would otherwise have to invent these choices or make each platform choose them independently.
