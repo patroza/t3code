@@ -17,14 +17,19 @@ import {
   classifySessionLastError,
   fatalAlertDelivery,
   formatAlertCause,
+  formatLongRunningTurnMilestone,
   isExpectedSessionLastError,
   listSessionErrors,
+  longRunningTurnMilestoneMs,
+  nextLongRunningTurnMilestoneMs,
   selectSessionErrorsForAlert,
   sessionErrorAgeMs,
   sessionErrorAlertDelivery,
   sessionErrorAlertKey,
   SESSION_ERROR_MAX_AGE_MS,
+  shouldAlertLongRunningTurn,
   trackSustainedHotProcesses,
+  TURN_RUNNING_MIN_MS,
   type ProcInfo,
   type ProcSustainState,
 } from "./Alerts.ts";
@@ -283,6 +288,67 @@ describe("session last_error alert classification", () => {
     );
     expect(a).toBe(b);
     expect(a.startsWith("session-error-sig:")).toBe(true);
+  });
+});
+
+describe("long-running turn alert milestones (0.25h × 2ⁿ)", () => {
+  const min = (n: number) => n * 60_000;
+
+  it("stays quiet below the first 15m threshold", () => {
+    expect(longRunningTurnMilestoneMs(min(14))).toBeNull();
+    expect(shouldAlertLongRunningTurn(min(14), undefined).alert).toBe(false);
+  });
+
+  it("pages at 15m, 30m, 1h, 2h, 4h and not between rungs", () => {
+    // First page at 15m.
+    expect(longRunningTurnMilestoneMs(min(15))).toBe(min(15));
+    expect(shouldAlertLongRunningTurn(min(15), undefined)).toEqual({
+      alert: true,
+      milestoneMs: min(15),
+    });
+    // Still on the 15m rung until 30m — no re-page.
+    expect(longRunningTurnMilestoneMs(min(29))).toBe(min(15));
+    expect(shouldAlertLongRunningTurn(min(29), min(15)).alert).toBe(false);
+    // 30m / 1h / 2h / 4h rungs.
+    expect(longRunningTurnMilestoneMs(min(30))).toBe(min(30));
+    expect(longRunningTurnMilestoneMs(min(75))).toBe(min(60)); // the 75m spam case
+    expect(longRunningTurnMilestoneMs(min(125))).toBe(min(120));
+    expect(longRunningTurnMilestoneMs(min(240))).toBe(min(240));
+
+    let last: number | undefined;
+    const ages = [15, 20, 25, 30, 45, 59, 60, 75, 90, 119, 120, 180, 240];
+    const paged: number[] = [];
+    for (const ageMin of ages) {
+      const decision = shouldAlertLongRunningTurn(min(ageMin), last);
+      if (decision.alert) {
+        paged.push(ageMin);
+        last = decision.milestoneMs;
+      }
+    }
+    // Only when a new doubling rung is crossed — not every 10 minutes.
+    expect(paged).toEqual([15, 30, 60, 120, 240]);
+  });
+
+  it("re-pages at most once for the current rung after a restart", () => {
+    // Bot restart loses last milestone; age is already 75m → one page for 1h rung.
+    const decision = shouldAlertLongRunningTurn(min(75), undefined);
+    expect(decision).toEqual({ alert: true, milestoneMs: min(60) });
+    expect(shouldAlertLongRunningTurn(min(75), min(60)).alert).toBe(false);
+    // Next page only when age reaches 2h.
+    expect(shouldAlertLongRunningTurn(min(119), min(60)).alert).toBe(false);
+    expect(shouldAlertLongRunningTurn(min(120), min(60))).toEqual({
+      alert: true,
+      milestoneMs: min(120),
+    });
+  });
+
+  it("formats milestone labels and next-rung helper", () => {
+    expect(formatLongRunningTurnMilestone(min(15))).toBe("15m");
+    expect(formatLongRunningTurnMilestone(min(30))).toBe("30m");
+    expect(formatLongRunningTurnMilestone(min(60))).toBe("1h");
+    expect(formatLongRunningTurnMilestone(min(120))).toBe("2h");
+    expect(nextLongRunningTurnMilestoneMs(TURN_RUNNING_MIN_MS)).toBe(min(30));
+    expect(nextLongRunningTurnMilestoneMs(min(60))).toBe(min(120));
   });
 });
 
