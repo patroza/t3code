@@ -19,8 +19,8 @@ export type NTBSResponse = {
 /**
  * Defines the platform-specific operations used by the shared NTBS processor.
  *
- * The adapter detects duplicate requests, stores lifecycle data, finds that data
- * from a T3 thread ID, and posts acknowledgements and responses.
+ * The adapter stores lifecycle data, finds that data from a T3 thread ID, and
+ * posts acknowledgements and responses.
  *
  * The adapter owns its storage and retention policy. A stored snapshot may
  * outlive the original platform message. E.g. a message on Discord gets deleted
@@ -54,6 +54,21 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
     state: NTBS.ThreadStarted<P>,
     response: NTBSResponse,
   ) => Effect.Effect<string, AdapterError>;
+
+  /**
+   * Finds lifecycle data already recorded for this platform
+   request.
+   *
+   * The adapter identifies the request using its platform-
+   specific source data.
+   * Returns `null` when no T3 thread has been recorded and 
+    processing may continue.
+   * Any lifecycle state means the request has already started
+   T3 work.
+   */
+  readonly findByRequest: (
+    request: NTBS.NTBSInput<P>,
+  ) => Effect.Effect<NTBS.NTBSLifecycle<P> | null, AdapterError>;
   /**
    * Searches the response destination for a matching response previously
    * posted by this adapter.
