@@ -274,6 +274,14 @@
     "./productFamily": {
       "types": "./src/productFamily.ts",
       "import": "./src/productFamily.ts"
+    },
+    "./usageMerge": {
+      "types": "./src/usageMerge.ts",
+      "import": "./src/usageMerge.ts"
+    },
+    "./usageFormat": {
+      "types": "./src/usageFormat.ts",
+      "import": "./src/usageFormat.ts"
     }
   },
   "scripts": {
