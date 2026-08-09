@@ -4,7 +4,8 @@
  *
  * - Host: load, CPU%, memory, disk free
  * - Runaways: legacy stdio Sentry MCP proliferation / high RSS → alert only (never kill)
- * - T3: long-running turns; **real** session errors only (not orphan-restart recover text)
+ * - T3: long-running turns (page at 0.25h × 2ⁿ age milestones); **real** session errors only
+ *   (not orphan-restart recover text)
  * - App: postFatalAlert() / postBridgeAlert() for hard + bridge failures
  */
 import * as NodeChildProcess from "node:child_process";
@@ -66,7 +67,12 @@ const SENTRY_COUNT_ALERT = 2;
 const DEFAULT_PROCESS_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
 const DEFAULT_PROCESS_RSS_ALERT_MB = 768;
 const DEFAULT_PROCESS_SUSTAINED_FOR_MS = 4 * POLL_MS;
-const TURN_RUNNING_MIN_MS = 15 * 60 * 1000;
+/**
+ * First long-turn page threshold and base of the doubling milestone ladder.
+ * Pages at 0.25h, 0.5h, 1h, 2h, 4h, … (15m × 2ⁿ) while the turn stays `running`,
+ * instead of re-paging every fixed cooldown (was 10m — spammy for multi-hour turns).
+ */
+export const TURN_RUNNING_MIN_MS = 15 * 60 * 1000;
 
 /** Paths to check for free space (guest rootfs is tiny; data volume is the real store). */
 const DISK_PATHS = ["/", "/var/lib/t3"] as const;
@@ -570,6 +576,60 @@ ${scriptBody}
   }
 }
 
+/**
+ * Highest 0.25h × 2ⁿ milestone the turn age has reached, or `null` if still
+ * below the first page threshold.
+ *
+ * Examples (base 15m): 14m → null; 15–29m → 15m; 30–59m → 30m; 60–119m → 60m;
+ * 125m → 120m.
+ */
+export function longRunningTurnMilestoneMs(
+  ageMs: number,
+  baseMs: number = TURN_RUNNING_MIN_MS,
+): number | null {
+  if (!(ageMs >= baseMs) || !(baseMs > 0)) return null;
+  const exp = Math.floor(Math.log2(ageMs / baseMs));
+  if (!Number.isFinite(exp) || exp < 0) return null;
+  return baseMs * 2 ** exp;
+}
+
+/** Next doubling milestone after the one we just paged (cap not applied). */
+export function nextLongRunningTurnMilestoneMs(milestoneMs: number): number {
+  return milestoneMs * 2;
+}
+
+/** Human label for a milestone duration: `15m`, `30m`, `1h`, `2h`, … */
+export function formatLongRunningTurnMilestone(milestoneMs: number): string {
+  const minutes = milestoneMs / 60_000;
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const hours = minutes / 60;
+  if (Number.isInteger(hours)) return `${hours}h`;
+  // Keep one decimal for non-integer hours (shouldn't happen on pure 2ⁿ ladder).
+  return `${hours}h`;
+}
+
+/**
+ * Whether to page for this long-running turn given the last milestone already
+ * posted for its `turnId`. Milestone is derived from turn age (not wall-clock
+ * since last post), so bot restarts re-page at most once for the current rung.
+ */
+export function shouldAlertLongRunningTurn(
+  ageMs: number,
+  lastAlertedMilestoneMs: number | undefined,
+  baseMs: number = TURN_RUNNING_MIN_MS,
+):
+  | { readonly alert: true; readonly milestoneMs: number }
+  | { readonly alert: false; readonly milestoneMs: number | null } {
+  const milestoneMs = longRunningTurnMilestoneMs(ageMs, baseMs);
+  if (milestoneMs === null) {
+    return { alert: false, milestoneMs: null };
+  }
+  if (lastAlertedMilestoneMs !== undefined && milestoneMs <= lastAlertedMilestoneMs) {
+    return { alert: false, milestoneMs };
+  }
+  return { alert: true, milestoneMs };
+}
+
 function listLongRunningTurns(
   dbPath: string,
   minAgeMs: number,
@@ -835,6 +895,8 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
     const discordConfig = yield* DiscordConfig.DiscordConfig;
     const alertProcessRules = loadAlertProcessRulesFromFileSync(botConfig.alertProcessRulesPath);
     const lastSent = new Map<string, number>();
+    /** Highest long-turn milestone already posted per `turnId` (0.25h × 2ⁿ ladder). */
+    const lastTurnMilestones = new Map<string, number>();
 
     const postAlert: Poster = (key, content, cooldownMs = COOLDOWN_MS, files = []) =>
       Effect.gen(function* () {
@@ -1020,16 +1082,30 @@ export const runAlertWatchdog = (botConfig: DiscordBotConfig) =>
           );
         }
 
-        // --- long T3 turns ---
+        // --- long T3 turns (page at 0.25h × 2ⁿ age milestones; drop finished turns) ---
+        const longTurnIds = new Set(snap.longTurns.map((t) => t.turnId));
+        for (const turnId of lastTurnMilestones.keys()) {
+          if (!longTurnIds.has(turnId)) lastTurnMilestones.delete(turnId);
+        }
         for (const turn of snap.longTurns) {
+          const ageMs = turn.ageMin * 60_000;
+          const decision = shouldAlertLongRunningTurn(ageMs, lastTurnMilestones.get(turn.turnId));
+          if (!decision.alert) continue;
+          lastTurnMilestones.set(turn.turnId, decision.milestoneMs);
+          const milestoneLabel = formatLongRunningTurnMilestone(decision.milestoneMs);
+          const nextLabel = formatLongRunningTurnMilestone(
+            nextLongRunningTurnMilestoneMs(decision.milestoneMs),
+          );
+          // Cooldown 0: cadence is the age-milestone ladder, not wall-clock spacing.
           yield* postAlert(
             `turn:${turn.turnId}`,
             [
               "**Long-running T3 turn**",
               `thread=\`${turn.threadId}\``,
               `turn=\`${turn.turnId}\``,
-              `age≈${turn.ageMin} min (alert after ${TURN_RUNNING_MIN_MS / 60_000} min)`,
+              `age≈${turn.ageMin} min · milestone ${milestoneLabel} (next ~${nextLabel}; ladder 15m×2ⁿ)`,
             ].join("\n"),
+            0,
           );
         }
 
