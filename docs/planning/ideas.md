@@ -25,3 +25,9 @@ The processor does not use acknowledgement success as a condition for continuing
 Keep `SourceChannel`, `SourceRef`, `sourceHint`, `originSource`, and related fork-specific provenance out of the NTBS design. Adapters already retain the platform data needed to connect external messages with T3 work.
 
 Once every external platform has moved to NTBS, remove these fields and the old integration logic that depends on them.
+
+## Keep remote adapters possible
+
+The first NTBS adapters can run inside the T3 server, but some platform integrations may remain separate programs. The current Discord bot is one example.
+
+When a remote adapter is implemented, either move its platform operations into the server or expose the processor and adapter operations through a network API. The shared lifecycle and storage design should not require every adapter to share the T3 server process. Choose the transport when the first remote adapter is ported.

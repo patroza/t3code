@@ -63,6 +63,17 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
     response: NTBSResponse,
   ) => Effect.Effect<string, AdapterError>;
   /**
+   * Searches the response destination for a matching response previously
+   * posted by this adapter.
+   *
+   * Returns the platform message ID when found, or `null` when no matching
+   * message exists.
+   */
+  readonly findMatchingResponseMessage: (
+    state: NTBS.ThreadStarted<P>,
+    response: NTBSResponse,
+  ) => Effect.Effect<string | null, AdapterError>;
+  /**
    * Finds the latest lifecycle state associated with a T3 thread.
    *
    * Fails with `ThreadNotFound` when this adapter has no request associated
@@ -71,6 +82,14 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
   readonly findByThreadId: (
     threadId: ThreadId,
   ) => Effect.Effect<NTBS.NTBSLifecycle<P>, ThreadNotFound | AdapterError>;
+  /**
+   * Loads records that reached `ThreadStarted` but have no recorded
+   * `ResponsePosted` state.
+   */
+  readonly loadThreadsAwaitingResponse: Effect.Effect<
+    ReadonlyArray<NTBS.ThreadStarted<P>>,
+    AdapterError
+  >;
 }
 
 export const makeNTBSAdapterTag = <P extends NTBS.PlatformData>(key: string) =>

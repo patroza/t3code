@@ -1,4 +1,4 @@
-import type { ChatAttachment, ThreadId } from "@t3tools/contracts";
+import type { ChatAttachment, MessageId, ThreadId } from "@t3tools/contracts";
 
 /**
  * Describes the platform-specific data of a
@@ -36,6 +36,12 @@ export type ThreadEvent<P extends PlatformData> = NTBSInput<P> & {
   t3Data: {
     /** The T3 thread created by the lifecycle event */
     threadId: ThreadId;
+    /**
+     * The first T3 user message created for this external request.
+     * This identifies the correct turn and response even if the thread later
+     * receives other messages.
+     */
+    userMessageId: MessageId;
   };
 };
 
@@ -43,6 +49,7 @@ export type ThreadStarted<P extends PlatformData> = ThreadEvent<P> & {
   /** T3 has created the new thread. */
   state: "thread.started";
 };
+
 export type ResponsePosted<P extends PlatformData> = ThreadEvent<P> & {
   state: "thread.response.posted";
   responseMessageId: string;
