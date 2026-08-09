@@ -270,6 +270,17 @@ export interface GrokScanState {
   readonly modelBySession: Map<string, string>;
 }
 
+/**
+ * The model recorded for a Grok turn whose session never announced one in this
+ * file.
+ *
+ * `model changed` is emitted at session start, so this only happens if the log
+ * is rotated between a session's announcement and a later turn. Dropping the
+ * record would silently lose real tokens; recording them under an unpriceable
+ * sentinel keeps the token count whole and the cost honest.
+ */
+export const GROK_UNKNOWN_MODEL = "grok";
+
 export function initialGrokScanState(): GrokScanState {
   return { modelBySession: new Map<string, string>() };
 }
@@ -309,8 +320,7 @@ export function parseGrokLine(line: string, state: GrokScanState): UsageRecord |
 
   const timestampMs = parseTimestampMs(record["ts"]);
   if (timestampMs === null) return null;
-  const model = state.modelBySession.get(sessionId);
-  if (model === undefined) return null;
+  const model = state.modelBySession.get(sessionId) ?? GROK_UNKNOWN_MODEL;
 
   const promptTokens = int(contextRecord["prompt_tokens"]);
   const cachedInputTokens = int(contextRecord["cached_prompt_tokens"]);

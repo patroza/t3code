@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  GROK_UNKNOWN_MODEL,
   initialCodexScanState,
   initialGrokScanState,
   initialKimiScanState,
@@ -196,14 +197,18 @@ describe("parseGrokLine", () => {
     expect(parseGrokLine(inferenceDone("s2", usage), state)?.model).toBe("grok-code");
   });
 
-  it("drops usage that arrives before any model is known", () => {
+  it("keeps usage whose session never announced a model, as unpriceable", () => {
+    // `model changed` leads a session, so this only happens if the log rotates
+    // mid-session. Dropping the record would lose real tokens outright.
     const state = initialGrokScanState();
-    expect(
-      parseGrokLine(
-        inferenceDone("s1", { prompt_tokens: 100, cached_prompt_tokens: 0, completion_tokens: 10 }),
-        state,
-      ),
-    ).toBeNull();
+    const record = parseGrokLine(
+      inferenceDone("s1", { prompt_tokens: 100, cached_prompt_tokens: 0, completion_tokens: 10 }),
+      state,
+    );
+
+    expect(record).not.toBeNull();
+    expect(record?.model).toBe(GROK_UNKNOWN_MODEL);
+    expect(record?.totals.uncachedInputTokens).toBe(100);
   });
 
   it("never reports reasoning above the output it is drawn from", () => {
