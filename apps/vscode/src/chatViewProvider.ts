@@ -947,7 +947,7 @@ export class T3ChatViewProvider implements vscode.WebviewViewProvider, vscode.Di
     select { width: 100%; min-width: 0; border: 1px solid var(--vscode-dropdown-border); background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border-radius: 4px; padding: 5px 7px; }
     #status { min-height: 0; padding: 0 10px; color: var(--vscode-descriptionForeground); font-size: 11px; }
     #status.error { color: var(--vscode-errorForeground); padding-top: 7px; padding-bottom: 7px; }
-    #status:not(:empty) { padding: 0 0 6px; }
+    #status:not(:empty) { padding: 0 10px 6px; }
     #status:not(.error)::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); vertical-align: 1px; }
     #status.working { color: var(--vscode-charts-blue); }
     #status.working::before, #status.connecting::before { background: var(--vscode-charts-blue); animation: status-pulse 1.4s ease-in-out infinite; }
