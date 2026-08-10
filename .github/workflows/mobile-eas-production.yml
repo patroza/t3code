@@ -199,8 +199,8 @@ jobs:
             echo "::error::Expo Free plan iOS build quota exhausted. Upgrade at https://expo.dev/accounts/patroza/settings/billing or wait for the monthly reset, then re-run mode=build. Pure-JS fixes can still ship via mode=auto (fallback OTA) or mode=update with runtime_version."
           fi
 
-      - name: Publish OTA update
-        if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'
+      - name: Publish OTA update (manual)
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'update'
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
