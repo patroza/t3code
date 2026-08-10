@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   DndContext,
   DragOverlay,
@@ -65,6 +66,8 @@ import {
   matchesEnvironmentFilter,
   resolveSelectedEnvironmentIds,
 } from "../listEnvironmentFilter";
+import { buildOwnershipPredicate, useOwnershipFilter } from "../ownershipFilter";
+import { identityClaimPersonIdByEnvironmentAtom } from "../../state/identity";
 import { ProjectFavicon, ProjectFaviconFallback } from "../ProjectFavicon";
 import {
   SETTLED_TAIL_INITIAL_COUNT,
@@ -305,14 +308,29 @@ function BoardContent() {
     [projects],
   );
 
+  // The ownership selection is a user-level "whose work am I looking at",
+  // shared with the sidebar rather than a sidebar-only view: a board sitting
+  // beside a sidebar filtered to Mine must not show everyone's threads.
+  const { mode: ownershipMode, relation: ownershipRelation } = useOwnershipFilter();
+  const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const ownershipPredicate = useMemo(
+    () =>
+      buildOwnershipPredicate({
+        claimPersonIdByEnvironment,
+        mode: ownershipMode,
+        relation: ownershipRelation,
+      }),
+    [claimPersonIdByEnvironment, ownershipMode, ownershipRelation],
+  );
   const threads = useMemo(
     () =>
       threadShells.filter(
         (thread) =>
           thread.archivedAt === null &&
-          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds),
+          matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
+          ownershipPredicate(thread),
       ),
-    [selectedEnvironmentIds, threadShells],
+    [ownershipPredicate, selectedEnvironmentIds, threadShells],
   );
   const envFilteredProjectSnapshots = useMemo(
     () =>

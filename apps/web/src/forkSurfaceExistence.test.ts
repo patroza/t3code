@@ -248,6 +248,20 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).not.toContain("ThreadIdentityLeading");
   });
 
+  it("every thread surface filters through the shared ownership predicate", () => {
+    // The Board shipped reading the same thread atom as the sidebar but never
+    // applying the ownership filter, so a sidebar filtered to Mine sat beside
+    // a board showing everyone's threads. Both must go through the one
+    // predicate rather than each re-deriving the call.
+    const board = readSrc("components/board/BoardView.tsx");
+    const sidebar = readSrc("components/Sidebar.tsx");
+    for (const source of [board, sidebar]) {
+      expect(source).toContain("useOwnershipFilter()");
+      expect(source).toContain("buildOwnershipPredicate({");
+      expect(source).toContain("ownershipPredicate(thread)");
+    }
+  });
+
   it("sidebar v2 uses budgeted list VCS status so PR markers and auto-settle stay fresh", () => {
     const sidebar = readSrc("components/Sidebar.tsx");
     expect(sidebar).toContain("vcsEnvironment.listStatus({");
