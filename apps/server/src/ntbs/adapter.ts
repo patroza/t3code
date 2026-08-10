@@ -41,7 +41,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * Returns the platform's identifier for the posted message.
    */
   readonly postAcknowledgement: (
-    state: NTBS.ThreadStarted<P>,
+    state: NTBS.ThreadCreated<P>,
   ) => Effect.Effect<string, AdapterError>;
   /**
    * Posts the final T3 outcome at the response destination described
@@ -51,7 +51,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * The processor uses that identifier to save `ResponsePosted`.
    */
   readonly postResponse: (
-    state: NTBS.ThreadStarted<P>,
+    state: NTBS.ThreadCreated<P>,
     response: NTBSResponse,
   ) => Effect.Effect<string, AdapterError>;
 
@@ -79,7 +79,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * source data.
    * Returns `null` when no T3 thread has been recorded and processing
    * may continue.
-   * Any lifecycle state means the request has already started T3 work.
+   * Any lifecycle state means the request already has a T3 thread.
    */
   readonly findByRequest: (
     request: NTBS.NTBSInput<P>,
@@ -92,7 +92,7 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    * message exists.
    */
   readonly findMatchingResponseMessage: (
-    state: NTBS.ThreadStarted<P>,
+    state: NTBS.ThreadCreated<P>,
     response: NTBSResponse,
   ) => Effect.Effect<string | null, AdapterError>;
   /**
@@ -105,11 +105,11 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
     threadId: ThreadId,
   ) => Effect.Effect<NTBS.NTBSLifecycle<P>, ThreadNotFound | AdapterError>;
   /**
-   * Loads records that reached `ThreadStarted` but have no recorded
+   * Loads records that reached `ThreadCreated` but have no recorded
    * `ResponsePosted` state.
    */
   readonly loadThreadsAwaitingResponse: Effect.Effect<
-    ReadonlyArray<NTBS.ThreadStarted<P>>,
+    ReadonlyArray<NTBS.ThreadCreated<P>>,
     AdapterError
   >;
 }

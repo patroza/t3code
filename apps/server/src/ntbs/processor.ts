@@ -25,7 +25,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
   1. Generic NTBS processor:
     - Runs the shared workflow for every platform.
     - Creates a fresh worktree and T3 thread.
-    - Saves `ThreadStarted`.
+    - Saves `ThreadCreated`.
     - Starts the first turn with the snapshot and attachments.
     - Monitors the turn for completion and timeouts.
     - Attempts to post the acknowledgement independently.
@@ -85,8 +85,9 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
   /**
    * Consumes T3 events and passes them to `processT3Event`.
    *
-   * After the live subscription begins, loads stored `ThreadStarted` records
-   * and restarts their monitors from each turn's original `requestedAt` time.
+   * After the live subscription begins, loads stored `ThreadCreated` records.
+   * It starts a missing first turn or restarts its monitor from the turn's
+   * original `requestedAt` time.
    *
    * Runs until interrupted by its caller.
    * Logs individual processing failures and continues with later events.
@@ -121,19 +122,6 @@ type NTBSProcessorRequirements =
   | Crypto.Crypto;
 
 /**
- * Starts the first turn in an existing T3 thread.
- *
- * Uses the user message ID recorded in `ThreadStarted` so the resulting turn
- * and response can be matched to the external request.
- */
-declare const startT3Turn: (
-  threadId: ThreadId,
-  userMessageId: MessageId,
-  snapshot: string,
-  attachments: ReadonlyArray<ChatAttachment>,
-) => Effect.Effect<void, NTBSProcessorError>;
-
-/**
  * Monitors one started T3 turn without blocking request processing.
  *
  * Starts in the background immediately after `startT3Turn` succeeds. It checks
@@ -146,7 +134,7 @@ declare const startT3Turn: (
  * The timed-out thread remains unarchived for inspection or manual retry.
  */
 declare const monitorT3Turn: <P extends NTBS.PlatformData>(
-  state: NTBS.ThreadStarted<P>,
+  state: NTBS.ThreadCreated<P>,
 ) => Effect.Effect<void, NTBSProcessorError>;
 
 /**
@@ -213,6 +201,42 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
     const gitWorkflowService = yield* GitWorkflowService;
+
+    /**
+     * Starts the first turn in an existing T3 thread.
+     *
+     * Uses the user message ID recorded in `ThreadCreated` so the resulting turn
+     * and response can be matched to the external request.
+     */
+    const startT3Turn = (
+      threadId: ThreadId,
+      userMessageId: MessageId,
+      snapshot: string,
+      attachments: ReadonlyArray<ChatAttachment>,
+    ): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        const commandId = CommandId.make(yield* randomUUID);
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
+
+        yield* orchestrationEngineService
+          .dispatch(
+            OrchestrationCommand.make({
+              type: "thread.turn.start",
+              commandId,
+              threadId,
+              message: {
+                messageId: userMessageId,
+                role: "user",
+                text: snapshot,
+                attachments,
+              },
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              createdAt,
+            }),
+          )
+          .pipe(orFail("Failed to start the first T3 turn"));
+      });
 
     /**
      * Resolves where a new thread worktree starts from.
@@ -411,10 +435,10 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
       Handles an external request in this order:
 
       1. Ask the adapter whether this platform request already has a recorded
-      `ThreadStarted` or `ResponsePosted`.
+      `ThreadCreated` or `ResponsePosted`.
       If yes - stop. . If no - continue
       2. Create the worktree and T3 thread.
-      3. Generate the first user message ID and record it with ThreadStarted.
+      3. Generate the first user message ID and record it with ThreadCreated.
       4. Start the first T3 turn with that message ID, the snapshot, and attachments.
       5. Start monitoring the turn in the background.
       6. Attempt to post the acknowledgement independently.
@@ -450,12 +474,13 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
           } else {
             // create the worktree and T3 thread
             const threadId = yield* createT3Thread(t3Context);
-            // generate the first user message ID and record it with ThreadStarted
+
+            // generate the first user message ID and record it with ThreadCreated
             const userMessageId = MessageId.make(yield* randomUUID);
 
-            const threadStarted: NTBS.ThreadStarted<P> = {
+            const threadCreated: NTBS.ThreadCreated<P> = {
               ...request,
-              state: "thread.started",
+              state: "thread.created",
               t3Data: {
                 threadId,
                 userMessageId,
@@ -463,10 +488,11 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
             };
 
             yield* adapter
-              .save(threadStarted)
-              .pipe(orFail("Failed to record the started NTBS thread"));
+              .save(threadCreated)
+              .pipe(orFail("Failed to record the created NTBS thread"));
 
             // Start the first T3 turn with that message Id, the snapshot and attachments
+            yield* startT3Turn(threadId, userMessageId, request.snapshot, request.attachments);
             // start monitoring the turn in the background (TODO: aren't we already subscribing for this?)
             // Attempt to post the acknowledgement independently
           }

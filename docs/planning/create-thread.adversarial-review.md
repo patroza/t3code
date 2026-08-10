@@ -49,7 +49,7 @@ Concurrent duplicates are now refused, not raced. The design:
   duplicate happening to be queued.
 
 Remaining follow-up, deferred to the adapter storage schema work: a unique constraint on the
-request key for stored `ThreadStarted` records, as the durable backstop for what the in-process
+request key for stored `ThreadCreated` records, as the durable backstop for what the in-process
 set cannot see (crash mid-creation, multi-process future).
 
 (The `return Effect.void` smell noted here earlier is fixed — both sites use a bare `return`.)

@@ -73,7 +73,7 @@ type PlatformData<Source, ResponseDestination> = {
  */
 type NtbsEvent<P extends PlatformData<unknown, unknown>> =
   | NtbsEventAccepted<P>
-  | NtbsEventThreadStarted<P>
+  | NtbsEventThreadCreated<P>
   | NtbsEventAcknowledgementPosted<P>
   | NtbsEventOutcomeAvailable<P>
   | NtbsEventResponsePosted<P>;
@@ -102,9 +102,9 @@ type NtbsEventWithThread<P extends PlatformData<unknown, unknown>> = NtbsEventBa
   };
 };
 
-type NtbsEventThreadStarted<P extends PlatformData<unknown, unknown>> = NtbsEventWithThread<P> & {
+type NtbsEventThreadCreated<P extends PlatformData<unknown, unknown>> = NtbsEventWithThread<P> & {
   /** T3 has created the new thread from the source snapshot. */
-  state: "threadStarted";
+  state: "threadCreated";
 };
 
 type NtbsEventWithAcknowledgement<P extends PlatformData<unknown, unknown>> =
@@ -162,7 +162,7 @@ A user adds top-level Jira comment `10401` on issue `T3-123`: `@agent investigat
 When T3 creates the work, the adapter adds its IDs:
 
 ```ts
-state: "threadStarted",
+state: "threadCreated",
 t3: {
   threadId: "thread-1",
   userMessageId: "message-1",

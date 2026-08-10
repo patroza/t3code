@@ -45,9 +45,12 @@ export type ThreadEvent<P extends PlatformData> = NTBSInput<P> & {
   };
 };
 
-export type ThreadStarted<P extends PlatformData> = ThreadEvent<P> & {
-  /** T3 has created the new thread. */
-  state: "thread.started";
+export type ThreadCreated<P extends PlatformData> = ThreadEvent<P> & {
+  /**
+   * T3 has created the new thread and the adapter has recorded its relationship
+   * to the platform request. The first turn may not have started yet.
+   */
+  state: "thread.created";
 };
 
 export type ResponsePosted<P extends PlatformData> = ThreadEvent<P> & {
@@ -55,4 +58,4 @@ export type ResponsePosted<P extends PlatformData> = ThreadEvent<P> & {
   responseMessageId: string;
 };
 
-export type NTBSLifecycle<P extends PlatformData> = ThreadStarted<P> | ResponsePosted<P>;
+export type NTBSLifecycle<P extends PlatformData> = ThreadCreated<P> | ResponsePosted<P>;
