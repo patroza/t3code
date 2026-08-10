@@ -77,6 +77,7 @@ interface ChatHeaderProps {
   /** For showing usage dot on the active thread's model at conversation level. */
   activeThreadDriverKind?: ProviderDriverKind | null;
   activeThreadModel?: string | null;
+  readonly onOpenPullRequest?: ((number: number) => void) | undefined;
   onNewThreadInProject: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
@@ -188,6 +189,7 @@ export const ChatHeader = memo(function ChatHeader({
   isPreparingWorktree = false,
   activeThreadDriverKind = null,
   activeThreadModel = null,
+  onOpenPullRequest,
   onNewThreadInProject,
   onRunProjectScript,
   onAddProjectScript,
@@ -489,6 +491,7 @@ export const ChatHeader = memo(function ChatHeader({
             gitCwd={gitCwd}
             activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
             isPreparingWorktree={isPreparingWorktree}
+            onOpenPullRequest={onOpenPullRequest}
             {...(draftId ? { draftId } : {})}
           />
         )}
