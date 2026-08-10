@@ -56,6 +56,23 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
   ) => Effect.Effect<string, AdapterError>;
 
   /**
+   * Derives the stable identity of a platform request.
+   *
+   * The same platform request must always produce the same key,
+   * across redeliveries and restarts. Distinct requests must produce
+   * distinct keys.
+   *
+   * This is the same identity `findByRequest` looks up, typically the
+   * platform's own message or event ID, e.g. a Jira comment ID or a
+   * Discord message ID.
+   *
+   * The processor uses it to serialize concurrent deliveries of the
+   * same request. It is also the natural unique key for the adapter's
+   * stored lifecycle records.
+   */
+  readonly getRequestKey: (request: NTBS.NTBSInput<P>) => string;
+
+  /**
    * Finds lifecycle data already recorded for this platform request.
    *
    * The adapter identifies the request using its platform-specific

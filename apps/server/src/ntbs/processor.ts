@@ -279,6 +279,8 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const projectScriptRunner = yield* ProjectSetupScriptRunner;
 
+    const inFlightRequests = new Set<string>();
+
     /**
      * Creates an isolated worktree and a new T3 thread.
      *
@@ -421,20 +423,40 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const processAdapterRequest = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
       Effect.gen(function* () {
-        const existingRequest = yield* adapter
-          .findByRequest(request)
-          .pipe(orFail("Error getting the existing request in processAdapterRequest"));
+        /*
+          In-flight dedup first. We check if the processor is *currently*
+          working on this very request: it's being worked right now.
+          Later we check for the *durable* dedup: are we receiving a request 
+          for work that has *already* completed.
+        */
+        const key = adapter.getRequestKey(request);
 
-        if (existingRequest) {
+        const isBeingWorkedNow = inFlightRequests.has(key);
+        if (isBeingWorkedNow) {
+          yield* Effect.logDebug("NTBS request already being worked on; dropping duplicate", {
+            key,
+          });
           return;
-        } else {
-          // create the worktree and T3 thread
-          // generate the first user message ID and record it with ThreadStarted
-          // Start the first T3 turn with that message Id, the snapshot and attachments
-          // start monitoring the turn in the background (TODO: aren't we already subscribing for this?)
-          // Attempt to post the acknowledgement independently
         }
-        return;
+        inFlightRequests.add(key);
+
+        yield* Effect.gen(function* () {
+          // durable dedup
+          const existingRequest = yield* adapter
+            .findByRequest(request)
+            .pipe(orFail("Error getting the existing request in processAdapterRequest"));
+
+          if (existingRequest) {
+            return;
+          } else {
+            // create the worktree and T3 thread
+            // generate the first user message ID and record it with ThreadStarted
+            // Start the first T3 turn with that message Id, the snapshot and attachments
+            // start monitoring the turn in the background (TODO: aren't we already subscribing for this?)
+            // Attempt to post the acknowledgement independently
+          }
+          return;
+        }).pipe(Effect.ensuring(Effect.sync(() => inFlightRequests.delete(key))));
       });
 
     const process = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
