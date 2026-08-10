@@ -32,7 +32,10 @@ concurrency:
 jobs:
   fingerprint:
     name: Native fingerprint diff
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    # Upstream runs this on Blacksmith; the fork uses GitHub-hosted runners
+    # throughout, so a Blacksmith job here would queue forever on any PR
+    # touching apps/mobile and never report.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       issues: write

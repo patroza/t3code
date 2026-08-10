@@ -50,7 +50,6 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
-  EllipsisIcon,
   ListIcon,
   MessageSquareIcon,
   ListFilterIcon,
