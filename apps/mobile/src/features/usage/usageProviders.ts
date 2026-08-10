@@ -5,7 +5,25 @@ import { useColorScheme } from "react-native";
  * Series and table order. The chart stacks providers from the bottom in this
  * order, so it also fixes which band sits on top of the bars.
  */
-export const PROVIDER_ORDER: readonly UsageProviderKind[] = ["codex", "claude", "grok", "kimi"];
+export const PROVIDER_ORDER = [
+  "codex",
+  "claude",
+  "grok",
+  "kimi",
+] as const satisfies readonly UsageProviderKind[];
+
+/**
+ * A provider added to `UsageProviderKind` but not to {@link PROVIDER_ORDER}
+ * would still appear in the summary rows (those come from `merged.providers`)
+ * while silently vanishing from the daily columns, chart bands, legends and
+ * skeletons, all of which iterate this order. The `Record` maps below are
+ * exhaustive by their own type; this makes the order exhaustive too, so the
+ * omission is a compile error rather than a missing column nobody notices.
+ */
+type AssertNoUnorderedProvider<T extends never> = T;
+export type UsageProviderOrderIsExhaustive = AssertNoUnorderedProvider<
+  Exclude<UsageProviderKind, (typeof PROVIDER_ORDER)[number]>
+>;
 
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   claude: "Claude Code",
