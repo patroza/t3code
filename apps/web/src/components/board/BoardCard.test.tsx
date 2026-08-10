@@ -2,6 +2,7 @@ import { DndContext } from "@dnd-kit/core";
 import {
   DEFAULT_RUNTIME_MODE,
   EnvironmentId,
+  PersonId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -109,6 +110,23 @@ describe("BoardCard", () => {
     expect(openButtonEnd).toBeGreaterThan(openButtonStart);
     expect(prButtonStart).toBeGreaterThan(openButtonEnd);
     expect(markup.slice(openButtonStart, openButtonEnd)).not.toContain("#42");
+  });
+
+  it("shows where a thread came from", () => {
+    // The mobile board and both sidebars mark the source; the web board did
+    // not, so a Discord-started thread was indistinguishable from a local one.
+    const markup = renderCard(
+      makeThread({ originSource: { channel: "discord", personId: PersonId.make("person-1") } }),
+    );
+
+    // Δ is the Discord glyph from SourceChannelGlyph.
+    expect(markup).toContain("Δ");
+  });
+
+  it("shows no source mark when a thread has no source", () => {
+    const markup = renderCard(makeThread({ originSource: null }));
+
+    expect(markup).not.toContain("Δ");
   });
 
   it("shows the plan-only indicator only for plan-mode threads", () => {
