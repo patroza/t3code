@@ -31,14 +31,26 @@ cause instead of a crisp contract error. Revisit when the first inbound layer pr
 `createT3Thread` now passes `deferDependencyInstall: true` to `createWorktree`, matching the ws
 pattern, since setup scripts run afterwards.
 
-### 5. Duplicate-request race (adjacent — `processAdapterRequest`)
+### 5. Duplicate-request race (adjacent — `processAdapterRequest`) — MOSTLY FIXED
 
-Not in `createT3Thread` itself, but directly feeds it. Still open:
+Concurrent duplicates are now refused, not raced. The design:
 
-- The `findByRequest` → create sequence has no atomicity, and webhooks _do_ redeliver
-  concurrently. Two identical deliveries both pass the check and both create threads. Queuing is
-  explicitly deferred, but at minimum the adapter's `ThreadStarted` record insert should be
-  unique-keyed on the platform request so the second creation fails loudly.
+- `NTBSAdapter.getRequestKey(request)` defines the stable identity of a platform request
+  (deterministic, distinct per request, stable across redeliveries) — the same identity
+  `findByRequest` looks up.
+- `processAdapterRequest` keeps an in-flight `Set` of keys: check-and-add happens synchronously
+  before the first yield (single-threaded, so no race), a present key drops the duplicate with a
+  debug log, and `Effect.ensuring` — wrapping only the admitted work, so a dropped duplicate
+  cannot erase the winner's key — removes the key on success, failure, or interruption.
+- `findByRequest` remains as the durable dedup for later redeliveries (after completion or
+  restart); the set only covers requests running right now.
+- Waiting/queueing duplicates behind the winner was considered and rejected: reliability is the
+  winner's own job (a bounded `Effect.retry` around creation — still TODO), not a side effect of a
+  duplicate happening to be queued.
+
+Remaining follow-up, deferred to the adapter storage schema work: a unique constraint on the
+request key for stored `ThreadStarted` records, as the durable backstop for what the in-process
+set cannot see (crash mid-creation, multi-process future).
 
 (The `return Effect.void` smell noted here earlier is fixed — both sites use a bare `return`.)
 
