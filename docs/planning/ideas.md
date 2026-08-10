@@ -31,3 +31,32 @@ Once every external platform has moved to NTBS, remove these fields and the old 
 The first NTBS adapters can run inside the T3 server, but some platform integrations may remain separate programs. The current Discord bot is one example.
 
 When a remote adapter is implemented, either move its platform operations into the server or expose the processor and adapter operations through a network API. The shared lifecycle and storage design should not require every adapter to share the T3 server process. Choose the transport when the first remote adapter is ported.
+
+## Add worktree cleanup to the Jira bridge
+
+The Jira auto-create flow (`JiraIssueBridge.ts`) creates a worktree before dispatching
+`thread.create` but has no compensation: a failed dispatch orphans the branch and worktree. The
+NTBS processor fixed this with `Effect.onError` → forced `removeWorktree` (cleanup errors logged,
+original cause re-raised). Rather than patching the bridge separately, extract the shared
+`provisionThreadWorktree` helper proposed in `create-thread.adversarial-review.md` and let both
+flows use it — the Jira bridge is expected to collapse onto NTBS eventually anyway.
+
+## Delete the temporary branch when thread provisioning fails
+
+When `thread.create` fails after `createWorktree`, the NTBS processor removes the worktree but
+retains the `t3/wt-…` branch (documented in `processor.ts` as an accepted leak). Everywhere else,
+branch retention is deliberate — `WorktreeLifecycle.cleanupThreadWorktree` keeps the branch so
+`restoreThreadWorktree` can recreate the worktree on unarchive — but a failed provision has no
+thread and nothing restorable, so retention buys nothing there.
+
+If the ref noise ever matters, the shape is:
+
+- Add `deleteTemporaryWorktreeBranch({ cwd, refName })` to `GitWorkflowService`, hard-guarded with
+  `isTemporaryWorktreeBranch` so it structurally cannot delete a real branch. Plumbing precedent:
+  checkpoint refs are deleted via `update-ref -d` in `GitVcsDriver.ts`, which also skips the
+  checked-out/merged safety checks.
+- In the processor's failure cleanup: `removeWorktree({ force: true })` first, then the branch
+  delete (git refuses to delete a branch still checked out in a worktree), each step best-effort
+  with its own log warning.
+- Comment on the service op why this exception to branch retention exists, so it is not
+  "harmonized" with `cleanupThreadWorktree`'s keep-the-branch behavior.
