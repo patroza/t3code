@@ -49,6 +49,7 @@ import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reani
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   hasNativeSelectableMarkdownText,
   SelectableMarkdownText,
@@ -878,6 +879,12 @@ function renderFeedEntry(
     const attachments = message.attachments ?? [];
     const previewAttachments = entry.previewAttachments ?? [];
     const hasReviewCommentContext = message.text.includes("<review_comment");
+    // A bubble that sizes itself from its content cannot lay out a block whose
+    // intrinsic width overflows `maxWidth`: Android positions the bubble's
+    // children during the unclamped pass and never moves them once the width
+    // is clamped, so the paragraphs around the block end up drawn on top of
+    // each other. Pinning the width removes that pass.
+    const hasWideBlock = hasWideMarkdownBlock(message.text);
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
@@ -900,7 +907,11 @@ function renderFeedEntry(
             style={{
               backgroundColor: userBubbleColor,
               maxWidth: props.userBubbleMaxWidth,
-              ...(hasReviewCommentContext ? { width: props.reviewCommentBubbleWidth } : null),
+              ...(hasReviewCommentContext
+                ? { width: props.reviewCommentBubbleWidth }
+                : hasWideBlock
+                  ? { width: props.userBubbleMaxWidth }
+                  : null),
             }}
           >
             {message.text.trim().length > 0 ? (

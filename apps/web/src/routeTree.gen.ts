@@ -25,6 +25,7 @@ import { Route as SettingsArchivedRouteImport } from './routes/settings.archived
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
+import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatJumpRouteImport } from './routes/_chat.jump'
 import { Route as ChatBoardRouteImport } from './routes/_chat.board'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -109,6 +110,11 @@ const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
   path: '/connect/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
+  id: '/pull-requests',
+  path: '/pull-requests',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatJumpRoute = ChatJumpRouteImport.update({
   id: '/jump',
   path: '/jump',
@@ -139,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/usage': typeof UsageRoute
   '/board': typeof ChatBoardRoute
   '/jump': typeof ChatJumpRoute
+  '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -159,6 +166,7 @@ export interface FileRoutesByTo {
   '/usage': typeof UsageRoute
   '/board': typeof ChatBoardRoute
   '/jump': typeof ChatJumpRoute
+  '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -182,6 +190,7 @@ export interface FileRoutesById {
   '/usage': typeof UsageRoute
   '/_chat/board': typeof ChatBoardRoute
   '/_chat/jump': typeof ChatJumpRoute
+  '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -206,6 +215,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/board'
     | '/jump'
+    | '/pull-requests'
     | '/connect/callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -226,6 +236,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/board'
     | '/jump'
+    | '/pull-requests'
     | '/connect/callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -248,6 +259,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/_chat/board'
     | '/_chat/jump'
+    | '/_chat/pull-requests'
     | '/connect_/callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -387,6 +399,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_chat/pull-requests': {
+      id: '/_chat/pull-requests'
+      path: '/pull-requests'
+      fullPath: '/pull-requests'
+      preLoaderRoute: typeof ChatPullRequestsRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/jump': {
       id: '/_chat/jump'
       path: '/jump'
@@ -421,6 +440,7 @@ declare module '@tanstack/react-router' {
 interface ChatRouteChildren {
   ChatBoardRoute: typeof ChatBoardRoute
   ChatJumpRoute: typeof ChatJumpRoute
+  ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
@@ -429,6 +449,7 @@ interface ChatRouteChildren {
 const ChatRouteChildren: ChatRouteChildren = {
   ChatBoardRoute: ChatBoardRoute,
   ChatJumpRoute: ChatJumpRoute,
+  ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,

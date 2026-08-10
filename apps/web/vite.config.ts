@@ -97,6 +97,7 @@ const isolatedUnitTestFiles = [
   // applies — the compiled component reports a memo-cache hit and skips the
   // hooks these tests assert on. Upstream ships these without isolation
   // because it does not share registries; the fork does.
+  "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   "src/connection/storage.test.ts",
