@@ -96,6 +96,12 @@ const UNPRICEABLE_MODELS = new Set([
   "sonnet",
   "haiku",
   "fable",
+  // Kimi's wire log names no model, and a rotated Grok log can separate a
+  // session's model announcement from its turns, so those arrive under bare
+  // provider-name sentinels rather than a guess. Reporting them unpriced keeps
+  // the cost honest. Neither bare name is itself a priced model.
+  "kimi",
+  "grok",
 ]);
 
 export function lookupRate(table: RateTable, model: string): ModelRate | null {

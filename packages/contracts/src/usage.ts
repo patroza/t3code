@@ -2,7 +2,8 @@
  * Usage reporting contract.
  *
  * Each environment scans the provider CLIs' own on-disk session transcripts
- * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`) rather than
+ * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
+ * `~/.grok/logs/unified.jsonl`, `~/.kimi/sessions/**\/wire.jsonl`) rather than
  * relying on T3 Code's own orchestration projections, so usage stays complete
  * even for turns that were never driven through T3 Code. This mirrors the
  * approach `ccusage` takes.
@@ -20,10 +21,17 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * Bumped whenever the shape of {@link UsageSummary} changes incompatibly. The
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
+ *
+ * Adding a provider to {@link UsageProviderKind} is deliberately *not* such a
+ * change. An older environment simply reports no buckets for the new provider,
+ * and those payloads still decode here. Bumping would instead drop that
+ * environment's Claude and Codex usage too, until every environment in a fleet
+ * had been upgraded — a real undercount traded for a signal about providers
+ * that environment may not even run.
  */
 export const USAGE_CONTRACT_VERSION = 3 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex"]);
+export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok", "kimi"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
