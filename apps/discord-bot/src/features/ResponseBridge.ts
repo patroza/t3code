@@ -1842,7 +1842,9 @@ type SourceAwareOrchestrationMessage = {
 function echoedUserSourceLabel(message: SourceAwareOrchestrationMessage): string {
   const username = message.source?.username?.trim() || "unknown";
   const channel = message.source?.channel?.trim() || "unknown";
-  return `from **${username}@${channel}**:`;
+  // Thought-bubble marks cross-client (app) input so Discord readers can
+  // spot it at a glance next to native channel messages.
+  return `💭 from **${username}@${channel}**:`;
 }
 
 export function formatEchoedUserMessage(message: SourceAwareOrchestrationMessage): string {

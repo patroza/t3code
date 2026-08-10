@@ -1689,12 +1689,12 @@ describe("formatEchoedUserMessage", () => {
           username: "patroza",
         },
       }),
-    ).toBe("from **patroza@mobile**:\nplease check the latest build");
+    ).toBe("💭 from **patroza@mobile**:\nplease check the latest build");
   });
 
   it("uses an explicit fallback for legacy messages without provenance", () => {
     expect(formatEchoedUserMessage(userMessage("user-legacy"))).toBe(
-      "from **unknown@unknown**:\nfollow-up",
+      "💭 from **unknown@unknown**:\nfollow-up",
     );
   });
 });
