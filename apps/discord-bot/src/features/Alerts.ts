@@ -54,19 +54,22 @@ const SENTRY_RSS_ALERT_MB = 512;
 const SENTRY_COUNT_ALERT = 2;
 /**
  * Default generic process rule for "unexpectedly hot" processes.
- * The sustained duration preserves the prior five-sample window semantics:
- * the first sample establishes the CPU-rate baseline, then four 60s intervals
- * must stay hot before alerting.
+ * First page only after the process stays hot for `DEFAULT_PROCESS_SUSTAINED_FOR_MS`
+ * (ten 60s poll ticks by default). The first sample establishes the CPU-rate
+ * baseline; subsequent ticks must stay hot for the full window before alerting.
  *
  * This measures a *rate* (Δcpu / Δwall between ticks), not cumulative CPU time:
  * a long-lived-but-idle process (e.g. one that gathered 200s of CPU over hours
  * yet now moves a few seconds per 10 min) is not a problem and used to re-alert
  * forever. What we want to catch is a process actually pegging CPU or memory for
  * a sustained stretch.
+ *
+ * Defaults are intentionally a bit loose for guest dev servers (e.g. nuxt-dev
+ * sitting ~800 MiB idle): RSS ≥ 850 MiB or CPU ≥ 50% of a core for ≥ 10 min.
  */
 const DEFAULT_PROCESS_CPU_PERCENT = 50; // percent of a single core, averaged over the tick gap
-const DEFAULT_PROCESS_RSS_ALERT_MB = 768;
-const DEFAULT_PROCESS_SUSTAINED_FOR_MS = 4 * POLL_MS;
+const DEFAULT_PROCESS_RSS_ALERT_MB = 850;
+const DEFAULT_PROCESS_SUSTAINED_FOR_MS = 10 * POLL_MS;
 /**
  * First long-turn page threshold and base of the doubling milestone ladder.
  * Pages at 0.25h, 0.5h, 1h, 2h, 4h, … (15m × 2ⁿ) while the turn stays `running`,
