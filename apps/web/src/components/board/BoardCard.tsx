@@ -153,11 +153,11 @@ function BoardCardBody({
             {thread.title}
           </span>
         )}
+        {/* ThreadIdentityMark already falls back to the first participant's
+            channel, so passing the origin alone keeps one copy of that rule. */}
         <ThreadIdentityMark
           environmentId={thread.environmentId}
-          originChannel={
-            thread.originSource?.channel ?? thread.participantSummaries?.[0]?.firstChannel ?? null
-          }
+          originChannel={thread.originSource?.channel}
           participants={thread.participantSummaries}
           className="mt-0.5 shrink-0"
         />
