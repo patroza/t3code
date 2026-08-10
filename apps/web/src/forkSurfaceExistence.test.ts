@@ -242,6 +242,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     const chat = readSrc("components/ChatView.tsx");
     expect(chat).toContain("requestIdentityClaimGate");
     expect(sidebarV2).toContain("ThreadIdentityMark");
+    // The board is a thread surface too: a card has to say where a thread came
+    // from, the same as a sidebar row and the mobile board card.
+    expect(readSrc("components/board/BoardCard.tsx")).toContain("ThreadIdentityMark");
     expect(sidebarV2).toContain("sidebar-ownership-filter-");
     expect(sidebarV1).toContain("ThreadIdentityMark");
     expect(sidebarV1).not.toContain("ThreadIdentityLeading");

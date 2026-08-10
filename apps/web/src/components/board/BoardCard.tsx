@@ -29,6 +29,7 @@ import {
 } from "../ThreadStatusIndicators";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ThreadIdentityMark } from "../identity/ParticipantStack";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   BOARD_DROP_INTENT_OVERLAY_CLASSES,
@@ -125,27 +126,43 @@ function BoardCardBody({
           {relativeTimeLabel}
         </span>
       </div>
-      {rendering.interactive ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                aria-label={`Open thread: ${thread.title}`}
-                data-testid={`board-card-open-${thread.id}`}
-                className="line-clamp-2 w-full cursor-pointer text-left text-sm font-medium text-foreground focus-visible:outline-none"
-                onClick={rendering.onOpenThread}
-                {...rendering.draggableAttributes}
-              />
-            }
-          >
+      {/* Title row carries the source/identity mark trailing the title, the
+          same place the sidebars and the mobile board put it, so a card says
+          who a thread came from without opening it. */}
+      <div className="flex min-w-0 items-start gap-1.5">
+        {rendering.interactive ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={`Open thread: ${thread.title}`}
+                  data-testid={`board-card-open-${thread.id}`}
+                  className="line-clamp-2 min-w-0 flex-1 cursor-pointer text-left text-sm font-medium text-foreground focus-visible:outline-none"
+                  onClick={rendering.onOpenThread}
+                  {...rendering.draggableAttributes}
+                />
+              }
+            >
+              {thread.title}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{thread.title}</TooltipPopup>
+          </Tooltip>
+        ) : (
+          <span className="line-clamp-2 min-w-0 flex-1 text-sm font-medium text-foreground">
             {thread.title}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{thread.title}</TooltipPopup>
-        </Tooltip>
-      ) : (
-        <span className="line-clamp-2 text-sm font-medium text-foreground">{thread.title}</span>
-      )}
+          </span>
+        )}
+        {/* ThreadIdentityMark already falls back to the first participant's
+            channel, so passing the origin alone keeps one copy of that rule. */}
+        <ThreadIdentityMark
+          environmentId={thread.environmentId}
+          originChannel={thread.originSource?.channel}
+          participants={thread.participantSummaries}
+          className="mt-0.5 shrink-0"
+          interactive={rendering.interactive}
+        />
+      </div>
       {thread.branch ? (
         <div className="flex min-w-0 items-center gap-1">
           <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/60">

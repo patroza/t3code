@@ -2,6 +2,8 @@ import { DndContext } from "@dnd-kit/core";
 import {
   DEFAULT_RUNTIME_MODE,
   EnvironmentId,
+  IdentityUsername,
+  PersonId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -111,6 +113,45 @@ describe("BoardCard", () => {
     expect(markup.slice(openButtonStart, openButtonEnd)).not.toContain("#42");
   });
 
+  it("shows where a thread came from", () => {
+    // The mobile board and both sidebars mark the source; the web board did
+    // not, so a Discord-started thread was indistinguishable from a local one.
+    const markup = renderCard(
+      makeThread({ originSource: { channel: "discord", personId: PersonId.make("person-1") } }),
+    );
+
+    expect(markup).toContain('data-testid="source-channel-glyph"');
+    expect(markup).toContain('aria-label="Source discord"');
+  });
+
+  it("shows no source mark when a thread has no source", () => {
+    // The glyph renders nothing rather than reserving space, so a card with no
+    // source keeps the layout it had before the mark existed.
+    const markup = renderCard(makeThread({ originSource: null }));
+
+    expect(markup).not.toContain('data-testid="source-channel-glyph"');
+    expect(markup).not.toContain('data-testid="participant-stack"');
+  });
+
+  it("falls back to a participant's channel when there is no origin", () => {
+    const markup = renderCard(
+      makeThread({
+        originSource: null,
+        participantSummaries: [
+          {
+            personId: PersonId.make("person-1"),
+            username: IdentityUsername.make("ada"),
+            name: "Ada",
+            firstChannel: "jira",
+            firstParticipatedAt: "2026-07-22T09:00:00.000Z",
+          },
+        ],
+      }),
+    );
+
+    expect(markup).toContain('data-testid="participant-stack"');
+  });
+
   it("shows the plan-only indicator only for plan-mode threads", () => {
     const markup = renderCard(makeThread({ interactionMode: "plan" }));
 
@@ -178,6 +219,34 @@ describe("BoardCardDragOverlay", () => {
     expect(markup).not.toContain("<button");
     expect(markup).not.toContain("<a ");
     expect(markup).not.toContain("tabindex=");
+  });
+
+  it("keeps a participant-bearing drag clone out of the tab order", () => {
+    // The clone is aria-hidden, so anything focusable inside it is reachable by
+    // keyboard while being invisible to assistive technology. The identity
+    // mark is a tab stop on a real card and must not be one here.
+    const markup = renderToStaticMarkup(
+      <BoardCardDragOverlay
+        thread={makeThread({
+          participantSummaries: [
+            {
+              personId: PersonId.make("person-1"),
+              username: IdentityUsername.make("ada"),
+              name: "Ada",
+              firstChannel: "discord",
+              firstParticipatedAt: "2026-07-22T09:00:00.000Z",
+            },
+          ],
+        })}
+        project={null}
+        gitStatus={makeGitStatus()}
+        gitStatusPending={false}
+        isSettled={false}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="participant-stack"');
+    expect(markup).not.toContain("tabindex");
   });
 
   it("reflects the pending drop intent so feedback is visible under the card", () => {
