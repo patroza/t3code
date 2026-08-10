@@ -45,17 +45,15 @@ describe("searchSettings", () => {
 
   it("matches normalized title substrings", () => {
     expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
-    // "work" is not a substring of "word wrap". Full catalog includes Tim's
-    // "Worktree remove confirmation" and upstream's project workspace setting
-    // (and not Word wrap).
+    // "work" is not a substring of "word wrap". The full catalog matches the
+    // fork's "Worktree remove confirmation" (and not Word wrap). Upstream's
+    // project workspace setting left this catalog with #5923, which moved
+    // project settings onto contextual project routes.
     expect(
       searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
     ).toEqual([]);
-    expect(
-      searchSettings("work")
-        .map((item) => item.id)
-        .toSorted(),
-    ).toEqual(["project-new-thread-workspace", "worktree-remove-confirmation"].toSorted());
+    expect(searchSettings("work").map((item) => item.id)).toEqual(["worktree-remove-confirmation"]);
+    expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
     expect(searchSettings("xyzzy")).toEqual([]);
   });
 
