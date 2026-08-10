@@ -1,17 +1,24 @@
 import {
   type ChatAttachment,
+  CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
   type MessageId,
+  OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./lifecycle.ts";
-import { Context, Crypto, Data, Effect } from "effect";
+import { Context, Crypto, Data, DateTime, Effect } from "effect";
 import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
-import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import type { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import type { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import type { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
+import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
+import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { setInputType } from "effect/Schedule";
 
 /*
   NTBS architecture:
@@ -42,11 +49,23 @@ import type { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunn
 
 export type T3Context = {
   readonly projectId: ProjectId;
-  readonly revision: string;
+  /**
+   * The starting point for the thread's worktree: the new branch is created
+   * from this ref.
+   *
+   * Usually a branch name such as `main`. Before use it is resolved against
+   * `origin`, so the worktree starts from the latest remote commit even when
+   * the local copy of the branch is behind. A commit SHA is also accepted and
+   * is used as-is.
+   *
+   * Set by the platform-specific inbound code.
+   */
+  readonly baseRef: string;
 };
 
 export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
   reason: string;
+  cause: unknown;
 }> {}
 
 export interface NTBSProcessor<P extends NTBS.PlatformData> {
@@ -186,12 +205,84 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
   adapter: NTBSAdapter<P>,
 ): Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements> =>
   Effect.gen(function* () {
+    const orFail = (reason: string) =>
+      Effect.mapError((cause: unknown) => new NTBSProcessorError({ reason, cause }));
+
     const crypto = yield* Crypto.Crypto;
+    const randomUUID = crypto.randomUUIDv4.pipe(orFail("Failed creating a UUID v4"));
+
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+
+    const gitWorkflowService = yield* GitWorkflowService;
+
+    /**
+     * Resolves where a new thread worktree starts from.
+     *
+     * Fetches `origin` and prefers the remote state of `baseRef`, so a branch name resolves to its latest remote commit even when the local copy is behind.
+     *
+     * When no remote branch with that name exists
+     * (a commit SHA, a tag, a local-only branch, or no reachable remote),
+     * the ref is returned as-is for git to resolve during worktree creation.
+     *
+     * Never fails: an unresolvable ref surfaces later as a worktree-creation error,
+     * which carries the real git cause.
+     *
+     */
+    const resolveWorktreeBase = (input: {
+      readonly cwd: string;
+      readonly baseRef: string;
+    }): Effect.Effect<{ readonly refName: string; readonly baseRefName: string | null }> =>
+      Effect.gen(function* () {
+        // A failed fetch only means we resolve against the last-known remote state
+        // The tracking ref may still exist locally
+        yield* gitWorkflowService
+          .fetchRemote({
+            cwd: input.cwd,
+            remoteName: "origin",
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logDebug("NTBS fetch of origin failed; resolving against local state.", {
+                cwd: input.cwd,
+                cause,
+              }),
+            ),
+          );
+
+        return yield* gitWorkflowService
+          .resolveRemoteTrackingCommit({
+            cwd: input.cwd,
+            refName: input.baseRef,
+            fallbackRemoteName: "origin",
+          })
+          .pipe(
+            Effect.map((resolved) => ({
+              refName: resolved.commitSha,
+              baseRefName: input.baseRef,
+            })),
+            Effect.catch((cause) =>
+              Effect.logDebug("NTBS base ref is not a remote branch; using it as-is", {
+                baseRef: input.baseRef,
+                cwd: input.cwd,
+                cause,
+              }).pipe(
+                Effect.as({
+                  refName: input.baseRef,
+                  baseRefName: null,
+                }),
+              ),
+            ),
+          );
+      });
+
+    const orchestrationEngineService = yield* OrchestrationEngineService;
+
+    const projectScriptRunner = yield* ProjectSetupScriptRunner;
 
     /**
      * Creates an isolated worktree and a new T3 thread.
      *
-     * Uses the supplied project and revision. The thread starts with T3's default
+     * Uses the supplied project and base ref. The thread starts with T3's default
      * title, the project's default model or T3's fallback model, `full-access`
      * runtime mode, and `default` interaction mode.
      *
@@ -200,9 +291,118 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
      * The final title of the thread is generated by T3 after the first turn starts.
      */
     const createT3Thread = (t3Context: T3Context): Effect.Effect<ThreadId, NTBSProcessorError> =>
-      Effect.sync(function () {
-        // TODO: Continue from here
-        const threadId = ThreadId.make("somethread");
+      Effect.gen(function* () {
+        const maybeProject = yield* projectionSnapshotQuery
+          .getProjectShellById(t3Context.projectId)
+          .pipe(orFail("Could not load the T3 Project."));
+
+        const project = yield* Effect.fromOption(maybeProject).pipe(
+          orFail(`T3 project ${t3Context.projectId} does not exist.`),
+        );
+
+        const threadUUID = yield* randomUUID;
+        const threadId = ThreadId.make(threadUUID);
+
+        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        // TODO: Resolve the title in a better way
+        const title = DEFAULT_THREAD_TITLE;
+        const modelSelection =
+          project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+
+        const commandId = CommandId.make(yield* randomUUID);
+
+        // create the isolated branch and worktree
+        const branchName = buildTemporaryWorktreeBranchName(() => threadUUID);
+
+        const base = yield* resolveWorktreeBase({
+          cwd: project.workspaceRoot,
+          baseRef: t3Context.baseRef,
+        });
+
+        const gitWorktree = yield* gitWorkflowService
+          .createWorktree({
+            cwd: project.workspaceRoot,
+            refName: base.refName,
+            ...(base.baseRefName !== null
+              ? {
+                  baseRefName: base.baseRefName,
+                }
+              : {}),
+            newRefName: branchName,
+            path: null,
+            // we run setup scripts later
+            deferDependencyInstall: true,
+          })
+          .pipe(orFail("Could not create the T3 worktree"));
+
+        yield* orchestrationEngineService
+          .dispatch(
+            OrchestrationCommand.make({
+              type: "thread.create",
+              branch: gitWorktree.worktree.refName,
+              worktreePath: gitWorktree.worktree.path,
+              threadId: threadId,
+              title: title,
+              modelSelection: modelSelection,
+              commandId: commandId,
+              createdAt: createdAt,
+              projectId: project.id,
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            }),
+          )
+          .pipe(
+            /*
+              Removes the worktree, but deliberately not its temporary
+              branch: GitWorkflowService has no branch-delete operation
+              (branch retention is an invariant of the thread worktree 
+              lifecycle — see WorktreeLifecycle.cleanupThreadWorktree), so
+              the orphaned `t3/wt-…` ref is an accepted leak. It is a
+              dangling ref to an existing commit and costs nothing beyond
+              ref-listing noise.
+            */
+            Effect.onError(() =>
+              gitWorkflowService
+                .removeWorktree({
+                  path: gitWorktree.worktree.path,
+                  cwd: project.workspaceRoot,
+                  /* We also want garbage collection, we cannot rely
+                     on the directory to be pristine.
+                  */
+                  force: true,
+                })
+                .pipe(
+                  Effect.catch((cleanupErr) =>
+                    Effect.logWarning(
+                      "Failed to remove worktree after thread.create did not complete",
+                      {
+                        threadId,
+                        path: gitWorktree.worktree.path,
+                        cause: cleanupErr,
+                      },
+                    ),
+                  ),
+                ),
+            ),
+            orFail("Failed to create a T3 thread"),
+          );
+
+        yield* projectScriptRunner
+          .runForThread({
+            threadId,
+            projectId: project.id,
+            projectCwd: project.workspaceRoot,
+            worktreePath: gitWorktree.worktree.path,
+          })
+          .pipe(
+            Effect.catch((err) =>
+              Effect.logWarning("NTBS thread setup script failed.", {
+                threadId,
+                cause: err,
+              }),
+            ),
+          );
+
         return threadId;
       });
 
@@ -221,16 +421,12 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const processAdapterRequest = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
       Effect.gen(function* () {
-        const existingRequest = yield* adapter.findByRequest(request).pipe(
-          Effect.mapError(
-            () =>
-              new NTBSProcessorError({
-                reason: "Error getting the existing request in processAdapterRequest",
-              }),
-          ),
-        );
+        const existingRequest = yield* adapter
+          .findByRequest(request)
+          .pipe(orFail("Error getting the existing request in processAdapterRequest"));
+
         if (existingRequest) {
-          return Effect.void;
+          return;
         } else {
           // create the worktree and T3 thread
           // generate the first user message ID and record it with ThreadStarted
@@ -238,7 +434,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
           // start monitoring the turn in the background (TODO: aren't we already subscribing for this?)
           // Attempt to post the acknowledgement independently
         }
-        return Effect.void;
+        return;
       });
 
     const process = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>

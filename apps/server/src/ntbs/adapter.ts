@@ -56,15 +56,13 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
   ) => Effect.Effect<string, AdapterError>;
 
   /**
-   * Finds lifecycle data already recorded for this platform
-   request.
+   * Finds lifecycle data already recorded for this platform request.
    *
-   * The adapter identifies the request using its platform-
-   specific source data.
-   * Returns `null` when no T3 thread has been recorded and 
-    processing may continue.
-   * Any lifecycle state means the request has already started
-   T3 work.
+   * The adapter identifies the request using its platform-specific
+   * source data.
+   * Returns `null` when no T3 thread has been recorded and processing
+   * may continue.
+   * Any lifecycle state means the request has already started T3 work.
    */
   readonly findByRequest: (
     request: NTBS.NTBSInput<P>,

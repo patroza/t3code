@@ -24,9 +24,9 @@ Storage and retention are adapter implementation details, not architecture decis
 
 ## Passing T3 context
 
-An incoming platform event carries both platform data and the T3 context needed to start work, such as the project, revision, and execution context. The adapter forwards that T3 context to T3 when it creates the new thread.
+An incoming platform event carries both platform data and the T3 context needed to start work, such as the project, base ref, and execution context. The base ref is the starting point for the thread's worktree — usually a branch name such as `main`, resolved against `origin` before use, or a commit SHA used as-is. The adapter forwards that T3 context to T3 when it creates the new thread.
 
-`NtbsEvent` does not retain the project, revision, or execution context as lifecycle data. Once T3 creates the thread, T3 owns that information. Keeping copies in `NtbsEvent` would require the adapter to keep them in sync with T3.
+`NtbsEvent` does not retain the project, base ref, or execution context as lifecycle data. Once T3 creates the thread, T3 owns that information. Keeping copies in `NtbsEvent` would require the adapter to keep them in sync with T3.
 
 ## Receiving T3 outcomes
 
