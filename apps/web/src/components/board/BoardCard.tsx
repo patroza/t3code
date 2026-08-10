@@ -160,6 +160,7 @@ function BoardCardBody({
           originChannel={thread.originSource?.channel}
           participants={thread.participantSummaries}
           className="mt-0.5 shrink-0"
+          interactive={rendering.interactive}
         />
       </div>
       {thread.branch ? (

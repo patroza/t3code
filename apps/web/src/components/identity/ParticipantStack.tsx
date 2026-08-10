@@ -19,6 +19,12 @@ export function ParticipantStack(props: {
   readonly participants: ReadonlyArray<ThreadParticipantSummary>;
   readonly channel?: string | null | undefined;
   readonly className?: string | undefined;
+  /**
+   * When false the stack is inert: no tab stop and no tooltip trigger. Drag
+   * clones are `aria-hidden`, and a focusable element inside one is reachable
+   * by keyboard while being hidden from assistive technology.
+   */
+  readonly interactive?: boolean | undefined;
 }) {
   const people = props.participants;
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
@@ -48,7 +54,7 @@ export function ParticipantStack(props: {
       )}
       data-testid="participant-stack"
       aria-label={accessibleLabel}
-      tabIndex={0}
+      {...(props.interactive === false ? {} : { tabIndex: 0 })}
     >
       <span className="relative inline-flex shrink-0 pr-0.5">
         <IdentityAvatar
@@ -158,6 +164,8 @@ export function ThreadIdentityMark(props: {
   readonly originChannel?: string | null | undefined;
   readonly participants?: ReadonlyArray<ThreadParticipantSummary> | null | undefined;
   readonly className?: string | undefined;
+  /** Pass false inside an aria-hidden clone; see {@link ParticipantStack}. */
+  readonly interactive?: boolean | undefined;
 }) {
   const participants = props.participants ?? [];
   const channel = props.originChannel ?? participants[0]?.firstChannel ?? null;
@@ -170,6 +178,7 @@ export function ThreadIdentityMark(props: {
       participants={participants}
       channel={channel}
       className={props.className}
+      interactive={props.interactive}
     />
   );
 }
