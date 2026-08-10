@@ -135,10 +135,8 @@ import {
   requestIdentityClaimGate,
 } from "./identity/IdentityClaimGate";
 import {
-  claimPersonIdForEnvironment,
   DEFAULT_OWNERSHIP_RELATION,
   isOwnershipRelation,
-  threadMatchesMine,
   type OwnershipRelation,
 } from "@t3tools/client-runtime/state/identity";
 import { identityClaimPersonIdByEnvironmentAtom } from "../state/identity";
@@ -212,12 +210,9 @@ import {
   LIST_THREAD_GROUPING_STORAGE_KEY,
   ListEnvironmentFilterSchema,
   ListHideSettledSchema,
-  parseSidebarOwnershipFilter,
   SIDEBAR_OWNERSHIP_FILTER_LABELS,
-  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_FILTERS,
   SIDEBAR_OWNERSHIP_RELATION_LABELS,
-  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_RELATIONS,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
   WEB_THREAD_GROUPING_LABELS,

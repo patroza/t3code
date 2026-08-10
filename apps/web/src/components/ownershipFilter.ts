@@ -35,7 +35,21 @@ import {
   type SidebarOwnershipFilter,
 } from "./listEnvironmentFilter";
 
+/**
+ * Last value this tab wrote, kept so a selection still takes effect when
+ * persistence is unavailable.
+ *
+ * Storage can throw on quota or a restricted browser context. The surfaces
+ * used to hold their own React state, so the filter kept working for the
+ * session and only failed to survive a reload; reading straight back out of
+ * storage would instead make the click do nothing at all. Cleared when another
+ * tab writes, so an external value still wins.
+ */
+const sessionValues = new Map<string, string>();
+
 function readRaw(key: string): string | null {
+  const pending = sessionValues.get(key);
+  if (pending !== undefined) return pending;
   try {
     return window.localStorage.getItem(key);
   } catch {
@@ -44,11 +58,11 @@ function readRaw(key: string): string | null {
 }
 
 function writeRaw(key: string, value: string) {
+  sessionValues.set(key, value);
   try {
     window.localStorage.setItem(key, value);
   } catch {
-    // A storage failure must not take the menu down with it; the selection
-    // simply does not survive a reload.
+    // Session-only: the selection applies now but will not survive a reload.
   }
   dispatchLocalStorageChange(key);
 }
@@ -56,7 +70,11 @@ function writeRaw(key: string, value: string) {
 function subscribeToKey(key: string) {
   return (onStoreChange: () => void) => {
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === key) onStoreChange();
+      // `clear()` in another tab reports a null key, meaning everything went.
+      if (event.key !== null && event.key !== key) return;
+      // Another tab is now the source of truth for this key.
+      sessionValues.delete(key);
+      onStoreChange();
     };
     const handleLocal = (event: CustomEvent<LocalStorageChangeDetail>) => {
       if (event.detail.key === key) onStoreChange();
@@ -76,6 +94,24 @@ const readMode = () => readRaw(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY);
 const readRelation = () => readRaw(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
 // Server render has no storage; both fall back to the documented defaults.
 const readNothing = () => null;
+
+/**
+ * The store the hook is built on, exposed so the synchronisation contract —
+ * a write notifies every subscriber and is readable immediately — can be
+ * tested directly. Rendering two components and diffing them would prove less
+ * and break more.
+ */
+export const ownershipFilterStore = {
+  readMode,
+  readRelation,
+  subscribeToMode,
+  subscribeToRelation,
+  setMode: (value: SidebarOwnershipFilter) => writeRaw(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY, value),
+  setRelation: (value: OwnershipRelation) =>
+    writeRaw(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY, value),
+  /** Test-only: drops the session fallback so cases start from storage. */
+  resetSessionValues: () => sessionValues.clear(),
+} as const;
 
 export interface OwnershipFilterState {
   readonly mode: SidebarOwnershipFilter;

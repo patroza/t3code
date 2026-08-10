@@ -153,6 +153,7 @@ import {
 } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
+import { buildOwnershipPredicate, useOwnershipFilter } from "./ownershipFilter";
 import { Kbd } from "./ui/kbd";
 import {
   getArm64IntelBuildWarningDescription,
@@ -261,10 +262,8 @@ import {
   ListHideSettledSchema,
   ListProjectFilterSchema,
   SIDEBAR_OWNERSHIP_FILTER_LABELS,
-  SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_FILTERS,
   SIDEBAR_OWNERSHIP_RELATION_LABELS,
-  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
   SIDEBAR_OWNERSHIP_RELATIONS,
   SIDEBAR_V2_SETTLED_RECENCY_HEADERS_STORAGE_KEY,
   SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY,
@@ -280,7 +279,6 @@ import {
   isWebListMode,
   isWebThreadGrouping,
   matchesEnvironmentFilter,
-  parseSidebarOwnershipFilter,
   resolveSelectedEnvironmentIds,
   toggleEnvironmentId,
   usesFlatThreadGrouping,
@@ -1355,23 +1353,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   });
   const openPrLink = useOpenPrLink();
   const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
-  const ownershipMatchedThreads = useMemo(
+  const ownershipPredicate = useMemo(
     () =>
-      sidebarThreads.filter((thread) =>
-        threadMatchesMine({
-          claimPersonId: claimPersonIdForEnvironment(
-            claimPersonIdByEnvironment,
-            thread.environmentId,
-          ),
-          originPersonId: thread.originSource?.personId ?? null,
-          participantPersonIds: (thread.participantSummaries ?? []).map(
-            (participant) => participant.personId,
-          ),
-          mode: ownershipFilter,
-          relation: ownershipRelation,
-        }),
-      ),
-    [claimPersonIdByEnvironment, ownershipFilter, ownershipRelation, sidebarThreads],
+      buildOwnershipPredicate({
+        claimPersonIdByEnvironment,
+        mode: ownershipFilter,
+        relation: ownershipRelation,
+      }),
+    [claimPersonIdByEnvironment, ownershipFilter, ownershipRelation],
+  );
+  const ownershipMatchedThreads = useMemo(
+    () => sidebarThreads.filter((thread) => ownershipPredicate(thread)),
+    [ownershipPredicate, sidebarThreads],
   );
   const sidebarThreadByKey = useMemo(
     () =>
@@ -5111,40 +5104,15 @@ export default function LegacySidebar() {
     DEFAULT_HIDE_SETTLED_PROJECTS,
     ListHideSettledSchema,
   );
-  const [ownershipFilter, setOwnershipFilter] = useState<SidebarOwnershipFilter>(() => {
-    try {
-      return parseSidebarOwnershipFilter(
-        window.localStorage.getItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY),
-      );
-    } catch {
-      return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
-    }
-  });
-  const handleOwnershipFilterChange = useCallback((filter: SidebarOwnershipFilter) => {
-    setOwnershipFilter(filter);
-    try {
-      window.localStorage.setItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY, filter);
-    } catch {
-      // ignore
-    }
-  }, []);
-  const [ownershipRelation, setOwnershipRelation] = useState<OwnershipRelation>(() => {
-    try {
-      const raw = window.localStorage.getItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
-      if (isOwnershipRelation(raw)) return raw;
-    } catch {
-      // ignore
-    }
-    return DEFAULT_OWNERSHIP_RELATION;
-  });
-  const handleOwnershipRelationChange = useCallback((relation: OwnershipRelation) => {
-    setOwnershipRelation(relation);
-    try {
-      window.localStorage.setItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY, relation);
-    } catch {
-      // ignore
-    }
-  }, []);
+  // Same shared selection as the v2 sidebar and the Board: this one held its
+  // own state and wrote the keys directly, so a change here never reached a
+  // Board mounted beside it.
+  const {
+    mode: ownershipFilter,
+    relation: ownershipRelation,
+    setMode: handleOwnershipFilterChange,
+    setRelation: handleOwnershipRelationChange,
+  } = useOwnershipFilter();
   const hideSettledThreads = usesProjectThreadGrouping(storedThreadGrouping)
     ? hideSettledProjects
     : hideSettledRecent;

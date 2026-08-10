@@ -255,10 +255,16 @@ describe("fork surface existence (anti stack-drop)", () => {
     // predicate rather than each re-deriving the call.
     const board = readSrc("components/board/BoardView.tsx");
     const sidebar = readSrc("components/Sidebar.tsx");
-    for (const source of [board, sidebar]) {
+    // The legacy sidebar is still selectable, and it wrote the same keys from
+    // its own state without notifying anyone — so a change there did not reach
+    // a Board either.
+    const legacySidebar = readSrc("components/LegacySidebar.tsx");
+    for (const source of [board, sidebar, legacySidebar]) {
       expect(source).toContain("useOwnershipFilter()");
       expect(source).toContain("buildOwnershipPredicate({");
       expect(source).toContain("ownershipPredicate(thread)");
+      // Nobody may keep a private copy of the selection again.
+      expect(source).not.toContain("window.localStorage.setItem(SIDEBAR_OWNERSHIP");
     }
   });
 
