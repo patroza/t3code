@@ -3104,6 +3104,7 @@ const RECENT_PROJECT_BADGE_CLASSES = [
 const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   entry: SidebarRecentThread;
   isActive: boolean;
+  openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   navigateToThread: (threadRef: ScopedThreadRef) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
@@ -3140,6 +3141,22 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   const environment = useEnvironment(thread.environmentId);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const openPrLink = useOpenPrLink();
+  const { isActive, navigateToThread, openPullRequestsInRightPanel } = props;
+  // Same contract as the project rows: open in the right panel when enabled,
+  // and bring the thread into view so the panel has something to sit beside.
+  const handleRecentPrClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, url: string) => {
+      const openedInRightPanel = openPrLink(
+        event,
+        url,
+        openPullRequestsInRightPanel ? threadRef : undefined,
+      );
+      if (openedInRightPanel && openPullRequestsInRightPanel && !isActive) {
+        navigateToThread(threadRef);
+      }
+    },
+    [isActive, navigateToThread, openPrLink, openPullRequestsInRightPanel, threadRef],
+  );
   const confirmThreadArchive = useClientSettings<boolean>(
     (settings) => settings.confirmThreadArchive,
   );
@@ -3735,7 +3752,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                           "shrink-0 cursor-pointer font-mono text-xs hover:underline outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                           prStatus.colorClass,
                         )}
-                        onClick={(event) => openPrLink(event, prStatus.url)}
+                        onClick={(event) => handleRecentPrClick(event, prStatus.url)}
                       />
                     }
                   >
@@ -3966,6 +3983,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
 
 const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
   recentThreads: readonly SidebarRecentThread[];
+  openPullRequestsInRightPanel: boolean;
   /**
    * When true, partition by recency. Section headers render only when more
    * than one non-empty bucket is present (Last Hour / Earlier Today / …).
@@ -4144,6 +4162,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     const threadKey = scopedThreadKey(scopeThreadRef(entry.thread.environmentId, entry.thread.id));
     return (
       <SidebarRecentThreadRow
+        openPullRequestsInRightPanel={props.openPullRequestsInRightPanel}
         key={threadKey}
         entry={entry}
         isActive={threadKey === props.routeThreadKey}
@@ -4887,6 +4906,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       {showFlatOrRecencyList ? (
         <SidebarRecentThreads
           recentThreads={recentThreads}
+          openPullRequestsInRightPanel={openPullRequestsInRightPanel}
           groupByRecency={threadGrouping === "recency"}
           hideSettledThreads={hideSettledThreads}
           routeThreadKey={routeThreadKey}

@@ -11,8 +11,6 @@ import type { DesktopApplicationSelection } from "@t3tools/contracts";
 
 import * as MacApplicationIcon from "./MacApplicationIcon.ts";
 
-const CONFIRM_BUTTON_INDEX = 1;
-
 export class ElectronDialogPickFolderError extends Schema.TaggedErrorClass<ElectronDialogPickFolderError>()(
   "ElectronDialogPickFolderError",
   {
@@ -56,20 +54,6 @@ export class ElectronDialogPickFilesError extends Schema.TaggedErrorClass<Electr
   }
 }
 
-export class ElectronDialogConfirmError extends Schema.TaggedErrorClass<ElectronDialogConfirmError>()(
-  "ElectronDialogConfirmError",
-  {
-    ownerWindowId: Schema.NullOr(Schema.Number),
-    promptLength: Schema.Number,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    const owner = this.ownerWindowId === null ? "the application" : `window ${this.ownerWindowId}`;
-    return `Failed to open an Electron confirmation dialog for ${owner} with a ${this.promptLength}-character prompt.`;
-  }
-}
-
 export class ElectronDialogShowMessageBoxError extends Schema.TaggedErrorClass<ElectronDialogShowMessageBoxError>()(
   "ElectronDialogShowMessageBoxError",
   {
@@ -104,7 +88,6 @@ export const ElectronDialogError = Schema.Union([
   ElectronDialogPickFolderError,
   ElectronDialogPickApplicationError,
   ElectronDialogPickFilesError,
-  ElectronDialogConfirmError,
   ElectronDialogShowMessageBoxError,
   ElectronDialogShowErrorBoxError,
 ]);
@@ -126,11 +109,6 @@ export interface ElectronDialogPickFilesInput {
   readonly filters: readonly Electron.FileFilter[];
 }
 
-export interface ElectronDialogConfirmInput {
-  readonly owner: Option.Option<Electron.BrowserWindow>;
-  readonly message: string;
-}
-
 export class ElectronDialog extends Context.Service<
   ElectronDialog,
   {
@@ -146,9 +124,6 @@ export class ElectronDialog extends Context.Service<
     readonly pickFiles: (
       input: ElectronDialogPickFilesInput,
     ) => Effect.Effect<readonly string[], ElectronDialogPickFilesError>;
-    readonly confirm: (
-      input: ElectronDialogConfirmInput,
-    ) => Effect.Effect<boolean, ElectronDialogConfirmError>;
     readonly showMessageBox: (
       options: Electron.MessageBoxOptions,
     ) => Effect.Effect<Electron.MessageBoxReturnValue, ElectronDialogShowMessageBoxError>;
@@ -266,39 +241,6 @@ export const make = Effect.gen(function* () {
         suggestedName: NodePath.basename(applicationPath, NodePath.extname(applicationPath)),
         iconDataUrl,
       });
-    }),
-    confirm: Effect.fn("desktop.electron.dialog.confirm")(function* (input) {
-      const normalizedMessage = input.message.trim();
-      if (normalizedMessage.length === 0) {
-        return false;
-      }
-
-      const options = {
-        type: "question" as const,
-        buttons: ["No", "Yes"],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-        message: normalizedMessage,
-      };
-      const ownerWindowId = Option.match(input.owner, {
-        onNone: () => null,
-        onSome: (owner) => owner.id,
-      });
-      const result = yield* Effect.tryPromise({
-        try: () =>
-          Option.match(input.owner, {
-            onNone: () => Electron.dialog.showMessageBox(options),
-            onSome: (owner) => Electron.dialog.showMessageBox(owner, options),
-          }),
-        catch: (cause) =>
-          new ElectronDialogConfirmError({
-            ownerWindowId,
-            promptLength: normalizedMessage.length,
-            cause,
-          }),
-      });
-      return result.response === CONFIRM_BUTTON_INDEX;
     }),
     showMessageBox: (options) =>
       Effect.tryPromise({
