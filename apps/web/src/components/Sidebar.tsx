@@ -201,6 +201,7 @@ import {
   MenuTrigger,
 } from "./ui/menu";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { buildOwnershipPredicate, useOwnershipFilter } from "./ownershipFilter";
 import {
   DEFAULT_SIDEBAR_OWNERSHIP_FILTER,
   DEFAULT_SIDEBAR_V2_SETTLED_SHELF_EXPANDED,
@@ -1822,26 +1823,25 @@ export default function Sidebar() {
       ),
     [environments],
   );
-  const [ownershipFilter, setOwnershipFilter] = useState<SidebarOwnershipFilter>(() => {
-    try {
-      return parseSidebarOwnershipFilter(
-        window.localStorage.getItem(SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY),
-      );
-    } catch {
-      return DEFAULT_SIDEBAR_OWNERSHIP_FILTER;
-    }
-  });
-  const [ownershipRelation, setOwnershipRelation] = useState<OwnershipRelation>(() => {
-    try {
-      const raw = window.localStorage.getItem(SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY);
-      if (isOwnershipRelation(raw)) return raw;
-    } catch {
-      return DEFAULT_OWNERSHIP_RELATION;
-    }
-    return DEFAULT_OWNERSHIP_RELATION;
-  });
+  // Shared with the Board so the selection applies to both while they are on
+  // screen together, rather than being a sidebar-local view of the same data.
+  const {
+    mode: ownershipFilter,
+    relation: ownershipRelation,
+    setMode: setOwnershipFilter,
+    setRelation: setOwnershipRelation,
+  } = useOwnershipFilter();
   // Per-environment claims (not primary-only): smart has no map while t3vm does.
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
+  const ownershipPredicate = useMemo(
+    () =>
+      buildOwnershipPredicate({
+        claimPersonIdByEnvironment,
+        mode: ownershipFilter,
+        relation: ownershipRelation,
+      }),
+    [claimPersonIdByEnvironment, ownershipFilter, ownershipRelation],
+  );
 
   // Shared with classic list / Board so multi-env filters (e.g. hide t3vm) stick
   // when switching sidebars.
@@ -2103,18 +2103,7 @@ export default function Sidebar() {
         matchesEnvironmentFilter(thread.environmentId, selectedEnvironmentIds) &&
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)) &&
-        threadMatchesMine({
-          claimPersonId: claimPersonIdForEnvironment(
-            claimPersonIdByEnvironment,
-            thread.environmentId,
-          ),
-          originPersonId: thread.originSource?.personId ?? null,
-          participantPersonIds: (thread.participantSummaries ?? []).map(
-            (participant) => participant.personId,
-          ),
-          mode: ownershipFilter,
-          relation: ownershipRelation,
-        }),
+        ownershipPredicate(thread),
     );
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
@@ -2175,11 +2164,9 @@ export default function Sidebar() {
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
-    claimPersonIdByEnvironment,
+    ownershipPredicate,
     nowMinute,
     orderForThreadGrouping,
-    ownershipFilter,
-    ownershipRelation,
     scopedProjectKeys,
     selectedEnvironmentIds,
     serverConfigs,
@@ -3678,14 +3665,6 @@ export default function Sidebar() {
                         onValueChange={(value) => {
                           if (value !== "any" && value !== "mine" && value !== "theirs") return;
                           setOwnershipFilter(value);
-                          try {
-                            window.localStorage.setItem(
-                              SIDEBAR_OWNERSHIP_FILTER_STORAGE_KEY,
-                              value,
-                            );
-                          } catch {
-                            // ignore
-                          }
                         }}
                       >
                         {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
@@ -3713,14 +3692,6 @@ export default function Sidebar() {
                             onValueChange={(value) => {
                               if (!isOwnershipRelation(value)) return;
                               setOwnershipRelation(value);
-                              try {
-                                window.localStorage.setItem(
-                                  SIDEBAR_OWNERSHIP_RELATION_STORAGE_KEY,
-                                  value,
-                                );
-                              } catch {
-                                // ignore
-                              }
                             }}
                           >
                             {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
