@@ -2,7 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  type MessageId,
+  MessageId,
   OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectId,
@@ -18,7 +18,6 @@ import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
-import { setInputType } from "effect/Schedule";
 
 /*
   NTBS architecture:
@@ -450,7 +449,23 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
             return;
           } else {
             // create the worktree and T3 thread
+            const threadId = yield* createT3Thread(t3Context);
             // generate the first user message ID and record it with ThreadStarted
+            const userMessageId = MessageId.make(yield* randomUUID);
+
+            const threadStarted: NTBS.ThreadStarted<P> = {
+              ...request,
+              state: "thread.started",
+              t3Data: {
+                threadId,
+                userMessageId,
+              },
+            };
+
+            yield* adapter
+              .save(threadStarted)
+              .pipe(orFail("Failed to record the started NTBS thread"));
+
             // Start the first T3 turn with that message Id, the snapshot and attachments
             // start monitoring the turn in the background (TODO: aren't we already subscribing for this?)
             // Attempt to post the acknowledgement independently
