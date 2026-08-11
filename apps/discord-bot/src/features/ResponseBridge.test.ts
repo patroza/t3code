@@ -1343,6 +1343,19 @@ describe("rewriteMarkdownLocalFileLinksForDiscord", () => {
     expect(rewritten).toBe("report.csv (attached below)");
   });
 
+  it("rewrites oversized local files to temporary Azure download links", () => {
+    const rewritten = rewriteMarkdownLocalFileLinksForDiscord({
+      text: "[big.mp4](/tmp/big.mp4)",
+      githubUrlsBySrc: new Map(),
+      attachedFileNames: new Set(),
+      oversizedByName: new Set(["big.mp4"]),
+      externalUrlsByName: new Map([
+        ["big.mp4", "https://example.blob.core.windows.net/c/big?sv=1&sig=abc"],
+      ]),
+    });
+    expect(rewritten).toBe("[big.mp4](https://example.blob.core.windows.net/c/big?sv=1&sig=abc)");
+  });
+
   it("keeps attachable documents as attachments even when source refs become links", () => {
     const rewritten = rewriteMarkdownLocalFileLinksForDiscord({
       text: [
