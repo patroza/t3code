@@ -22,6 +22,7 @@ import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import type { OnDiffLineClickProps } from "@pierre/diffs";
 
 /*
   NTBS architecture:
@@ -184,22 +185,6 @@ type TurnStatus = {
   /** The observed turn statistics, or null while the turn is still pending. */
   readonly stats: TurnStats | null;
 };
-
-/**
- * Monitors one started T3 turn without blocking request processing.
- *
- * Starts in the background immediately after `startT3Turn` succeeds. It checks
- * the turn 30 minutes after its original `requestedAt` time, then checks again
- * at 45 minutes if it is still running. Startup recovery restarts this monitor
- * from the original `requestedAt` time rather than resetting the deadline.
- *
- * If the turn is still running after 45 minutes, interrupts it, waits for T3 to
- * confirm it stopped, posts a timeout response, and records `ResponsePosted`.
- * The timed-out thread remains unarchived for inspection or manual retry.
- */
-declare const monitorT3Turn: <P extends NTBS.PlatformData>(
-  state: NTBS.ThreadCreated<P>,
-) => Effect.Effect<void, NTBSProcessorError>;
 
 /**
  * Provider runtimes (like Claude Code) emit `turn.completed` events.
@@ -408,7 +393,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
      * The first observation establishes the baseline and reports `progressed` as null.
      * Nonterminal observations replace the stored baseline; terminal observations remove it.
      */
-    const getProgress = (
+    const checkProgress = (
       threadId: ThreadId,
     ): Effect.Effect<
       { readonly status: TurnStatus; readonly progressed: boolean | null },
@@ -444,6 +429,39 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
         }
 
         return { status: fresh, progressed };
+      });
+
+    // TODO: These guys should come from some config
+    const CHECK_INTERVAL = "15 seconds";
+    const MAX_NO_PROGRESS_CHECKS = 12;
+
+    const monitorT3Turn = (threadId: ThreadId): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        let consecutiveNoProgressChecks = 0;
+
+        while (true) {
+          const result = yield* checkProgress(threadId);
+          const stats = result.status.stats;
+
+          if (stats !== null && stats.state !== "running") {
+            // it has completed already
+            return;
+          }
+
+          if (result.progressed === true) {
+            // reset the counter
+            consecutiveNoProgressChecks = 0;
+          } else if (result.progressed === false) {
+            consecutiveNoProgressChecks += 1;
+          }
+
+          if (consecutiveNoProgressChecks >= MAX_NO_PROGRESS_CHECKS) {
+            yield* Effect.logDebug("No progress for 2 minutes, something's sketchy, check");
+            return;
+          }
+
+          yield* Effect.sleep(CHECK_INTERVAL);
+        }
       });
 
     /**
