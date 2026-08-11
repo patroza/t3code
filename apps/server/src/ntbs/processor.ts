@@ -13,7 +13,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./lifecycle.ts";
-import { Context, Crypto, Data, DateTime, Effect } from "effect";
+import { Context, Crypto, Data, DateTime, Effect, Schedule } from "effect";
 import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -483,7 +483,19 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
         let consecutiveNoProgressChecks = 0;
 
         while (true) {
-          const result = yield* checkProgress(userMessageId);
+          const result = yield* checkProgress(userMessageId).pipe(
+            Effect.retry({
+              times: 3,
+              schedule: Schedule.spaced(CHECK_INTERVAL),
+            }),
+            Effect.tapError((cause) =>
+              Effect.logWarning("Failed checking T3 turn progress after retries", {
+                userMessageId,
+                cause,
+              }),
+            ),
+          );
+
           const stats = result.status.stats;
 
           if (stats !== null && stats.state !== "running") {
