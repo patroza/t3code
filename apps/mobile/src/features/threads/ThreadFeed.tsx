@@ -1651,10 +1651,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // Fork: the key goes filled once per thread open and stays there. Toggling
   // it back on a feed that briefly empties during sync remounts mid-read,
   // which looks like the conversation was cleared and reloaded.
-  const listMountThreadIdRef = useRef(props.threadId);
+  // Keyed on the environment-scoped key, not the bare thread id: two
+  // environments can hold the same id, and latching on the id alone would
+  // carry "already filled" across the switch and skip the remount the new
+  // feed needs to pick up the composer inset.
+  const listMountThreadKeyRef = useRef(feedThreadKey);
   const sawFilledFeedRef = useRef(props.feed.length > 0);
-  if (listMountThreadIdRef.current !== props.threadId) {
-    listMountThreadIdRef.current = props.threadId;
+  if (listMountThreadKeyRef.current !== feedThreadKey) {
+    listMountThreadKeyRef.current = feedThreadKey;
     sawFilledFeedRef.current = props.feed.length > 0;
   } else if (props.feed.length > 0) {
     sawFilledFeedRef.current = true;
