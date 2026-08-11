@@ -765,6 +765,79 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status resolves the PR by number for an untracked prNNNN checkout", () =>
+    Effect.gen(function* () {
+      // `git fetch origin <head-branch>:pr2182` — the review-a-PR habit: the
+      // PR head lands in a renamed local branch with no upstream tracking, so
+      // no head selector can name the PR. The number in the branch name is
+      // the only remaining link.
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "pr2182"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          // Every head-selector list comes back empty…
+          prListSequence: [],
+          // …and `gh pr view 2182` names the real head branch.
+          pullRequest: {
+            number: 2182,
+            title: "Dedupe order ids in Mako import batches",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/2182",
+            baseRefName: "main",
+            headRefName: "fix/mako-import-batch-dedupe-order-ids",
+            state: "open",
+          },
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+      expect(status.pr).toEqual({
+        number: 2182,
+        title: "Dedupe order ids in Mako import batches",
+        url: "https://github.com/pingdotgg/codething-mvp/pull/2182",
+        baseRef: "main",
+        headRef: "fix/mako-import-batch-dedupe-order-ids",
+        state: "open",
+      });
+      expect(ghCalls.some((call) => call.startsWith("pr view 2182"))).toBe(true);
+    }),
+  );
+
+  it.effect("status does not resolve by number once a prNNNN branch gains tracking", () =>
+    Effect.gen(function* () {
+      // With tracking, the head selector is precise; the numeric fallback must
+      // stay out of the way even when the selector search finds nothing (the
+      // tracked head may simply have no PR yet).
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "pr2182"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "pr2182:some-head-branch"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [],
+          pullRequest: {
+            number: 2182,
+            title: "Unrelated PR that happens to share the number",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/2182",
+            baseRefName: "main",
+            headRefName: "somebody/elses-branch",
+            state: "open",
+          },
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+      expect(status.pr).toBeNull();
+      expect(ghCalls.some((call) => call.startsWith("pr view"))).toBe(false);
+    }),
+  );
+
   it.effect("status trims PR metadata returned by gh before publishing it", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

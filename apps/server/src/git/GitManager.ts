@@ -1397,6 +1397,27 @@ export const make = Effect.gen(function* () {
 
     const parsed = Arr.sort(parsedByNumber.values(), pullRequestUpdatedAtDescOrder);
 
+    // A checkout made by fetching a PR head into a locally renamed branch
+    // (`git fetch origin <head-branch>:pr2182`) has no upstream tracking, so
+    // no head selector above can ever name the PR and the thread stays
+    // badge-less forever. The branch name itself encodes the PR number, so
+    // resolve it directly. Gated on headBranch === localBranch: a tracked
+    // branch already produced the precise head selector, and this must not
+    // override it with a number that merely resembles the branch name.
+    const numericPrBranch = /^pr[-_]?(\d+)$/i.exec(headContext.localBranch);
+    if (
+      parsed.length === 0 &&
+      numericPrBranch?.[1] !== undefined &&
+      headContext.headBranch === headContext.localBranch
+    ) {
+      const byNumber = yield* (yield* sourceControlProvider(cwd))
+        .getChangeRequest({ cwd, reference: numericPrBranch[1] })
+        .pipe(Effect.orElseSucceed(() => null));
+      if (byNumber !== null) {
+        return toPullRequestInfo(byNumber);
+      }
+    }
+
     const latestOpenPr = parsed.find((pr) => pr.state === "open");
     if (latestOpenPr) {
       return latestOpenPr;
