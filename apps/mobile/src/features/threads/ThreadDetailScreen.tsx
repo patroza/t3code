@@ -558,6 +558,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     });
   }, [freeze, scrollMessageToEnd]);
 
+  // Fork: upstream's pill is icon-only. The fork's feed chip said "New
+  // activity" when something arrived while the reader was away, which is the
+  // difference between "you scrolled up" and "you are missing something". The
+  // feed reports it now and the pill carries the dot.
+  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
   const isDarkMode = useColorScheme() === "dark";
 
@@ -622,6 +627,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             usesAutomaticContentInsets={props.usesAutomaticContentInsets}
             onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
             onEndFollowEnabledChange={setEndFollowEnabled}
+            onUnreadActivityChange={setHasUnreadActivity}
             skills={selectedProviderSkills}
             loadEarlier={props.loadEarlier ?? null}
           />
@@ -675,21 +681,33 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     }}
                   >
                     <ControlPill
-                      accessibilityLabel="Scroll to end"
+                      accessibilityLabel={
+                        hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"
+                      }
                       activateOnPressIn
                       className="h-9 w-9 bg-transparent"
                       icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
                       onPress={handleScrollToEnd}
                     />
+                    {hasUnreadActivity ? (
+                      <View className="absolute right-1 top-1 size-1.5 rounded-full bg-blue-500" />
+                    ) : null}
                   </LiquidGlassView>
                 ) : (
-                  <ControlPill
-                    accessibilityLabel="Scroll to end"
-                    activateOnPressIn
-                    className="h-9 w-9 border border-border bg-card shadow-md shadow-black/10"
-                    icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
-                    onPress={handleScrollToEnd}
-                  />
+                  <View>
+                    <ControlPill
+                      accessibilityLabel={
+                        hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"
+                      }
+                      activateOnPressIn
+                      className="h-9 w-9 border border-border bg-card shadow-md shadow-black/10"
+                      icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
+                      onPress={handleScrollToEnd}
+                    />
+                    {hasUnreadActivity ? (
+                      <View className="absolute right-1 top-1 size-1.5 rounded-full bg-blue-500" />
+                    ) : null}
+                  </View>
                 )}
               </Animated.View>
             ) : null}

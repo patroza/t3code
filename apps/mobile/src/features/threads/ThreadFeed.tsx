@@ -156,6 +156,8 @@ export interface ThreadFeedProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
+  /** Fork: something arrived while the reader was away from the live edge. */
+  readonly onUnreadActivityChange?: (hasUnread: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: {
@@ -1361,11 +1363,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const userScrollSessionRef = useRef(false);
   // Fork: the scroll-to-latest pill reports whether anything arrived while the
   // reader was away, so returning to the live edge always clears it.
-  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
+  const hasUnreadActivityRef = useRef(false);
   const setEndFollow = useCallback(
     (enabled: boolean) => {
       if (enabled) {
-        setHasUnreadActivity(false);
+        if (hasUnreadActivityRef.current) {
+          hasUnreadActivityRef.current = false;
+          props.onUnreadActivityChange?.(false);
+        }
       }
       if (endFollowEnabledRef.current === enabled) {
         return;
@@ -1374,7 +1379,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       setEndFollowEnabled(enabled);
       props.onEndFollowEnabledChange?.(enabled);
     },
-    [props.onEndFollowEnabledChange],
+    [props.onEndFollowEnabledChange, props.onUnreadActivityChange],
   );
   const transitionEndFollow = useCallback(
     (event: ThreadFeedLiveFollowEvent) => {
@@ -1427,7 +1432,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const isDarkMode = useColorScheme() === "dark";
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const userBubbleColor = useThemeColor("--color-user-bubble");
-  const scrollToLatestBackground = useThemeColor("--color-card");
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
       const presentation = resolveMarkdownLinkPresentation(href);
@@ -1604,7 +1608,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       (previous.feed !== props.feed || previous.latestTurn !== props.latestTurn) &&
       !endFollowEnabledRef.current
     ) {
-      setHasUnreadActivity(true);
+      if (!hasUnreadActivityRef.current) {
+        hasUnreadActivityRef.current = true;
+        props.onUnreadActivityChange?.(true);
+      }
     }
   }, [props.feed, props.latestTurn]);
 
@@ -1634,12 +1641,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.latestTurn,
     ],
   );
-
-  const scrollToLatest = useCallback(() => {
-    userScrollSessionRef.current = false;
-    setEndFollow(true);
-    props.listRef.current?.scrollToEnd({ animated: true });
-  }, [props.listRef, setEndFollow]);
 
   // The empty↔filled key below remounts the list, which resets its imperative
   // content-inset override — and useKeyboardChatComposerInset (mounted above
@@ -2058,44 +2059,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               paddingHorizontal: contentHorizontalPadding,
             }}
           />
-          {!endFollowEnabled ? (
-            <View
-              pointerEvents="box-none"
-              className="absolute inset-x-0 items-center"
-              style={{ bottom: bottomContentInset + 8 }}
-            >
-              <Pressable
-                accessibilityLabel={
-                  hasUnreadActivity ? "New activity. Scroll to latest" : "Scroll to latest"
-                }
-                accessibilityRole="button"
-                onPress={scrollToLatest}
-                // Use the real card token — `bg-background` is not defined in the
-                // mobile theme, so the chip rendered as a transparent outline and
-                // looked like floating text over the feed.
-                className="flex-row items-center gap-1.5 rounded-full border border-border bg-card px-3 py-2 active:opacity-70"
-                style={{
-                  backgroundColor: String(scrollToLatestBackground),
-                  shadowColor: "#000000",
-                  shadowOpacity: isDarkMode ? 0.35 : 0.14,
-                  shadowRadius: 10,
-                  shadowOffset: { width: 0, height: 4 },
-                  elevation: 6,
-                }}
-              >
-                <SymbolView
-                  name={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
-                  size={13}
-                  tintColor={iconSubtleColor}
-                  type="monochrome"
-                />
-                {hasUnreadActivity ? <View className="size-1.5 rounded-full bg-blue-500" /> : null}
-                <Text className="font-t3-medium text-xs text-foreground-secondary">
-                  {hasUnreadActivity ? "New activity" : "Scroll to latest"}
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
         </View>
         {props.feed.length === 0 && props.loadEarlier != null ? (
           // The window can derive zero visible entries while older history
