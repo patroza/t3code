@@ -37,6 +37,10 @@ const baseConfig = {
   teamsPort: 3978,
   teamsMessagingEndpoint: "/api/messages" as const,
   teamsDefaultProjectShortName: undefined,
+  azureStorageConnectionString: undefined,
+  azureStorageAccountName: undefined,
+  azureStorageAccountKey: undefined,
+  azureStorageContainer: "discord-bot-attachments",
 } satisfies DiscordBotConfig;
 
 describe("preferredModelSelection", () => {

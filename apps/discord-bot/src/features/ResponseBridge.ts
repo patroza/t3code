@@ -35,6 +35,15 @@ import {
   streamHistoryHasAdditionalContent,
   unpostedAttachments,
 } from "../presentation/attachments.ts";
+import {
+  AzureBlobUploadError,
+  DISCORD_CONSERVATIVE_UPLOAD_LIMIT_BYTES,
+  formatOversizedAttachmentNote,
+  isAzureBlobUploadConfigured,
+  uploadOversizedFilesToAzureBlob,
+  type AzureBlobUploadConfig,
+  type UploadedAzureBlobLink,
+} from "../presentation/azureBlobUpload.ts";
 import { buildOmegentThreadMessageUrl } from "../presentation/discordPrAttribution.ts";
 import {
   createMessageWithAttachments,
@@ -107,7 +116,6 @@ import { upsertThreadInfoPin } from "./ThreadInfoPin.ts";
 
 const DISCORD_LIMIT = 2000;
 const STREAM_CHUNK_LIMIT = inProgressChunkLimit(DISCORD_LIMIT);
-const DISCORD_CONSERVATIVE_UPLOAD_LIMIT_BYTES = 10_000_000;
 
 interface BridgeState {
   /** T3 orchestration turn currently tracked by this bridge. */
@@ -2017,6 +2025,7 @@ function formatMarkdownLocalFileRefForDiscord(input: {
   readonly githubUrlsBySrc: ReadonlyMap<string, string>;
   readonly attachedFileNames?: ReadonlySet<string> | undefined;
   readonly oversizedByName?: ReadonlySet<string> | undefined;
+  readonly externalUrlsByName?: ReadonlyMap<string, string> | undefined;
 }): string {
   const display =
     input.ref.label.trim() !== "" ? input.ref.label : fileNameForLocalFileRef(input.ref);
@@ -2026,13 +2035,17 @@ function formatMarkdownLocalFileRefForDiscord(input: {
   }
 
   const uploadName = fileNameForLocalFileRef(input.ref);
+  const externalUrl = input.externalUrlsByName?.get(uploadName);
+  if (externalUrl) {
+    return `[${display}](${externalUrl})`;
+  }
   if (input.oversizedByName?.has(uploadName)) {
     return `${display} (too large to attach in Discord)`;
   }
   if (input.attachedFileNames?.has(uploadName)) {
     return `${display} (attached below)`;
   }
-  if (input.attachedFileNames || input.oversizedByName) {
+  if (input.attachedFileNames || input.oversizedByName || input.externalUrlsByName) {
     return `${display} (attachment unavailable)`;
   }
   return input.ref.match;
@@ -2043,6 +2056,7 @@ export function rewriteMarkdownLocalFileLinksForDiscord(input: {
   readonly githubUrlsBySrc: ReadonlyMap<string, string>;
   readonly attachedFileNames?: ReadonlySet<string> | undefined;
   readonly oversizedByName?: ReadonlySet<string> | undefined;
+  readonly externalUrlsByName?: ReadonlyMap<string, string> | undefined;
 }): string {
   return replaceMarkdownLocalFileLinks(input.text, (ref) =>
     formatMarkdownLocalFileRefForDiscord({
@@ -2050,6 +2064,7 @@ export function rewriteMarkdownLocalFileLinksForDiscord(input: {
       githubUrlsBySrc: input.githubUrlsBySrc,
       attachedFileNames: input.attachedFileNames,
       oversizedByName: input.oversizedByName,
+      externalUrlsByName: input.externalUrlsByName,
     }),
   );
 }
@@ -3082,6 +3097,131 @@ export const runBridge = (
       };
     };
 
+    const azureBlobConfigFromBot = (botConfig: {
+      readonly azureStorageConnectionString: string | undefined;
+      readonly azureStorageAccountName: string | undefined;
+      readonly azureStorageAccountKey: string | undefined;
+      readonly azureStorageContainer: string;
+    }): AzureBlobUploadConfig => ({
+      connectionString: botConfig.azureStorageConnectionString,
+      accountName: botConfig.azureStorageAccountName,
+      accountKey: botConfig.azureStorageAccountKey,
+      containerName: botConfig.azureStorageContainer,
+    });
+
+    /**
+     * Offload files over Discord's ~10MB limit to a private Azure container and
+     * return 3-day read-only SAS links. No-ops gracefully when Azure is unset.
+     */
+    const offloadOversizedFiles = (oversized: ReadonlyArray<DiscordUploadFile>) =>
+      Effect.gen(function* () {
+        if (oversized.length === 0) {
+          return {
+            uploaded: [] as ReadonlyArray<UploadedAzureBlobLink>,
+            failed: [] as ReadonlyArray<{ readonly fileName: string; readonly sizeBytes: number }>,
+            unconfigured: [] as ReadonlyArray<{
+              readonly fileName: string;
+              readonly sizeBytes: number;
+            }>,
+            externalUrlsByName: new Map<string, string>(),
+          };
+        }
+
+        const botConfig = yield* DiscordBotConfig;
+        const azureConfig = azureBlobConfigFromBot(botConfig);
+        if (!isAzureBlobUploadConfigured(azureConfig)) {
+          yield* Effect.logWarning(
+            "Oversized Discord attachments skipped (Azure blob upload not configured)",
+            {
+              files: oversized.map((file) => ({
+                name: file.name,
+                bytes: file.data.byteLength,
+              })),
+            },
+          );
+          return {
+            uploaded: [] as ReadonlyArray<UploadedAzureBlobLink>,
+            failed: [] as ReadonlyArray<{ readonly fileName: string; readonly sizeBytes: number }>,
+            unconfigured: oversized.map((file) => ({
+              fileName: file.name,
+              sizeBytes: file.data.byteLength,
+            })),
+            externalUrlsByName: new Map<string, string>(),
+          };
+        }
+
+        yield* Effect.logInfo("Uploading oversized Discord attachments to Azure Blob", {
+          container: azureConfig.containerName,
+          files: oversized.map((file) => ({
+            name: file.name,
+            bytes: file.data.byteLength,
+          })),
+        });
+
+        const result = yield* Effect.tryPromise({
+          try: () =>
+            uploadOversizedFilesToAzureBlob({
+              config: azureConfig,
+              files: oversized,
+            }),
+          catch: (cause) =>
+            cause instanceof AzureBlobUploadError
+              ? cause
+              : new AzureBlobUploadError(
+                  cause instanceof Error ? cause.message : String(cause),
+                  cause,
+                ),
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logError("Azure blob bulk upload failed").pipe(
+              Effect.andThen(Effect.logError(cause)),
+              Effect.as({
+                uploaded: [] as ReadonlyArray<UploadedAzureBlobLink>,
+                failed: oversized.map((file) => ({
+                  fileName: file.name,
+                  error: cause instanceof Error ? cause.message : String(cause),
+                })),
+              }),
+            ),
+          ),
+        );
+
+        for (const failure of result.failed) {
+          yield* Effect.logWarning("Azure blob upload failed for attachment", failure);
+        }
+        if (result.uploaded.length > 0) {
+          yield* Effect.logInfo("Azure blob upload complete", {
+            uploaded: result.uploaded.map((entry) => ({
+              fileName: entry.fileName,
+              blobName: entry.blobName,
+              expiresAt: entry.expiresAt.toISOString(),
+              bytes: entry.sizeBytes,
+            })),
+          });
+        }
+
+        const failedWithSize = result.failed.map((failure) => {
+          const match = oversized.find((file) => file.name === failure.fileName);
+          return {
+            fileName: failure.fileName,
+            sizeBytes: match?.data.byteLength ?? 0,
+          };
+        });
+        const externalUrlsByName = new Map(
+          result.uploaded.map((entry) => [entry.fileName, entry.url] as const),
+        );
+
+        return {
+          uploaded: result.uploaded,
+          failed: failedWithSize,
+          unconfigured: [] as ReadonlyArray<{
+            readonly fileName: string;
+            readonly sizeBytes: number;
+          }>,
+          externalUrlsByName,
+        };
+      });
+
     /**
      * Create a Discord message. Binary files use native multipart FormData + fetch
      * (HTTP/1.1). dfx `withFiles` goes through Effect/Undici HTTP2 and dies with
@@ -3679,7 +3819,26 @@ export const runBridge = (
           );
           const files = [...imageFiles, ...mdLoaded.files, ...linkedFilesLoaded.files];
           if (files.length === 0) return;
-          const created = yield* createMessageWithFiles("", files);
+          const { batches: lateBatches, oversized: lateOversized } =
+            splitFilesForDiscordUpload(files);
+          const lateOffload = yield* offloadOversizedFiles(lateOversized);
+          const finalIds: string[] = [];
+          for (const batch of lateBatches) {
+            const created = yield* createMessageWithFiles("", batch);
+            finalIds.push(created.id);
+          }
+          if (lateOversized.length > 0) {
+            const note = formatOversizedAttachmentNote({
+              uploaded: lateOffload.uploaded,
+              failed: lateOffload.failed,
+              unconfigured: lateOffload.unconfigured,
+            });
+            if (note !== null) {
+              const created = yield* rest.createMessage(input.discordChannelId, { content: note });
+              finalIds.push(created.id);
+            }
+          }
+          if (finalIds.length === 0) return;
           const postedFromFiles = pendingImages
             .slice(0, imageFiles.length)
             .map((entry) => entry.id);
@@ -3692,7 +3851,7 @@ export const runBridge = (
             postedMarkdownFileSrcs: [
               ...new Set([...current.postedMarkdownFileSrcs, ...linkedFilesLoaded.loadedSrcs]),
             ],
-            finalDiscordMessageIds: [...current.finalDiscordMessageIds, created.id],
+            finalDiscordMessageIds: [...current.finalDiscordMessageIds, ...finalIds],
           }));
           return;
         }
@@ -3771,9 +3930,15 @@ export const runBridge = (
         const postedFromFiles = pendingImages.slice(0, imageFiles.length).map((entry) => entry.id);
 
         // Split once for local-file rewrite notes (no table .txt attachments).
+        // Oversized files go to private Azure Blob with 3-day SAS download links.
         const { batches: uploadBatches, oversized: oversizedFiles } =
           splitFilesForDiscordUpload(files);
-        const oversizedByName = new Set(oversizedFiles.map((file) => file.name));
+        const oversizedOffload = yield* offloadOversizedFiles(oversizedFiles);
+        const oversizedByName = new Set(
+          oversizedFiles
+            .map((file) => file.name)
+            .filter((name) => !oversizedOffload.externalUrlsByName.has(name)),
+        );
         const attachedFileNames = new Set(
           uploadBatches.flatMap((batch) => batch.map((file) => file.name)),
         );
@@ -3789,6 +3954,7 @@ export const runBridge = (
             githubUrlsBySrc,
             attachedFileNames,
             oversizedByName,
+            externalUrlsByName: oversizedOffload.externalUrlsByName,
           })
             .replace(/_\(attachment will attach when done\)_/giu, "")
             .replace(/_\(\d+ attachments will attach when done\)_/giu, "")
@@ -3932,14 +4098,15 @@ export const runBridge = (
           }
 
           if (oversizedFiles.length > 0) {
-            const note = [
-              "**Some files could not be attached due to Discord upload limits:**",
-              ...oversizedFiles.map(
-                (file) => `- \`${file.name}\` (${Math.ceil(file.data.byteLength / 1_000_000)} MB)`,
-              ),
-            ].join("\n");
-            const created = yield* rest.createMessage(input.discordChannelId, { content: note });
-            ids.push(created.id);
+            const note = formatOversizedAttachmentNote({
+              uploaded: oversizedOffload.uploaded,
+              failed: oversizedOffload.failed,
+              unconfigured: oversizedOffload.unconfigured,
+            });
+            if (note !== null) {
+              const created = yield* rest.createMessage(input.discordChannelId, { content: note });
+              ids.push(created.id);
+            }
           }
           return ids;
         });

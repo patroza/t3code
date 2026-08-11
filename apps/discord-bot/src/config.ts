@@ -73,6 +73,15 @@ export interface DiscordBotConfig {
   readonly teamsMessagingEndpoint: `/${string}`;
   /** Fallback alias for personal/group chats that do not map to a configured channel. */
   readonly teamsDefaultProjectShortName: string | undefined;
+  /**
+   * Optional Azure Blob offload for Discord attachments over ~10MB.
+   * Container must be private (not listable). Bot issues 3-day read SAS links.
+   * Prefer connection string; account name+key is also accepted.
+   */
+  readonly azureStorageConnectionString: string | undefined;
+  readonly azureStorageAccountName: string | undefined;
+  readonly azureStorageAccountKey: string | undefined;
+  readonly azureStorageContainer: string;
 }
 
 const RuntimeModeConfig = Schema.Literals([
@@ -220,6 +229,23 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
     const teamsDefaultProjectShortName = yield* Config.string(
       "TEAMS_DEFAULT_PROJECT_SHORT_NAME",
     ).pipe(Config.option, Config.map(Option.getOrUndefined));
+    const azureStorageConnectionString = yield* Config.redacted(
+      "AZURE_STORAGE_CONNECTION_STRING",
+    ).pipe(
+      Config.option,
+      Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
+    );
+    const azureStorageAccountName = yield* Config.string("AZURE_STORAGE_ACCOUNT_NAME").pipe(
+      Config.option,
+      Config.map(Option.getOrUndefined),
+    );
+    const azureStorageAccountKey = yield* Config.redacted("AZURE_STORAGE_ACCOUNT_KEY").pipe(
+      Config.option,
+      Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
+    );
+    const azureStorageContainer = yield* Config.string("AZURE_STORAGE_CONTAINER").pipe(
+      Config.withDefault("discord-bot-attachments"),
+    );
 
     return {
       discordToken,
@@ -255,6 +281,10 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
       teamsPort,
       teamsMessagingEndpoint,
       teamsDefaultProjectShortName,
+      azureStorageConnectionString,
+      azureStorageAccountName,
+      azureStorageAccountKey,
+      azureStorageContainer,
     } satisfies DiscordBotConfig;
   },
 );
