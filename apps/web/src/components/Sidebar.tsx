@@ -252,7 +252,10 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
-// Keep the v2 key so existing preferences survive the v2-to-default rename.
+// Upstream's key, adopted verbatim so the two stay interchangeable. Its "v2"
+// spelling is upstream's own legacy; the fork had no snoozed-shelf preference
+// before this, so nothing is being migrated. The settled shelf keeps the
+// fork's older key instead, which does hold existing preferences.
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
