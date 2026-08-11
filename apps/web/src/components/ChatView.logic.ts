@@ -141,17 +141,14 @@ export function resolveServerThreadError(input: {
   readonly localError: string | null | undefined;
   /** `session.lastError` from the server. */
   readonly serverError: string | null | undefined;
-  /** The server message the user dismissed, if any. */
-  readonly dismissedServerError: string | null | undefined;
 }): string | null {
   if (input.localError !== null && input.localError !== undefined) {
     return input.localError;
   }
-  const serverError = input.serverError ?? null;
-  if (serverError === null) {
-    return null;
-  }
-  return serverError === input.dismissedServerError ? null : serverError;
+  // Dismissal is no longer resolved here: upstream's session-scoped banner
+  // masking (#6123) survives reconnects and rerenders, which is exactly what
+  // the fork's dismissed-message comparison did not.
+  return input.serverError ?? null;
 }
 
 export function shouldTreatServerThreadAsActive(input: {

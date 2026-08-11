@@ -246,6 +246,10 @@ export function useThreadComposerState() {
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
+  const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
+  const activeThreadBusy =
+    !!selectedThread &&
+    (selectedThread.session?.status === "running" || selectedThread.session?.status === "starting");
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const interactionMode = selectedDraft?.interactionMode ?? selectedThread?.interactionMode ?? null;
@@ -522,6 +526,8 @@ export function useThreadComposerState() {
 
   return {
     selectedThreadFeed,
+    selectedThreadQueueCount,
+    activeThreadBusy,
     composerQueueItems,
     activeWorkStartedAt,
     draftMessage,

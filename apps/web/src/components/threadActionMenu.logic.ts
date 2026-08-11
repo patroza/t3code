@@ -100,9 +100,11 @@ export function buildThreadActionMenuItems(
       : []),
     { id: "mark-unread", label: "Mark unread" },
     { id: "copy-path", label: "Copy path", icon: "copy" },
-    // Fork: thread ids are the currency of Discord bridges and deep links.
-    { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
     ...(state.branch ? [{ id: "copy-branch" as const, label: "Copy branch", icon: "copy" }] : []),
+    // Upstream ships this as of #5574; the fork carried its own copy first,
+    // for the same reason — thread ids are the currency of Discord bridges
+    // and deep links. One entry, in upstream's position.
+    { id: "copy-thread-id", label: "Copy thread ID", icon: "copy" },
     { id: "delete", label: "Delete", destructive: true, icon: "trash" },
   ];
 }

@@ -31,6 +31,10 @@ on:
           - ios
           - android
           - all
+      version:
+        description: "Optional build version override (blank uses app.config.ts; an override is committed before building)"
+        required: false
+        type: string
       message:
         description: "OTA update message (mode=update / auto)"
         required: false
@@ -79,12 +83,22 @@ jobs:
             echo "EXPO_TOKEN is not available; skipping EAS production job."
           fi
 
+      - id: version_app_token
+        name: Mint release app token for version override
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'build' && inputs.version != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Checkout
         if: steps.expo-token.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ inputs.release_branch }}
           fetch-depth: 0
+          token: ${{ steps.version_app_token.outputs.token || github.token }}
           # No sparse-checkout here: it makes actions/checkout fetch with
           # --filter=blob:none, and eas-cli archives the project via
           # `git clone --depth 1 file://<workspace>`, which fails (exit 128)
