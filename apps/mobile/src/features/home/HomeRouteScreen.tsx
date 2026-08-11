@@ -212,9 +212,17 @@ export function HomeRouteScreen() {
           onOwnershipRelationChange={setOwnershipRelation}
           onHideSettledThreadsChange={setHideSettledThreads}
           onOpenEnvironments={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironments" },
+            })
           }
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
@@ -228,7 +236,10 @@ export function HomeRouteScreen() {
           threadGrouping={listOptions.threadGrouping}
           hideSettledThreads={hideSettledThreads}
           onAddConnection={() =>
-            navigation.navigate("SettingsSheet", { screen: "SettingsEnvironmentNew" })
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsEnvironmentNew" },
+            })
           }
           onArchiveThread={archiveThread}
           onDeleteThread={confirmDeleteThread}
@@ -242,7 +253,12 @@ export function HomeRouteScreen() {
           onToggleEnvironment={toggleSelectedEnvironmentId}
           onMovePinnedThread={movePinnedThread}
           onProjectChange={setSelectedProjectKey}
-          onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
+          onOpenSettings={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "Settings" },
+            })
+          }
           onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {

@@ -38,6 +38,12 @@ import {
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
+import {
+  dismissThreadErrorBannerForSession,
+  getThreadErrorBannerKey,
+  isThreadErrorBannerDismissedForSession,
+  shouldShowThreadErrorBanner,
+} from "./chat/ThreadErrorBanner";
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
@@ -873,73 +879,67 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
 describe("resolveServerThreadError", () => {
   const CAPACITY = "Selected model is at capacity. Please try a different model.";
 
-  it("shows the server error when nothing is dismissed", () => {
-    expect(
-      resolveServerThreadError({
-        localError: undefined,
-        serverError: CAPACITY,
-        dismissedServerError: undefined,
-      }),
-    ).toBe(CAPACITY);
-  });
-
-  it("dismisses a server-sourced error", () => {
-    // Regression: dismissal used to clear the local error, which then fell back
-    // to session.lastError via `??` — leaving server errors undismissable.
-    expect(
-      resolveServerThreadError({
-        localError: null,
-        serverError: CAPACITY,
-        dismissedServerError: CAPACITY,
-      }),
-    ).toBeNull();
-  });
-
-  it("still surfaces a different server error after a dismissal", () => {
-    // A dismissal covers the message it dismissed, not the thread forever.
-    expect(
-      resolveServerThreadError({
-        localError: null,
-        serverError: "Provider crashed",
-        dismissedServerError: CAPACITY,
-      }),
-    ).toBe("Provider crashed");
-  });
-
-  it("re-shows the same error if the server raises it again after it cleared", () => {
-    expect(
-      resolveServerThreadError({
-        localError: undefined,
-        serverError: null,
-        dismissedServerError: CAPACITY,
-      }),
-    ).toBeNull();
-    expect(
-      resolveServerThreadError({
-        localError: undefined,
-        serverError: CAPACITY,
-        dismissedServerError: undefined,
-      }),
-    ).toBe(CAPACITY);
+  it("shows the server error", () => {
+    expect(resolveServerThreadError({ localError: undefined, serverError: CAPACITY })).toBe(
+      CAPACITY,
+    );
   });
 
   it("prefers a local error over the server error", () => {
-    expect(
-      resolveServerThreadError({
-        localError: "Failed to send",
-        serverError: CAPACITY,
-        dismissedServerError: undefined,
-      }),
-    ).toBe("Failed to send");
+    expect(resolveServerThreadError({ localError: "Failed to send", serverError: CAPACITY })).toBe(
+      "Failed to send",
+    );
   });
 
-  it("shows nothing when there is no error at all", () => {
+  it("reports no error when neither side has one", () => {
+    expect(resolveServerThreadError({ localError: null, serverError: null })).toBeNull();
+  });
+});
+
+// Dismissal moved to the session-scoped banner helpers in #6123, which upstream
+// ships untested. These are the fork's dismissal cases retargeted at them, so
+// the behaviour keeps its coverage rather than losing it in the handover.
+describe("thread error banner dismissal", () => {
+  const CAPACITY = "Selected model is at capacity. Please try a different model.";
+  const threadKey = "environment-local:thread-1";
+
+  it("hides the banner for the message that was dismissed", () => {
+    const key = getThreadErrorBannerKey(threadKey, CAPACITY);
+    expect(shouldShowThreadErrorBanner(threadKey, CAPACITY, false)).toBe(true);
+
+    dismissThreadErrorBannerForSession(key);
+
+    expect(isThreadErrorBannerDismissedForSession(key)).toBe(true);
     expect(
-      resolveServerThreadError({
-        localError: null,
-        serverError: null,
-        dismissedServerError: undefined,
-      }),
-    ).toBeNull();
+      shouldShowThreadErrorBanner(threadKey, CAPACITY, isThreadErrorBannerDismissedForSession(key)),
+    ).toBe(false);
+  });
+
+  it("still surfaces a different error on the same thread after a dismissal", () => {
+    // A dismissal covers the message it dismissed, not the thread forever.
+    const other = "Provider crashed";
+    const key = getThreadErrorBannerKey(threadKey, other);
+    expect(
+      shouldShowThreadErrorBanner(threadKey, other, isThreadErrorBannerDismissedForSession(key)),
+    ).toBe(true);
+  });
+
+  it("keeps a dismissal scoped to its own thread", () => {
+    // The key pairs thread and message, so the same error on another thread is
+    // not silently suppressed.
+    const otherThread = "environment-local:thread-2";
+    const key = getThreadErrorBannerKey(otherThread, CAPACITY);
+    expect(
+      shouldShowThreadErrorBanner(
+        otherThread,
+        CAPACITY,
+        isThreadErrorBannerDismissedForSession(key),
+      ),
+    ).toBe(true);
+  });
+
+  it("has nothing to show when there is no error", () => {
+    expect(getThreadErrorBannerKey(threadKey, null)).toBeNull();
+    expect(shouldShowThreadErrorBanner(threadKey, null, false)).toBe(false);
   });
 });

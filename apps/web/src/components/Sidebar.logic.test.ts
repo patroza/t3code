@@ -47,6 +47,7 @@ import {
   sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  shouldCreateNewThreadInCurrentProject,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -828,6 +829,21 @@ describe("buildSidebarThreadWorktreeSections", () => {
     expect(
       formatWorktreeGroupLabel({ worktreePath: "/repo/t3code", branch: null, source: "local" }),
     ).toBe("Local checkout · t3code");
+  });
+});
+
+describe("shouldCreateNewThreadInCurrentProject", () => {
+  it("creates directly on shift+click in a multi-project setup", () => {
+    expect(shouldCreateNewThreadInCurrentProject(true, 2)).toBe(true);
+  });
+
+  it("opens the picker on a plain click in a multi-project setup", () => {
+    expect(shouldCreateNewThreadInCurrentProject(false, 2)).toBe(false);
+  });
+
+  it("creates directly on any click with a single project", () => {
+    expect(shouldCreateNewThreadInCurrentProject(false, 1)).toBe(true);
+    expect(shouldCreateNewThreadInCurrentProject(true, 1)).toBe(true);
   });
 });
 

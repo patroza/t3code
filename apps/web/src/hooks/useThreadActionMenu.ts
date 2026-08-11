@@ -11,7 +11,7 @@ import {
   effectiveSnoozed,
   type ChangeRequestStateLike,
 } from "@t3tools/client-runtime/state/thread-settled";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useCallback } from "react";
 
 import { resolveSnoozePresets, snoozeWakeDescription } from "../components/Sidebar.snooze";
@@ -95,7 +95,7 @@ export function useThreadActionMenu(input: {
     },
     onError: (error) => failureToast("Failed to copy branch", error),
   });
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: string }>({
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
     onCopy: ({ threadId }) => {
       toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
     },
@@ -249,8 +249,7 @@ export function useThreadActionMenu(input: {
             }
             return;
           case "copy-thread-id":
-            // Fork: thread ids are the currency of Discord bridges and deep links.
-            copyThreadIdToClipboard(String(thread.id), { threadId: String(thread.id) });
+            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
           case "delete": {
             if (confirmThreadDelete) {
@@ -289,6 +288,7 @@ export function useThreadActionMenu(input: {
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      copyThreadIdToClipboard,
       deleteThread,
       handleNewThread,
       markThreadUnread,

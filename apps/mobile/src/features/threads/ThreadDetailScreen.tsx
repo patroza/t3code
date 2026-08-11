@@ -2,6 +2,7 @@ import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
+import { HeaderHeightContext } from "@react-navigation/elements";
 import type {
   ApprovalRequestId,
   EnvironmentId,
@@ -13,18 +14,46 @@ import type {
   RuntimeMode,
   ServerConfig as T3ServerConfig,
   ThreadId,
+  UserInputQuestion,
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Platform, StyleSheet, View, type GestureResponderEvent } from "react-native";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
+import {
+  AppState,
+  Keyboard,
+  Platform,
+  StyleSheet,
+  useColorScheme,
+  useWindowDimensions,
+  View,
+  type GestureResponderEvent,
+} from "react-native";
 import {
   KeyboardController,
   KeyboardStickyView,
   useKeyboardState,
 } from "react-native-keyboard-controller";
-import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
+import Animated, {
+  Easing,
+  FadeInDown,
+  FadeOut,
+  useAnimatedReaction,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ControlPill } from "../../components/ControlPill";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
@@ -39,6 +68,11 @@ import type {
 import { ComposerQueuedMessages } from "./ComposerQueuedMessages";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
+import {
+  derivePendingUserInputMaxHeight,
+  ESTIMATED_KEYBOARD_HEIGHT,
+  USER_INPUT_TOGGLE_DURATION_MS,
+} from "./pendingUserInputLayout";
 import {
   COMPOSER_COLLAPSED_CHROME,
   COMPOSER_EXPANDED_CHROME,
@@ -59,7 +93,7 @@ export interface ThreadDetailScreenProps {
   readonly respondingApprovalId: ApprovalRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
   readonly activePendingUserInputDrafts: Record<string, PendingUserInputDraftAnswer>;
-  readonly activePendingUserInputAnswers: Record<string, string> | null;
+  readonly activePendingUserInputAnswers: Record<string, string | ReadonlyArray<string>> | null;
   readonly respondingUserInputId: ApprovalRequestId | null;
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
@@ -70,6 +104,8 @@ export interface ThreadDetailScreenProps {
   readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
   /** A send made now would be held in the steering queue, not open a turn. */
   readonly sendEntersQueue: boolean;
+  readonly activeThreadBusy: boolean;
+  readonly selectedThreadQueueCount: number;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
@@ -104,7 +140,7 @@ export interface ThreadDetailScreenProps {
   ) => Promise<unknown>;
   readonly onSelectUserInputOption: (
     requestId: ApprovalRequestId,
-    questionId: string,
+    question: UserInputQuestion,
     label: string,
   ) => void;
   readonly onChangeUserInputCustomAnswer: (
@@ -186,8 +222,48 @@ function useStreamingHaptics(threadId: ThreadId, feed: ReadonlyArray<ThreadFeedE
   }, [threadId, feed]);
 }
 
+const USER_INPUT_TOGGLE_TIMING = {
+  duration: USER_INPUT_TOGGLE_DURATION_MS,
+  easing: Easing.out(Easing.cubic),
+};
+
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const insets = useSafeAreaInsets();
+  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
+  const liveKeyboardHeight = useKeyboardState((state) => state.height);
+  // Android can swallow the IME hide callbacks when the app is backgrounded
+  // mid keyboard-hide (the reported repro: send — which blurs and starts the
+  // hide — then Home within a second). The keyboard library's height AND
+  // visibility then stay frozen open, so gating the sticky translation on
+  // visibility alone still strands the composer after resume. Quarantine the
+  // translation on every Android resume instead; any sign of a live keyboard
+  // stream — an owned input gaining focus, or any visibility/height movement —
+  // lifts it. A healthy resume sees no visual difference (the translation is
+  // already zero while the keyboard is closed).
+  const [keyboardStateSuspect, setKeyboardStateSuspect] = useState(false);
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      return;
+    }
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") {
+        setKeyboardStateSuspect(true);
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+  useEffect(() => {
+    setKeyboardStateSuspect(false);
+  }, [isKeyboardVisible, liveKeyboardHeight]);
+  const handleOwnedInputFocusChange = useCallback((focused: boolean) => {
+    if (focused) {
+      setKeyboardStateSuspect(false);
+    }
+  }, []);
+  const windowHeight = useWindowDimensions().height;
+  const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -198,11 +274,17 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const lastScrolledAnchorMessageIdRef = useRef<MessageId | null>(null);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
-  // Key the safe-area padding on keyboard visibility, not focus: on Android
-  // the back gesture closes the keyboard while the editor stays focused, and
-  // a focus-keyed inset would leave the toolbar under the gesture bar.
-  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
-  const composerBottomInset = isKeyboardVisible ? 0 : Math.max(insets.bottom, 12);
+  const [endFollowEnabled, setEndFollowEnabled] = useState(true);
+  // Android keys the safe-area padding on keyboard visibility (#5988): the
+  // back gesture closes the keyboard while the editor stays focused, and a
+  // focus-keyed inset would leave the toolbar under the gesture bar. iOS must
+  // NOT use visibility — it only flips on keyboardDidHide, after the hide
+  // animation, so the composer would ride down flush to the screen edge and
+  // then snap up into the inset. On iOS blur precedes the hide, so the
+  // focus-keyed inset is already in place while the composer rides down.
+  const composerBottomInset = (Platform.OS === "android" ? isKeyboardVisible : composerExpanded)
+    ? 0
+    : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
@@ -223,6 +305,41 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
+  // While a user-input request is pending, the questionnaire owns the
+  // composer slot outright: expanded it is the full card, collapsed it is a
+  // composer-style bar in the same place (with its own stop control). The
+  // composer never mounts into the transition, which keeps the collapse and
+  // keyboard animations coherent. Collapse state is keyed by request id so a
+  // new request re-expands automatically.
+  const [collapsedUserInputRequestId, setCollapsedUserInputRequestId] =
+    useState<ApprovalRequestId | null>(null);
+  const activeUserInputRequestId = props.activePendingUserInput?.requestId ?? null;
+  const userInputCollapsed =
+    activeUserInputRequestId !== null && collapsedUserInputRequestId === activeUserInputRequestId;
+  // The card's height RESERVES keyboard space at all times instead of
+  // tracking the keyboard: transforms (the sticky translation) apply
+  // same-frame on the UI thread while layout props lag a Yoga pass behind,
+  // so any height that follows the keyboard flashes the card over the nav
+  // header on the way up. With a constant height the keyboard transition is
+  // pure translation — frame-perfect by construction — and the resting card
+  // stays compact over the transcript. Before the first open the reserve is
+  // an estimate; once a real height is known the card corrects once,
+  // discretely.
+  const [lastKnownKeyboardHeight, setLastKnownKeyboardHeight] = useState(0);
+  useEffect(() => {
+    if (liveKeyboardHeight > 0 && liveKeyboardHeight !== lastKnownKeyboardHeight) {
+      setLastKnownKeyboardHeight(liveKeyboardHeight);
+    }
+  }, [lastKnownKeyboardHeight, liveKeyboardHeight]);
+  const pendingUserInputMaxHeight = derivePendingUserInputMaxHeight({
+    windowHeight,
+    keyboardHeight:
+      lastKnownKeyboardHeight > 0 ? lastKnownKeyboardHeight : ESTIMATED_KEYBOARD_HEIGHT,
+    navigationHeaderHeight,
+    // The questionnaire owns the composer slot, so only the composer's
+    // bottom inset still overlaps.
+    composerOverlapHeight: composerBottomInset,
+  });
   const estimatedOverlayHeight = composerOverlapHeight;
   // The overlay's measured height includes the home-indicator inset (the
   // composer pads it), but contentInsetAdjustmentBehavior="automatic" makes
@@ -239,7 +356,103 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     Math.max(0, estimatedOverlayHeight - nativeInsetOvercount),
     -nativeInsetOvercount,
   );
+  // The expanded questionnaire is an absolute overlay on iOS, so it never
+  // changes the measured overlay height (that constancy is what keeps the
+  // feed from snapping on collapse/expand). The toggle choreography runs on
+  // SHARED VALUES set directly in the tap handler — one JS hop, then the
+  // card's rise/sink and the feed's end-inset glide animate in lockstep on
+  // the UI thread, keyboard-style, instead of waiting on React mount +
+  // onLayout + state round trips. Coverage (how far the card extends above
+  // the bar) is measured straight into a shared value by the card's
+  // onLayout, with no re-render.
+  const userInputCardProgress = useSharedValue(1);
+  const userInputInsetProgress = useSharedValue(1);
+  const userInputCardCoverage = useSharedValue(0);
+  // Android renders the expanded card in-flow (it cannot hit-test the iOS
+  // overlay outside the bar's bounds), so its measured overlay height already
+  // includes the card — the coverage extra is iOS-only.
+  const userInputCoverageApplies = Platform.OS === "ios" && activeUserInputRequestId !== null;
+  const combinedContentInsetEndAdjustment = useSharedValue(
+    Math.max(0, estimatedOverlayHeight - nativeInsetOvercount),
+  );
+  useAnimatedReaction(
+    () =>
+      contentInsetEndAdjustment.value +
+      (userInputCoverageApplies ? userInputInsetProgress.value * userInputCardCoverage.value : 0),
+    (value) => {
+      combinedContentInsetEndAdjustment.value = value;
+    },
+    [userInputCoverageApplies],
+  );
   const { freeze, scrollMessageToEnd } = useKeyboardScrollToEnd({ listRef });
+  const endFollowEnabledRef = useRef(true);
+  endFollowEnabledRef.current = endFollowEnabled;
+  const userInputRepinTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The list's own corrections for these inset changes drift on short
+  // content (and the error compounds across toggles), so deterministically
+  // re-pin the end once a toggle settles: a no-op when the resting position
+  // is already right, corrective when it is not. Follow state is re-checked
+  // inside the callback — the user may grab the list during the settle
+  // window, and yanking them back would override a live gesture.
+  const scheduleUserInputRepin = useCallback(
+    (delayMs: number) => {
+      if (userInputRepinTimerRef.current !== null) {
+        clearTimeout(userInputRepinTimerRef.current);
+      }
+      userInputRepinTimerRef.current = setTimeout(() => {
+        userInputRepinTimerRef.current = null;
+        if (!endFollowEnabledRef.current) {
+          return;
+        }
+        void scrollMessageToEnd({ animated: false, closeKeyboard: false }).catch(() => {
+          freeze.set(false);
+        });
+      }, delayMs);
+    },
+    [freeze, scrollMessageToEnd],
+  );
+  useEffect(
+    () => () => {
+      if (userInputRepinTimerRef.current !== null) {
+        clearTimeout(userInputRepinTimerRef.current);
+      }
+    },
+    [],
+  );
+  const handleToggleUserInputCollapsed = useCallback(() => {
+    if (activeUserInputRequestId === null) {
+      return;
+    }
+    if (userInputCollapsed) {
+      // Expanding: card and feed glide start NOW, on the UI thread.
+      userInputCardProgress.value = withTiming(1, USER_INPUT_TOGGLE_TIMING);
+      userInputInsetProgress.value = withTiming(1, USER_INPUT_TOGGLE_TIMING);
+      setCollapsedUserInputRequestId(null);
+      scheduleUserInputRepin(USER_INPUT_TOGGLE_DURATION_MS + 50);
+    } else {
+      // Collapsing hides the custom-answer inputs; release the keyboard with
+      // them instead of leaving it up over a dead responder.
+      Keyboard.dismiss();
+      userInputCardProgress.value = withTiming(0, USER_INPUT_TOGGLE_TIMING);
+      // Instant: the sinking card still covers the strip being revealed, and
+      // animating the inset downward is what drifted the short-content end
+      // anchor.
+      userInputInsetProgress.value = 0;
+      setCollapsedUserInputRequestId(activeUserInputRequestId);
+      scheduleUserInputRepin(60);
+    }
+  }, [
+    activeUserInputRequestId,
+    scheduleUserInputRepin,
+    userInputCardProgress,
+    userInputCollapsed,
+    userInputInsetProgress,
+  ]);
+  useEffect(() => {
+    // A new request always arrives expanded.
+    userInputCardProgress.value = 1;
+    userInputInsetProgress.value = 1;
+  }, [activeUserInputRequestId, userInputCardProgress, userInputInsetProgress]);
   const showContent = props.showContent ?? true;
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
@@ -260,6 +473,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   useEffect(() => {
     setAnchorMessageId(null);
     lastScrolledAnchorMessageIdRef.current = null;
+    setEndFollowEnabled(true);
     freeze.set(false);
   }, [freeze, selectedThreadKey]);
 
@@ -337,6 +551,21 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     composerEditorRef.current?.blur();
   }, []);
 
+  const handleScrollToEnd = useCallback(() => {
+    void Haptics.selectionAsync();
+    void scrollMessageToEnd({ animated: true, closeKeyboard: false }).catch(() => {
+      freeze.set(false);
+    });
+  }, [freeze, scrollMessageToEnd]);
+
+  // Fork: upstream's pill is icon-only. The fork's feed chip said "New
+  // activity" when something arrived while the reader was away, which is the
+  // difference between "you scrolled up" and "you are missing something". The
+  // feed reports it now and the pill carries the dot.
+  const [hasUnreadActivity, setHasUnreadActivity] = useState(false);
+  const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
+  const isDarkMode = useColorScheme() === "dark";
+
   const handleFeedTouchStart = useCallback((event: GestureResponderEvent) => {
     feedTouchStartRef.current = {
       pageX: event.nativeEvent.pageX,
@@ -390,13 +619,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}
-            contentInsetEndAdjustment={contentInsetEndAdjustment}
+            contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
             contentTopInset={0}
             contentBottomInset={estimatedOverlayHeight}
             contentMaxWidth={contentMaxWidth}
             layoutVariant={layoutVariant}
             usesAutomaticContentInsets={props.usesAutomaticContentInsets}
             onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
+            onEndFollowEnabledChange={setEndFollowEnabled}
+            onUnreadActivityChange={setHasUnreadActivity}
             skills={selectedProviderSkills}
             loadEarlier={props.loadEarlier ?? null}
           />
@@ -413,52 +644,132 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         scrolling behind it.
       */}
       {showContent ? (
-        <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-          <View pointerEvents="none" style={{ flex: 1 }} />
-          <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
-            {/* No paddingTop here: the overlay's measured height becomes the
-                list's bottom inset, so any padding above the pill/composer
-                pushes the resting content floor up by the same amount. */}
-            <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
-              <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
-                {props.activePendingApproval || props.activePendingUserInput ? (
-                  <Animated.View
-                    className="shrink-0 gap-3 px-4 pb-3"
-                    entering={FadeInDown.duration(220)}
-                    exiting={FadeOut.duration(140)}
+        <KeyboardStickyView
+          // The animated keyboard height can remain stale after a dismissed
+          // IME on both platforms. Visibility is the authoritative closed
+          // state, so disable the translation rather than stranding the pill.
+          enabled={isKeyboardVisible && !keyboardStateSuspect}
+          style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
+          offset={{ closed: 0, opened: 0 }}
+        >
+          {/* No paddingTop here: the overlay's measured height becomes the
+              list's bottom inset, so any padding above the pill/composer
+              pushes the resting content floor up by the same amount. */}
+          <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
+            {showScrollToEndButton ? (
+              <Animated.View
+                pointerEvents="box-none"
+                className="absolute -top-11 left-0 right-0 z-20 items-center"
+                entering={FadeInDown.duration(160)}
+                exiting={FadeOut.duration(100)}
+              >
+                {isLiquidGlassSupported ? (
+                  <LiquidGlassView
+                    colorScheme={isDarkMode ? "dark" : "light"}
+                    effect="regular"
+                    interactive
+                    // Interactive glass can render larger than the requested
+                    // box (minimum touch size), so center the pill instead of
+                    // relying on it filling the glass exactly.
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 18,
+                      height: 36,
+                      justifyContent: "center",
+                      overflow: "hidden",
+                      width: 36,
+                    }}
                   >
-                    {props.activePendingApproval ? (
-                      <PendingApprovalCard
-                        approval={props.activePendingApproval}
-                        respondingApprovalId={props.respondingApprovalId}
-                        onRespond={props.onRespondToApproval}
-                      />
+                    <ControlPill
+                      accessibilityLabel={
+                        hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"
+                      }
+                      activateOnPressIn
+                      className="h-9 w-9 bg-transparent"
+                      icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
+                      onPress={handleScrollToEnd}
+                    />
+                    {hasUnreadActivity ? (
+                      <View className="absolute right-1 top-1 size-1.5 rounded-full bg-blue-500" />
                     ) : null}
-                    {props.activePendingUserInput ? (
-                      <PendingUserInputCard
-                        pendingUserInput={props.activePendingUserInput}
-                        drafts={props.activePendingUserInputDrafts}
-                        answers={props.activePendingUserInputAnswers}
-                        respondingUserInputId={props.respondingUserInputId}
-                        onSelectOption={props.onSelectUserInputOption}
-                        onChangeCustomAnswer={props.onChangeUserInputCustomAnswer}
-                        onSubmit={props.onSubmitUserInput}
-                      />
+                  </LiquidGlassView>
+                ) : (
+                  <View>
+                    <ControlPill
+                      accessibilityLabel={
+                        hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"
+                      }
+                      activateOnPressIn
+                      className="h-9 w-9 border border-border bg-card shadow-md shadow-black/10"
+                      icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
+                      onPress={handleScrollToEnd}
+                    />
+                    {hasUnreadActivity ? (
+                      <View className="absolute right-1 top-1 size-1.5 rounded-full bg-blue-500" />
                     ) : null}
-                  </Animated.View>
-                ) : null}
-                <ComposerQueuedMessages
-                  items={props.composerQueueItems}
-                  disabled={props.connectionStateLabel !== "connected"}
-                  onSteer={(messageId) => {
-                    void props.onSteerQueuedMessage(messageId);
-                  }}
-                  onEdit={(messageId, source) => {
-                    void props.onEditQueuedMessage(messageId, source);
-                  }}
-                />
-              </View>
+                  </View>
+                )}
+              </Animated.View>
+            ) : null}
+            <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+              {props.activePendingApproval || props.activePendingUserInput ? (
+                <Animated.View
+                  className="shrink-0 gap-3 px-4 pb-3"
+                  // The questionnaire replaces the composer, so it must pad
+                  // the home indicator the composer normally covers.
+                  style={
+                    activeUserInputRequestId !== null
+                      ? { paddingBottom: composerBottomInset }
+                      : undefined
+                  }
+                  entering={FadeInDown.duration(220)}
+                  exiting={FadeOut.duration(140)}
+                >
+                  {props.activePendingApproval ? (
+                    <PendingApprovalCard
+                      approval={props.activePendingApproval}
+                      respondingApprovalId={props.respondingApprovalId}
+                      onRespond={props.onRespondToApproval}
+                    />
+                  ) : null}
+                  {props.activePendingUserInput ? (
+                    <PendingUserInputCard
+                      pendingUserInput={props.activePendingUserInput}
+                      maxHeight={pendingUserInputMaxHeight}
+                      collapsed={userInputCollapsed}
+                      onToggleCollapsed={handleToggleUserInputCollapsed}
+                      onStopThread={props.onStopThread}
+                      cardProgress={userInputCardProgress}
+                      cardCoverage={userInputCardCoverage}
+                      onInputFocusChange={handleOwnedInputFocusChange}
+                      drafts={props.activePendingUserInputDrafts}
+                      answers={props.activePendingUserInputAnswers}
+                      respondingUserInputId={props.respondingUserInputId}
+                      onSelectOption={props.onSelectUserInputOption}
+                      onChangeCustomAnswer={props.onChangeUserInputCustomAnswer}
+                      onSubmit={props.onSubmitUserInput}
+                    />
+                  ) : null}
+                </Animated.View>
+              ) : null}
+              {/* Fork: a send held in the steering queue stays a composer chip
+                  rather than becoming a feed row, so it belongs in the overlay
+                  beside the approval cards. */}
+              <ComposerQueuedMessages
+                items={props.composerQueueItems}
+                disabled={props.connectionStateLabel !== "connected"}
+                onSteer={(messageId) => {
+                  void props.onSteerQueuedMessage(messageId);
+                }}
+                onEdit={(messageId, source) => {
+                  void props.onEditQueuedMessage(messageId, source);
+                }}
+              />
+            </View>
 
+            {/* Hidden (not unmounted) while a user-input request owns the
+                composer slot, so composer drafts and editor state survive. */}
+            <View style={activeUserInputRequestId !== null ? { display: "none" } : undefined}>
               <ThreadComposer
                 editorRef={composerEditorRef}
                 draftMessage={props.draftMessage}
@@ -471,6 +782,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 threadSyncPhase={threadSyncPhase}
                 selectedThread={props.selectedThread}
                 serverConfig={props.serverConfig}
+                queueCount={props.selectedThreadQueueCount}
+                activeThreadBusy={props.activeThreadBusy}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}
                 bottomInset={composerBottomInset}
@@ -486,10 +799,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
                 onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
                 onExpandedChange={setComposerExpanded}
+                onEditorFocusChange={handleOwnedInputFocusChange}
               />
             </View>
-          </KeyboardStickyView>
-        </View>
+          </View>
+        </KeyboardStickyView>
       ) : null}
     </View>
   );
