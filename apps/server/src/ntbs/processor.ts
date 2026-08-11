@@ -2,9 +2,13 @@ import {
   type ChatAttachment,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  type EventId,
   MessageId,
   OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationLatestTurn,
+  type OrchestrationLatestTurnState,
+  type OrchestrationThread,
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -121,6 +125,66 @@ type NTBSProcessorRequirements =
    */
   | Crypto.Crypto;
 
+type TurnStats = {
+  readonly state: OrchestrationLatestTurnState;
+  readonly activityCount: number;
+  readonly latestActivityId: EventId | null;
+  readonly assistantTextLength: number;
+  readonly assistantUpdatedAt: string | null;
+};
+
+/**
+ * Gets the statistics visible in T3's projected activities and assistant
+ * messages for one turn. It includes recorded tool activity and assistant text
+ * that has reached the projection, but not necessarily buffered output,
+ * hidden reasoning, or provider work that produces no projected event.
+ * Comparing two results can indicate observable progress, but an unchanged
+ * result does not prove that the turn is stalled.
+ */
+const getTurnStats = (thread: OrchestrationThread, turn: OrchestrationLatestTurn): TurnStats => {
+  const activities = thread.activities.filter((activity) => activity.turnId === turn.turnId);
+  const assistantMessages = thread.messages.filter(
+    (message) => message.turnId === turn.turnId && message.role === "assistant",
+  );
+
+  const assistantUpdatedAt = assistantMessages.reduce<string | null>(
+    (latest, message) =>
+      latest === null || message.updatedAt > latest ? message.updatedAt : latest,
+    null,
+  );
+
+  return {
+    state: turn.state,
+    activityCount: activities.length,
+    latestActivityId: activities.at(-1)?.id ?? null,
+    assistantTextLength: assistantMessages.reduce(
+      (length, message) => length + message.text.length,
+      0,
+    ),
+    assistantUpdatedAt,
+  };
+};
+
+const hasProgress = (previous: TurnStats, current: TurnStats): boolean =>
+  previous.activityCount !== current.activityCount ||
+  previous.latestActivityId !== current.latestActivityId ||
+  previous.assistantTextLength !== current.assistantTextLength ||
+  previous.assistantUpdatedAt !== current.assistantUpdatedAt;
+
+/**
+ * Records what the processor observed when it last checked a T3 turn.
+ *
+ * `stats` is null while T3 has accepted the turn request but the provider has
+ * not started the turn. Once the turn exists, `stats.state` is the single
+ * source of truth for whether it is running or terminal.
+ */
+type TurnStatus = {
+  /** When the processor read this status from the T3 projection. */
+  readonly recordedAt: string;
+  /** The observed turn statistics, or null while the turn is still pending. */
+  readonly stats: TurnStats | null;
+};
+
 /**
  * Monitors one started T3 turn without blocking request processing.
  *
@@ -202,6 +266,8 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const gitWorkflowService = yield* GitWorkflowService;
 
+    const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+
     /**
      * Starts the first turn in an existing T3 thread.
      *
@@ -216,7 +282,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
     ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
         const commandId = CommandId.make(yield* randomUUID);
-        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        const createdAt = yield* getNow;
 
         yield* orchestrationEngineService
           .dispatch(
@@ -302,7 +368,83 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const projectScriptRunner = yield* ProjectSetupScriptRunner;
 
+    /**
+     * Semaphore-like behavior to avoid triggering multiple threads
+     * and turns for the same requests.
+     */
     const inFlightRequests = new Set<string>();
+
+    /**
+     * Keeps stats of active threads.
+     *
+     * Used to find out whether a turn has progressed since last check
+     * or is it hanging.
+     */
+    const threadStatus = new Map<ThreadId, TurnStatus>();
+
+    /**
+     * Fetches fresh turn information from T3
+     */
+    const loadThreadStatus = (threadId: ThreadId): Effect.Effect<TurnStatus, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        const maybeThread = yield* projectionSnapshotQuery
+          .getThreadDetailById(threadId)
+          .pipe(orFail("Problems getting the thread from the projection"));
+
+        const thread = yield* Effect.fromOption(maybeThread).pipe(
+          orFail(`Could not load T3 thread ${threadId}`),
+        );
+
+        if (!thread.latestTurn) {
+          return { stats: null, recordedAt: yield* getNow };
+        }
+
+        const stats = getTurnStats(thread, thread.latestTurn);
+        return { stats, recordedAt: yield* getNow };
+      });
+
+    /**
+     * Loads the current turn status and compares it with the previous observation.
+     * The first observation establishes the baseline and reports `progressed` as null.
+     * Nonterminal observations replace the stored baseline; terminal observations remove it.
+     */
+    const getProgress = (
+      threadId: ThreadId,
+    ): Effect.Effect<
+      { readonly status: TurnStatus; readonly progressed: boolean | null },
+      NTBSProcessorError
+    > =>
+      Effect.gen(function* () {
+        const recorded = threadStatus.get(threadId);
+        const fresh = yield* loadThreadStatus(threadId);
+
+        let progressed: boolean | null;
+
+        if (recorded === undefined) {
+          progressed = null;
+        } else if (recorded.stats === null && fresh.stats === null) {
+          progressed = false;
+        } else if (recorded.stats === null) {
+          progressed = true;
+        } else if (fresh.stats === null) {
+          return yield* new NTBSProcessorError({
+            reason: `T3 thread ${threadId} became pending after its turn had started.`,
+            cause: { recorded, fresh },
+          });
+        } else {
+          progressed = hasProgress(recorded.stats, fresh.stats);
+        }
+
+        const finished = fresh.stats !== null && fresh.stats.state !== "running";
+
+        if (finished) {
+          threadStatus.delete(threadId);
+        } else {
+          threadStatus.set(threadId, fresh);
+        }
+
+        return { status: fresh, progressed };
+      });
 
     /**
      * Creates an isolated worktree and a new T3 thread.
@@ -328,7 +470,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
         const threadUUID = yield* randomUUID;
         const threadId = ThreadId.make(threadUUID);
 
-        const createdAt = DateTime.formatIso(yield* DateTime.now);
+        const createdAt = yield* getNow;
         // TODO: Resolve the title in a better way
         const title = DEFAULT_THREAD_TITLE;
         const modelSelection =
