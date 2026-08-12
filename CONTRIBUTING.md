@@ -10,7 +10,7 @@ If that sounds annoying, that is because it is. This project is still early and 
 
 PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
 
-If you are an external contributor, expect `vouch:unvouched` until we explicitly add you to [.github/VOUCHED.td](.github/VOUCHED.td).
+If you are an external contributor, expect `vouch:unvouched` until a maintainer vouches for you. This fork does not carry upstream's `.github/VOUCHED.td` roster.
 
 ## What We Are Most Likely To Accept
 

@@ -958,7 +958,14 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozeLabelNow: `${nowMinute}:00.000Z`,
         groupByRecency: props.threadGrouping === "recency",
       }),
-    [nowMinute, settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
+    [
+      nowMinute,
+      props.threadGrouping,
+      settledShelfExpanded,
+      snoozedShelfExpanded,
+      threadListV2Layout,
+      v2PendingTasks,
+    ],
   );
 
   const renderV2Item = useCallback(
@@ -1083,6 +1090,7 @@ export function HomeScreen(props: HomeScreenProps) {
       handleMovePinnedThread,
       handlePinThread,
       handleRegenerateThreadTitle,
+      nowMinute,
       handleSettleThread,
       handleSnoozeThread,
       handleUnpinThread,
