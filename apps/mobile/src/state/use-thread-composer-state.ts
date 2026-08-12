@@ -25,6 +25,7 @@ import {
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import {
   defaultFetchAttachmentDataUrl,
+  describeQueuedAttachmentCapacity,
   formatMissingAttachmentsError,
   recallQueuedAttachments,
 } from "../lib/queuedAttachmentRecall";
@@ -430,12 +431,29 @@ export function useThreadComposerState() {
           (candidate) => candidate.messageId === messageId,
         );
         if (!message) return;
-        // Bytes first: the removal below is what makes editing destructive, so
-        // the attachments have to be in hand while the message still exists.
+        // Removing a queued message deletes its attachment files on the server,
+        // so everything that could lose a picture happens before the removal and
+        // backs out of the whole edit instead.
+        const capacityError = describeQueuedAttachmentCapacity(
+          message.attachments.length,
+          getComposerDraftSnapshot(threadKey).attachments.length,
+        );
+        if (capacityError !== null) {
+          setPendingConnectionError(capacityError);
+          return;
+        }
         const recalled = await recallQueuedAttachments(message.attachments, {
           urlById: serverQueuedAttachmentUrlById,
           fetchDataUrl: defaultFetchAttachmentDataUrl,
         });
+        // Signed URLs resolve asynchronously, so an edit tapped early — or one
+        // that hits a network blip — finds nothing to read. Leave the message
+        // queued: it and its pictures are intact, and the edit can be retried.
+        const missingError = formatMissingAttachmentsError(recalled.missing);
+        if (missingError !== null) {
+          setPendingConnectionError(missingError);
+          return;
+        }
         const result = await removeServerQueuedMessage({
           environmentId: selectedThreadShell.environmentId,
           input: { threadId: selectedThreadShell.id, messageId },
@@ -444,10 +462,6 @@ export function useThreadComposerState() {
         setComposerDraftText(threadKey, message.text);
         if (recalled.images.length > 0) {
           appendComposerDraftAttachments(threadKey, recalled.images);
-        }
-        const missingError = formatMissingAttachmentsError(recalled.missing);
-        if (missingError !== null) {
-          setPendingConnectionError(missingError);
         }
       }
     },

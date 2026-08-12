@@ -1,3 +1,5 @@
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
+
 import type { ComposerImageAttachment } from "../../composerDraftStore";
 import { randomUUID } from "../../lib/utils";
 
@@ -10,8 +12,10 @@ import { randomUUID } from "../../lib/utils";
  * editing has to fetch each attachment back through its signed asset URL.
  *
  * Callers must do this *before* removing the queued message. The removal is
- * what makes the edit destructive: once the queued entry is gone, a failed
- * fetch has no second chance and the picture is lost.
+ * what makes the edit destructive: once the queued entry is gone, its
+ * attachment files are pruned server-side and a failed fetch has no second
+ * chance — so a caller that cannot restore everything must leave the message
+ * queued rather than remove it.
  */
 
 export interface RecallableQueuedAttachment {
@@ -87,6 +91,23 @@ export const recallQueuedAttachments = async (
 export const formatMissingAttachmentsError = (missing: ReadonlyArray<string>): string | null => {
   if (missing.length === 0) return null;
   return missing.length === 1
-    ? `'${missing[0]}' could not be restored for editing and was left off the message.`
-    : `${missing.length} attachments could not be restored for editing and were left off the message.`;
+    ? `'${missing[0]}' could not be loaded, so the message is still queued. Try editing it again in a moment.`
+    : `${missing.length} attachments could not be loaded, so the message is still queued. Try editing it again in a moment.`;
+};
+
+/**
+ * Refuses the edit up front when the composer has no room for the queued
+ * message's pictures. Restoring only some of them would drop the rest for good,
+ * since removing the queued message deletes its attachment files server-side.
+ */
+export const describeQueuedAttachmentCapacity = (
+  queuedCount: number,
+  draftImageCount: number,
+): string | null => {
+  if (queuedCount === 0) return null;
+  const capacity = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - draftImageCount);
+  if (queuedCount <= capacity) return null;
+  return `Editing this message would bring back ${queuedCount} image${
+    queuedCount === 1 ? "" : "s"
+  }, past the ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}-image limit. Remove some images from the composer first.`;
 };

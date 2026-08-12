@@ -1,6 +1,8 @@
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  describeQueuedAttachmentCapacity,
   formatMissingAttachmentsError,
   recallQueuedAttachments,
   type RecallableQueuedAttachment,
@@ -114,13 +116,40 @@ describe("formatMissingAttachmentsError", () => {
 
   it("names the single attachment that was left behind", () => {
     expect(formatMissingAttachmentsError(["screenshot.png"])).toBe(
-      "'screenshot.png' could not be restored for editing and was left off the message.",
+      "'screenshot.png' could not be loaded, so the message is still queued. Try editing it again in a moment.",
     );
   });
 
   it("counts them once several were left behind", () => {
     expect(formatMissingAttachmentsError(["a.png", "b.png"])).toBe(
-      "2 attachments could not be restored for editing and were left off the message.",
+      "2 attachments could not be loaded, so the message is still queued. Try editing it again in a moment.",
     );
+  });
+});
+
+describe("describeQueuedAttachmentCapacity", () => {
+  it("allows an edit that fits in the composer", () => {
+    expect(describeQueuedAttachmentCapacity(3, 2)).toBeNull();
+  });
+
+  it("allows an edit that exactly fills the remaining room", () => {
+    expect(describeQueuedAttachmentCapacity(3, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 3)).toBeNull();
+  });
+
+  it("refuses an edit that would overflow, rather than restoring only some pictures", () => {
+    const message = describeQueuedAttachmentCapacity(3, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 2);
+
+    expect(message).toContain(`${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}-image limit`);
+    expect(message).toContain("Remove some images from the composer first.");
+  });
+
+  it("says image, singular, for one attachment", () => {
+    expect(describeQueuedAttachmentCapacity(1, PROVIDER_SEND_TURN_MAX_ATTACHMENTS)).toContain(
+      "bring back 1 image,",
+    );
+  });
+
+  it("never blocks a message with no attachments", () => {
+    expect(describeQueuedAttachmentCapacity(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS)).toBeNull();
   });
 });

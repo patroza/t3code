@@ -469,12 +469,7 @@ export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   insertTextAtEnd: (text: string, options?: { ensureLeadingBoundary?: boolean }) => boolean;
-  /**
-   * Put a queued message back in the composer for editing. Attachments are
-   * passed alongside the text because the queued entry is removed first — the
-   * composer is the only place its pictures can survive the edit.
-   */
-  recallQueuedMessage: (text: string, images?: ReadonlyArray<ComposerImageAttachment>) => void;
+  recallQueuedMessage: (text: string) => void;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
@@ -2741,7 +2736,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         composerEditorRef.current?.focusAt(cursor);
       },
       insertTextAtEnd: insertComposerTextAtEnd,
-      recallQueuedMessage: (text: string, images?: ReadonlyArray<ComposerImageAttachment>) => {
+      recallQueuedMessage: (text: string) => {
         const history = recallComposerInputHistory(
           composerInputHistoryRef.current,
           text,
@@ -2749,9 +2744,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
         persistComposerInputHistory(history);
         applyComposerHistoryValue(text);
-        if (images && images.length > 0) {
-          addComposerImagesToDraft([...images]);
-        }
       },
       openModelPicker: () => {
         setIsComposerModelPickerOpen(true);
@@ -2841,7 +2833,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }),
     [
       activeThread,
-      addComposerImagesToDraft,
       composerDraftTarget,
       getComposerDraft,
       composerCursor,

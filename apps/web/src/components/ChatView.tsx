@@ -363,6 +363,7 @@ import {
 import { useAssetUrls } from "../assets/assetUrls";
 import {
   defaultFetchAttachmentBlob,
+  describeQueuedAttachmentCapacity,
   formatMissingAttachmentsError,
   recallQueuedAttachments,
 } from "./chat/queuedAttachmentRecall";
@@ -5854,26 +5855,48 @@ function ChatViewContent(props: ChatViewProps) {
       (message) => message.messageId === messageId,
     );
     if (!queuedMessage) return;
-    // Attachments are fetched back before the removal, not after: removing the
-    // queued message is what makes this destructive, so the bytes have to be in
-    // hand while the message still exists.
+    // Removing a queued message deletes its attachment files on the server, so
+    // every step that could lose a picture happens before the removal and backs
+    // out of the whole edit instead.
+    const threadId = activeThread.id;
+    const draftTarget = composerDraftTarget;
+    const capacityError = describeQueuedAttachmentCapacity(
+      queuedMessage.attachments.length,
+      useComposerDraftStore.getState().getComposerDraft(draftTarget)?.images.length ?? 0,
+    );
+    if (capacityError !== null) {
+      setThreadError(threadId, capacityError);
+      return;
+    }
     const recalled = await recallQueuedAttachments(queuedMessage.attachments, {
       urlById: serverAttachmentUrlById,
       fetchBlob: defaultFetchAttachmentBlob,
       createObjectUrl: (file) => URL.createObjectURL(file),
     });
-    const result = await removeQueuedThreadMessage({
-      environmentId,
-      input: { threadId: activeThread.id, messageId },
-    });
-    if (result._tag === "Failure") {
+    const revokeRecalled = () => {
       for (const image of recalled.images) {
         URL.revokeObjectURL(image.previewUrl);
       }
+    };
+    // Signed URLs resolve asynchronously, so an edit clicked early — or one that
+    // hits a network blip — finds nothing to fetch. Leave the message queued:
+    // it and its pictures are still intact, and the edit can be retried.
+    const missingError = formatMissingAttachmentsError(recalled.missing);
+    if (missingError !== null) {
+      revokeRecalled();
+      setThreadError(threadId, missingError);
+      return;
+    }
+    const result = await removeQueuedThreadMessage({
+      environmentId,
+      input: { threadId, messageId },
+    });
+    if (result._tag === "Failure") {
+      revokeRecalled();
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
-          activeThread.id,
+          threadId,
           error instanceof Error
             ? error.message
             : "Failed to remove the queued message for editing.",
@@ -5881,10 +5904,12 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
-    composerRef.current?.recallQueuedMessage(queuedMessage.text, recalled.images);
-    const missingError = formatMissingAttachmentsError(recalled.missing);
-    if (missingError !== null) {
-      setThreadError(activeThread.id, missingError);
+    composerRef.current?.recallQueuedMessage(queuedMessage.text);
+    // Written against the draft target captured before the awaits, not the
+    // composer's current one: switching threads mid-fetch must not drop another
+    // thread's pictures into this draft, or these into another.
+    if (recalled.images.length > 0) {
+      addComposerDraftImages(draftTarget, [...recalled.images]);
     }
   };
 
