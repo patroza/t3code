@@ -203,10 +203,12 @@ type TurnStatus = {
  *
  * Resolves the required T3 services and returns processor operations with no remaining requirements.
  */
-export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
-  adapter: NTBSAdapter<P>,
-): Effect.Effect<NTBSProcessor<P>, never, NTBSProcessorRequirements> =>
+export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
+  adapterTag: Context.Service<AdapterId, NTBSAdapter<P>>,
+): Effect.Effect<NTBSProcessor<P>, never, AdapterId | NTBSProcessorRequirements> =>
   Effect.gen(function* () {
+    const adapter = yield* adapterTag;
+
     const orFail = (reason: string) =>
       Effect.mapError((cause: unknown) => new NTBSProcessorError({ reason, cause }));
 
