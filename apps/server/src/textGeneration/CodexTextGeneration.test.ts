@@ -290,7 +290,10 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           body: "",
         }),
         launchArgs: "--enable settings-feature",
-        environment: { T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --listen off " },
+        // Merged onto the real environment, not replacing it: this env is what
+        // the fake `codex` shell script is spawned with, and dropping PATH
+        // leaves it unable to resolve `cat` on systems without /bin/cat.
+        environment: { ...process.env, T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --listen off " },
         requireArg: "--strict-config",
         forbidArg: "settings-feature",
       },

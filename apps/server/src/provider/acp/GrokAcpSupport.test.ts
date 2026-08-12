@@ -1,3 +1,8 @@
+import {
+  ProviderDriverKind,
+  DEFAULT_MODEL_BY_PROVIDER,
+  GROK_DEFAULT_MODEL,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as EffectAcpErrors from "effect-acp/errors";
@@ -14,9 +19,14 @@ import {
 
 describe("resolveGrokAcpBaseModelId", () => {
   it("normalizes empty and custom Grok model ids", () => {
-    expect(resolveGrokAcpBaseModelId(undefined)).toBe("grok-build");
-    expect(resolveGrokAcpBaseModelId("   ")).toBe("grok-build");
+    expect(resolveGrokAcpBaseModelId(undefined)).toBe(GROK_DEFAULT_MODEL);
+    expect(resolveGrokAcpBaseModelId("   ")).toBe(GROK_DEFAULT_MODEL);
     expect(resolveGrokAcpBaseModelId("  grok-test-custom-model  ")).toBe("grok-test-custom-model");
+  });
+
+  it("falls back to the shared Grok default rather than Grok Build", () => {
+    expect(GROK_DEFAULT_MODEL).toBe("grok-4.6");
+    expect(DEFAULT_MODEL_BY_PROVIDER[ProviderDriverKind.make("grok")]).toBe(GROK_DEFAULT_MODEL);
   });
 });
 

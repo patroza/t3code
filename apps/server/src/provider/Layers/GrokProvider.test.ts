@@ -4,10 +4,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { GrokSettings } from "@t3tools/contracts";
+import { GROK_DEFAULT_MODEL, GrokSettings } from "@t3tools/contracts";
 
 import {
   buildGrokCapabilitiesFromModelMeta,
+  buildGrokDiscoveredModelsFromSessionModelState,
   buildGrokReasoningEffortCapabilities,
   buildInitialGrokProviderSnapshot,
   checkGrokProviderStatus,
@@ -84,13 +85,19 @@ describe("buildInitialGrokProviderSnapshot", () => {
       expect(snapshot.status).toBe("warning");
       expect(snapshot.version).toBeNull();
       expect(snapshot.message).toContain("Checking Grok");
-      expect(snapshot.requiresNewThreadForModelChange).toBe(true);
-      const builtIn = snapshot.models.find((model) => model.slug === "grok-build");
+      // Grok switches models mid-session, so the snapshot must not carry the
+      // new-thread requirement that would grey out its model picker.
+      expect(snapshot.requiresNewThreadForModelChange).toBeUndefined();
+      const builtIn = snapshot.models.find((model) => model.slug === GROK_DEFAULT_MODEL);
       expect(
         (builtIn?.capabilities?.optionDescriptors ?? []).some(
           (descriptor) => descriptor.id === "reasoningEffort",
         ),
       ).toBe(true);
+      // The picker default has to be a model the CLI still accepts: Grok 1.0.3
+      // rejects the old `grok-build` slug outright.
+      expect(builtIn?.isDefault).toBe(true);
+      expect(snapshot.models.some((model) => model.slug === "grok-build")).toBe(false);
     }),
   );
 });
@@ -162,8 +169,36 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
 
       expect(snapshot.status).toBe("error");
       expect(snapshot.installed).toBe(true);
-      expect(snapshot.models.map((model) => model.slug)).toEqual(["grok-build"]);
+      expect(snapshot.models.map((model) => model.slug)).toEqual([GROK_DEFAULT_MODEL, "grok-4.5"]);
       expect(snapshot.message).toContain("ACP startup failed");
     }),
   );
+});
+
+describe("buildGrokDiscoveredModelsFromSessionModelState", () => {
+  const modelState = (currentModelId: string | undefined) => ({
+    ...(currentModelId === undefined ? {} : { currentModelId }),
+    availableModels: [
+      { modelId: "grok-4.6", name: "Grok 4.6" },
+      { modelId: "grok-4.5", name: "Grok 4.5" },
+    ],
+  });
+
+  it("marks the model a fresh session starts on as the picker default", () => {
+    const models = buildGrokDiscoveredModelsFromSessionModelState(modelState("grok-4.5") as never);
+
+    expect(models.map((model) => model.slug)).toEqual(["grok-4.6", "grok-4.5"]);
+    expect(models.find((model) => model.slug === "grok-4.5")?.isDefault).toBe(true);
+    expect(models.find((model) => model.slug === "grok-4.6")?.isDefault).toBeUndefined();
+  });
+
+  it("leaves the default unmarked when Grok reports no current model", () => {
+    const models = buildGrokDiscoveredModelsFromSessionModelState(modelState(undefined) as never);
+
+    expect(models.some((model) => model.isDefault)).toBe(false);
+  });
+
+  it("returns nothing when there is no model state to read", () => {
+    expect(buildGrokDiscoveredModelsFromSessionModelState(null)).toEqual([]);
+  });
 });

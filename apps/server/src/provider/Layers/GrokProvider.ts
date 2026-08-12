@@ -1,4 +1,5 @@
 import {
+  GROK_DEFAULT_MODEL,
   type GrokSettings,
   type ModelCapabilities,
   type ServerProvider,
@@ -33,11 +34,13 @@ import {
 } from "../providerMaintenance.ts";
 import { makeGrokAcpRuntime, resolveGrokAcpBaseModelId } from "../acp/GrokAcpSupport.ts";
 
+// No `requiresNewThreadForModelChange`: Grok's ACP accepts `session/set_model`
+// mid-session, and the adapter re-applies the requested model on every turn
+// (`applyGrokAcpModelSelection`).
 const GROK_PRESENTATION = {
   displayName: "Grok",
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
-  requiresNewThreadForModelChange: true,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -74,10 +77,20 @@ export function buildGrokReasoningEffortCapabilities(
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const GROK_ACP_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
+// Shown until ACP model discovery answers (and whenever it fails). Grok 1.0.3
+// rejects the old `grok-build` slug with "unknown model id", so offering it
+// here only produced sessions that could not start.
 const GROK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
-    slug: "grok-build",
-    name: "Grok Build",
+    slug: GROK_DEFAULT_MODEL,
+    name: "Grok 4.6",
+    isCustom: false,
+    isDefault: true,
+    capabilities: buildGrokReasoningEffortCapabilities(GROK_FALLBACK_REASONING_EFFORTS),
+  },
+  {
+    slug: "grok-4.5",
+    name: "Grok 4.5",
     isCustom: false,
     capabilities: buildGrokReasoningEffortCapabilities(GROK_FALLBACK_REASONING_EFFORTS),
   },
@@ -231,13 +244,19 @@ function grokModelsFromSettings(
   return providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES);
 }
 
-function buildGrokDiscoveredModelsFromSessionModelState(
+export function buildGrokDiscoveredModelsFromSessionModelState(
   modelState: EffectAcpSchema.SessionModelState | null | undefined,
 ): ReadonlyArray<ServerProviderModel> {
   if (!modelState || modelState.availableModels.length === 0) {
     return [];
   }
   const seen = new Set<string>();
+  // Grok reports which model a fresh session starts on; mark it default so the
+  // picker agrees with what a new thread would actually run, rather than
+  // whichever model happens to come first in the ACP list.
+  const currentSlug = modelState.currentModelId
+    ? resolveGrokAcpBaseModelId(modelState.currentModelId)
+    : undefined;
   return modelState.availableModels
     .map((model): ServerProviderModel | undefined => {
       const slug = resolveGrokAcpBaseModelId(model.modelId);
@@ -249,6 +268,7 @@ function buildGrokDiscoveredModelsFromSessionModelState(
         slug,
         name: model.name.trim() || slug,
         isCustom: false,
+        ...(slug === currentSlug ? { isDefault: true } : {}),
         capabilities: buildGrokCapabilitiesFromModelMeta(model._meta),
       };
     })
