@@ -1248,6 +1248,13 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  // Lets async handlers tell "still on the thread I started from" from "the user
+  // has since navigated away", which decides whether the live composer handle is
+  // still the right place to put recalled content.
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  useEffect(() => {
+    routeThreadKeyRef.current = routeThreadKey;
+  }, [routeThreadKey]);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -5860,6 +5867,7 @@ function ChatViewContent(props: ChatViewProps) {
     // out of the whole edit instead.
     const threadId = activeThread.id;
     const draftTarget = composerDraftTarget;
+    const draftTargetKey = routeThreadKey;
     const capacityError = describeQueuedAttachmentCapacity(
       queuedMessage.attachments.length,
       useComposerDraftStore.getState().getComposerDraft(draftTarget)?.images.length ?? 0,
@@ -5904,12 +5912,17 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
-    composerRef.current?.recallQueuedMessage(queuedMessage.text);
-    // Written against the draft target captured before the awaits, not the
-    // composer's current one: switching threads mid-fetch must not drop another
-    // thread's pictures into this draft, or these into another.
+    // Both text and pictures go to the draft target captured before the awaits,
+    // never the composer's current one: switching threads mid-fetch must not
+    // split the message across two drafts, or drop it if this one unmounted.
+    setComposerDraftPrompt(draftTarget, queuedMessage.text);
     if (recalled.images.length > 0) {
       addComposerDraftImages(draftTarget, [...recalled.images]);
+    }
+    // The handle only adds composer-local polish — input history and cursor —
+    // so it is worth calling solely while its composer is still this thread's.
+    if (routeThreadKeyRef.current === draftTargetKey) {
+      composerRef.current?.recallQueuedMessage(queuedMessage.text);
     }
   };
 

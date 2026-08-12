@@ -114,13 +114,13 @@ describe("formatMissingAttachmentsError", () => {
 
   it("names the single attachment that was left behind", () => {
     expect(formatMissingAttachmentsError(["screenshot.png"])).toBe(
-      "'screenshot.png' could not be loaded, so the message is still queued. Try editing it again in a moment.",
+      "'screenshot.png' could not be loaded, so the message is still queued. Try again — if it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.",
     );
   });
 
   it("counts them once several were left behind", () => {
     expect(formatMissingAttachmentsError(["a.png", "b.png"])).toBe(
-      "2 attachments could not be loaded, so the message is still queued. Try editing it again in a moment.",
+      "2 attachments could not be loaded, so the message is still queued. Try again — if it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.",
     );
   });
 });

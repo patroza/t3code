@@ -48,8 +48,9 @@ export const defaultFetchAttachmentBlob = async (url: string): Promise<Blob> => 
 
 /**
  * Fetches every queued attachment back into a composer-ready image. Failures
- * are collected rather than thrown: one unreadable picture should not block
- * editing the message's text, and the caller reports what was left behind.
+ * are collected rather than thrown so the caller sees the whole picture at
+ * once: because removing the queued message prunes its files, a caller that
+ * cannot restore everything must abandon the edit rather than restore part.
  */
 export const recallQueuedAttachments = async (
   attachments: ReadonlyArray<RecallableQueuedAttachment>,
@@ -91,8 +92,8 @@ export const recallQueuedAttachments = async (
 export const formatMissingAttachmentsError = (missing: ReadonlyArray<string>): string | null => {
   if (missing.length === 0) return null;
   return missing.length === 1
-    ? `'${missing[0]}' could not be loaded, so the message is still queued. Try editing it again in a moment.`
-    : `${missing.length} attachments could not be loaded, so the message is still queued. Try editing it again in a moment.`;
+    ? `'${missing[0]}' could not be loaded, so the message is still queued. Try again — if it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`
+    : `${missing.length} attachments could not be loaded, so the message is still queued. Try again — if it keeps failing, the image is no longer on the server and the message has to be sent or replaced as it is.`;
 };
 
 /**
