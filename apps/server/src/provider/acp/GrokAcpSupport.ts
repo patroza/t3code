@@ -1,4 +1,5 @@
 import {
+  GROK_DEFAULT_MODEL,
   type GrokSettings,
   type ModelSelection,
   type ProviderInteractionMode,
@@ -150,8 +151,8 @@ export const makeGrokAcpRuntime = (
 
 export function resolveGrokAcpBaseModelId(model: string | null | undefined): string {
   const trimmed = model?.trim();
-  const base = trimmed && trimmed.length > 0 ? trimmed : "grok-build";
-  return normalizeModelSlug(base, GROK_DRIVER_KIND) ?? "grok-build";
+  const base = trimmed && trimmed.length > 0 ? trimmed : GROK_DEFAULT_MODEL;
+  return normalizeModelSlug(base, GROK_DRIVER_KIND) ?? GROK_DEFAULT_MODEL;
 }
 
 export function currentGrokModelIdFromSessionSetup(

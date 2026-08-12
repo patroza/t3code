@@ -137,6 +137,12 @@ const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 export const DEFAULT_MODEL = "gpt-5.6-sol";
 
 /**
+ * Grok's default model. Grok Build held this slot from the original Grok
+ * integration; 4.6 is the frontier model Grok's own session default reports.
+ */
+export const GROK_DEFAULT_MODEL = "grok-4.6";
+
+/**
  * Codex default-model preference, most preferred first. The provider snapshot
  * marks the first of these present in the live `model/list` response as
  * default; when none are available, Codex's own `isDefault` flag wins.
@@ -152,7 +158,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-opus-4-8",
   [CURSOR_DRIVER_KIND]: "auto",
-  [GROK_DRIVER_KIND]: "grok-build",
+  [GROK_DRIVER_KIND]: GROK_DEFAULT_MODEL,
   [KIMI_DRIVER_KIND]: "kimi-code/k3",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
 };

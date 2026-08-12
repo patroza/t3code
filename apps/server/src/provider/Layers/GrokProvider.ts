@@ -33,11 +33,14 @@ import {
 } from "../providerMaintenance.ts";
 import { makeGrokAcpRuntime, resolveGrokAcpBaseModelId } from "../acp/GrokAcpSupport.ts";
 
+// No `requiresNewThreadForModelChange`: Grok's ACP accepts `session/set_model`
+// mid-session, and the adapter already re-applies the requested model on every
+// turn (`applyGrokAcpModelSelection`). The flag dated from the original ACP
+// integration, when that was not yet known to work.
 const GROK_PRESENTATION = {
   displayName: "Grok",
   badgeLabel: "Early Access",
   showInteractionModeToggle: true,
-  requiresNewThreadForModelChange: true,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],

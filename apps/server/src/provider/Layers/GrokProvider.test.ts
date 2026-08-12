@@ -84,7 +84,9 @@ describe("buildInitialGrokProviderSnapshot", () => {
       expect(snapshot.status).toBe("warning");
       expect(snapshot.version).toBeNull();
       expect(snapshot.message).toContain("Checking Grok");
-      expect(snapshot.requiresNewThreadForModelChange).toBe(true);
+      // Grok switches models mid-session, so the snapshot must not carry the
+      // new-thread requirement that would grey out its model picker.
+      expect(snapshot.requiresNewThreadForModelChange).toBeUndefined();
       const builtIn = snapshot.models.find((model) => model.slug === "grok-build");
       expect(
         (builtIn?.capabilities?.optionDescriptors ?? []).some(
