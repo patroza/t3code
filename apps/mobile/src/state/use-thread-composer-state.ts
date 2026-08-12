@@ -23,6 +23,11 @@ import {
   pickComposerImages,
 } from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import {
+  defaultFetchAttachmentDataUrl,
+  formatMissingAttachmentsError,
+  recallQueuedAttachments,
+} from "../lib/queuedAttachmentRecall";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildThreadFeed, promoteSteeredQueuedMessages } from "../lib/threadActivity";
 import { appAtomRegistry } from "../state/atom-registry";
@@ -42,6 +47,7 @@ import {
   setPendingConnectionError,
   useRemoteConnectionStatus,
 } from "../state/use-remote-environment-registry";
+import { useAssetUrls } from "../state/assets";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
@@ -360,6 +366,40 @@ export function useThreadComposerState() {
     [selectedThreadShell, steerQueuedMessage, steeringQueuedMessageIds],
   );
 
+  // Server-queued attachments are resolved up front so editing one can put its
+  // pictures back in the composer; the bytes only exist behind a signed URL.
+  const serverQueuedAttachmentIds = useMemo(() => {
+    const attachmentIds = new Set<string>();
+    for (const queued of serverQueuedMessages ?? []) {
+      for (const attachment of queued.attachments) {
+        attachmentIds.add(attachment.id);
+      }
+    }
+    return [...attachmentIds];
+  }, [serverQueuedMessages]);
+  const serverQueuedAttachmentResources = useMemo(
+    () =>
+      serverQueuedAttachmentIds.map((attachmentId) => ({
+        _tag: "attachment" as const,
+        attachmentId,
+      })),
+    [serverQueuedAttachmentIds],
+  );
+  const serverQueuedAttachmentUrls = useAssetUrls(
+    selectedThreadShell?.environmentId ?? null,
+    serverQueuedAttachmentResources,
+  );
+  const serverQueuedAttachmentUrlById = useMemo(
+    () =>
+      new Map(
+        serverQueuedAttachmentIds.flatMap((attachmentId, index) => {
+          const url = serverQueuedAttachmentUrls[index];
+          return url ? [[attachmentId, url] as const] : [];
+        }),
+      ),
+    [serverQueuedAttachmentIds, serverQueuedAttachmentUrls],
+  );
+
   const onEditQueuedMessage = useCallback(
     async (messageId: MessageId, source: "local" | "server") => {
       if (!selectedThreadShell) {
@@ -390,12 +430,25 @@ export function useThreadComposerState() {
           (candidate) => candidate.messageId === messageId,
         );
         if (!message) return;
+        // Bytes first: the removal below is what makes editing destructive, so
+        // the attachments have to be in hand while the message still exists.
+        const recalled = await recallQueuedAttachments(message.attachments, {
+          urlById: serverQueuedAttachmentUrlById,
+          fetchDataUrl: defaultFetchAttachmentDataUrl,
+        });
         const result = await removeServerQueuedMessage({
           environmentId: selectedThreadShell.environmentId,
           input: { threadId: selectedThreadShell.id, messageId },
         });
         if (result._tag !== "Success") return;
         setComposerDraftText(threadKey, message.text);
+        if (recalled.images.length > 0) {
+          appendComposerDraftAttachments(threadKey, recalled.images);
+        }
+        const missingError = formatMissingAttachmentsError(recalled.missing);
+        if (missingError !== null) {
+          setPendingConnectionError(missingError);
+        }
       }
     },
     [
@@ -403,6 +456,7 @@ export function useThreadComposerState() {
       selectedThreadDetail,
       selectedThreadQueuedMessages,
       selectedThreadShell,
+      serverQueuedAttachmentUrlById,
     ],
   );
 

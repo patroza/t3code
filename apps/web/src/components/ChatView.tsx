@@ -361,6 +361,11 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import {
+  defaultFetchAttachmentBlob,
+  formatMissingAttachmentsError,
+  recallQueuedAttachments,
+} from "./chat/queuedAttachmentRecall";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -2510,6 +2515,10 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
   const serverMessages = activeThread?.messages;
+  // Queued messages are included so editing one can put its pictures back in
+  // the composer: a queued attachment names bytes the server holds, and the
+  // only way to recover them client-side is a signed asset URL.
+  const serverQueuedMessages = activeThread?.queuedMessages;
   const serverAttachmentIds = useMemo(() => {
     const attachmentIds = new Set<string>();
     for (const message of serverMessages ?? []) {
@@ -2517,8 +2526,13 @@ function ChatViewContent(props: ChatViewProps) {
         attachmentIds.add(attachment.id);
       }
     }
+    for (const queued of serverQueuedMessages ?? []) {
+      for (const attachment of queued.attachments) {
+        attachmentIds.add(attachment.id);
+      }
+    }
     return [...attachmentIds];
-  }, [serverMessages]);
+  }, [serverMessages, serverQueuedMessages]);
   const serverAttachmentResources = useMemo(
     () =>
       serverAttachmentIds.map((attachmentId) => ({
@@ -5840,11 +5854,22 @@ function ChatViewContent(props: ChatViewProps) {
       (message) => message.messageId === messageId,
     );
     if (!queuedMessage) return;
+    // Attachments are fetched back before the removal, not after: removing the
+    // queued message is what makes this destructive, so the bytes have to be in
+    // hand while the message still exists.
+    const recalled = await recallQueuedAttachments(queuedMessage.attachments, {
+      urlById: serverAttachmentUrlById,
+      fetchBlob: defaultFetchAttachmentBlob,
+      createObjectUrl: (file) => URL.createObjectURL(file),
+    });
     const result = await removeQueuedThreadMessage({
       environmentId,
       input: { threadId: activeThread.id, messageId },
     });
     if (result._tag === "Failure") {
+      for (const image of recalled.images) {
+        URL.revokeObjectURL(image.previewUrl);
+      }
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
@@ -5856,7 +5881,11 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
-    composerRef.current?.recallQueuedMessage(queuedMessage.text);
+    composerRef.current?.recallQueuedMessage(queuedMessage.text, recalled.images);
+    const missingError = formatMissingAttachmentsError(recalled.missing);
+    if (missingError !== null) {
+      setThreadError(activeThread.id, missingError);
+    }
   };
 
   const onRespondToApproval = useCallback(
