@@ -11,9 +11,11 @@ import {
   type OrchestrationThread,
   type ProjectId,
   ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./lifecycle.ts";
 import { Context, Crypto, Data, DateTime, Effect, Schedule } from "effect";
+import * as Semaphore from "effect/Semaphore";
 import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -132,6 +134,7 @@ type NTBSProcessorRequirements =
   | Crypto.Crypto;
 
 type TurnStats = {
+  readonly turnId: TurnId;
   readonly state: OrchestrationLatestTurnState;
   readonly activityCount: number;
   readonly latestActivityId: EventId | null;
@@ -163,6 +166,7 @@ const getTurnStats = (
   );
 
   return {
+    turnId: turn.turnId,
     state: turn.state,
     activityCount: activities.length,
     latestActivityId: activities.at(-1)?.id ?? null,
@@ -264,6 +268,38 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
+    /** Keeps one lock per user message so its turn cannot return two final responses at once. */
+    const responseLocks = new Map<MessageId, Semaphore.Semaphore>();
+
+    const getResponseLock = (userMessageId: MessageId): Semaphore.Semaphore => {
+      let semaphore = responseLocks.get(userMessageId);
+      if (semaphore === undefined) {
+        semaphore = Semaphore.makeUnsafe(1);
+        responseLocks.set(userMessageId, semaphore);
+      }
+      return semaphore;
+    };
+
+    /**
+     * Prevents the turn started by one user message from producing competing
+     * final outcomes, such as both a normal response and a timeout.
+     */
+    const ensureUniqueOutcome = <A, E, R>(
+      userMessageId: MessageId,
+      effect: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E, R> => {
+      const semaphore = getResponseLock(userMessageId);
+      return semaphore.withPermit(effect).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (responseLocks.get(userMessageId) === semaphore) {
+              responseLocks.delete(userMessageId);
+            }
+          }),
+        ),
+      );
+    };
+
     /**
      * Starts the first turn in an existing T3 thread.
      *
@@ -299,6 +335,109 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
           )
           .pipe(orFail("Failed to start the first T3 turn"));
       });
+
+    /**
+     * Requests interruption of one exact T3 turn.
+     */
+    const interruptT3Turn = (
+      threadId: ThreadId,
+      turnId: TurnId,
+    ): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        const commandId = CommandId.make(yield* randomUUID);
+        const createdAt = yield* getNow;
+
+        yield* orchestrationEngineService
+          .dispatch(
+            OrchestrationCommand.make({
+              type: "thread.turn.interrupt",
+              commandId,
+              threadId,
+              turnId,
+              createdAt,
+            }),
+          )
+          .pipe(orFail(`Failed to interrupt T3 turn ${turnId}`));
+      });
+
+    /**
+     * Posts one final response and records it in the adapter lifecycle.
+     *
+     * The caller must have already confirmed that no response is recorded and
+     * must hold the outcome lock for this user message. If the platform already
+     * contains the response, it is recorded instead of reposted.
+     */
+    const postResponse = (
+      threadCreated: NTBS.ThreadCreated<P>,
+      response: NTBSResponse,
+    ): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        const existingResponseMessageId = yield* adapter
+          .findMatchingResponseMessage(threadCreated, response)
+          .pipe(orFail("Failed checking whether the NTBS response was already posted"));
+
+        const responseMessageId =
+          existingResponseMessageId ??
+          (yield* adapter
+            .postResponse(threadCreated, response)
+            .pipe(orFail("Failed posting the NTBS response")));
+
+        yield* adapter
+          .save({
+            ...threadCreated,
+            state: "thread.response.posted",
+            responseMessageId,
+          })
+          .pipe(orFail("Failed recording the posted NTBS response"));
+      });
+
+    /**
+     * Stops a stalled T3 turn and reports the timeout to the external platform.
+     *
+     * Response handling is locked by user message so a normal completion and
+     * timeout cannot both post an outcome. Timed-out threads remain unarchived
+     * for inspection or manual retry.
+     */
+    const handleStalledTurn = (
+      userMessageId: MessageId,
+      status: TurnStatus,
+    ): Effect.Effect<void, NTBSProcessorError> =>
+      ensureUniqueOutcome(
+        userMessageId,
+        Effect.gen(function* () {
+          const lifecycle = yield* adapter
+            .findByThreadId(status.threadId)
+            .pipe(orFail("Failed loading the NTBS lifecycle for a stalled turn"));
+
+          if (lifecycle.state === "thread.response.posted") {
+            return;
+          }
+
+          if (status.stats !== null) {
+            const turnId = status.stats.turnId;
+            yield* interruptT3Turn(status.threadId, turnId).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed interrupting stalled T3 turn", {
+                  userMessageId,
+                  threadId: status.threadId,
+                  turnId,
+                  cause,
+                }),
+              ),
+            );
+          }
+
+          const response: NTBSResponse = {
+            type: "timeout",
+            text:
+              status.stats === null
+                ? "T3 could not start this request after repeated checks."
+                : "T3 stopped this request after repeated checks found no observable progress.",
+          };
+
+          yield* postResponse(lifecycle, response);
+        }),
+      );
 
     /**
      * Resolves where a new thread worktree starts from.
@@ -511,7 +650,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
           }
 
           if (consecutiveNoProgressChecks >= MAX_NO_PROGRESS_CHECKS) {
-            yield* Effect.logDebug("No progress for 2 minutes, something's sketchy, check");
+            yield* handleStalledTurn(userMessageId, result.status);
             return;
           }
 
@@ -713,7 +852,16 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
               recordedAt: yield* getNow,
               stats: null,
             });
-            // start monitoring the turn in the background (TODO: aren't we already subscribing for this?)
+            yield* monitorT3Turn(userMessageId).pipe(
+              Effect.catch((cause) =>
+                Effect.logError("NTBS turn monitor failed", {
+                  userMessageId,
+                  threadId,
+                  cause,
+                }),
+              ),
+              Effect.forkDetach,
+            );
             // Attempt to post the acknowledgement independently
           }
           return;
