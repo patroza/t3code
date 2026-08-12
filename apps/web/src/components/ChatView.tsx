@@ -361,6 +361,12 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import {
+  defaultFetchAttachmentBlob,
+  describeQueuedAttachmentCapacity,
+  formatMissingAttachmentsError,
+  recallQueuedAttachments,
+} from "./chat/queuedAttachmentRecall";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -1242,6 +1248,13 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  // Lets async handlers tell "still on the thread I started from" from "the user
+  // has since navigated away", which decides whether the live composer handle is
+  // still the right place to put recalled content.
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  useEffect(() => {
+    routeThreadKeyRef.current = routeThreadKey;
+  }, [routeThreadKey]);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -2510,6 +2523,10 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
   const serverMessages = activeThread?.messages;
+  // Queued messages are included so editing one can put its pictures back in
+  // the composer: a queued attachment names bytes the server holds, and the
+  // only way to recover them client-side is a signed asset URL.
+  const serverQueuedMessages = activeThread?.queuedMessages;
   const serverAttachmentIds = useMemo(() => {
     const attachmentIds = new Set<string>();
     for (const message of serverMessages ?? []) {
@@ -2517,8 +2534,13 @@ function ChatViewContent(props: ChatViewProps) {
         attachmentIds.add(attachment.id);
       }
     }
+    for (const queued of serverQueuedMessages ?? []) {
+      for (const attachment of queued.attachments) {
+        attachmentIds.add(attachment.id);
+      }
+    }
     return [...attachmentIds];
-  }, [serverMessages]);
+  }, [serverMessages, serverQueuedMessages]);
   const serverAttachmentResources = useMemo(
     () =>
       serverAttachmentIds.map((attachmentId) => ({
@@ -5840,15 +5862,49 @@ function ChatViewContent(props: ChatViewProps) {
       (message) => message.messageId === messageId,
     );
     if (!queuedMessage) return;
+    // Removing a queued message deletes its attachment files on the server, so
+    // every step that could lose a picture happens before the removal and backs
+    // out of the whole edit instead.
+    const threadId = activeThread.id;
+    const draftTarget = composerDraftTarget;
+    const draftTargetKey = routeThreadKey;
+    const capacityError = describeQueuedAttachmentCapacity(
+      queuedMessage.attachments.length,
+      useComposerDraftStore.getState().getComposerDraft(draftTarget)?.images.length ?? 0,
+    );
+    if (capacityError !== null) {
+      setThreadError(threadId, capacityError);
+      return;
+    }
+    const recalled = await recallQueuedAttachments(queuedMessage.attachments, {
+      urlById: serverAttachmentUrlById,
+      fetchBlob: defaultFetchAttachmentBlob,
+      createObjectUrl: (file) => URL.createObjectURL(file),
+    });
+    const revokeRecalled = () => {
+      for (const image of recalled.images) {
+        URL.revokeObjectURL(image.previewUrl);
+      }
+    };
+    // Signed URLs resolve asynchronously, so an edit clicked early — or one that
+    // hits a network blip — finds nothing to fetch. Leave the message queued:
+    // it and its pictures are still intact, and the edit can be retried.
+    const missingError = formatMissingAttachmentsError(recalled.missing);
+    if (missingError !== null) {
+      revokeRecalled();
+      setThreadError(threadId, missingError);
+      return;
+    }
     const result = await removeQueuedThreadMessage({
       environmentId,
-      input: { threadId: activeThread.id, messageId },
+      input: { threadId, messageId },
     });
     if (result._tag === "Failure") {
+      revokeRecalled();
       if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
-          activeThread.id,
+          threadId,
           error instanceof Error
             ? error.message
             : "Failed to remove the queued message for editing.",
@@ -5856,7 +5912,18 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
-    composerRef.current?.recallQueuedMessage(queuedMessage.text);
+    // Both text and pictures go to the draft target captured before the awaits,
+    // never the composer's current one: switching threads mid-fetch must not
+    // split the message across two drafts, or drop it if this one unmounted.
+    setComposerDraftPrompt(draftTarget, queuedMessage.text);
+    if (recalled.images.length > 0) {
+      addComposerDraftImages(draftTarget, [...recalled.images]);
+    }
+    // The handle only adds composer-local polish — input history and cursor —
+    // so it is worth calling solely while its composer is still this thread's.
+    if (routeThreadKeyRef.current === draftTargetKey) {
+      composerRef.current?.recallQueuedMessage(queuedMessage.text);
+    }
   };
 
   const onRespondToApproval = useCallback(
