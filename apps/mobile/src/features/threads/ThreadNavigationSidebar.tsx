@@ -236,6 +236,7 @@ function ThreadNavigationSidebarPane(
     pinThread,
     unpinThread,
     movePinnedThread,
+    regenerateThreadTitle,
   } = useThreadListActions();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -778,6 +779,15 @@ function ThreadNavigationSidebarPane(
     }
     return supported;
   }, [serverConfigs]);
+  const titleRegenerationEnvironmentIds = useMemo(() => {
+    const supported = new Set<EnvironmentId>();
+    for (const [environmentId, config] of serverConfigs) {
+      if (config.environment.capabilities.threadTitleRegeneration === true) {
+        supported.add(environmentId);
+      }
+    }
+    return supported;
+  }, [serverConfigs]);
   // Canonical arranged pinned order for Move up/down flags — computed from
   // all shells so search/scope filtering never disables a valid move.
   const arrangedPinnedKeys = useMemo(() => {
@@ -1287,6 +1297,8 @@ function ThreadNavigationSidebarPane(
               onSelectThread={handleSelectThread}
               onDeleteThread={confirmDeleteThread}
               onArchiveThread={archiveThread}
+              onRegenerateThreadTitle={regenerateThreadTitle}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
               onSettleThread={settleThread}
               snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
@@ -1420,6 +1432,8 @@ function ThreadNavigationSidebarPane(
               onUnsettleThread={unsettleThread}
               onArchiveThread={archiveThread}
               onDeleteThread={confirmDeleteThread}
+              onRegenerateThreadTitle={regenerateThreadTitle}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               onSelectThread={handleSelectThread}
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
@@ -1458,6 +1472,7 @@ function ThreadNavigationSidebarPane(
       projectByKey,
       projectCwdByKey,
       projectTitleByProjectKey,
+      regenerateThreadTitle,
       props.onNewThreadInProject,
       props.searchQuery,
       showFlatThreadList,
@@ -1465,6 +1480,8 @@ function ThreadNavigationSidebarPane(
       props.width,
       savedConnectionsById,
       serverConfigs,
+      threadSearchMatchByKey,
+      titleRegenerationEnvironmentIds,
       settleThread,
       settlementEnvironmentIds,
       settledThreadKeys,

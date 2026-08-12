@@ -57,6 +57,7 @@ export function HomeRouteScreen() {
     pinThread,
     unpinThread,
     movePinnedThread,
+    regenerateThreadTitle,
     unsettleThread,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
@@ -252,6 +253,7 @@ export function HomeRouteScreen() {
           onClearEnvironments={clearSelectedEnvironments}
           onToggleEnvironment={toggleSelectedEnvironmentId}
           onMovePinnedThread={movePinnedThread}
+          onRegenerateThreadTitle={regenerateThreadTitle}
           onProjectChange={setSelectedProjectKey}
           onOpenSettings={() =>
             navigation.navigate("SettingsSheet", {
