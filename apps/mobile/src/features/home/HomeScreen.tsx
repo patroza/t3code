@@ -1100,6 +1100,7 @@ export function HomeScreen(props: HomeScreenProps) {
       handleUnsettleThread,
       pinningEnvironmentIds,
       pinReorderEnvironmentIds,
+      snoozeEnvironmentIds,
       projectByKey,
       projectCwdByKey,
       props.onArchiveThread,
