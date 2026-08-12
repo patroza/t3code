@@ -32,6 +32,10 @@ The first NTBS adapters can run inside the T3 server, but some platform integrat
 
 When a remote adapter is implemented, either move its platform operations into the server or expose the processor and adapter operations through a network API. The shared lifecycle and storage design should not require every adapter to share the T3 server process. Choose the transport when the first remote adapter is ported.
 
+## Decide thread archival after testing
+
+Keep NTBS-created T3 threads after their responses are posted for now. Once the workflow has been tested in practice, decide whether completed threads should be archived automatically and under which conditions.
+
 ## Add worktree cleanup to the Jira bridge
 
 The Jira auto-create flow (`JiraIssueBridge.ts`) creates a worktree before dispatching

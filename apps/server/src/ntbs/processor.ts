@@ -14,7 +14,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./lifecycle.ts";
-import { Context, Crypto, Data, DateTime, Effect, Schedule } from "effect";
+import { Context, Crypto, Data, DateTime, Effect, Schedule, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -25,7 +25,6 @@ import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
-import type { OnDiffLineClickProps } from "@pierre/diffs";
 
 /*
   NTBS architecture:
@@ -39,7 +38,6 @@ import type { OnDiffLineClickProps } from "@pierre/diffs";
     - Attempts to post the acknowledgement independently.
     - Watches T3 events for completed work.
     - Posts the final result through the adapter and saves `ResponsePosted`.
-    - Archives the T3 thread after its response has been recorded.
 
   2. Platform-specific inbound code:
     - Receives raw platform data from Jira, Discord, GitHub, or Teams.
@@ -94,8 +92,8 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
    * Consumes T3 events and passes them to `processT3Event`.
    *
    * After the live subscription begins, loads stored `ThreadCreated` records.
-   * It starts a missing first turn or restarts its monitor from the turn's
-   * original `requestedAt` time.
+   * It starts a missing first turn, resumes monitoring an active turn, or posts
+   * the outcome of a turn that already finished.
    *
    * Runs until interrupted by its caller.
    * Logs individual processing failures and continues with later events.
@@ -113,7 +111,7 @@ type NTBSProcessorRequirements =
    */
   | OrchestrationEngineService
   /*
-    Loads the selected T3 project and reads thread outcomes and archive state.
+    Loads the selected T3 project and reads thread outcomes.
   */
   | ProjectionSnapshotQuery
   /*
@@ -201,52 +199,6 @@ type TurnStatus = {
 };
 
 /**
- * Provider runtimes (like Claude Code) emit `turn.completed` events.
- * T3 consumes those internally and exposes the resulting session change through a `thread.session-set` event.
- *
- * Native T3 clients can react by refreshing the thread projection.
- * External NTBS adapters do not consume T3 projections automatically, so they must read the thread state themselves.
- *
- * This function reads the projected thread identified by the session event.
- * It finds the recorded user message, then resolves the response from that
- * message's turn rather than whichever turn happens to be latest.
- * It returns `null` if that turn has not ended.
- * Otherwise it returns the response and its type.
- */
-declare const resolveT3Outcome: (
-  event: Extract<OrchestrationEvent, { type: "thread.session-set" }>,
-  userMessageId: MessageId,
-) => Effect.Effect<
-  { readonly threadId: ThreadId; readonly response: NTBSResponse } | null,
-  NTBSProcessorError
->;
-
-/**
- * Archives a T3 thread after its external response has been recorded.
- *
- * Returns successfully when the thread is already archived. A failure can be
- * retried without posting the external response again.
- * Timed-out threads are left unarchived for inspection or manual retry.
- */
-declare const archiveT3Thread: (threadId: ThreadId) => Effect.Effect<void, NTBSProcessorError>;
-
-/**
- * Handles T3 events that may indicate that a turn has ended.
- *
- * 1. Ignore events other than `thread.session-set`.
- * 2. Find the adapter record by thread ID.
- * 3. Stop if no record exists.
- * 4. Stop if the response was already posted.
- * 5. Resolve the T3 outcome and stop if the turn has not ended.
- * 6. Post the response.
- * 7. Record `ResponsePosted`.
- * 8. Archive the T3 thread.
- */
-declare const processT3Event: (
-  event: OrchestrationEvent,
-) => Effect.Effect<void, NTBSProcessorError>;
-
-/**
  * Creates an NTBS processor for one adapter.
  *
  * Resolves the required T3 services and returns processor operations with no remaining requirements.
@@ -268,16 +220,34 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
 
     const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
-    /** Keeps one lock per user message so its turn cannot return two final responses at once. */
-    const responseLocks = new Map<MessageId, Semaphore.Semaphore>();
-
-    const getResponseLock = (userMessageId: MessageId): Semaphore.Semaphore => {
-      let semaphore = responseLocks.get(userMessageId);
-      if (semaphore === undefined) {
-        semaphore = Semaphore.makeUnsafe(1);
-        responseLocks.set(userMessageId, semaphore);
+    /** Keeps each user message's lock until its final response is recorded and no caller uses it. */
+    const responseLocks = new Map<
+      MessageId,
+      {
+        readonly semaphore: Semaphore.Semaphore;
+        callers: number;
+        responsePosted: boolean;
       }
-      return semaphore;
+    >();
+
+    const getResponseLock = (userMessageId: MessageId) => {
+      let lock = responseLocks.get(userMessageId);
+      if (lock === undefined) {
+        lock = {
+          semaphore: Semaphore.makeUnsafe(1),
+          callers: 0,
+          responsePosted: false,
+        };
+        responseLocks.set(userMessageId, lock);
+      }
+      return lock;
+    };
+
+    const markResponsePosted = (userMessageId: MessageId): void => {
+      const lock = responseLocks.get(userMessageId);
+      if (lock !== undefined) {
+        lock.responsePosted = true;
+      }
     };
 
     /**
@@ -287,18 +257,26 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
     const ensureUniqueOutcome = <A, E, R>(
       userMessageId: MessageId,
       effect: Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E, R> => {
-      const semaphore = getResponseLock(userMessageId);
-      return semaphore.withPermit(effect).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            if (responseLocks.get(userMessageId) === semaphore) {
-              responseLocks.delete(userMessageId);
-            }
-          }),
-        ),
-      );
-    };
+    ): Effect.Effect<A, E, R> =>
+      Effect.suspend(() => {
+        const lock = getResponseLock(userMessageId);
+        lock.callers += 1;
+
+        return lock.semaphore.withPermit(effect).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              lock.callers -= 1;
+              if (
+                lock.callers === 0 &&
+                lock.responsePosted &&
+                responseLocks.get(userMessageId) === lock
+              ) {
+                responseLocks.delete(userMessageId);
+              }
+            }),
+          ),
+        );
+      });
 
     /**
      * Starts the first turn in an existing T3 thread.
@@ -361,6 +339,83 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
       });
 
     /**
+     * Reads the final outcome of the turn started by one NTBS user message.
+     * Returns `null` while that exact turn is still pending or running.
+     */
+    const resolveT3Outcome = (
+      threadId: ThreadId,
+      userMessageId: MessageId,
+    ): Effect.Effect<
+      { readonly threadId: ThreadId; readonly response: NTBSResponse } | null,
+      NTBSProcessorError
+    > =>
+      Effect.gen(function* () {
+        const turns = yield* projectionTurnRepository
+          .listByThreadId({ threadId })
+          .pipe(orFail(`Failed loading turns for T3 thread ${threadId}`));
+
+        const matchingTurns = turns.filter((turn) => turn.pendingMessageId === userMessageId);
+        const turn = matchingTurns[0];
+
+        if (matchingTurns.length !== 1 || turn === undefined) {
+          return yield* new NTBSProcessorError({
+            reason: `Expected exactly one T3 turn for user message ${userMessageId}, found ${matchingTurns.length}.`,
+            cause: { threadId, userMessageId, matchingTurns },
+          });
+        }
+
+        if (turn.state === "pending" || turn.state === "running") {
+          return null;
+        }
+
+        const maybeThread = yield* projectionSnapshotQuery
+          .getThreadDetailById(threadId)
+          .pipe(orFail(`Failed loading T3 thread ${threadId}`));
+
+        const thread = yield* Effect.fromOption(maybeThread).pipe(
+          orFail(`Could not find T3 thread ${threadId}`),
+        );
+
+        if (turn.state === "completed") {
+          const assistantMessage =
+            turn.assistantMessageId === null
+              ? undefined
+              : thread.messages.find((message) => message.id === turn.assistantMessageId);
+
+          const text = assistantMessage?.text.trim() ?? "";
+
+          return {
+            threadId,
+            response:
+              text.length > 0
+                ? { type: "answer", text }
+                : {
+                    type: "failure",
+                    text: "T3 completed without producing a response.",
+                  },
+          };
+        }
+
+        if (turn.state === "error") {
+          return {
+            threadId,
+            response: {
+              type: "failure",
+              text: thread.session?.lastError ?? "T3 failed while processing this request.",
+            },
+          };
+        }
+
+        return {
+          threadId,
+          response: {
+            type: "cancellation",
+            text: "T3 stopped processing this request.",
+          },
+        };
+      });
+
+    /**
      * Posts one final response and records it in the adapter lifecycle.
      *
      * The caller must have already confirmed that no response is recorded and
@@ -389,14 +444,76 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
             responseMessageId,
           })
           .pipe(orFail("Failed recording the posted NTBS response"));
+
+        markResponsePosted(threadCreated.t3Data.userMessageId);
+      });
+
+    /**
+     * Posts the final response when a T3 session event ends an NTBS turn.
+     * Other T3 events and threads unknown to this adapter are ignored.
+     */
+    const processT3Event = (event: OrchestrationEvent): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        if (event.type !== "thread.session-set") {
+          return;
+        }
+
+        const threadId = event.payload.threadId;
+
+        /*
+          We may receive events for threads that are not related to the current 
+          platform, and thus, adapter.
+          So we check if the thread in question exists in the adapter records.
+        */
+        const recordedThread = yield* adapter.findByThreadId(threadId).pipe(
+          Effect.catchTag("ThreadNotFound", () => Effect.succeed(null)),
+          orFail("Failed loading the NTBS lifecycle for a T3 event"),
+        );
+
+        if (recordedThread === null) {
+          return;
+        }
+
+        /*
+          At the same time a thread may have different messages. We're only interested
+          in the last user message that appears in the adapter records. 
+         */
+        const userMessageId = recordedThread.t3Data.userMessageId;
+
+        yield* ensureUniqueOutcome(
+          userMessageId,
+          Effect.gen(function* () {
+            // Timeout handling may have posted a response while this event was
+            // waiting for the same user message's outcome lock.
+            const currentRecord = yield* adapter.findByThreadId(threadId).pipe(
+              Effect.catchTag("ThreadNotFound", () => Effect.succeed(null)),
+              orFail("Failed reloading the NTBS lifecycle before posting its outcome"),
+            );
+
+            if (currentRecord === null) {
+              return;
+            }
+
+            if (currentRecord.state === "thread.response.posted") {
+              markResponsePosted(userMessageId);
+              return;
+            }
+
+            const outcome = yield* resolveT3Outcome(threadId, userMessageId);
+            if (outcome === null) {
+              return;
+            }
+
+            yield* postResponse(currentRecord, outcome.response);
+          }),
+        );
       });
 
     /**
      * Stops a stalled T3 turn and reports the timeout to the external platform.
      *
      * Response handling is locked by user message so a normal completion and
-     * timeout cannot both post an outcome. Timed-out threads remain unarchived
-     * for inspection or manual retry.
+     * timeout cannot both post an outcome.
      */
     const handleStalledTurn = (
       userMessageId: MessageId,
@@ -410,6 +527,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
             .pipe(orFail("Failed loading the NTBS lifecycle for a stalled turn"));
 
           if (lifecycle.state === "thread.response.posted") {
+            markResponsePosted(userMessageId);
             return;
           }
 
@@ -785,6 +903,83 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
         return threadId;
       });
 
+    /**
+     * Resumes one stored NTBS thread after the processor starts.
+     *
+     * Starts the original turn when it is missing, resumes monitoring while it
+     * is active, or posts its outcome when it already finished.
+     */
+    const recoverThread = (
+      threadCreated: NTBS.ThreadCreated<P>,
+    ): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.gen(function* () {
+        const { threadId, userMessageId } = threadCreated.t3Data;
+        const turns = yield* projectionTurnRepository
+          .listByThreadId({ threadId })
+          .pipe(orFail(`Failed loading turns while recovering T3 thread ${threadId}`));
+        const matchingTurns = turns.filter((turn) => turn.pendingMessageId === userMessageId);
+
+        if (matchingTurns.length > 1) {
+          return yield* new NTBSProcessorError({
+            reason: `Expected at most one T3 turn for user message ${userMessageId}, found ${matchingTurns.length}.`,
+            cause: { threadId, userMessageId, matchingTurns },
+          });
+        }
+
+        const turn = matchingTurns[0];
+
+        if (turn === undefined) {
+          yield* startT3Turn(
+            threadId,
+            userMessageId,
+            threadCreated.snapshot,
+            threadCreated.attachments,
+          );
+          messageStatus.set(userMessageId, {
+            threadId,
+            recordedAt: yield* getNow,
+            stats: null,
+          });
+        } else {
+          const status = yield* loadMessageStatus(userMessageId, threadId);
+
+          if (status.stats !== null && status.stats.state !== "running") {
+            yield* ensureUniqueOutcome(
+              userMessageId,
+              Effect.gen(function* () {
+                const currentRecord = yield* adapter
+                  .findByThreadId(threadId)
+                  .pipe(orFail("Failed reloading the NTBS lifecycle during recovery"));
+
+                if (currentRecord.state === "thread.response.posted") {
+                  markResponsePosted(userMessageId);
+                  return;
+                }
+
+                const outcome = yield* resolveT3Outcome(threadId, userMessageId);
+                if (outcome !== null) {
+                  yield* postResponse(currentRecord, outcome.response);
+                }
+              }),
+            );
+            return;
+          }
+
+          messageStatus.set(userMessageId, status);
+        }
+
+        yield* monitorT3Turn(userMessageId).pipe(
+          Effect.catch((cause) =>
+            Effect.logError("Recovered NTBS turn monitor failed", {
+              userMessageId,
+              threadId,
+              cause,
+            }),
+          ),
+          Effect.forkDetach,
+        );
+      });
+
     /*
       Handles an external request in this order:
 
@@ -862,7 +1057,17 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
               ),
               Effect.forkDetach,
             );
-            // Attempt to post the acknowledgement independently
+
+            yield* adapter.postAcknowledgement(threadCreated).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed posting the NTBS acknowledgement", {
+                  userMessageId,
+                  threadId,
+                  cause,
+                }),
+              ),
+              Effect.asVoid,
+            );
           }
           return;
         }).pipe(Effect.ensuring(Effect.sync(() => inFlightRequests.delete(key))));
@@ -871,7 +1076,51 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData>(
     const process = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
       processAdapterRequest(request, t3Context);
 
-    const subscribeToT3Events = Effect.void;
+    const consumeT3Events = Stream.runForEach(
+      orchestrationEngineService.streamDomainEvents,
+      (event) =>
+        processT3Event(event).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Failed processing T3 event for NTBS", {
+              eventType: event.type,
+              cause,
+            }),
+          ),
+        ),
+    );
+
+    const recoverStoredThreads = adapter.loadThreadsAwaitingResponse.pipe(
+      orFail("Failed loading NTBS threads awaiting a response"),
+      Effect.flatMap((threads) =>
+        Effect.forEach(
+          threads,
+          (threadCreated) =>
+            recoverThread(threadCreated).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed recovering an NTBS thread", {
+                  threadId: threadCreated.t3Data.threadId,
+                  userMessageId: threadCreated.t3Data.userMessageId,
+                  cause,
+                }),
+              ),
+            ),
+          { discard: true },
+        ),
+      ),
+      Effect.catch((cause) =>
+        Effect.logError("Failed starting NTBS thread recovery", {
+          cause,
+        }),
+      ),
+    );
+
+    const subscribeToT3Events = Effect.scoped(
+      Effect.gen(function* () {
+        yield* consumeT3Events.pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* recoverStoredThreads;
+        yield* Effect.never;
+      }),
+    );
 
     return {
       process,
