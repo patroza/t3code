@@ -27,6 +27,7 @@ import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import { composerDraftsAtom, hasComposerDraftMessage } from "../../state/use-composer-drafts";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
+import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import { ThreadIdentityMark } from "../identity/ParticipantStack";
 import { resolveSettledRowTimestamp, resolveThreadStatus } from "./threadPresentation";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
@@ -481,14 +482,21 @@ const THREAD_ROW_LEGACY_MENU_ACTIONS: MenuAction[] = [
 function buildThreadRowMenuActions(input: {
   readonly settlementSupported: boolean;
   readonly isSettled: boolean;
+  /** Upstream's regenerate entry (#6253), sat above Archive as it is there. */
+  readonly titleRegeneration: readonly MenuAction[];
 }): MenuAction[] {
   if (!input.settlementSupported) {
-    return THREAD_ROW_LEGACY_MENU_ACTIONS;
+    return [
+      THREAD_ROW_LEGACY_MENU_ACTIONS[0]!,
+      ...input.titleRegeneration,
+      ...THREAD_ROW_LEGACY_MENU_ACTIONS.slice(1),
+    ];
   }
   return [
     input.isSettled
       ? { id: "unsettle", title: "Unsettle", image: "pin" }
       : { id: "settle", title: "Settle", image: "checkmark.circle" },
+    ...input.titleRegeneration,
     { id: "archive", title: "Archive", image: "archivebox" },
     { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
   ];
@@ -519,6 +527,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly isSettled?: boolean;
   readonly onSettleThread?: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread?: (thread: EnvironmentThreadShell) => void;
+  readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
+  readonly titleRegenerationSupported: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   readonly simultaneousSwipeGesture?: ComponentProps<
@@ -547,6 +557,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     onDeleteThread,
     onSettleThread,
     onUnsettleThread,
+    onRegenerateThreadTitle,
   } = props;
   const settlementSupported = props.settlementSupported === true;
   const isSettled = props.isSettled === true;
@@ -596,6 +607,10 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const handleSettle = useCallback(() => onSettleThread?.(thread), [onSettleThread, thread]);
   const handleUnsettle = useCallback(() => onUnsettleThread?.(thread), [onUnsettleThread, thread]);
+  const handleRegenerateTitle = useCallback(
+    () => onRegenerateThreadTitle(thread),
+    [onRegenerateThreadTitle, thread],
+  );
   const primaryAction = useMemo(
     () => ({
       accessibilityLabel: `Archive ${thread.title}`,
@@ -606,17 +621,26 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     [handleArchive, thread.title],
   );
   const menuActions = useMemo(
-    () => buildThreadRowMenuActions({ settlementSupported, isSettled }),
-    [isSettled, settlementSupported],
+    () =>
+      buildThreadRowMenuActions({
+        settlementSupported,
+        isSettled,
+        titleRegeneration: buildThreadTitleRegenerationMenuItems({
+          supported: props.titleRegenerationSupported,
+          isRegenerating: thread.titleRegeneration != null,
+        }),
+      }),
+    [isSettled, props.titleRegenerationSupported, settlementSupported, thread.titleRegeneration],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete, handleSettle, handleUnsettle],
+    [handleArchive, handleDelete, handleRegenerateTitle, handleSettle, handleUnsettle],
   );
 
   const statusPill = effectiveStatus ? (
