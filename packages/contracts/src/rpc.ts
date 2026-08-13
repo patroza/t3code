@@ -89,6 +89,7 @@ import {
   PullRequestActionInput,
   PullRequestActivity,
   PullRequestCommentInput,
+  PullRequestCommentUpdateInput,
   PullRequestDetail,
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
@@ -98,6 +99,7 @@ import {
   PullRequestListStatsInput,
   PullRequestListStatsResult,
   PullRequestOperationError,
+  PullRequestReactionInput,
   PullRequestRef,
   PullRequestReviewerCandidateList,
   PullRequestReviewerRequestInput,
@@ -105,6 +107,7 @@ import {
   PullRequestThreadReplyInput,
   PullRequestThreadResolutionInput,
   PullRequestUnavailableError,
+  PullRequestUpdateInput,
 } from "./pullRequest.ts";
 import {
   RelayClientInstallFailedError,
@@ -307,10 +310,13 @@ export const WS_METHODS = {
   pullRequestsActivity: "pullRequests.activity",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
   pullRequestsRunAction: "pullRequests.runAction",
+  pullRequestsUpdate: "pullRequests.update",
   pullRequestsComment: "pullRequests.comment",
+  pullRequestsUpdateComment: "pullRequests.updateComment",
   pullRequestsSubmitReview: "pullRequests.submitReview",
   pullRequestsReplyToThread: "pullRequests.replyToThread",
   pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
+  pullRequestsSetReaction: "pullRequests.setReaction",
   pullRequestsInvalidate: "pullRequests.invalidate",
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
@@ -575,8 +581,20 @@ export const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAct
   error: PullRequestRpcError,
 });
 
+export const WsPullRequestsUpdateRpc = Rpc.make(WS_METHODS.pullRequestsUpdate, {
+  payload: PullRequestUpdateInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
 export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
   payload: PullRequestCommentInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsUpdateCommentRpc = Rpc.make(WS_METHODS.pullRequestsUpdateComment, {
+  payload: PullRequestCommentUpdateInput,
   success: Schema.Void,
   error: PullRequestRpcError,
 });
@@ -601,6 +619,12 @@ export const WsPullRequestsSetThreadResolutionRpc = Rpc.make(
     error: PullRequestRpcError,
   },
 );
+
+export const WsPullRequestsSetReactionRpc = Rpc.make(WS_METHODS.pullRequestsSetReaction, {
+  payload: PullRequestReactionInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
 
 export const WsPullRequestsInvalidateRpc = Rpc.make(WS_METHODS.pullRequestsInvalidate, {
   payload: PullRequestInvalidateInput,
@@ -1099,10 +1123,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsActivityRpc,
   WsPullRequestsDiffFileContentsRpc,
   WsPullRequestsRunActionRpc,
+  WsPullRequestsUpdateRpc,
   WsPullRequestsCommentRpc,
+  WsPullRequestsUpdateCommentRpc,
   WsPullRequestsSubmitReviewRpc,
   WsPullRequestsReplyToThreadRpc,
   WsPullRequestsSetThreadResolutionRpc,
+  WsPullRequestsSetReactionRpc,
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
