@@ -151,6 +151,7 @@ import {
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
+  isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   planPinnedReorder,
@@ -1108,7 +1109,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
   const handlePrClick = useCallback(
-    (event: ReactMouseEvent<HTMLElement>) => {
+    (event: ReactMouseEvent<HTMLAnchorElement>) => {
       if (!pr?.url) return;
       const openedInRightPanel = openPrLink(
         event,
@@ -1199,10 +1200,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </div>
   );
 
+  // A real link so cmd/ctrl+click and middle-click open the host in the
+  // browser. A plain click still opens T3's pull request view.
   const prBadge =
     prStatus && pr ? (
-      <button
-        type="button"
+      <a
+        href={pr.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={handlePrClick}
         className={cn(
           // Sidebar chrome follows the interface font; tabular digits keep the
@@ -1217,7 +1223,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         aria-label={prStatus.tooltip}
       >
         #{pr.number}
-      </button>
+      </a>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
@@ -2504,6 +2510,7 @@ export default function Sidebar() {
 
   const handleThreadClick = useCallback(
     (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
+      if (isSidebarNestedLinkClick(event.target)) return;
       const isMac = isMacPlatform(navigator.platform);
       const isModClick = isMac ? event.metaKey : event.ctrlKey;
       const threadKey = scopedThreadKey(threadRef);
