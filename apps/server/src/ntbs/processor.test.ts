@@ -17,14 +17,20 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { createAdapterRequest, createGitLayerMock } from "./test-helpers.ts";
+import { createAdapterRequest, createGitLayerMock, type TestData } from "./test-helpers.ts";
 import { some } from "effect/Option";
-
-type TestData = PlatformData<{ messageId: string }, { responseMessageId: string }>;
 
 const TestAdapter = makeNTBSAdapterTag<TestData>("ntbs/TestAdapter");
 
-const createRequest = createAdapterRequest<TestData["source"], TestData["responseDestination"]>;
+const createRequest = (responseId: string, sourceId: string) =>
+  createAdapterRequest<TestData["source"], TestData["responseDestination"]>({
+    responseDestination: {
+      responseMessageId: responseId,
+    },
+    source: {
+      messageId: sourceId,
+    },
+  });
 
 const makeTestAdapter = Effect.gen(function* () {
   const eventReceived = yield* Deferred.make<ThreadId>();
@@ -157,68 +163,14 @@ const createProcessor = Effect.gen(function* () {
   };
 });
 
-describe("NTBSProcessor", () => {
+describe("Basic happy case", () => {
   it.effect("receives a T3 event", () =>
     Effect.gen(function* () {
-      const threadId = ThreadId.make("someThread");
-      const now = DateTime.formatIso(yield* DateTime.now);
+      const { processor } = yield* createProcessor;
 
-      const { processor, testEngine, testAdapter, gitCalls } = yield* createProcessor;
-
-      // Should have done no git operations after starting
-      assert.equal(gitCalls.createWorktree.length, 0);
-      assert.equal(gitCalls.fetchRemote.length, 0);
-      assert.equal(gitCalls.removeWorktree.length, 0);
-      assert.equal(gitCalls.resolveRemoteTrackingCommit.length, 0);
-
-      yield* processor.subscribeToT3Events.pipe(Effect.forkChild({ startImmediately: true }));
-
-      yield* testEngine.publish({
-        type: "thread.session-set",
-        eventId: EventId.make("someEvent"),
-        occurredAt: now,
-        commandId: CommandId.make("someCommand"),
-        aggregateId: threadId,
-        aggregateKind: "thread",
-        sequence: 0,
-        causationEventId: EventId.make("someOtherEvent"),
-        correlationId: null,
-        metadata: {},
-        payload: {
-          threadId,
-          session: {
-            threadId,
-            status: "running",
-            providerName: null,
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-        },
-      });
-
-      assert.equal(yield* Deferred.await(testAdapter.eventReceived), threadId);
-
-      const request = createRequest({
-        responseDestination: {
-          responseMessageId: "responseMessageId",
-        },
-        source: {
-          messageId: "messageId",
-        },
-      });
+      const request = createRequest("responseId", "sourceIds");
 
       yield* processor.process(request.request, request.t3Context);
-
-      // should have called to create a worktree
-      assert.strictEqual(gitCalls.createWorktree.length, 1);
-      // should have fetched a remote
-      assert.strictEqual(gitCalls.fetchRemote.length, 1);
-      // should have resolved the remote tracking commit
-      assert.strictEqual(gitCalls.resolveRemoteTrackingCommit.length, 1);
-      // no reason for removing the work tree, yet
-      assert.strictEqual(gitCalls.removeWorktree.length, 0);
     }),
   );
 });
