@@ -93,7 +93,6 @@ export interface NTBSAdapter<P extends NTBS.PlatformData> {
    */
   readonly findMatchingResponseMessage: (
     state: NTBS.ThreadCreated<P>,
-    response: NTBSResponse,
   ) => Effect.Effect<string | null, AdapterError>;
   /**
    * Finds the latest lifecycle state associated with a T3 thread.
