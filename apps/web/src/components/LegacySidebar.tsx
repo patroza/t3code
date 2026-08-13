@@ -3150,7 +3150,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
   // Same contract as the project rows: open in the right panel when enabled,
   // and bring the thread into view so the panel has something to sit beside.
   const handleRecentPrClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>, url: string) => {
+    (event: React.MouseEvent<HTMLAnchorElement>, url: string) => {
       const openedInRightPanel = openPrLink(
         event,
         url,
@@ -3482,6 +3482,9 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
 
   const handleRowClick = useCallback(
     (event: React.MouseEvent) => {
+      // The PR badge in this row is a link now; a modifier-click on it must open
+      // the pull request, not toggle this row's selection.
+      if (isSidebarNestedLinkClick(event.target)) return;
       const isModClick = isMacPlatform(navigator.platform) ? event.metaKey : event.ctrlKey;
       if (isModClick) {
         event.preventDefault();
@@ -3750,13 +3753,16 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <button
-                        type="button"
+                      <a
+                        href={prStatus.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         aria-label={prStatus.tooltip}
                         className={cn(
                           "shrink-0 cursor-pointer font-mono text-xs hover:underline outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                           prStatus.colorClass,
                         )}
+                        onPointerDown={(event) => event.stopPropagation()}
                         onClick={(event) => handleRecentPrClick(event, prStatus.url)}
                       />
                     }
