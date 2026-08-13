@@ -64,3 +64,11 @@ If the ref noise ever matters, the shape is:
   with its own log warning.
 - Comment on the service op why this exception to branch retention exists, so it is not
   "harmonized" with `cleanupThreadWorktree`'s keep-the-branch behavior.
+
+## Use Deferred for asynchronous test synchronization
+
+Effect's `Deferred` is useful as a one-shot, promise-like latch when a test needs to wait for an
+asynchronous operation to reach a specific point. The code under test completes it, while the test
+awaits it deterministically, avoiding arbitrary sleeps, flaky timing assumptions, and unnecessary
+polling. Use it to coordinate milestones such as a subscriber consuming an event; direct
+`processor.process` tests generally do not need it.
