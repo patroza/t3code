@@ -430,7 +430,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
     ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
         const existingResponseMessageId = yield* adapter
-          .findMatchingResponseMessage(threadCreated, response)
+          .findMatchingResponseMessage(threadCreated)
           .pipe(orFail("Failed checking whether the NTBS response was already posted"));
 
         const responseMessageId =
