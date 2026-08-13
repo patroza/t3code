@@ -72,7 +72,7 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
   cause: unknown;
 }> {}
 
-export interface NTBSProcessor<P extends NTBS.PlatformData> {
+export interface NTBSProcessor {
   /**
    * Processes a request received by a platform adapter.
    *
@@ -83,7 +83,7 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
    * or backpressure for the time being. This choice can be reviewed later.
    */
   readonly process: (
-    request: NTBS.NTBSInput<P>,
+    request: NTBS.NTBSInput,
     t3Context: T3Context,
   ) => Effect.Effect<void, NTBSProcessorError>;
 
@@ -100,8 +100,7 @@ export interface NTBSProcessor<P extends NTBS.PlatformData> {
   readonly subscribeToT3Events: Effect.Effect<void>;
 }
 
-export const makeNTBSProcessorTag = <P extends NTBS.PlatformData>(key: string) =>
-  Context.Service<NTBSProcessor<P>>(key);
+export const makeNTBSProcessorTag = (key: string) => Context.Service<NTBSProcessor>(key);
 
 type NTBSProcessorRequirements =
   /*
@@ -202,9 +201,9 @@ type TurnStatus = {
  *
  * Resolves the required T3 services and returns processor operations with no remaining requirements.
  */
-export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
-  adapterTag: Context.Service<AdapterId, NTBSAdapter<P>>,
-): Effect.Effect<NTBSProcessor<P>, never, AdapterId | NTBSProcessorRequirements> =>
+export const makeNTBSProcessor = <AdapterId>(
+  adapterTag: Context.Service<AdapterId, NTBSAdapter>,
+): Effect.Effect<NTBSProcessor, never, AdapterId | NTBSProcessorRequirements> =>
   Effect.gen(function* () {
     const adapter = yield* adapterTag;
 
@@ -424,7 +423,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
      * contains the response, it is recorded instead of reposted.
      */
     const postResponse = (
-      threadCreated: NTBS.ThreadCreated<P>,
+      threadCreated: NTBS.ThreadCreated,
       response: NTBSResponse,
     ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
@@ -911,7 +910,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
      * is active, or posts its outcome when it already finished.
      */
     const recoverThread = (
-      threadCreated: NTBS.ThreadCreated<P>,
+      threadCreated: NTBS.ThreadCreated,
     ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
         const { threadId, userMessageId } = threadCreated.t3Data;
@@ -994,7 +993,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
       6. Attempt to post the acknowledgement independently.
     */
 
-    const processAdapterRequest = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
+    const processAdapterRequest = (request: NTBS.NTBSInput, t3Context: T3Context) =>
       Effect.gen(function* () {
         /*
           In-flight dedup first. We check if the processor is *currently*
@@ -1002,7 +1001,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
           Later we check for the *durable* dedup: are we receiving a request 
           for work that has *already* completed.
         */
-        const key = adapter.getRequestKey(request);
+        const key = request.sourceUri;
 
         const isBeingWorkedNow = inFlightRequests.has(key);
         if (isBeingWorkedNow) {
@@ -1028,7 +1027,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
             // generate the first user message ID and record it with ThreadCreated
             const userMessageId = MessageId.make(yield* randomUUID);
 
-            const threadCreated: NTBS.ThreadCreated<P> = {
+            const threadCreated: NTBS.ThreadCreated = {
               ...request,
               state: "thread.created",
               t3Data: {
@@ -1074,7 +1073,7 @@ export const makeNTBSProcessor = <P extends NTBS.PlatformData, AdapterId>(
         }).pipe(Effect.ensuring(Effect.sync(() => inFlightRequests.delete(key))));
       });
 
-    const process = (request: NTBS.NTBSInput<P>, t3Context: T3Context) =>
+    const process = (request: NTBS.NTBSInput, t3Context: T3Context) =>
       processAdapterRequest(request, t3Context);
 
     const consumeT3Events = Stream.runForEach(

@@ -1,45 +1,31 @@
-import { assert, describe, it } from "@effect/vitest";
+import { describe, it } from "@effect/vitest";
 import { NodeServices } from "@effect/platform-node";
 import {
-  CommandId,
-  EventId,
   OrchestrationProjectShell,
   ProviderInstanceId,
   ThreadId,
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
-import { DateTime, Deferred, Effect, Layer, PubSub, Stream } from "effect";
+import { Deferred, Effect, Layer, PubSub, Stream } from "effect";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSAdapter } from "./adapter.ts";
-import type { PlatformData } from "./lifecycle.ts";
 import { makeNTBSProcessor, makeNTBSProcessorTag } from "./processor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { createAdapterRequest, createGitLayerMock, type TestData } from "./test-helpers.ts";
+import { createAdapterRequest, createGitLayerMock } from "./test-helpers.ts";
 import { some } from "effect/Option";
 
-const TestAdapter = makeNTBSAdapterTag<TestData>("ntbs/TestAdapter");
-
-const createRequest = (responseId: string, sourceId: string) =>
-  createAdapterRequest<TestData["source"], TestData["responseDestination"]>({
-    responseDestination: {
-      responseMessageId: responseId,
-    },
-    source: {
-      messageId: sourceId,
-    },
-  });
+const TestAdapter = makeNTBSAdapterTag("ntbs/TestAdapter");
 
 const makeTestAdapter = Effect.gen(function* () {
   const eventReceived = yield* Deferred.make<ThreadId>();
 
-  const service: NTBSAdapter<TestData> = {
+  const service: NTBSAdapter = {
     save: () => Effect.void,
     postAcknowledgement: () => Effect.succeed("acknowledgement id"),
     postResponse: () => Effect.succeed("response id"),
-    getRequestKey: () => "requestKey",
     findByRequest: () => Effect.succeed(null),
     findMatchingResponseMessage: () => Effect.succeed(null),
     findByThreadId: (threadId) =>
@@ -56,7 +42,7 @@ const makeTestAdapter = Effect.gen(function* () {
   };
 });
 
-const TestProcessor = makeNTBSProcessorTag<TestData>("ntbs/TestProcessor");
+const TestProcessor = makeNTBSProcessorTag("ntbs/TestProcessor");
 
 const makeTestOrchestrationEngine = Effect.gen(function* () {
   const domainEvents = yield* PubSub.unbounded<OrchestrationEvent>();
@@ -103,7 +89,7 @@ processes a new request into a T3 thread, starts its first turn, persists lifecy
 */
 const makeTestProcessorLive = (
   orchestrationEngine: Layer.Layer<OrchestrationEngineService>,
-  adapter: Layer.Layer<NTBSAdapter<TestData>>,
+  adapter: Layer.Layer<NTBSAdapter>,
 ) => {
   const gitLayer = createGitLayerMock();
   return {
@@ -168,7 +154,7 @@ describe("Basic happy case", () => {
     Effect.gen(function* () {
       const { processor } = yield* createProcessor;
 
-      const request = createRequest("responseId", "sourceIds");
+      const request = createAdapterRequest("someRequestId");
 
       yield* processor.process(request.request, request.t3Context);
     }),

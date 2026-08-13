@@ -7,7 +7,7 @@ import {
   ThreadId,
   VcsCreateWorktreeResult,
 } from "@t3tools/contracts";
-import type { NTBSInput, NTBSLifecycle, PlatformData, ThreadCreated } from "./lifecycle.ts";
+import type { NTBSInput, NTBSLifecycle, ThreadCreated } from "./lifecycle.ts";
 import type { T3Context } from "./processor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSResponse } from "./adapter.ts";
@@ -55,28 +55,22 @@ export const createGitLayerMock = () => {
   };
 };
 
-export const createAdapterRequest = <Source, Destination>(input: {
-  responseDestination: Destination;
-  source: Source;
-}): {
-  request: NTBSInput<PlatformData<Source, Destination>>;
+export const createAdapterRequest = (
+  uniqueId: string,
+): {
+  request: NTBSInput;
   t3Context: T3Context;
 } => ({
   request: {
     snapshot: "This is an ongoing discussion",
     attachments: [],
-    platformData: {
-      responseDestination: input.responseDestination,
-      source: input.source,
-    },
+    sourceUri: uniqueId,
   },
   t3Context: {
     baseRef: "fork/dev",
     projectId: ProjectId.make("project"),
   },
 });
-
-export type TestData = PlatformData<{ messageId: string }, { responseMessageId: string }>;
 
 /*
     # Testing strategy
@@ -174,13 +168,12 @@ class TestAdapterState extends Context.Service<
     /**
      * Lifecycle records keyed by T3 thread.
      */
-    readonly records: Map<ThreadId, NTBSLifecycle<TestData>>;
-    // readonly lifecycleEvents: Array<NTBSLifecycle<TestData>>;
-    readonly postedAcks: Map<string, ThreadCreated<TestData>>;
+    readonly records: Map<ThreadId, NTBSLifecycle>;
+    readonly postedAcks: Map<string, ThreadCreated>;
     readonly postedResponses: Map<
       string,
       {
-        readonly record: ThreadCreated<TestData>;
+        readonly record: ThreadCreated;
         readonly response: NTBSResponse;
       }
     >;
@@ -196,12 +189,12 @@ class TestAdapterState extends Context.Service<
     Effect.gen(function* () {
       return {
         // lifecycleEvents: [],
-        records: new Map<ThreadId, NTBSLifecycle<TestData>>(),
-        postedAcks: new Map<string, ThreadCreated<TestData>>(),
+        records: new Map<ThreadId, NTBSLifecycle>(),
+        postedAcks: new Map<string, ThreadCreated>(),
         postedResponses: new Map<
           string,
           {
-            readonly record: ThreadCreated<TestData>;
+            readonly record: ThreadCreated;
             readonly response: NTBSResponse;
           }
         >(),
@@ -211,7 +204,7 @@ class TestAdapterState extends Context.Service<
   );
 }
 
-const TestAdapter = makeNTBSAdapterTag<TestData>("test/ntbs/TestAdapter");
+const TestAdapter = makeNTBSAdapterTag("test/ntbs/TestAdapter");
 
 const TestAdapterFromState = Layer.effect(
   TestAdapter,
@@ -246,9 +239,7 @@ const TestAdapterFromState = Layer.effect(
               .entries()
               .map((el) => el[1])
               .find((entry) => {
-                return (
-                  entry.platformData.source.messageId === request.platformData.source.messageId
-                );
+                return entry.sourceUri === request.sourceUri;
               }) ?? null
           );
         }),
@@ -260,15 +251,13 @@ const TestAdapterFromState = Layer.effect(
         }),
       findMatchingResponseMessage: (state) =>
         Effect.sync(() => {
-          const messageId = state.platformData.source.messageId;
           const maybeResponse = adapterState.postedResponses
             .entries()
-            .find(([_id, posted]) => posted.record.platformData.source.messageId === messageId);
+            .find(([_id, posted]) => posted.record.sourceUri === state.sourceUri);
           return maybeResponse ? maybeResponse[0] : null;
         }),
-      getRequestKey: (request) => request.platformData.source.messageId,
       loadThreadsAwaitingResponse: Effect.sync(() => {
-        const awaitingResponse: ThreadCreated<TestData>[] = [];
+        const awaitingResponse: ThreadCreated[] = [];
         adapterState.records.forEach((state) => {
           if (state.state === "thread.created") {
             awaitingResponse.push(state);

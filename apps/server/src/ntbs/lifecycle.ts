@@ -1,24 +1,28 @@
 import type { ChatAttachment, MessageId, ThreadId } from "@t3tools/contracts";
 
-/**
- * Describes the platform-specific data of a
- * Non-Turn-Based-Surface.
- *
- * When receiving an NTBS event (a comment, a message tagging
- * a bot, etc) `source` and `responseDestination` hold the details
- * necessary to process the what and why.
- */
-export type PlatformData<Source = unknown, ResponseDestination = unknown> = {
-  source: Source;
-  responseDestination: ResponseDestination;
-};
-
-export type NTBSInput<P extends PlatformData> = {
+export type NTBSInput = {
   /**
-   * Each NTBSEvent carries the adapter-defined external data.
-   * T3 never inspects it. Only the adapter deals with it.
+   * Adapter-encoded URI locating the originating platform message,
+   * e.g. `discord://<guildId>/<channelId>/<messageId>` or
+   * `jira://<issueKey>/comment/<commentId>`.
+   *
+   * Two contracts:
+   *
+   * Identity — the same platform request must carry the same string
+   * across redeliveries and restarts; distinct requests must carry
+   * distinct strings. This is the durable dedup key `findByRequest`
+   * looks up, the key the processor serializes concurrent deliveries
+   * on, and the natural unique key for the adapter's stored records.
+   *
+   * Addressability — it must contain everything needed to reach the
+   * message through the platform API from a cold start, because
+   * recovery reposts with only the stored record. A Discord message
+   * ID alone fails this: replying requires the channel ID too.
+   *
+   * Only the adapter that wrote it may parse it; the processor treats
+   * it as an opaque string.
    */
-  platformData: P;
+  sourceUri: string;
   /**
    * The captured source text sent as the first T3 user message.
    * Platform independent.
@@ -32,7 +36,7 @@ export type NTBSInput<P extends PlatformData> = {
   attachments: ReadonlyArray<ChatAttachment>;
 };
 
-export type ThreadEvent<P extends PlatformData> = NTBSInput<P> & {
+export type ThreadEvent = NTBSInput & {
   t3Data: {
     /** The T3 thread created by the lifecycle event */
     threadId: ThreadId;
@@ -45,7 +49,7 @@ export type ThreadEvent<P extends PlatformData> = NTBSInput<P> & {
   };
 };
 
-export type ThreadCreated<P extends PlatformData> = ThreadEvent<P> & {
+export type ThreadCreated = ThreadEvent & {
   /**
    * T3 has created the new thread and the adapter has recorded its relationship
    * to the platform request. The first turn may not have started yet.
@@ -53,9 +57,9 @@ export type ThreadCreated<P extends PlatformData> = ThreadEvent<P> & {
   state: "thread.created";
 };
 
-export type ResponsePosted<P extends PlatformData> = ThreadEvent<P> & {
+export type ResponsePosted = ThreadEvent & {
   state: "thread.response.posted";
   responseMessageId: string;
 };
 
-export type NTBSLifecycle<P extends PlatformData> = ThreadCreated<P> | ResponsePosted<P>;
+export type NTBSLifecycle = ThreadCreated | ResponsePosted;
