@@ -175,7 +175,7 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "1.0.3",
+  version: "1.0.4",
   // Default: fingerprint policy so OTAs only reach binaries with matching native
   // inputs (deps, config plugins, patches). Override with MOBILE_RUNTIME_VERSION_OVERRIDE
   // when CI must ship pure-JS fixes to an already-installed binary (e.g. Free-plan

@@ -41,6 +41,7 @@ import {
   resolveHideSettledOnRecent,
 } from "../../persistence/mobile-preferences";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import { useThreadSearch } from "../../state/queries";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
@@ -106,7 +107,6 @@ import {
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
-  resolveThreadListV2Enabled,
 } from "./threadListV2";
 
 /** The sidebar list serves both lists: v1 grouped items or, when the Thread
@@ -238,8 +238,12 @@ function ThreadNavigationSidebarPane(
     movePinnedThread,
     regenerateThreadTitle,
   } = useThreadListActions();
+  const threadListV2Preferred = useThreadListV2Enabled();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const autoSettleOnMerge =
+    !AsyncResult.isSuccess(preferencesResult) ||
+    preferencesResult.value.autoSettleOnMerge !== false;
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -296,14 +300,7 @@ function ThreadNavigationSidebarPane(
   // renderer or remove pinning / shelves.
   // v2 is the default list since #5672; legacyThreadListEnabled is the opt-out.
   // Must match HomeScreen, or this surface and Home disagree about the list.
-  const threadListV2Enabled =
-    options.listMode === "threads" &&
-    resolveThreadListV2Enabled({
-      legacyPreference: AsyncResult.isSuccess(preferencesResult)
-        ? preferencesResult.value.legacyThreadListEnabled
-        : undefined,
-      preferencesLoaded: AsyncResult.isSuccess(preferencesResult),
-    });
+  const threadListV2Enabled = options.listMode === "threads" && threadListV2Preferred;
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
     ? resolveHideSettledOnRecent(preferencesResult.value)
     : true;
@@ -508,8 +505,8 @@ function ThreadNavigationSidebarPane(
 
   // Thread List v2 (beta) support — same model as the compact Home list
   // (HomeScreen.tsx): flat creation-order card block + settled recency tail.
-  // PR states stream in per-row; merged/closed PRs auto-settle their thread
-  // on the next partition.
+  // PR states stream in per-row. The next partition applies the configured
+  // merge rule and the always-on close rule.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
     ReadonlyMap<string, "open" | "closed" | "merged">
   >(() => new Map());
@@ -822,6 +819,7 @@ function ThreadNavigationSidebarPane(
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
+      autoSettleOnMerge,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       settledLimit: settledVisibleCount,
@@ -833,6 +831,7 @@ function ThreadNavigationSidebarPane(
     });
   }, [
     changeRequestStateByKey,
+    autoSettleOnMerge,
     nowMinute,
     snoozeWakeTick,
     options.selectedEnvironmentIds,
