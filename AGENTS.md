@@ -88,6 +88,12 @@ whole branching model. See
     `compose-integration.yml` (and to `fork-ci.yml` PR bases).
 - **Slow path (upstream / Tim / candidates):** **manual / local only.** Run
   merge `upstream/main` into `fork/dev` directly; `main` is then fast-forwarded to the upstream tip.
+  **Land a sync PR with `gh pr merge <n> --merge`, never the GitHub button.** Ordinary fork PRs
+  squash, so the button remembers "Squash and merge" — which drops the merge's second parent and
+  with it the upstream lineage. The code survives, but `fork/dev..upstream/main` then reports
+  already-merged work as missing and the next sync re-resolves every conflict again. #401 landed
+  that way and went unnoticed for two merges. `.github/workflows/upstream-lineage-guard.yml`
+  catches it on the next push to `fork/dev` and prints the repair.
   There is no restack workflow any more. Pushes to `main` / `fork/tim` / `fork/candidates` must not auto-restack
   or auto-compose. Local restacks mirror `pingdotgg/t3code:main`, rebuild provenance layers with
   stop-the-line green gates, rebase overlays, then compose integration via

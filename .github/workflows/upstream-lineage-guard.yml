@@ -1,0 +1,52 @@
+name: Upstream Lineage Guard
+
+# Fails when an upstream sync reaches fork/dev without its second parent.
+#
+# Squash- and rebase-merging a sync PR keeps the code and discards the lineage:
+# the upstream commits stop being ancestors, so `fork/dev..upstream/main` reports
+# already-merged work as missing and the next sync re-merges and re-resolves all
+# of it. #401 landed that way; it surfaced two merges later, in a deploy alert
+# that said "Commits (2)" for a range that had carried 23.
+#
+# This runs after the merge, not before it — GitHub has no per-PR merge-method
+# control, and a repository-wide setting cannot allow squash for ordinary fork
+# PRs while requiring a merge commit for syncs. So the button stays available
+# and this turns a silent, weeks-later discovery into a red check within a
+# minute, with the repair printed in the log.
+#
+# Prevention, rather than detection, is to merge sync PRs with
+# `gh pr merge <n> --merge` instead of the button.
+on:
+  push:
+    branches:
+      - fork/dev
+
+concurrency:
+  group: upstream-lineage-guard-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  lineage:
+    name: Upstream lineage
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history: the check walks the pushed range and counts parents,
+          # both of which a shallow clone hides.
+          fetch-depth: 0
+          sparse-checkout: |
+            /.github
+          sparse-checkout-cone-mode: false
+
+      - name: Check pushed commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: .github/scripts/check-upstream-lineage.sh
