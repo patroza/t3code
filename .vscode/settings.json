@@ -14,5 +14,6 @@
   },
   "search.exclude": {
     ".repos/**": true
-  }
+  },
+  "js/ts.experimental.useTsgo": true
 }
