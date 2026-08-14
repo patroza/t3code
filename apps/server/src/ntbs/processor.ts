@@ -190,8 +190,6 @@ const hasProgress = (previous: TurnStats, current: TurnStats): boolean =>
 type TurnStatus = {
   /** The T3 thread containing the monitored user message. */
   readonly threadId: ThreadId;
-  /** When the processor read this status from the T3 projection. */
-  readonly recordedAt: string;
   /** The observed turn statistics, or null while the turn is still pending. */
   readonly stats: TurnStats | null;
 };
@@ -920,7 +918,6 @@ export const makeNTBSProcessor = <AdapterId>(
             threadCreated.attachments,
           );
           initialStatus = {
-            recordedAt: yield* getNow,
             threadId,
             stats: null,
           };
@@ -1027,7 +1024,6 @@ export const makeNTBSProcessor = <AdapterId>(
 
             yield* monitorT3Turn(userMessageId, {
               threadId,
-              recordedAt: yield* getNow,
               stats: null,
             }).pipe(
               Effect.catch((cause) =>
