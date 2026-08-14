@@ -418,9 +418,9 @@ export function useThreadOutboxDrain(): void {
           }
           // Editor hold: defer with backoff. Do NOT report success (that cleared
           // retry state and spun beginDispatch → finish → effect forever).
-          // Mid-turn is intentional send: fork hands ownership to the server,
-          // which queues follow-ups during an active turn (unlike upstream,
-          // which waits on threadBusy and never enters beginDispatch).
+          // Mid-turn is an intentional send: ownership belongs to the server,
+          // which queues follow-ups during an active turn. Upstream gated this
+          // on threadBusy until #6543 removed that guard and matched us.
           if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
             return "deferred";
           }

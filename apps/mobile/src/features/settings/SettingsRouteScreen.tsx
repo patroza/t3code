@@ -588,11 +588,9 @@ function LegacySettingsSection() {
   );
 }
 
-type UpdateCheckState = "idle" | "checking" | "downloading" | "restarting" | "current";
-
 function AppSettingsSection() {
   const icon = useThemeColor("--color-icon");
-  const [updateState, setUpdateState] = useState<UpdateCheckState>("idle");
+  const [updateState, setUpdateState] = useState<AppUpdateCheckState>("idle");
   const updateInFlight = useRef(false);
   const hiddenUpdateTapCount = useRef(0);
 
@@ -719,13 +717,6 @@ function AppSettingsSection() {
       )}
     </SettingsSection>
   );
-}
-
-function reportUpdateFailure(result: AtomCommandResult<unknown, unknown>, fallback: string): void {
-  reportAtomCommandResult(result, { label: "app update check" });
-  if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
-  const error = squashAtomCommandFailure(result);
-  Alert.alert("Update failed", error instanceof Error ? error.message : fallback);
 }
 
 function capitalize(value: string): string {

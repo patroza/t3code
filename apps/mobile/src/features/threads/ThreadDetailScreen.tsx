@@ -105,7 +105,6 @@ export interface ThreadDetailScreenProps {
   readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
   /** A send made now would be held in the steering queue, not open a turn. */
   readonly sendEntersQueue: boolean;
-  readonly activeThreadBusy: boolean;
   readonly selectedThreadQueueCount: number;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;

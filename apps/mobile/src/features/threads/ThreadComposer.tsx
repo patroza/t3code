@@ -99,7 +99,6 @@ export interface ThreadComposerProps {
   readonly bottomInset?: number;
   readonly connectionState: RemoteClientConnectionState;
   readonly queueCount: number;
-  readonly activeThreadBusy: boolean;
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   /**

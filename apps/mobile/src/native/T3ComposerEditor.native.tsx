@@ -1,5 +1,7 @@
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 import { requireNativeView } from "expo";
+import { TextInputWrapper } from "expo-paste-input";
+import { useNativePaste } from "../lib/useNativePaste";
 import {
   useCallback,
   useEffect,
@@ -118,6 +120,7 @@ export function ComposerEditor({
   const skillBorder = useThemeColor("--color-inline-skill-border");
   const skillText = useThemeColor("--color-inline-skill-foreground");
   const fileTint = useThemeColor("--color-icon-muted");
+  const handlePaste = useNativePaste((uris) => onPasteImages?.(uris));
 
   useImperativeHandle(
     ref,
