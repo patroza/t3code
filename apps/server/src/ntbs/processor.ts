@@ -337,10 +337,7 @@ export const makeNTBSProcessor = <AdapterId>(
     const resolveT3Outcome = (
       threadId: ThreadId,
       userMessageId: MessageId,
-    ): Effect.Effect<
-      { readonly threadId: ThreadId; readonly response: NTBSResponse } | null,
-      NTBSProcessorError
-    > =>
+    ): Effect.Effect<NTBSResponse | null, NTBSProcessorError> =>
       Effect.gen(function* () {
         const turns = yield* projectionTurnRepository
           .listByThreadId({ threadId })
@@ -376,34 +373,24 @@ export const makeNTBSProcessor = <AdapterId>(
 
           const text = assistantMessage?.text.trim() ?? "";
 
-          return {
-            threadId,
-            response:
-              text.length > 0
-                ? { type: "answer", text }
-                : {
-                    type: "failure",
-                    text: "T3 completed without producing a response.",
-                  },
-          };
+          return text.length > 0
+            ? { type: "answer", text }
+            : {
+                type: "failure",
+                text: "T3 completed without producing a response.",
+              };
         }
 
         if (turn.state === "error") {
           return {
-            threadId,
-            response: {
-              type: "failure",
-              text: thread.session?.lastError ?? "T3 failed while processing this request.",
-            },
+            type: "failure",
+            text: thread.session?.lastError ?? "T3 failed while processing this request.",
           };
         }
 
         return {
-          threadId,
-          response: {
-            type: "cancellation",
-            text: "T3 stopped processing this request.",
-          },
+          type: "cancellation",
+          text: "T3 stopped processing this request.",
         };
       });
 
@@ -491,12 +478,12 @@ export const makeNTBSProcessor = <AdapterId>(
               return;
             }
 
-            const outcome = yield* resolveT3Outcome(threadId, userMessageId);
-            if (outcome === null) {
+            const response = yield* resolveT3Outcome(threadId, userMessageId);
+            if (response === null) {
               return;
             }
 
-            yield* postResponse(currentRecord, outcome.response);
+            yield* postResponse(currentRecord, response);
           }),
         );
       });
@@ -931,9 +918,9 @@ export const makeNTBSProcessor = <AdapterId>(
                   return;
                 }
 
-                const outcome = yield* resolveT3Outcome(threadId, userMessageId);
-                if (outcome !== null) {
-                  yield* postResponse(currentRecord, outcome.response);
+                const response = yield* resolveT3Outcome(threadId, userMessageId);
+                if (response !== null) {
+                  yield* postResponse(currentRecord, response);
                 }
               }),
             );
