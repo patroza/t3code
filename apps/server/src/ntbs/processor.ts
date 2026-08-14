@@ -628,14 +628,6 @@ export const makeNTBSProcessor = <AdapterId>(
     const inFlightRequests = new Set<string>();
 
     /**
-     * Keeps stats of active NTBS messages.
-     *
-     * Used to find out whether a turn has progressed since last check
-     * or is it hanging.
-     */
-    const messageStatus = new Map<MessageId, TurnStatus>();
-
-    /**
      * Fetches fresh information for the turn created by one T3 user message.
      */
     const loadMessageStatus = (
@@ -686,46 +678,30 @@ export const makeNTBSProcessor = <AdapterId>(
     /**
      * Loads the current turn status and compares it with the previous observation.
      * The status recorded when monitoring begins is the initial baseline.
-     * Nonterminal observations replace the stored baseline; terminal observations remove it.
      */
     const checkProgress = (
       userMessageId: MessageId,
+      previousStatus: TurnStatus,
     ): Effect.Effect<
       { readonly status: TurnStatus; readonly progressed: boolean },
       NTBSProcessorError
     > =>
       Effect.gen(function* () {
-        const recorded = messageStatus.get(userMessageId);
-        if (recorded === undefined) {
-          return yield* new NTBSProcessorError({
-            reason: `No monitoring state exists for T3 user message ${userMessageId}.`,
-            cause: userMessageId,
-          });
-        }
-
-        const fresh = yield* loadMessageStatus(userMessageId, recorded.threadId);
+        const fresh = yield* loadMessageStatus(userMessageId, previousStatus.threadId);
 
         let progressed: boolean;
 
-        if (recorded.stats === null && fresh.stats === null) {
+        if (previousStatus.stats === null && fresh.stats === null) {
           progressed = false;
-        } else if (recorded.stats === null) {
+        } else if (previousStatus.stats === null) {
           progressed = true;
         } else if (fresh.stats === null) {
           return yield* new NTBSProcessorError({
-            reason: `T3 thread ${recorded.threadId} became pending after its turn had started.`,
-            cause: { recorded, fresh },
+            reason: `T3 thread ${previousStatus.threadId} became pending after its turn had started.`,
+            cause: { previousStatus, fresh },
           });
         } else {
-          progressed = hasProgress(recorded.stats, fresh.stats);
-        }
-
-        const finished = fresh.stats !== null && fresh.stats.state !== "running";
-
-        if (finished) {
-          messageStatus.delete(userMessageId);
-        } else {
-          messageStatus.set(userMessageId, fresh);
+          progressed = hasProgress(previousStatus.stats, fresh.stats);
         }
 
         return { status: fresh, progressed };
@@ -735,12 +711,17 @@ export const makeNTBSProcessor = <AdapterId>(
     const CHECK_INTERVAL = "15 seconds";
     const MAX_NO_PROGRESS_CHECKS = 12;
 
-    const monitorT3Turn = (userMessageId: MessageId): Effect.Effect<void, NTBSProcessorError> =>
+    const monitorT3Turn = (
+      userMessageId: MessageId,
+      initialStatus: TurnStatus,
+    ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
         let consecutiveNoProgressChecks = 0;
 
+        let previousStatus = initialStatus;
+
         while (true) {
-          const result = yield* checkProgress(userMessageId).pipe(
+          const result = yield* checkProgress(userMessageId, previousStatus).pipe(
             Effect.retry({
               times: 3,
               schedule: Schedule.spaced(CHECK_INTERVAL),
@@ -752,6 +733,8 @@ export const makeNTBSProcessor = <AdapterId>(
               }),
             ),
           );
+
+          previousStatus = result.status;
 
           const stats = result.status.stats;
 
@@ -774,7 +757,7 @@ export const makeNTBSProcessor = <AdapterId>(
 
           yield* Effect.sleep(CHECK_INTERVAL);
         }
-      }).pipe(Effect.ensuring(Effect.sync(() => messageStatus.delete(userMessageId))));
+      });
 
     /**
      * Creates an isolated worktree and a new T3 thread.
@@ -927,6 +910,7 @@ export const makeNTBSProcessor = <AdapterId>(
         }
 
         const turn = matchingTurns[0];
+        let initialStatus: TurnStatus;
 
         if (turn === undefined) {
           yield* startT3Turn(
@@ -935,14 +919,14 @@ export const makeNTBSProcessor = <AdapterId>(
             threadCreated.snapshot,
             threadCreated.attachments,
           );
-          messageStatus.set(userMessageId, {
-            threadId,
+          initialStatus = {
             recordedAt: yield* getNow,
+            threadId,
             stats: null,
-          });
+          };
         } else {
           const status = yield* loadMessageStatus(userMessageId, threadId);
-
+          initialStatus = status;
           if (status.stats !== null && status.stats.state !== "running") {
             yield* ensureUniqueOutcome(
               userMessageId,
@@ -964,11 +948,9 @@ export const makeNTBSProcessor = <AdapterId>(
             );
             return;
           }
-
-          messageStatus.set(userMessageId, status);
         }
 
-        yield* monitorT3Turn(userMessageId).pipe(
+        yield* monitorT3Turn(userMessageId, initialStatus).pipe(
           Effect.catch((cause) =>
             Effect.logError("Recovered NTBS turn monitor failed", {
               userMessageId,
@@ -1042,12 +1024,12 @@ export const makeNTBSProcessor = <AdapterId>(
 
             // Start the first T3 turn with that message Id, the snapshot and attachments
             yield* startT3Turn(threadId, userMessageId, request.snapshot, request.attachments);
-            messageStatus.set(userMessageId, {
+
+            yield* monitorT3Turn(userMessageId, {
               threadId,
               recordedAt: yield* getNow,
               stats: null,
-            });
-            yield* monitorT3Turn(userMessageId).pipe(
+            }).pipe(
               Effect.catch((cause) =>
                 Effect.logError("NTBS turn monitor failed", {
                   userMessageId,
