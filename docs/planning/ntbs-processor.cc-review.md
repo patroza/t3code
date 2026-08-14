@@ -23,9 +23,6 @@ If you keep any shared structure, its only genuine job is "is someone already mo
 **S2. Three copies of the turn-for-message lookup** — `processor.ts:353-365`, `646-658`, `917-929`
 `resolveT3Outcome`, `loadMessageStatus`, and `recoverThread` each do `listByThreadId` → filter on `pendingMessageId === userMessageId` → cardinality check with a hand-built error. Extract one `findTurnForMessage(threadId, userMessageId)` helper. This is also the single place to implement the found-0 handling from bug **B1** — three call sites collapse into one decision point.
 
-**S5. `postAcknowledgement`'s return value is dead contract** — `adapter.ts:43`
-The processor discards it (`processor.ts:1061-1070`, `Effect.asVoid`), and the simplified lifecycle no longer stores an acknowledgement message ID. Make it `Effect<void, AdapterError>`; an adapter that needs the ID for its own `findMatchingResponseMessage` heuristics can store it internally. Right now the signature promises a use that doesn't exist.
-
 **S6. Half of `test-helpers.ts` is dead code** — `test-helpers.ts:99-270`
 `TestEngine`, `TestAdapterState`, `TestAdapter`, and both derived layers are unexported and unused (only `createGitLayerMock` and `createAdapterRequest` are imported, by `processor.test.ts`). `processor2.test.ts` contains its own — already divergent — copies of the same fakes. Pick one harness (the `processor2.test.ts` one is the better design: state services + `Layer.provideMerge`, and the `threadLookups` queue-as-synchronization trick is good), move it into `test-helpers.ts`, and delete the rest. Fold `processor.test.ts` into the same file while at it: its single test (`processor.test.ts:153-163`) asserts nothing — it passes if `process` doesn't die — and the `eventReceived` Deferred in its adapter is never awaited. The assertions it was meant to make are already enumerated in `docs/planning/processor-testing.md` steps 1–8; write them against the surviving harness.
 

@@ -120,10 +120,9 @@ const AdapterFromState = Layer.effect(
         Effect.sync(() => {
           state.records.set(lifecycleEvent.t3Data.threadId, lifecycleEvent);
         }),
-      postAcknowledgement: (record) =>
+      acknowledge: (record) =>
         Effect.sync(() => {
           state.postedAcks.push(record);
-          return `ack-${state.postedAcks.length}`;
         }),
       postResponse: (record, response) =>
         Effect.sync(() => {

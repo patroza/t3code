@@ -1017,7 +1017,7 @@ export const makeNTBSProcessor = <AdapterId>(
               Effect.forkDetach,
             );
 
-            yield* adapter.postAcknowledgement(threadCreated).pipe(
+            yield* adapter.acknowledge(threadCreated).pipe(
               Effect.catch((cause) =>
                 Effect.logWarning("Failed posting the NTBS acknowledgement", {
                   userMessageId,
@@ -1025,7 +1025,6 @@ export const makeNTBSProcessor = <AdapterId>(
                   cause,
                 }),
               ),
-              Effect.asVoid,
             );
           }
           return;

@@ -40,7 +40,7 @@ export interface NTBSAdapter {
    *
    * Returns the platform's identifier for the posted message.
    */
-  readonly postAcknowledgement: (state: NTBS.ThreadCreated) => Effect.Effect<string, AdapterError>;
+  readonly acknowledge: (state: NTBS.ThreadCreated) => Effect.Effect<void, AdapterError>;
   /**
    * Posts the final T3 outcome at the response destination described
    * by the event.
