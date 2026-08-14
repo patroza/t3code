@@ -130,8 +130,6 @@ type NTBSProcessorRequirements =
   | Crypto.Crypto;
 
 type TurnStats = {
-  readonly turnId: TurnId;
-  readonly state: OrchestrationLatestTurnState;
   readonly activityCount: number;
   readonly latestActivityId: EventId | null;
   readonly assistantTextLength: number;
@@ -162,8 +160,6 @@ const getTurnStats = (
   );
 
   return {
-    turnId: turn.turnId,
-    state: turn.state,
     activityCount: activities.length,
     latestActivityId: activities.at(-1)?.id ?? null,
     assistantTextLength: assistantMessages.reduce(
@@ -180,19 +176,17 @@ const hasProgress = (previous: TurnStats, current: TurnStats): boolean =>
   previous.assistantTextLength !== current.assistantTextLength ||
   previous.assistantUpdatedAt !== current.assistantUpdatedAt;
 
-/**
- * Records what the processor observed when it last checked a T3 turn.
- *
- * `stats` is null while T3 has accepted the turn request but the provider has
- * not started the turn. Once the turn exists, `stats.state` is the single
- * source of truth for whether it is running or terminal.
- */
-type TurnStatus = {
-  /** The T3 thread containing the monitored user message. */
-  readonly threadId: ThreadId;
-  /** The observed turn statistics, or null while the turn is still pending. */
-  readonly stats: TurnStats | null;
-};
+type TurnStatus =
+  | {
+      readonly threadId: ThreadId;
+      state: "pending";
+    }
+  | {
+      readonly threadId: ThreadId;
+      readonly turnId: TurnId;
+      readonly state: OrchestrationLatestTurnState;
+      readonly stats: TurnStats;
+    };
 
 /**
  * Creates an NTBS processor for one adapter.
@@ -515,13 +509,13 @@ export const makeNTBSProcessor = <AdapterId>(
      */
     const handleStalledTurn = (
       userMessageId: MessageId,
-      status: TurnStatus,
+      turn: TurnStatus,
     ): Effect.Effect<void, NTBSProcessorError> =>
       ensureUniqueOutcome(
         userMessageId,
         Effect.gen(function* () {
           const lifecycle = yield* adapter
-            .findByThreadId(status.threadId)
+            .findByThreadId(turn.threadId)
             .pipe(orFail("Failed loading the NTBS lifecycle for a stalled turn"));
 
           if (lifecycle.state === "thread.response.posted") {
@@ -529,13 +523,13 @@ export const makeNTBSProcessor = <AdapterId>(
             return;
           }
 
-          if (status.stats !== null) {
-            const turnId = status.stats.turnId;
-            yield* interruptT3Turn(status.threadId, turnId).pipe(
+          if (turn.state !== "pending") {
+            const turnId = turn.turnId;
+            yield* interruptT3Turn(turn.threadId, turnId).pipe(
               Effect.catch((cause) =>
                 Effect.logWarning("Failed interrupting stalled T3 turn", {
                   userMessageId,
-                  threadId: status.threadId,
+                  threadId: turn.threadId,
                   turnId,
                   cause,
                 }),
@@ -546,7 +540,7 @@ export const makeNTBSProcessor = <AdapterId>(
           const response: NTBSResponse = {
             type: "timeout",
             text:
-              status.stats === null
+              turn.state === "pending"
                 ? "T3 could not start this request after repeated checks."
                 : "T3 stopped this request after repeated checks found no observable progress.",
           };
@@ -648,7 +642,7 @@ export const makeNTBSProcessor = <AdapterId>(
         }
 
         if (monitoredTurn.turnId === null && monitoredTurn.state === "pending") {
-          return { threadId, stats: null, recordedAt: yield* getNow };
+          return { threadId, state: "pending" };
         }
 
         if (monitoredTurn.turnId === null || monitoredTurn.state === "pending") {
@@ -670,7 +664,7 @@ export const makeNTBSProcessor = <AdapterId>(
           turnId: monitoredTurn.turnId,
           state: monitoredTurn.state,
         });
-        return { threadId, stats, recordedAt: yield* getNow };
+        return { threadId, turnId: monitoredTurn.turnId, stats, state: monitoredTurn.state };
       });
 
     /**
@@ -689,11 +683,11 @@ export const makeNTBSProcessor = <AdapterId>(
 
         let progressed: boolean;
 
-        if (previousStatus.stats === null && fresh.stats === null) {
+        if (previousStatus.state === "pending" && fresh.state === "pending") {
           progressed = false;
-        } else if (previousStatus.stats === null) {
+        } else if (previousStatus.state === "pending") {
           progressed = true;
-        } else if (fresh.stats === null) {
+        } else if (fresh.state === "pending") {
           return yield* new NTBSProcessorError({
             reason: `T3 thread ${previousStatus.threadId} became pending after its turn had started.`,
             cause: { previousStatus, fresh },
@@ -734,9 +728,9 @@ export const makeNTBSProcessor = <AdapterId>(
 
           previousStatus = result.status;
 
-          const stats = result.status.stats;
+          const { status } = result;
 
-          if (stats !== null && stats.state !== "running") {
+          if (status.state !== "pending" && status.state !== "running") {
             // it has completed already
             return;
           }
@@ -919,12 +913,12 @@ export const makeNTBSProcessor = <AdapterId>(
           );
           initialStatus = {
             threadId,
-            stats: null,
+            state: "pending",
           };
         } else {
           const status = yield* loadMessageStatus(userMessageId, threadId);
           initialStatus = status;
-          if (status.stats !== null && status.stats.state !== "running") {
+          if (status.state !== "pending" && status.state !== "running") {
             yield* ensureUniqueOutcome(
               userMessageId,
               Effect.gen(function* () {
@@ -1024,7 +1018,7 @@ export const makeNTBSProcessor = <AdapterId>(
 
             yield* monitorT3Turn(userMessageId, {
               threadId,
-              stats: null,
+              state: "pending",
             }).pipe(
               Effect.catch((cause) =>
                 Effect.logError("NTBS turn monitor failed", {
