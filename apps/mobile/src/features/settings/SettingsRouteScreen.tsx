@@ -631,7 +631,13 @@ function AppSettingsSection() {
     if (updateInFlight.current) return;
     updateInFlight.current = true;
     try {
-      await runUpdateCheck(setUpdateState);
+      // The user asked for this restart by tapping the version row, so it may
+      // apply immediately instead of prompting.
+      await runAppUpdateCheck({
+        applyMode: "immediate",
+        onFailure: (message) => Alert.alert("Update failed", message),
+        onStateChange: setUpdateState,
+      });
     } finally {
       updateInFlight.current = false;
     }
@@ -651,11 +657,15 @@ function AppSettingsSection() {
       ? "Checking…"
       : updateState === "downloading"
         ? "Downloading…"
-        : updateState === "restarting"
-          ? "Restarting…"
-          : updateState === "current"
-            ? "Up to date"
-            : bundleLabel;
+        : // "ready" appears only when this check joined an in-flight background-mode
+          // check; that download installs at the next backgrounding.
+          updateState === "ready"
+          ? "Update ready"
+          : updateState === "restarting"
+            ? "Restarting…"
+            : updateState === "current"
+              ? "Up to date"
+              : bundleLabel;
 
   const versionRow = (
     <View className="flex-row items-center gap-4 p-4">
@@ -709,45 +719,6 @@ function AppSettingsSection() {
       )}
     </SettingsSection>
   );
-}
-
-async function runUpdateCheck(setUpdateState: (state: UpdateCheckState) => void): Promise<void> {
-  setUpdateState("checking");
-  const check = await settlePromise(() => Updates.checkForUpdateAsync());
-  if (check._tag === "Failure") {
-    reportUpdateFailure(check, "Could not check for updates.");
-    setUpdateState("idle");
-    return;
-  }
-  // A rollback directive (`eas update:rollback`) arrives as isAvailable: false
-  // with isRollBackToEmbedded: true — there is nothing newer to install, but the
-  // running OTA still has to be dropped for the embedded bundle.
-  if (!check.value.isAvailable && !check.value.isRollBackToEmbedded) {
-    setUpdateState("current");
-    return;
-  }
-
-  setUpdateState("downloading");
-  const fetched = await settlePromise(() => Updates.fetchUpdateAsync());
-  if (fetched._tag === "Failure") {
-    reportUpdateFailure(fetched, "Could not download the update.");
-    setUpdateState("idle");
-    return;
-  }
-  // isNew is always false for a rollback, so it can't be the sole gate here either.
-  if (!fetched.value.isNew && !fetched.value.isRollBackToEmbedded) {
-    setUpdateState("current");
-    return;
-  }
-
-  setUpdateState("restarting");
-  // reloadAsync never resolves on success — the JS context is torn down — so
-  // reaching the failure branch below is the only way this returns.
-  const reloaded = await settlePromise(() => Updates.reloadAsync());
-  if (reloaded._tag === "Failure") {
-    reportUpdateFailure(reloaded, "Downloaded, but could not restart the app.");
-    setUpdateState("idle");
-  }
 }
 
 function reportUpdateFailure(result: AtomCommandResult<unknown, unknown>, fallback: string): void {
