@@ -23,12 +23,6 @@ If you keep any shared structure, its only genuine job is "is someone already mo
 **S2. Three copies of the turn-for-message lookup** — `processor.ts:353-365`, `646-658`, `917-929`
 `resolveT3Outcome`, `loadMessageStatus`, and `recoverThread` each do `listByThreadId` → filter on `pendingMessageId === userMessageId` → cardinality check with a hand-built error. Extract one `findTurnForMessage(threadId, userMessageId)` helper. This is also the single place to implement the found-0 handling from bug **B1** — three call sites collapse into one decision point.
 
-**S3. `TurnStatus.recordedAt` is write-only** — `processor.ts:194`
-Set in four places (`661`, `683`, `940`, `1047`), read nowhere. Drop the field and the `getNow` calls that feed it. With S1, `TurnStatus` shrinks to `{ threadId, stats }`.
-
-**S4. `resolveT3Outcome` echoes a `threadId` both callers already hold** — `processor.ts:348-350`
-Both call sites (`processor.ts:502-507`, `959-961`) use only `outcome.response`. Return `NTBSResponse | null`.
-
 **S5. `postAcknowledgement`'s return value is dead contract** — `adapter.ts:43`
 The processor discards it (`processor.ts:1061-1070`, `Effect.asVoid`), and the simplified lifecycle no longer stores an acknowledgement message ID. Make it `Effect<void, AdapterError>`; an adapter that needs the ID for its own `findMatchingResponseMessage` heuristics can store it internally. Right now the signature promises a use that doesn't exist.
 
