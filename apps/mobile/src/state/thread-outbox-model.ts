@@ -153,6 +153,12 @@ export function resolveThreadOutboxDeliveryAction(input: {
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
+  /**
+   * Accepted but unused. Upstream stopped gating on it in #6543 — a send during
+   * an active turn is now intentional on both sides — and kept it in the
+   * contract, so callers and its tests still pass it.
+   */
+  readonly threadBusy?: boolean;
 }): ThreadOutboxDeliveryAction {
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
