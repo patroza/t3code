@@ -134,6 +134,17 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   );
 }
 
+/**
+ * The only activity kinds `derivePendingUserInputCountFromActivities` reacts to.
+ * Every other kind is skipped, so the query that feeds it filters on these —
+ * keep the two in step.
+ */
+const PENDING_USER_INPUT_ACTIVITY_KINDS = [
+  "user-input.requested",
+  "user-input.resolved",
+  "provider.user-input.respond.failed",
+] as const;
+
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,
 ): number {
@@ -568,10 +579,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         return;
       }
 
+      // Only the user-input activity kinds, not the whole timeline. The single
+      // consumer below reduces these to one integer, but a long-running thread's
+      // activity rows carry every tool payload it ever produced — hundreds of
+      // megabytes — and this runs on every event in the thread. Reading it in
+      // full is what walked the server heap into its ceiling.
       const [messages, proposedPlans, activities, pendingApprovals] = yield* Effect.all([
         projectionThreadMessageRepository.listByThreadId({ threadId }),
         projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
-        projectionThreadActivityRepository.listByThreadId({ threadId }),
+        projectionThreadActivityRepository.listByThreadIdAndKinds({
+          threadId,
+          kinds: PENDING_USER_INPUT_ACTIVITY_KINDS,
+        }),
         projectionPendingApprovalRepository.listByThreadId({ threadId }),
       ]);
 
