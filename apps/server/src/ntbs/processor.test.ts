@@ -80,6 +80,9 @@ processes a new request into a T3 thread, starts its first turn, persists lifecy
   - runs setup;
   - posts the acknowledgement;
   - does not duplicate work.
+
+  TODO: Add a recovery-path test for a stored thread with no matching projected
+  turn; recovery should start the original turn and monitor it.
 */
 
 /*
