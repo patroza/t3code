@@ -110,7 +110,7 @@ class TestEngine extends Context.Service<
 
     readonly domainEvents: PubSub.PubSub<OrchestrationEvent>;
   }
->()("test/ntbs/TestEngine") {
+>()("t3/ntbs/test-helpers/TestEngine") {
   static readonly layer = Layer.effect(
     TestEngine,
     Effect.gen(function* () {
@@ -183,7 +183,7 @@ class TestAdapterState extends Context.Service<
      */
     readonly threadLookups: Queue.Queue<ThreadId>;
   }
->()("test/ntbs/TestAdapterState") {
+>()("t3/ntbs/test-helpers/TestAdapterState") {
   static readonly layer = Layer.effect(
     TestAdapterState,
     Effect.gen(function* () {

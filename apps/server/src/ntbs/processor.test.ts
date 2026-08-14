@@ -7,7 +7,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
-import { Deferred, Effect, Layer, PubSub, Stream } from "effect";
+import { DateTime, Deferred, Effect, Layer, PubSub, Stream } from "effect";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSAdapter } from "./adapter.ts";
 import { makeNTBSProcessor, makeNTBSProcessorTag } from "./processor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -99,10 +99,11 @@ const makeTestProcessorLive = (
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery)({
           getProjectShellById: (projectId) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
+              const now = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
               return some(
                 OrchestrationProjectShell.make({
-                  createdAt: new Date().toISOString(),
+                  createdAt: now,
                   id: projectId,
                   title: "project title",
                   workspaceRoot: "workspaceRoot",
@@ -110,7 +111,7 @@ const makeTestProcessorLive = (
                     model: "gpt-does-not-exist-v2",
                     instanceId: ProviderInstanceId.make("gpt-does-not-exist-v2"),
                   },
-                  updatedAt: new Date().toISOString(),
+                  updatedAt: now,
                   scripts: [],
                 }),
               );
@@ -121,7 +122,7 @@ const makeTestProcessorLive = (
       Layer.provide(gitLayer.layer),
       Layer.provide(
         Layer.mock(ProjectSetupScriptRunner)({
-          runForThread: (input) =>
+          runForThread: (_) =>
             Effect.sync(() => {
               return { status: "no-script" };
             }),

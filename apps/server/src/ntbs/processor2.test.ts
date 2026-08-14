@@ -47,7 +47,7 @@ class TestEngine extends Context.Service<
     readonly publish: (event: OrchestrationEvent) => Effect.Effect<void>;
     readonly domainEvents: PubSub.PubSub<OrchestrationEvent>;
   }
->()("test/ntbs/TestEngine") {
+>()("t3/ntbs/processor2.test/TestEngine") {
   static readonly layer = Layer.effect(
     TestEngine,
     Effect.gen(function* () {
@@ -94,7 +94,7 @@ class TestAdapterState extends Context.Service<
     /** One entry per findByThreadId call; taking from it awaits event delivery. */
     readonly threadLookups: Queue.Queue<ThreadId>;
   }
->()("test/ntbs/TestAdapterState") {
+>()("t3/ntbs/processor2.test/TestAdapterState") {
   static readonly layer = Layer.effect(
     TestAdapterState,
     Effect.gen(function* () {
