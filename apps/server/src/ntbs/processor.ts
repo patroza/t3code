@@ -1118,7 +1118,7 @@ export const makeNTBSProcessor = <AdapterId>(
       Effect.gen(function* () {
         yield* consumeT3Events.pipe(Effect.forkScoped({ startImmediately: true }));
         yield* recoverStoredThreads;
-        yield* Effect.never;
+        return yield* Effect.never;
       }),
     );
 
