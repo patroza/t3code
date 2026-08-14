@@ -952,8 +952,7 @@ export const makeNTBSProcessor = <AdapterId>(
       5. Start monitoring the turn in the background.
       6. Attempt to post the acknowledgement independently.
     */
-
-    const processAdapterRequest = (request: NTBS.NTBSInput, t3Context: T3Context) =>
+    const process = (request: NTBS.NTBSInput, t3Context: T3Context) =>
       Effect.gen(function* () {
         /*
           In-flight dedup first. We check if the processor is *currently*
@@ -1030,9 +1029,6 @@ export const makeNTBSProcessor = <AdapterId>(
           return;
         }).pipe(Effect.ensuring(Effect.sync(() => inFlightRequests.delete(key))));
       });
-
-    const process = (request: NTBS.NTBSInput, t3Context: T3Context) =>
-      processAdapterRequest(request, t3Context);
 
     const consumeT3Events = Stream.runForEach(
       orchestrationEngineService.streamDomainEvents,

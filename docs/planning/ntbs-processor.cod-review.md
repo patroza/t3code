@@ -38,11 +38,7 @@ The outbound half should likewise be one adapter operation, for example `postRes
 
 These cuts are mechanical and do not change the design:
 
-- `process` is only an alias for `processAdapterRequest` ([processor.ts](../../apps/server/src/ntbs/processor.ts#L1076)); keep one name.
-- `resolveT3Outcome` returns `{ threadId, response }`, but every caller already has the thread ID and uses only `response` ([processor.ts](../../apps/server/src/ntbs/processor.ts#L345)). Return `NTBSResponse | null`.
-- `TurnStatus.recordedAt` is written on every observation and never read ([processor.ts](../../apps/server/src/ntbs/processor.ts#L190)). Remove it unless the timeout is changed to elapsed-time semantics.
 - The exact-turn lookup and its “exactly one” error are duplicated in `resolveT3Outcome` and `loadMessageStatus` ([processor.ts](../../apps/server/src/ntbs/processor.ts#L353), [processor.ts](../../apps/server/src/ntbs/processor.ts#L646)). Extract one `loadRequestTurn(threadId, userMessageId)` helper.
-- `postAcknowledgement` returns a platform message ID that is discarded ([adapter.ts](../../apps/server/src/ntbs/adapter.ts#L35), [processor.ts](../../apps/server/src/ntbs/processor.ts#L1061)). Return `void` unless acknowledgement recovery is going to persist that ID.
 - `makeNTBSProcessorTag` has no consumer except the test harness. The factory already returns the service value, so the extra tag factory can wait until production wiring demonstrates a need. `makeNTBSAdapterTag` remains useful if several adapter-specific processor layers are actually constructed.
 
 `getTurnStats` should stay conservative for now. Some of its fields look correlated, but removing activity count, last activity ID, assistant length, or update time without first checking provider projection behavior would weaken stall detection for little benefit.
