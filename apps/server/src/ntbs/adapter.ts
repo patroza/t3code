@@ -12,7 +12,7 @@ export class AdapterError extends Data.TaggedError("AdapterError")<{
 }> {}
 
 export type NTBSResponse = {
-  readonly type: "answer" | "failure" | "timeout" | "cancellation";
+  readonly type: "answer" | "failure" | "cancellation";
   readonly text: string;
 };
 

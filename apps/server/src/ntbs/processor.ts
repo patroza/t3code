@@ -2,19 +2,14 @@ import {
   type ChatAttachment,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  type EventId,
   MessageId,
   OrchestrationCommand,
   type OrchestrationEvent,
-  type OrchestrationLatestTurn,
-  type OrchestrationLatestTurnState,
-  type OrchestrationThread,
   type ProjectId,
   ThreadId,
-  type TurnId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./lifecycle.ts";
-import { Context, Crypto, Data, DateTime, Effect, Schedule, Stream, Semaphore } from "effect";
+import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
 import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -33,7 +28,6 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
     - Creates a fresh worktree and T3 thread.
     - Saves `ThreadCreated`.
     - Starts the first turn with the snapshot and attachments.
-    - Monitors the turn for completion and timeouts.
     - Attempts to post the acknowledgement independently.
     - Watches T3 events for completed work.
     - Posts the final result through the adapter and saves `ResponsePosted`.
@@ -91,13 +85,12 @@ export interface NTBSProcessor {
    * The main loop of the processor, consumes T3 events and passes them to `processT3Event`.
    *
    * After the live subscription begins, loads stored `ThreadCreated` records.
-   * It starts a missing first turn, resumes monitoring an active turn, or posts
-   * the outcome of a turn that already finished.
+   * It starts a missing first turn, or posts the outcome of a turn that already finished.
    *
    * Runs until interrupted by its caller.
    * Logs individual processing failures and continues with later events.
    */
-  readonly start: Effect.Effect<void>;
+  readonly run: Effect.Effect<void>;
 }
 
 export const makeNTBSProcessorTag = (key: string) => Context.Service<NTBSProcessor>(key);
@@ -128,65 +121,6 @@ type NTBSProcessorRequirements =
     Generates unique identifiers for the new thread, message, commands, and worktree branch.
    */
   | Crypto.Crypto;
-
-type TurnStats = {
-  readonly activityCount: number;
-  readonly latestActivityId: EventId | null;
-  readonly assistantTextLength: number;
-  readonly assistantUpdatedAt: string | null;
-};
-
-/**
- * Gets the statistics visible in T3's projected activities and assistant
- * messages for one turn. It includes recorded tool activity and assistant text
- * that has reached the projection, but not necessarily buffered output,
- * hidden reasoning, or provider work that produces no projected event.
- * Comparing two results can indicate observable progress, but an unchanged
- * result does not prove that the turn is stalled.
- */
-const getTurnStats = (
-  thread: OrchestrationThread,
-  turn: Pick<OrchestrationLatestTurn, "turnId" | "state">,
-): TurnStats => {
-  const activities = thread.activities.filter((activity) => activity.turnId === turn.turnId);
-  const assistantMessages = thread.messages.filter(
-    (message) => message.turnId === turn.turnId && message.role === "assistant",
-  );
-
-  const assistantUpdatedAt = assistantMessages.reduce<string | null>(
-    (latest, message) =>
-      latest === null || message.updatedAt > latest ? message.updatedAt : latest,
-    null,
-  );
-
-  return {
-    activityCount: activities.length,
-    latestActivityId: activities.at(-1)?.id ?? null,
-    assistantTextLength: assistantMessages.reduce(
-      (length, message) => length + message.text.length,
-      0,
-    ),
-    assistantUpdatedAt,
-  };
-};
-
-const hasProgress = (previous: TurnStats, current: TurnStats): boolean =>
-  previous.activityCount !== current.activityCount ||
-  previous.latestActivityId !== current.latestActivityId ||
-  previous.assistantTextLength !== current.assistantTextLength ||
-  previous.assistantUpdatedAt !== current.assistantUpdatedAt;
-
-type TurnStatus =
-  | {
-      readonly threadId: ThreadId;
-      state: "pending";
-    }
-  | {
-      readonly threadId: ThreadId;
-      readonly turnId: TurnId;
-      readonly state: OrchestrationLatestTurnState;
-      readonly stats: TurnStats;
-    };
 
 /**
  * Creates an NTBS processor for one adapter.
@@ -304,30 +238,6 @@ export const makeNTBSProcessor = <AdapterId>(
             }),
           )
           .pipe(orFail("Failed to start the first T3 turn"));
-      });
-
-    /**
-     * Requests interruption of one exact T3 turn.
-     */
-    const interruptT3Turn = (
-      threadId: ThreadId,
-      turnId: TurnId,
-    ): Effect.Effect<void, NTBSProcessorError> =>
-      Effect.gen(function* () {
-        const commandId = CommandId.make(yield* randomUUID);
-        const createdAt = yield* getNow;
-
-        yield* orchestrationEngineService
-          .dispatch(
-            OrchestrationCommand.make({
-              type: "thread.turn.interrupt",
-              commandId,
-              threadId,
-              turnId,
-              createdAt,
-            }),
-          )
-          .pipe(orFail(`Failed to interrupt T3 turn ${turnId}`));
       });
 
     const getTurn = (threadId: ThreadId, userMessageId: MessageId) =>
@@ -500,54 +410,6 @@ export const makeNTBSProcessor = <AdapterId>(
       });
 
     /**
-     * Stops a stalled T3 turn and reports the timeout to the external platform.
-     *
-     * Response handling is locked by user message so a normal completion and
-     * timeout cannot both post an outcome.
-     */
-    const handleStalledTurn = (
-      userMessageId: MessageId,
-      turn: TurnStatus,
-    ): Effect.Effect<void, NTBSProcessorError> =>
-      ensureUniqueOutcome(
-        userMessageId,
-        Effect.gen(function* () {
-          const lifecycle = yield* adapter
-            .findByThreadId(turn.threadId)
-            .pipe(orFail("Failed loading the NTBS lifecycle for a stalled turn"));
-
-          if (lifecycle.state === "thread.response.posted") {
-            markResponsePosted(userMessageId);
-            return;
-          }
-
-          if (turn.state !== "pending") {
-            const turnId = turn.turnId;
-            yield* interruptT3Turn(turn.threadId, turnId).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Failed interrupting stalled T3 turn", {
-                  userMessageId,
-                  threadId: turn.threadId,
-                  turnId,
-                  cause,
-                }),
-              ),
-            );
-          }
-
-          const response: NTBSResponse = {
-            type: "timeout",
-            text:
-              turn.state === "pending"
-                ? "T3 could not start this request after repeated checks."
-                : "T3 stopped this request after repeated checks found no observable progress.",
-          };
-
-          yield* postResponse(lifecycle, response);
-        }),
-      );
-
-    /**
      * Resolves where a new thread worktree starts from.
      *
      * Fetches `origin` and prefers the remote state of `baseRef`, so a branch name resolves to its latest remote commit even when the local copy is behind.
@@ -616,136 +478,6 @@ export const makeNTBSProcessor = <AdapterId>(
      * and turns for the same requests.
      */
     const inFlightRequests = new Set<string>();
-
-    /**
-     * Fetches fresh information for the turn created by one T3 user message.
-     */
-    const loadMessageStatus = (
-      userMessageId: MessageId,
-      threadId: ThreadId,
-    ): Effect.Effect<TurnStatus, NTBSProcessorError> =>
-      Effect.gen(function* () {
-        const turn = yield* getTurn(threadId, userMessageId);
-
-        if (!turn) {
-          return yield* new NTBSProcessorError({
-            reason: `Failed to retrieve turn for user message`,
-            cause: { userMessageId, threadId },
-          });
-        }
-
-        if (turn.turnId === null && turn.state === "pending") {
-          return { threadId, state: "pending" };
-        }
-
-        // NOTE: This is not a business-logic related check.
-        // Turn state *in practice* has always turnId === null and state === pending
-        // But since they live on different properties we need to make it typecheck and cross check the wire
-        if (turn.turnId === null || turn.state === "pending") {
-          return yield* new NTBSProcessorError({
-            reason: `T3 turn state is inconsistent for user message ${userMessageId}.`,
-            cause: turn,
-          });
-        }
-
-        const maybeThread = yield* projectionSnapshotQuery
-          .getThreadDetailById(threadId)
-          .pipe(orFail("Problems getting the thread from the projection"));
-
-        const thread = yield* Effect.fromOption(maybeThread).pipe(
-          orFail(`Could not load T3 thread ${threadId}`),
-        );
-
-        const stats = getTurnStats(thread, {
-          turnId: turn.turnId,
-          state: turn.state,
-        });
-        return { threadId, turnId: turn.turnId, stats, state: turn.state };
-      });
-
-    /**
-     * Loads the current turn status and compares it with the previous observation.
-     * The status recorded when monitoring begins is the initial baseline.
-     */
-    const checkProgress = (
-      userMessageId: MessageId,
-      previousStatus: TurnStatus,
-    ): Effect.Effect<
-      { readonly status: TurnStatus; readonly progressed: boolean },
-      NTBSProcessorError
-    > =>
-      Effect.gen(function* () {
-        const fresh = yield* loadMessageStatus(userMessageId, previousStatus.threadId);
-
-        let progressed: boolean;
-
-        if (previousStatus.state === "pending" && fresh.state === "pending") {
-          progressed = false;
-        } else if (previousStatus.state === "pending") {
-          progressed = true;
-        } else if (fresh.state === "pending") {
-          return yield* new NTBSProcessorError({
-            reason: `T3 thread ${previousStatus.threadId} became pending after its turn had started.`,
-            cause: { previousStatus, fresh },
-          });
-        } else {
-          progressed = hasProgress(previousStatus.stats, fresh.stats);
-        }
-
-        return { status: fresh, progressed };
-      });
-
-    // TODO: These guys should come from some config
-    const CHECK_INTERVAL = "15 seconds";
-    const MAX_NO_PROGRESS_CHECKS = 12;
-
-    const monitorT3Turn = (
-      userMessageId: MessageId,
-      initialStatus: TurnStatus,
-    ): Effect.Effect<void, NTBSProcessorError> =>
-      Effect.gen(function* () {
-        let consecutiveNoProgressChecks = 0;
-
-        let previousStatus = initialStatus;
-
-        while (true) {
-          const result = yield* checkProgress(userMessageId, previousStatus).pipe(
-            Effect.retry({
-              times: 3,
-              schedule: Schedule.spaced(CHECK_INTERVAL),
-            }),
-            Effect.tapError((cause) =>
-              Effect.logWarning("Failed checking T3 turn progress after retries", {
-                userMessageId,
-                cause,
-              }),
-            ),
-          );
-
-          previousStatus = result.status;
-
-          const { status } = result;
-
-          if (status.state !== "pending" && status.state !== "running") {
-            // it has completed already
-            return;
-          }
-
-          if (result.progressed) {
-            // reset the counter
-            consecutiveNoProgressChecks = 0;
-          } else {
-            consecutiveNoProgressChecks += 1;
-          }
-
-          if (consecutiveNoProgressChecks >= MAX_NO_PROGRESS_CHECKS) {
-            yield* handleStalledTurn(userMessageId, result.status);
-            return;
-          }
-
-          yield* Effect.sleep(CHECK_INTERVAL);
-        }
-      });
 
     /**
      * Creates an isolated worktree and a new T3 thread.
@@ -887,7 +619,6 @@ export const makeNTBSProcessor = <AdapterId>(
         const { threadId, userMessageId } = threadCreated.t3Data;
 
         const turn = yield* getTurn(threadId, userMessageId);
-        let initialStatus: TurnStatus;
 
         if (!turn) {
           yield* startT3Turn(
@@ -896,46 +627,26 @@ export const makeNTBSProcessor = <AdapterId>(
             threadCreated.snapshot,
             threadCreated.attachments,
           );
-          initialStatus = {
-            threadId,
-            state: "pending",
-          };
         } else {
-          const status = yield* loadMessageStatus(userMessageId, threadId);
-          initialStatus = status;
-          if (status.state !== "pending" && status.state !== "running") {
-            yield* ensureUniqueOutcome(
-              userMessageId,
-              Effect.gen(function* () {
-                const currentRecord = yield* adapter
-                  .findByThreadId(threadId)
-                  .pipe(orFail("Failed reloading the NTBS lifecycle during recovery"));
+          yield* ensureUniqueOutcome(
+            userMessageId,
+            Effect.gen(function* () {
+              const currentRecord = yield* adapter
+                .findByThreadId(threadId)
+                .pipe(orFail("Failed reloading the NTBS lifecycle during recovery"));
 
-                if (currentRecord.state === "thread.response.posted") {
-                  markResponsePosted(userMessageId);
-                  return;
-                }
+              if (currentRecord.state === "thread.response.posted") {
+                markResponsePosted(userMessageId);
+                return;
+              }
 
-                const response = yield* resolveT3Outcome(threadId, userMessageId);
-                if (response !== null) {
-                  yield* postResponse(currentRecord, response);
-                }
-              }),
-            );
-            return;
-          }
-        }
-
-        yield* monitorT3Turn(userMessageId, initialStatus).pipe(
-          Effect.catch((cause) =>
-            Effect.logError("Recovered NTBS turn monitor failed", {
-              userMessageId,
-              threadId,
-              cause,
+              const response = yield* resolveT3Outcome(threadId, userMessageId);
+              if (response !== null) {
+                yield* postResponse(currentRecord, response);
+              }
             }),
-          ),
-          Effect.forkDetach,
-        );
+          );
+        }
       });
 
     /*
@@ -947,8 +658,7 @@ export const makeNTBSProcessor = <AdapterId>(
       2. Create the worktree and T3 thread.
       3. Generate the first user message ID and record it with ThreadCreated.
       4. Start the first T3 turn with that message ID, the snapshot, and attachments.
-      5. Start monitoring the turn in the background.
-      6. Attempt to post the acknowledgement independently.
+      5. Attempt to post the acknowledgement independently.
     */
     const process = (request: NTBS.NTBSInput, t3Context: T3Context) =>
       Effect.gen(function* () {
@@ -1000,20 +710,6 @@ export const makeNTBSProcessor = <AdapterId>(
           // Start the first T3 turn with that message Id, the snapshot and attachments
           yield* startT3Turn(threadId, userMessageId, request.snapshot, request.attachments);
 
-          yield* monitorT3Turn(userMessageId, {
-            threadId,
-            state: "pending",
-          }).pipe(
-            Effect.catch((cause) =>
-              Effect.logError("NTBS turn monitor failed", {
-                userMessageId,
-                threadId,
-                cause,
-              }),
-            ),
-            Effect.forkDetach,
-          );
-
           yield* adapter.acknowledge(threadCreated).pipe(
             Effect.catch((cause) =>
               Effect.logWarning("Failed posting the NTBS acknowledgement", {
@@ -1064,7 +760,7 @@ export const makeNTBSProcessor = <AdapterId>(
       ),
     );
 
-    const start = Effect.scoped(
+    const run = Effect.scoped(
       Effect.gen(function* () {
         yield* consumeT3Events.pipe(Effect.forkScoped({ startImmediately: true }));
         yield* recoverStoredThreads;
@@ -1074,6 +770,6 @@ export const makeNTBSProcessor = <AdapterId>(
 
     return {
       process,
-      start,
+      run,
     };
   });
