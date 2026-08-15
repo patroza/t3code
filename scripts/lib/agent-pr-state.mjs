@@ -2,8 +2,8 @@
  * Resolve whether the current branch's open PR should enforce the agent ship gate.
  *
  * Modes:
- *   none    — no open PR (or closed/merged): changed-file check only
- *   draft   — open draft PR: changed-file check only
+ *   none    — no open PR (or closed/merged): changed-file check + typecheck
+ *   draft   — open draft PR: changed-file check + typecheck
  *   ready   — open non-draft PR: full ship gate on every agent push
  *   unknown — gh missing / failed: fail closed (run the full gate)
  *
@@ -39,7 +39,7 @@ export const shouldRunShipGateOnPush = (mode) => mode === "ready" || mode === "u
 /**
  * How much of the gate a push pays for.
  *
- * Draft / no-PR: format + lint of files changed against fork/dev.
+ * Draft / no-PR: format + lint of files changed against fork/dev, plus typecheck.
  * Ready / unknown: full workspace check + typecheck + unit tests.
  *
  * @param {"none" | "draft" | "ready" | "unknown"} mode

@@ -68,9 +68,9 @@ authenticated.
 - `pnpm test:agent-gate`: Unit tests for the agent pre-push / PR-state / gh-policy helpers.
 - Husky: `pre-commit` runs `pnpm lint-staged` (`vp fmt` on staged files + `vp lint --fix` on staged
   code files);
-  `pre-push` runs `scripts/agent-pre-push.mjs` (agents only: changed-file `vp check` on draft /
-  no PR; full ship gate including unit tests on ready PRs / publish; full-gate SHA cache in
-  `.run/agent-ship-gate.json`).
+  `pre-push` runs `scripts/agent-pre-push.mjs` (agents only: changed-file `vp check` +
+  `vpr typecheck` on draft / no PR; full ship gate including unit tests on ready PRs / publish;
+  full-gate SHA cache in `.run/agent-ship-gate.json`).
 - `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
   an isolated T3 SQLite database; writes create a private backup first.
 

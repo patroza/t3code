@@ -5,8 +5,9 @@
  * Humans: no-op (exit 0) — self-responsible; not forced by the hook.
  *
  * Agents:
- *   - Draft PR or no open PR: changed-file `vp check` only (fmt + lint of
- *     files changed against fork/dev). Commits already pay lint-staged.
+ *   - Draft PR or no open PR: changed-file `vp check` (fmt + lint of files
+ *     changed against fork/dev) plus workspace `vpr typecheck`.
+ *     Commits already pay lint-staged.
  *   - Ready-for-review PR (or unknown PR state): full ship gate (1–3).
  *   - Publish path is `pnpm pr:ready` (not raw `gh pr ready`) — catch up to
  *     fork/dev, run the full gate, then undraft.
@@ -14,7 +15,7 @@
  *
  * Ship gate mirrors the CI JS quality path:
  *   1. `vp check` — format + lint (changed files on draft; workspace on full)
- *   2. `vpr typecheck` — workspace TypeScript (full / publish only)
+ *   2. `vpr typecheck` — workspace TypeScript (draft and full)
  *   3. `vp run test` — unit tests (full / publish only)
  *
  * Detection: GROK_AGENT / T3_AGENT / AI_AGENT / Claude / Cursor / Codex env.
@@ -76,7 +77,8 @@ const run = (label, args, opts = {}) => {
 /**
  * Agent ship gate. Shared by pre-push and `pnpm pr:ready`.
  *
- * `scope: "changed"` — `vp check` on files changed against fork/dev (draft / no-PR).
+ * `scope: "changed"` — `vp check` on files changed against fork/dev, then
+ *   workspace `vpr typecheck` (draft / no-PR).
  * `scope: "full"` (default) — workspace `vp check` + `vpr typecheck` + `vp run test`.
  *
  * Caches HEAD SHA under `.run/agent-ship-gate.json` so a full run is never
@@ -97,15 +99,16 @@ export const runAgentShipGate = async (opts = {}) => {
   if (scope === "changed") {
     const files = listChangedFilesAgainstForkDev({ cwd: root });
     if (files.length === 0) {
-      console.error("agent ship-gate: no files changed against fork/dev — skip");
-      return { status: "ok", sha: headSha, scope };
+      console.error("agent ship-gate: no files changed against fork/dev — skip fmt/lint");
+    } else {
+      run("vp check (changed)", ["vp", "check", "--no-error-on-unmatched-pattern", ...files], {
+        cwd: root,
+        env,
+      });
     }
-    run("vp check (changed)", ["vp", "check", "--no-error-on-unmatched-pattern", ...files], {
-      cwd: root,
-      env,
-    });
+    run("vpr typecheck", ["vpr", "typecheck"], { cwd: root, env });
     console.error(
-      `agent ship-gate: changed ok — ${files.length} file${files.length === 1 ? "" : "s"}; full gate on publish`,
+      `agent ship-gate: changed ok — ${files.length} file${files.length === 1 ? "" : "s"} + typecheck; full gate on publish`,
     );
     return { status: "ok", sha: headSha, scope };
   }
@@ -163,7 +166,7 @@ if (invokedAs === thisFile) {
         ? `draft PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""}`
         : "no open PR";
     console.error(
-      `agent pre-push: ${why} — changed-file check only (full gate on publish via pnpm pr:ready)`,
+      `agent pre-push: ${why} — changed-file check + typecheck (full gate on publish via pnpm pr:ready)`,
     );
   } else if (prState.mode === "unknown") {
     console.error(

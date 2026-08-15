@@ -45,9 +45,9 @@ When implementation work for a user request is done (code, docs, config — not 
 2. **Open or update a PR against `fork/dev`** before handing off. Never target `main`.
 3. **Let the agent ship gate own validation** before saying “updated the PR” or finishing (see
    _Task Completion Requirements → Agent ship gate_):
-   - **Draft / no-PR pushes** run `vp check` only on files changed against `fork/dev`. Commits
-     already pay lint-staged (fmt + lint of staged files). Do **not** hand-run the workspace
-     suite while drafting.
+   - **Draft / no-PR pushes** run `vp check` on files changed against `fork/dev`, plus workspace
+     `vpr typecheck`. Commits already pay lint-staged (fmt + lint of staged files). Do **not**
+     hand-run the unit suite while drafting.
    - **Publishing** (`pnpm pr:ready`) requires HEAD to contain latest `fork/dev` (rebase or merge
      — your choice), then the **full** ship gate (`vp check` → `vpr typecheck` → `vp run test`).
      Only a failing gate stops it. Raw `gh pr ready` is not refused — the `.tools/bin/gh` shim
@@ -117,8 +117,8 @@ moment, and caches a passing full-gate SHA.
   markers). Humans opt out per push with `SKIP_AGENT_PREPUSH=1` — **agents never set that flag** and
   never use `git push --no-verify`.
 - When it runs:
-  1. **Draft / no-PR:** `vp check` on files changed against `fork/dev` (fmt + lint). Same class of
-     check as lint-staged on commit.
+  1. **Draft / no-PR:** `vp check` on files changed against `fork/dev` (fmt + lint), then
+     workspace **`vpr typecheck`**.
   2. **Ready / publish:** workspace **`vp check`** → **`vpr typecheck`** → **`vp run test`**.
      Cargo, mobile native, desktop packaging, and Release Smoke stay **CI-only** — do not hand-run
      them for ordinary PR handoff.
@@ -127,12 +127,12 @@ moment, and caches a passing full-gate SHA.
 
 **When it runs:**
 
-| Branch PR state        | Agent push                           |
-| ---------------------- | ------------------------------------ |
-| No open PR             | **changed-file** `vp check`          |
-| **Draft** PR           | **changed-file** `vp check`          |
-| **Ready** PR           | **full** ship gate on every push     |
-| PR state can’t resolve | **full** ship gate (**fail closed**) |
+| Branch PR state        | Agent push                                    |
+| ---------------------- | --------------------------------------------- |
+| No open PR             | **changed-file** `vp check` + `vpr typecheck` |
+| **Draft** PR           | **changed-file** `vp check` + `vpr typecheck` |
+| **Ready** PR           | **full** ship gate on every push              |
+| PR state can’t resolve | **full** ship gate (**fail closed**)          |
 
 The gate keys off the PR’s **ready state**, not its base.
 
@@ -151,7 +151,7 @@ hooks and the shim on `prepare`.
 
 - **Open the draft immediately** once a PR is in scope (user asked, or Discord/turn rules require it)
   and the first meaningful commit is useful to review. Keep committing and pushing while it is a
-  draft — each push pays the **changed-file** check only.
+  draft — each push pays **changed-file** `vp check` + `vpr typecheck`.
 - **Publish when the work is done — do not leave a finished PR in draft.** Catch up to latest
   `fork/dev` if needed, then `pnpm pr:ready`. That is the immediate next action, before handoff
   notes, so full CI can start. Draft is only for work-in-progress.
@@ -181,7 +181,7 @@ hook rewrites files, stage those rewrites, commit, and push again.
 - Treating “CI will catch it” as a substitute for publishing through the gate. If a PR’s checks
   panel shows **no** Check job, it has not been through the gate — publish with `pnpm pr:ready`.
 - Leaving Discord/agent work with commits but **no** PR (open a draft; draft pushes pay changed-file
-  check).
+  check + typecheck).
 - Publishing a PR that is behind `fork/dev`, or walking away from a published PR before its required
   checks are green.
 - Leaving a **finished** PR in draft. Draft is for work-in-progress only; when the work is done,
