@@ -128,6 +128,11 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
     failureKind: Schema.optional(VcsProcessExitFailureKind),
     stderrLength: Schema.optional(NonNegativeInt),
     stderrTruncated: Schema.optional(Schema.Boolean),
+    /**
+     * A guest-wrapper line that is safe to show. Raw provider stderr stays off
+     * `message` so tokens in GraphQL/REST failures cannot leak into logs.
+     */
+    publicDiagnostic: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
@@ -138,6 +143,7 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
     context: VcsProcessErrorContext,
     error: VcsProcessExitFailure,
     failureKind: VcsProcessExitFailureKind,
+    publicDiagnostic?: string,
   ) {
     const detail =
       failureKind === "authentication"
@@ -159,6 +165,7 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
       failureKind,
       stderrLength: error.stderr.length,
       stderrTruncated: error.stderrTruncated,
+      ...(publicDiagnostic !== undefined ? { publicDiagnostic } : {}),
     });
   }
 }

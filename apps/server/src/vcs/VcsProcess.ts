@@ -101,6 +101,21 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
   return "command-failed";
 };
 
+/** Guest App-wrapper lines are written for operators; they do not carry tokens. */
+const WRAPPER_DIAGNOSTIC = /^(?:t3-github-app-token|gh-app-wrapper):.+/i;
+const PUBLIC_DIAGNOSTIC_MAX = 240;
+
+export function publicDiagnosticFromStderr(stderr: string): string | undefined {
+  for (const line of stderr.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!WRAPPER_DIAGNOSTIC.test(trimmed)) continue;
+    return trimmed.length > PUBLIC_DIAGNOSTIC_MAX
+      ? `${trimmed.slice(0, PUBLIC_DIAGNOSTIC_MAX - 1)}…`
+      : trimmed;
+  }
+  return undefined;
+}
+
 export const make = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const sourceControlCliSemaphore = yield* Semaphore.make(SOURCE_CONTROL_CLI_CONCURRENCY);
@@ -174,6 +189,7 @@ export const make = Effect.gen(function* () {
           stderrTruncated: result.stderrTruncated,
         },
         classifyNonZeroExit(input.command, result.stderr),
+        publicDiagnosticFromStderr(result.stderr),
       );
     }
 

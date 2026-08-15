@@ -52,6 +52,29 @@ describe("GitHubCli.layer", () => {
     assert.notProperty(commandFailure, "operation");
   });
 
+  it("surfaces guest App-wrapper diagnostics instead of the generic command-failed line", () => {
+    const context = { command: "gh", cwd: "/repo" } as const;
+    const cause = new VcsProcessExitError({
+      operation: "GitHubCli.execute",
+      command: "gh",
+      cwd: context.cwd,
+      exitCode: 1,
+      failureKind: "command-failed",
+      detail: "Process exited with a non-zero status.",
+      publicDiagnostic:
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    });
+
+    const error = GitHubCli.fromVcsError(context, cause);
+
+    assert.equal(error._tag, "GitHubCliCommandError");
+    assert.equal(
+      error.detail,
+      "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    );
+    assert.equal(error.message.includes("app is not installed"), true);
+  });
+
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(
