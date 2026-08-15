@@ -19,9 +19,14 @@ function normalizeProjectName(value: string): string {
     .toLocaleLowerCase();
 }
 
-function projectNames(project: EnvironmentProject): ReadonlySet<string> {
+function nameSet(names: ReadonlyArray<string | undefined>): ReadonlySet<string> {
+  return new Set(names.flatMap((name) => (name ? [normalizeProjectName(name)] : [])));
+}
+
+/** The names a project answers to as itself: its title, its folder, its own repository. */
+function primaryProjectNames(project: EnvironmentProject): ReadonlySet<string> {
   const identity = project.repositoryIdentity;
-  const names = [
+  return nameSet([
     project.title,
     project.workspaceRoot
       .replace(/[\\/]+$/u, "")
@@ -31,14 +36,31 @@ function projectNames(project: EnvironmentProject): ReadonlySet<string> {
     identity?.displayName,
     identity?.name,
     identity?.owner && identity.name ? `${identity.owner}/${identity.name}` : undefined,
-    ...(identity?.remotes?.flatMap((remote) => [
+  ]);
+}
+
+/**
+ * The names a project answers to only through a configured remote. A fork answers to
+ * more than one repository, but so does any clone carrying an unrelated remote (a
+ * subtree source, say), so these are weaker evidence than the project's own identity.
+ */
+function remoteProjectNames(project: EnvironmentProject): ReadonlySet<string> {
+  return nameSet(
+    project.repositoryIdentity?.remotes?.flatMap((remote) => [
       remote.canonicalKey,
       remote.name,
       remote.owner && remote.name ? `${remote.owner}/${remote.name}` : undefined,
-    ]) ?? []),
-  ];
+    ]) ?? [],
+  );
+}
 
-  return new Set(names.flatMap((name) => (name ? [normalizeProjectName(name)] : [])));
+const PRIMARY_MATCH = 0;
+const REMOTE_MATCH = 1;
+
+function matchRank(project: EnvironmentProject, projectName: string): number | null {
+  if (primaryProjectNames(project).has(projectName)) return PRIMARY_MATCH;
+  if (remoteProjectNames(project).has(projectName)) return REMOTE_MATCH;
+  return null;
 }
 
 function latestThreadForProject(
@@ -72,20 +94,23 @@ export function resolveProjectJumpTarget(
   const projectName = normalizeProjectName(rawProjectName);
   if (!projectName) return null;
 
-  const matches = projects
-    .filter((project) => projectNames(project).has(projectName))
-    .map((project) => ({
-      project,
-      latestThread: latestThreadForProject(project, threads),
-    }));
+  const matches = projects.flatMap((project) => {
+    const rank = matchRank(project, projectName);
+    return rank === null
+      ? []
+      : [{ project, rank, latestThread: latestThreadForProject(project, threads) }];
+  });
 
-  return (
-    matches.toSorted((left, right) => {
-      const leftTimestamp = Date.parse(left.latestThread?.updatedAt ?? left.project.updatedAt);
-      const rightTimestamp = Date.parse(right.latestThread?.updatedAt ?? right.project.updatedAt);
-      return rightTimestamp - leftTimestamp;
-    })[0] ?? null
-  );
+  // Strongest match wins outright; recency only breaks ties within a rank, so a busy
+  // clone that merely lists the repository as a remote never outranks the project itself.
+  const best = matches.toSorted((left, right) => {
+    if (left.rank !== right.rank) return left.rank - right.rank;
+    const leftTimestamp = Date.parse(left.latestThread?.updatedAt ?? left.project.updatedAt);
+    const rightTimestamp = Date.parse(right.latestThread?.updatedAt ?? right.project.updatedAt);
+    return rightTimestamp - leftTimestamp;
+  })[0];
+
+  return best ? { project: best.project, latestThread: best.latestThread } : null;
 }
 
 const PROJECT_REVEAL_EVENT = "t3code:reveal-project";
