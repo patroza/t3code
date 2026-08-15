@@ -34,6 +34,7 @@ import {
   appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapter,
   mergeOpenCodeAssistantText,
+  normalizeOpenCodeTokenUsage,
 } from "./OpenCodeAdapter.ts";
 
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
@@ -862,6 +863,98 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         ["Hello", "lo world", ""],
       );
       NodeAssert.equal(secondUpdate.latestText, "Hellolo world");
+    }),
+  );
+
+  it.effect("maps OpenCode token rollups to last in/out usage", () =>
+    Effect.sync(() => {
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenUsage({
+          total: 1_500,
+          input: 1_000,
+          output: 400,
+          reasoning: 100,
+          cache: { read: 200, write: 0 },
+        }),
+        {
+          usedTokens: 1_500,
+          lastUsedTokens: 1_500,
+          inputTokens: 1_200,
+          lastInputTokens: 1_200,
+          outputTokens: 400,
+          lastOutputTokens: 400,
+          reasoningOutputTokens: 100,
+          lastReasoningOutputTokens: 100,
+          cachedInputTokens: 200,
+          lastCachedInputTokens: 200,
+        },
+      );
+      NodeAssert.equal(
+        normalizeOpenCodeTokenUsage({
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        }),
+        undefined,
+      );
+    }),
+  );
+
+  it.effect("emits thread token usage from OpenCode assistant message tokens", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-token-usage");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "message.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            info: {
+              id: "msg-tokens",
+              role: "assistant",
+              tokens: {
+                total: 1_500,
+                input: 1_000,
+                output: 400,
+                reasoning: 100,
+                cache: { read: 200, write: 0 },
+              },
+            },
+          },
+        },
+      ];
+
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const usageEvent = events.find((event) => event.type === "thread.token-usage.updated");
+      NodeAssert.ok(usageEvent);
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        NodeAssert.deepEqual(usageEvent.payload.usage, {
+          usedTokens: 1_500,
+          lastUsedTokens: 1_500,
+          inputTokens: 1_200,
+          lastInputTokens: 1_200,
+          outputTokens: 400,
+          lastOutputTokens: 400,
+          reasoningOutputTokens: 100,
+          lastReasoningOutputTokens: 100,
+          cachedInputTokens: 200,
+          lastCachedInputTokens: 200,
+        });
+      }
     }),
   );
 
