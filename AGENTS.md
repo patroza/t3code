@@ -10,8 +10,9 @@ pingdotgg/t3code:main
 
 - **Change PRs:** branch from `fork/dev`, open every implementation PR against `fork/dev`, and
   squash-merge it. Never open implementation PRs against `main`.
-- **Catching a change PR up:** rebase onto latest `fork/dev`, or merge latest `fork/dev` into the
-  PR branch. Either is fine — pick one per PR.
+- **Catching a published PR up:** once the PR is no longer draft, rebase onto latest `fork/dev` or
+  merge latest `fork/dev` into the PR branch if it is behind or conflicting. Either is fine — pick
+  one. Draft PRs skip this.
 - **Updating from upstream:** fast-forward `main` to `upstream/main`, then classic-merge `main` into
   `fork/dev`. Never merge downstream work into `main`, and never use GitHub's **Sync fork** button.
   When the merge hits shared product paths, do a 3-way merge — never a blind whole-file
@@ -54,11 +55,11 @@ When implementation work for a user request is done (code, docs, config — not 
      Either way the checks run, so there is no way to publish around them and nothing to remember.
      The husky `pre-push` hook enforces the gate on every agent push and fails closed when PR state
      can’t be resolved.
-   - Catch the PR up to latest `fork/dev` (rebase or merge — your choice) if it is behind or
-     conflicting. The ensuing push runs the appropriate gate scope.
+   - **Before publishing**, catch the PR up to latest `fork/dev` (rebase or merge — your choice) if
+     it is behind or conflicting. Draft work skips this.
    - Confirm with `gh pr view <n> --json baseRefName,mergeable,mergeStateStatus,url`
-   - `baseRefName` must be `fork/dev`. `mergeable` should be `MERGEABLE` (CI may still be
-     `UNSTABLE` while checks run).
+   - `baseRefName` must be `fork/dev`. After publish, `mergeable` should be `MERGEABLE` (CI may
+     still be `UNSTABLE` while checks run).
 4. **Before pushing follow-ups**, verify PR state with `gh pr view` (or equivalent):
    - If the PR is **open** → update that branch and push; the
      gate re-runs for that HEAD (static if draft, full if ready).
