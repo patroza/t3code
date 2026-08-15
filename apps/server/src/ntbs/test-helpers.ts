@@ -216,7 +216,7 @@ const TestAdapterFromState = Layer.effect(
         Effect.sync(() => {
           adapterState.records.set(event.t3Data.threadId, event);
         }),
-      postAcknowledgement: (state) =>
+      acknowledge: (state) =>
         Effect.sync(() => {
           const acknowledgementId = `acknowledgementId-${adapterState.postedAcks.size}`;
           adapterState.postedAcks.set(acknowledgementId, state);

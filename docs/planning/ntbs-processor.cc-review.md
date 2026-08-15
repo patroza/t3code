@@ -11,15 +11,6 @@ Overall the shape is right: the processor/adapter boundary is clean, the outcome
 
 ### API and business logic
 
-**S1. `messageStatus` is fiber-local state wearing a Map costume** — `processor.ts:636`
-The map has exactly one reader, `checkProgress` (`processor.ts:698`); every other use is a write or delete from the same monitor's own control flow. The progress baseline can live in a local variable inside `monitorT3Turn`, with the initial `TurnStatus` passed in as a parameter. That deletes:
-
-- the `"No monitoring state exists"` error case (`processor.ts:700-704`), which cannot occur except through the map indirection itself;
-- the delete/set baseline dance in `checkProgress` (`processor.ts:725-729`) and the second delete in the monitor's `ensuring` (`processor.ts:777`);
-- the `TurnStats` / `TurnStatus` name near-collision, since `TurnStatus` mostly dissolves.
-
-If you keep any shared structure, its only genuine job is "is someone already monitoring this message" — a `Set<MessageId>` — which is exactly what bug **B2** needs. So: baseline goes fiber-local, the map becomes a Set used for recovery dedup.
-
 **S2. Three copies of the turn-for-message lookup** — `processor.ts:353-365`, `646-658`, `917-929`
 `resolveT3Outcome`, `loadMessageStatus`, and `recoverThread` each do `listByThreadId` → filter on `pendingMessageId === userMessageId` → cardinality check with a hand-built error. Extract one `findTurnForMessage(threadId, userMessageId)` helper. This is also the single place to implement the found-0 handling from bug **B1** — three call sites collapse into one decision point.
 
@@ -28,14 +19,9 @@ If you keep any shared structure, its only genuine job is "is someone already mo
 
 **S7. Small cuts**
 
-- `process` is a rename of `processAdapterRequest` (`processor.ts:1076-1077`) — define `process` directly.
-- `else` + trailing `return` after the early-return dedup branch (`processor.ts:1021-1073`) — flatten.
 - `runtimeMode: "full-access"` + `interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE` are hardcoded twice (`processor.ts:309-310`, `847-848`) — one module-level constant pair, which is also where a future per-request override would land.
 
 ### Naming and contracts
-
-**N1. `subscribeToT3Events` undersells itself** — `processor.ts:100`, `1117-1123`
-It subscribes, recovers stored threads, forks monitors, and then runs forever. Callers wire it as the processor's main loop. Call it `run` (or `start`), and keep the doc comment as is — the comment is accurate, the name isn't.
 
 **N2. `ThreadEvent` is not an event** — `lifecycle.ts:39`
 It's the stored record shape (input + T3 ids); the states are `ThreadCreated`/`ResponsePosted` and the union is already correctly named `NTBSLifecycle`. `ThreadRecord` (or `LifecycleBase`) says what it is. Same file: the fields are mutable while everything in `processor.ts` is `readonly` — make the contract types `readonly` too.

@@ -88,7 +88,7 @@ export interface NTBSProcessor {
   ) => Effect.Effect<void, NTBSProcessorError>;
 
   /**
-   * Consumes T3 events and passes them to `processT3Event`.
+   * The main loop of the processor, consumes T3 events and passes them to `processT3Event`.
    *
    * After the live subscription begins, loads stored `ThreadCreated` records.
    * It starts a missing first turn, resumes monitoring an active turn, or posts
@@ -97,7 +97,7 @@ export interface NTBSProcessor {
    * Runs until interrupted by its caller.
    * Logs individual processing failures and continues with later events.
    */
-  readonly subscribeToT3Events: Effect.Effect<void>;
+  readonly start: Effect.Effect<void>;
 }
 
 export const makeNTBSProcessorTag = (key: string) => Context.Service<NTBSProcessor>(key);
@@ -330,6 +330,22 @@ export const makeNTBSProcessor = <AdapterId>(
           .pipe(orFail(`Failed to interrupt T3 turn ${turnId}`));
       });
 
+    const getTurn = (threadId: ThreadId, userMessageId: MessageId) =>
+      Effect.gen(function* () {
+        const turns = yield* projectionTurnRepository
+          .listByThreadId({ threadId })
+          .pipe(orFail(`Failed loading turns for T3 thread ${threadId}`));
+        /*
+          Using `.find` is safe: a userMessageId can never label more than one turn.
+          The UUID is minted once per request, and a turn start is only repeated
+          (by recovery) when no turn exists for it.
+          If the turn started, `.find` finds it. Finding none means the turn never
+          started (e.g. crash) or T3 discarded it before a provider picked it up.
+        */
+        const turn = turns.find((turn) => turn.pendingMessageId === userMessageId);
+        return turn ?? null;
+      });
+
     /**
      * Reads the final outcome of the turn started by one NTBS user message.
      * Returns `null` while that exact turn is still pending or running.
@@ -339,17 +355,12 @@ export const makeNTBSProcessor = <AdapterId>(
       userMessageId: MessageId,
     ): Effect.Effect<NTBSResponse | null, NTBSProcessorError> =>
       Effect.gen(function* () {
-        const turns = yield* projectionTurnRepository
-          .listByThreadId({ threadId })
-          .pipe(orFail(`Failed loading turns for T3 thread ${threadId}`));
+        const turn = yield* getTurn(threadId, userMessageId);
 
-        const matchingTurns = turns.filter((turn) => turn.pendingMessageId === userMessageId);
-        const turn = matchingTurns[0];
-
-        if (matchingTurns.length !== 1 || turn === undefined) {
+        if (!turn) {
           return yield* new NTBSProcessorError({
-            reason: `Expected exactly one T3 turn for user message ${userMessageId}, found ${matchingTurns.length}.`,
-            cause: { threadId, userMessageId, matchingTurns },
+            reason: `Turn for user message ${userMessageId} not found.`,
+            cause: { threadId, userMessageId },
           });
         }
 
@@ -614,28 +625,26 @@ export const makeNTBSProcessor = <AdapterId>(
       threadId: ThreadId,
     ): Effect.Effect<TurnStatus, NTBSProcessorError> =>
       Effect.gen(function* () {
-        const turns = yield* projectionTurnRepository
-          .listByThreadId({ threadId })
-          .pipe(orFail(`Could not load projected turns for T3 thread ${threadId}`));
+        const turn = yield* getTurn(threadId, userMessageId);
 
-        const matchingTurns = turns.filter((turn) => turn.pendingMessageId === userMessageId);
-        const monitoredTurn = matchingTurns[0];
-
-        if (matchingTurns.length !== 1 || monitoredTurn === undefined) {
+        if (!turn) {
           return yield* new NTBSProcessorError({
-            reason: `Expected exactly one T3 turn for user message ${userMessageId}, found ${matchingTurns.length}.`,
-            cause: { userMessageId, threadId, matchingTurns },
+            reason: `Failed to retrieve turn for user message`,
+            cause: { userMessageId, threadId },
           });
         }
 
-        if (monitoredTurn.turnId === null && monitoredTurn.state === "pending") {
+        if (turn.turnId === null && turn.state === "pending") {
           return { threadId, state: "pending" };
         }
 
-        if (monitoredTurn.turnId === null || monitoredTurn.state === "pending") {
+        // NOTE: This is not a business-logic related check.
+        // Turn state *in practice* has always turnId === null and state === pending
+        // But since they live on different properties we need to make it typecheck and cross check the wire
+        if (turn.turnId === null || turn.state === "pending") {
           return yield* new NTBSProcessorError({
             reason: `T3 turn state is inconsistent for user message ${userMessageId}.`,
-            cause: monitoredTurn,
+            cause: turn,
           });
         }
 
@@ -648,10 +657,10 @@ export const makeNTBSProcessor = <AdapterId>(
         );
 
         const stats = getTurnStats(thread, {
-          turnId: monitoredTurn.turnId,
-          state: monitoredTurn.state,
+          turnId: turn.turnId,
+          state: turn.state,
         });
-        return { threadId, turnId: monitoredTurn.turnId, stats, state: monitoredTurn.state };
+        return { threadId, turnId: turn.turnId, stats, state: turn.state };
       });
 
     /**
@@ -876,22 +885,11 @@ export const makeNTBSProcessor = <AdapterId>(
     ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
         const { threadId, userMessageId } = threadCreated.t3Data;
-        const turns = yield* projectionTurnRepository
-          .listByThreadId({ threadId })
-          .pipe(orFail(`Failed loading turns while recovering T3 thread ${threadId}`));
-        const matchingTurns = turns.filter((turn) => turn.pendingMessageId === userMessageId);
 
-        if (matchingTurns.length > 1) {
-          return yield* new NTBSProcessorError({
-            reason: `Expected at most one T3 turn for user message ${userMessageId}, found ${matchingTurns.length}.`,
-            cause: { threadId, userMessageId, matchingTurns },
-          });
-        }
-
-        const turn = matchingTurns[0];
+        const turn = yield* getTurn(threadId, userMessageId);
         let initialStatus: TurnStatus;
 
-        if (turn === undefined) {
+        if (!turn) {
           yield* startT3Turn(
             threadId,
             userMessageId,
@@ -975,58 +973,56 @@ export const makeNTBSProcessor = <AdapterId>(
           // durable dedup
           const existingRequest = yield* adapter
             .findByRequest(request)
-            .pipe(orFail("Error getting the existing request in processAdapterRequest"));
+            .pipe(orFail("Error getting the existing request in process"));
 
           if (existingRequest) {
             return;
-          } else {
-            // create the worktree and T3 thread
-            const threadId = yield* createT3Thread(t3Context);
-
-            // generate the first user message ID and record it with ThreadCreated
-            const userMessageId = MessageId.make(yield* randomUUID);
-
-            const threadCreated: NTBS.ThreadCreated = {
-              ...request,
-              state: "thread.created",
-              t3Data: {
-                threadId,
-                userMessageId,
-              },
-            };
-
-            yield* adapter
-              .save(threadCreated)
-              .pipe(orFail("Failed to record the created NTBS thread"));
-
-            // Start the first T3 turn with that message Id, the snapshot and attachments
-            yield* startT3Turn(threadId, userMessageId, request.snapshot, request.attachments);
-
-            yield* monitorT3Turn(userMessageId, {
-              threadId,
-              state: "pending",
-            }).pipe(
-              Effect.catch((cause) =>
-                Effect.logError("NTBS turn monitor failed", {
-                  userMessageId,
-                  threadId,
-                  cause,
-                }),
-              ),
-              Effect.forkDetach,
-            );
-
-            yield* adapter.acknowledge(threadCreated).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Failed posting the NTBS acknowledgement", {
-                  userMessageId,
-                  threadId,
-                  cause,
-                }),
-              ),
-            );
           }
-          return;
+          // create the worktree and T3 thread
+          const threadId = yield* createT3Thread(t3Context);
+
+          // generate the first user message ID and record it with ThreadCreated
+          const userMessageId = MessageId.make(yield* randomUUID);
+
+          const threadCreated: NTBS.ThreadCreated = {
+            ...request,
+            state: "thread.created",
+            t3Data: {
+              threadId,
+              userMessageId,
+            },
+          };
+
+          yield* adapter
+            .save(threadCreated)
+            .pipe(orFail("Failed to record the created NTBS thread"));
+
+          // Start the first T3 turn with that message Id, the snapshot and attachments
+          yield* startT3Turn(threadId, userMessageId, request.snapshot, request.attachments);
+
+          yield* monitorT3Turn(userMessageId, {
+            threadId,
+            state: "pending",
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logError("NTBS turn monitor failed", {
+                userMessageId,
+                threadId,
+                cause,
+              }),
+            ),
+            Effect.forkDetach,
+          );
+
+          yield* adapter.acknowledge(threadCreated).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed posting the NTBS acknowledgement", {
+                userMessageId,
+                threadId,
+                cause,
+              }),
+            ),
+          );
         }).pipe(Effect.ensuring(Effect.sync(() => inFlightRequests.delete(key))));
       });
 
@@ -1068,7 +1064,7 @@ export const makeNTBSProcessor = <AdapterId>(
       ),
     );
 
-    const subscribeToT3Events = Effect.scoped(
+    const start = Effect.scoped(
       Effect.gen(function* () {
         yield* consumeT3Events.pipe(Effect.forkScoped({ startImmediately: true }));
         yield* recoverStoredThreads;
@@ -1078,6 +1074,6 @@ export const makeNTBSProcessor = <AdapterId>(
 
     return {
       process,
-      subscribeToT3Events,
+      start,
     };
   });
