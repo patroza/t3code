@@ -16,7 +16,12 @@ pingdotgg/t3code:main
 - **Updating from upstream:** fast-forward `main` to `upstream/main`, then classic-merge `main` into
   `fork/dev`. Never merge downstream work into `main`, and never use GitHub's **Sync fork** button.
   When the merge hits shared product paths, do a 3-way merge — never a blind whole-file
-  `ours`/`theirs`.
+  `ours`/`theirs`. **Land a sync PR with `gh pr merge <n> --merge`, never the GitHub button:**
+  ordinary fork PRs squash, so the button remembers "Squash and merge", which drops the merge's
+  second parent. The code survives, but `fork/dev..upstream/main` then reports already-merged work
+  as missing and the next sync re-resolves every conflict. #401 landed that way and went unnoticed
+  for two merges; `.github/workflows/upstream-lineage-guard.yml` now catches it on the next push to
+  `fork/dev` and prints the repair.
 - Independent features use parallel PRs based on `fork/dev`. Chain PRs only when one change
   genuinely depends on another, and merge that chain bottom-up.
 - All features land in `fork/dev`, including upstreamable work. To send something upstream, open a
