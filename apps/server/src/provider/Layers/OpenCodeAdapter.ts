@@ -8,6 +8,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
+  type ThreadTokenUsageSnapshot,
   type ToolLifecycleItemType,
   TurnId,
   type UserInputQuestion,
@@ -88,6 +89,66 @@ function openCodeEventSessionId(event: OpenCodeSubscribedEvent): string | undefi
   return info && typeof info.id === "string" ? info.id : undefined;
 }
 
+type OpenCodeTokenCounts = {
+  readonly total?: number;
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cache: {
+    readonly read: number;
+    readonly write: number;
+  };
+};
+
+function finiteNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.round(value);
+}
+
+/**
+ * Map OpenCode assistant/session/step token rollups onto T3's thread snapshot
+ * so Discord/GitHub footers can show in/out (and a used-total fallback).
+ */
+export function normalizeOpenCodeTokenUsage(
+  tokens: OpenCodeTokenCounts | null | undefined,
+): ThreadTokenUsageSnapshot | undefined {
+  if (tokens === null || tokens === undefined) {
+    return undefined;
+  }
+
+  const input = finiteNonNegativeInteger(tokens.input) ?? 0;
+  const cachedRead = finiteNonNegativeInteger(tokens.cache?.read) ?? 0;
+  const output = finiteNonNegativeInteger(tokens.output) ?? 0;
+  const reasoning = finiteNonNegativeInteger(tokens.reasoning) ?? 0;
+  const inputTokens = input + cachedRead;
+  const usedTokens = finiteNonNegativeInteger(tokens.total) ?? inputTokens + output + reasoning;
+  if (usedTokens <= 0) {
+    return undefined;
+  }
+
+  return {
+    usedTokens,
+    lastUsedTokens: usedTokens,
+    ...(inputTokens > 0 ? { inputTokens, lastInputTokens: inputTokens } : {}),
+    ...(output > 0 ? { outputTokens: output, lastOutputTokens: output } : {}),
+    ...(reasoning > 0
+      ? { reasoningOutputTokens: reasoning, lastReasoningOutputTokens: reasoning }
+      : {}),
+    ...(cachedRead > 0 ? { cachedInputTokens: cachedRead, lastCachedInputTokens: cachedRead } : {}),
+  };
+}
+
+function openCodeUsageFingerprint(usage: ThreadTokenUsageSnapshot): string {
+  return [
+    usage.usedTokens,
+    usage.lastInputTokens ?? usage.inputTokens ?? 0,
+    usage.lastOutputTokens ?? usage.outputTokens ?? 0,
+    usage.lastReasoningOutputTokens ?? usage.reasoningOutputTokens ?? 0,
+  ].join(":");
+}
+
 function openCodeEventSessionTitle(event: OpenCodeSubscribedEvent): string | undefined {
   if (event.type !== "session.updated") {
     return undefined;
@@ -109,6 +170,8 @@ interface OpenCodeSessionContext {
   readonly emittedTextByPartId: Map<string, string>;
   readonly completedAssistantPartIds: Set<string>;
   readonly turns: Array<OpenCodeTurnSnapshot>;
+  /** Last emitted usage fingerprint so repeated OpenCode token pings do not flood activities. */
+  lastEmittedUsageFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
@@ -606,6 +669,31 @@ export function makeOpenCodeAdapter(
 
     const emit = (event: ProviderRuntimeEvent) =>
       Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+    const emitOpenCodeTokenUsage = (
+      context: OpenCodeSessionContext,
+      tokens: OpenCodeTokenCounts | undefined,
+      raw: unknown,
+    ) =>
+      Effect.gen(function* () {
+        const usage = normalizeOpenCodeTokenUsage(tokens);
+        if (!usage) {
+          return;
+        }
+        const fingerprint = openCodeUsageFingerprint(usage);
+        if (fingerprint === context.lastEmittedUsageFingerprint) {
+          return;
+        }
+        context.lastEmittedUsageFingerprint = fingerprint;
+        yield* emit({
+          ...(yield* buildEventBase({
+            threadId: context.session.threadId,
+            turnId: context.activeTurnId,
+            raw,
+          })),
+          type: "thread.token-usage.updated",
+          payload: { usage },
+        });
+      });
     const writeNativeEvent = (
       threadId: ThreadId,
       event: {
@@ -780,12 +868,14 @@ export function makeOpenCodeAdapter(
               },
             });
           }
+          yield* emitOpenCodeTokenUsage(context, event.properties.info.tokens, event);
           break;
         }
 
         case "message.updated": {
           context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
           if (event.properties.info.role === "assistant") {
+            yield* emitOpenCodeTokenUsage(context, event.properties.info.tokens, event);
             for (const part of context.partById.values()) {
               if (part.messageID !== event.properties.info.id) {
                 continue;
@@ -853,6 +943,10 @@ export function makeOpenCodeAdapter(
 
           if (messageRole === "assistant") {
             yield* emitAssistantTextDelta(context, part, turnId, event);
+          }
+
+          if (part.type === "step-finish") {
+            yield* emitOpenCodeTokenUsage(context, part.tokens, event);
           }
 
           if (part.type === "tool") {
@@ -1351,6 +1445,7 @@ export function makeOpenCodeAdapter(
           messageRoleById: new Map(),
           completedAssistantPartIds: new Set(),
           turns: [],
+          lastEmittedUsageFingerprint: undefined,
           activeTurnId: undefined,
           activeAgent: undefined,
           activeVariant: undefined,

@@ -196,7 +196,7 @@ describe("AcpCoreRuntimeEvents", () => {
     });
   });
 
-  it("maps Grok _meta.totalTokens-style usage updates without a window size", () => {
+  it("maps _meta.totalTokens-style usage updates without a window size", () => {
     expect(normalizeAcpUsageUpdate({ used: 139_982 })).toEqual({
       usedTokens: 139_982,
       lastUsedTokens: 139_982,

@@ -110,8 +110,8 @@ export type AcpParsedSessionEvent =
       readonly rawPayload: unknown;
     }
   | {
-      /** ACP session-level context window update (`sessionUpdate: "usage_update"`)
-       * or Grok's `_meta.totalTokens` on ordinary session updates. */
+      /** ACP `usage_update`, or `_meta.totalTokens` on ordinary session updates
+       * (Grok, Cursor, Kimi). */
       readonly _tag: "UsageUpdated";
       readonly used: number;
       readonly size?: number;
@@ -622,8 +622,8 @@ function totalTokensFromMeta(value: unknown): number | undefined {
 }
 
 /**
- * Grok reports running token totals on `_meta.totalTokens` of ordinary session
- * updates (tool_call, agent_message_chunk, …) and does not emit `usage_update`.
+ * ACP agents may report a running total on `_meta.totalTokens` of ordinary
+ * session updates instead of (or as well as) `usage_update`.
  */
 function appendUsageFromSessionMeta(
   params: EffectAcpSchema.SessionNotification,

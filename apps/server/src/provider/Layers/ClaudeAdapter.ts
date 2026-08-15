@@ -504,8 +504,12 @@ function makeClaudeTokenUsageSnapshot(input: {
     ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
       ? { totalProcessedTokens }
       : {}),
-    ...(inputTokens !== undefined && inputTokens > 0 ? { inputTokens } : {}),
-    ...(outputTokens !== undefined && outputTokens > 0 ? { outputTokens } : {}),
+    ...(inputTokens !== undefined && inputTokens > 0
+      ? { inputTokens, lastInputTokens: inputTokens }
+      : {}),
+    ...(outputTokens !== undefined && outputTokens > 0
+      ? { outputTokens, lastOutputTokens: outputTokens }
+      : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(input.compactsAutomatically !== undefined
       ? { compactsAutomatically: input.compactsAutomatically }
