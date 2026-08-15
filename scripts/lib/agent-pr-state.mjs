@@ -11,8 +11,7 @@
  * parent (`pingdotgg/t3code`). A bare `gh pr view` therefore never finds the
  * fork's PRs, which would silently disable the gate. `.envrc` sets `GH_REPO`
  * to fix that for interactive shells, but the pre-push hook must not depend on
- * direnv being loaded — so, matching the rest of the fork tooling
- * (scripts/fork-stack.ts), resolve the PR against the fork repo explicitly:
+ * direnv being loaded — so resolve the PR against the fork repo explicitly:
  * `T3CODE_FORK_REPOSITORY` when set, else the `origin` remote, passed as
  * `gh pr list --head <branch> --repo` (an explicit `--repo` overrides GH_REPO).
  */

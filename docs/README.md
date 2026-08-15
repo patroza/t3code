@@ -21,7 +21,8 @@ Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 ## Working on T3 Code
 
 Everything below is for maintainers. Setup lives in the [root README](../README.md);
-policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../AGENTS.md).
+policy in [CONTRIBUTING.md](../CONTRIBUTING.md); fork branch model and agent rules in
+[AGENTS.md](../AGENTS.md).
 
 - [Architecture overview](./internals/overview.md)
 - [Workspace layout](./internals/workspace-layout.md)

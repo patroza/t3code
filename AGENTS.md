@@ -2,13 +2,16 @@
 
 ## Downstream fork branches and pull requests
 
-`fork/dev` is the default branch, the contributor target, and the release source. That is the whole
-branching model.
+```text
+pingdotgg/t3code:main
+    └── main           exact upstream mirror, fast-forward only
+            └── fork/dev   product: PR target, squash-merge, release source
+```
 
 - **Change PRs:** branch from `fork/dev`, open every implementation PR against `fork/dev`, and
   squash-merge it. Never open implementation PRs against `main`.
 - **Catching a change PR up:** rebase onto latest `fork/dev`, or merge latest `fork/dev` into the
-  PR branch. Either is fine — pick one per PR; it is a personal decision.
+  PR branch. Either is fine — pick one per PR.
 - **Updating from upstream:** fast-forward `main` to `upstream/main`, then classic-merge `main` into
   `fork/dev`. Never merge downstream work into `main`, and never use GitHub's **Sync fork** button.
   When the merge hits shared product paths, do a 3-way merge — never a blind whole-file
