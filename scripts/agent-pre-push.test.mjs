@@ -5,6 +5,11 @@ import * as NodePath from "node:path";
 import { isCodingAgent } from "./agent-pre-push.mjs";
 import { findRealGh, requiresShipGate, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
 import {
+  assertUpToDateWithForkDev,
+  listChangedFilesAgainstForkDev,
+  resolveForkDevRef,
+} from "./lib/agent-fork-dev.mjs";
+import {
   classifyPrPayload,
   parseRepoSlug,
   resolveOpenPrState,
@@ -52,6 +57,61 @@ it("PR payload: draft / ready / closed", () => {
   assert.equal(classifyPrPayload({ isDraft: true, state: "CLOSED" }), "none");
 });
 
+it("resolveForkDevRef: prefers origin/fork/dev", () => {
+  const seen = [];
+  const ref = resolveForkDevRef({
+    cwd: "/repo",
+    runGit: (args) => {
+      seen.push(args);
+      if (args.includes("origin/fork/dev")) return { status: 0, stdout: "abc\n" };
+      return { status: 1, stdout: "" };
+    },
+  });
+  assert.equal(ref, "origin/fork/dev");
+  assert.equal(seen[0]?.includes("origin/fork/dev"), true);
+});
+
+it("listChangedFilesAgainstForkDev: diffs merge-base..HEAD", () => {
+  const files = listChangedFilesAgainstForkDev({
+    cwd: "/repo",
+    runGit: (args) => {
+      if (args.includes("rev-parse")) return { status: 0, stdout: "abc\n" };
+      if (args[0] === "merge-base" && args[1] === "HEAD") return { status: 0, stdout: "base123\n" };
+      if (args[0] === "diff") return { status: 0, stdout: "AGENTS.md\nscripts/x.mjs\n" };
+      return { status: 1, stdout: "" };
+    },
+  });
+  assert.deepEqual(files, ["AGENTS.md", "scripts/x.mjs"]);
+});
+
+it("assertUpToDateWithForkDev: fails when fork/dev is not an ancestor", () => {
+  const result = assertUpToDateWithForkDev({
+    cwd: "/repo",
+    fetch: false,
+    runGit: (args) => {
+      if (args.includes("rev-parse")) return { status: 0, stdout: "abc\n" };
+      if (args.includes("--is-ancestor")) return { status: 1, stdout: "" };
+      return { status: 0, stdout: "" };
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.detail ?? "", /not up to date/);
+});
+
+it("assertUpToDateWithForkDev: ok when fork/dev is an ancestor", () => {
+  const result = assertUpToDateWithForkDev({
+    cwd: "/repo",
+    fetch: false,
+    runGit: (args) => {
+      if (args.includes("rev-parse")) return { status: 0, stdout: "abc\n" };
+      if (args.includes("--is-ancestor")) return { status: 0, stdout: "" };
+      return { status: 0, stdout: "" };
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.ref, "origin/fork/dev");
+});
+
 it("full ship gate on push: only ready + unknown", () => {
   assert.equal(shouldRunShipGateOnPush("none"), false);
   assert.equal(shouldRunShipGateOnPush("draft"), false);
@@ -59,9 +119,9 @@ it("full ship gate on push: only ready + unknown", () => {
   assert.equal(shouldRunShipGateOnPush("unknown"), true);
 });
 
-it("push scope: draft/none = static, ready/unknown = full", () => {
-  assert.equal(shipGateScopeForPush("none"), "static");
-  assert.equal(shipGateScopeForPush("draft"), "static");
+it("push scope: draft/none = changed, ready/unknown = full", () => {
+  assert.equal(shipGateScopeForPush("none"), "changed");
+  assert.equal(shipGateScopeForPush("draft"), "changed");
   assert.equal(shipGateScopeForPush("ready"), "full");
   assert.equal(shipGateScopeForPush("unknown"), "full");
 });

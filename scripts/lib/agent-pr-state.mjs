@@ -2,8 +2,8 @@
  * Resolve whether the current branch's open PR should enforce the agent ship gate.
  *
  * Modes:
- *   none    — no open PR (or closed/merged): static gate only
- *   draft   — open draft PR: static gate only (lighter than publish)
+ *   none    — no open PR (or closed/merged): changed-file check + typecheck
+ *   draft   — open draft PR: changed-file check + typecheck
  *   ready   — open non-draft PR: full ship gate on every agent push
  *   unknown — gh missing / failed: fail closed (run the full gate)
  *
@@ -11,8 +11,7 @@
  * parent (`pingdotgg/t3code`). A bare `gh pr view` therefore never finds the
  * fork's PRs, which would silently disable the gate. `.envrc` sets `GH_REPO`
  * to fix that for interactive shells, but the pre-push hook must not depend on
- * direnv being loaded — so, matching the rest of the fork tooling
- * (scripts/fork-stack.ts), resolve the PR against the fork repo explicitly:
+ * direnv being loaded — so resolve the PR against the fork repo explicitly:
  * `T3CODE_FORK_REPOSITORY` when set, else the `origin` remote, passed as
  * `gh pr list --head <branch> --repo` (an explicit `--repo` overrides GH_REPO).
  */
@@ -40,14 +39,13 @@ export const shouldRunShipGateOnPush = (mode) => mode === "ready" || mode === "u
 /**
  * How much of the gate a push pays for.
  *
- * Nothing is free any more: a push that does not format, lint or typecheck is
- * worthless to a reviewer whether or not the PR says "draft". What draft buys
- * is the *expensive* half — full unit suite stays on the ready/publish path.
+ * Draft / no-PR: format + lint of files changed against fork/dev, plus typecheck.
+ * Ready / unknown: full workspace check + typecheck + unit tests.
  *
  * @param {"none" | "draft" | "ready" | "unknown"} mode
- * @returns {"full" | "static"}
+ * @returns {"full" | "changed"}
  */
-export const shipGateScopeForPush = (mode) => (shouldRunShipGateOnPush(mode) ? "full" : "static");
+export const shipGateScopeForPush = (mode) => (shouldRunShipGateOnPush(mode) ? "full" : "changed");
 
 /** Strip ANSI color codes so `gh --json` stays parseable when color is forced. */
 const stripAnsi = (text) => String(text).replace(/\u001b\[[0-9;]*m/g, "");
