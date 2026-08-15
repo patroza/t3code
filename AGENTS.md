@@ -167,9 +167,14 @@ whole branching model. See
   work dir (`~/.t3/compose-work`, not tmpfs `/tmp`) before install. See
   [docs/fork-stack.md](./docs/fork-stack.md) ("Integration overlay compose and lockfiles").
 
-## Pull requests (required handoff)
+## Pull requests (when publishing)
 
-When implementation work for a user request is done (code, docs, config — not pure Q&A):
+Do not commit, rebase, push, or open/update a PR merely because an edit is complete. Do those
+things only when the user explicitly requests publication or the specific version-control action,
+or when another workflow in this file explicitly requires it (for example, Discord-originated
+work). A request to change code, docs, or config does not by itself authorize publication.
+
+When publication or a PR handoff is in scope:
 
 1. **Commit** the changes on a feature branch cut from `fork/dev`.
 2. **Open or update a PR against `fork/dev`** before handing off — for every kind of work, including
