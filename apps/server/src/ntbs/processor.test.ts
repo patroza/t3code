@@ -24,7 +24,7 @@ const makeTestAdapter = Effect.gen(function* () {
 
   const service: NTBSAdapter = {
     save: () => Effect.void,
-    postAcknowledgement: () => Effect.succeed("acknowledgement id"),
+    acknowledge: () => Effect.succeed("acknowledgement id"),
     postResponse: () => Effect.succeed("response id"),
     findByRequest: () => Effect.succeed(null),
     findMatchingResponseMessage: () => Effect.succeed(null),
