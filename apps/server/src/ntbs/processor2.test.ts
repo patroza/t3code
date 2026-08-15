@@ -219,7 +219,7 @@ describe("NTBSProcessor (layer harness)", () => {
       const adapterState = yield* TestAdapterState;
       const processor = yield* TestProcessor;
 
-      yield* processor.start.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
 
       const threadId = ThreadId.make("unknown-thread");
       yield* engine.publish(yield* sessionSetEvent(threadId));
@@ -267,7 +267,7 @@ describe("NTBSProcessor (layer harness)", () => {
         responseMessageId: "already-posted",
       });
 
-      yield* processor.start.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
       yield* engine.publish(yield* sessionSetEvent(threadId));
 
       // The processor loads the record twice: once to route the event and once
