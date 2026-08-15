@@ -103,6 +103,28 @@ describe("formatTurnResponseStatsLine", () => {
     expect(stats.inputTokens).toBe(9_000);
     expect(stats.outputTokens).toBe(400);
   });
+
+  it("falls back to usedTokens when in/out are missing", () => {
+    const line = formatTurnResponseStatsLine({
+      modelSelection: modelSelection("grok-4.6"),
+      activities: [
+        {
+          kind: "context-window.updated",
+          turnId: "turn-3",
+          payload: { usedTokens: 139_982 },
+        },
+      ],
+      turnId: "turn-3",
+      latestTurn: {
+        turnId: "turn-3",
+        requestedAt: "2026-08-15T07:00:00.000Z",
+        startedAt: "2026-08-15T07:00:00.000Z",
+        completedAt: "2026-08-15T07:31:31.000Z",
+      },
+    });
+
+    expect(line).toBe("_`grok-4.6` · 31m 31s · 140k_");
+  });
 });
 
 describe("appendTurnResponseStatsFooter", () => {

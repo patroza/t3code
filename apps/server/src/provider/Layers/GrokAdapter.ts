@@ -143,6 +143,8 @@ interface GrokSessionContext {
   promptsInFlight: number;
   currentModelId: string | undefined;
   stopped: boolean;
+  /** Last `usedTokens` emitted so Grok `_meta.totalTokens` spam does not flood activities. */
+  lastEmittedUsedTokens: number | undefined;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -1080,6 +1082,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             promptsInFlight: 0,
             currentModelId: boundModelId,
             stopped: false,
+            lastEmittedUsedTokens: undefined,
           };
 
           yield* acp.processExit.pipe(
@@ -1183,9 +1186,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   case "UsageUpdated": {
                     const usage = normalizeAcpUsageUpdate({
                       used: event.used,
-                      size: event.size,
+                      ...(event.size !== undefined ? { size: event.size } : {}),
                     });
-                    if (usage !== undefined) {
+                    if (usage !== undefined && usage.usedTokens !== ctx.lastEmittedUsedTokens) {
+                      ctx.lastEmittedUsedTokens = usage.usedTokens;
                       yield* offerRuntimeEvent(
                         makeAcpTokenUsageUpdatedEvent({
                           stamp,
@@ -1558,6 +1562,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 const completedStopReason = completedStopReasonFromPromptResponse(result);
                 const promptUsage = normalizeAcpPromptUsage(result.usage);
                 if (promptUsage !== undefined) {
+                  ctx.lastEmittedUsedTokens = promptUsage.usedTokens;
                   yield* offerRuntimeEvent(
                     makeAcpTokenUsageUpdatedEvent({
                       stamp: yield* makeEventStamp(),

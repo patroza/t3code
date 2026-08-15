@@ -17,6 +17,7 @@ export type TurnTokenUsageFields = {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly reasoningOutputTokens: number | null;
+  readonly usedTokens: number | null;
   readonly durationMs: number | null;
 };
 
@@ -27,6 +28,7 @@ export type TurnResponseStats = {
   readonly durationLabel: string | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
+  readonly usedTokens: number | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -103,8 +105,14 @@ export function deriveTurnTokenUsageFromActivities(
     const outputTokens =
       baseOutput === null && reasoning === null ? null : (baseOutput ?? 0) + (reasoning ?? 0);
     const durationMs = nonNegativeInt(payload.durationMs);
+    const usedTokens = nonNegativeInt(payload.usedTokens) ?? nonNegativeInt(payload.lastUsedTokens);
 
-    if (inputTokens === null && outputTokens === null && durationMs === null) {
+    if (
+      inputTokens === null &&
+      outputTokens === null &&
+      durationMs === null &&
+      usedTokens === null
+    ) {
       continue;
     }
 
@@ -112,6 +120,7 @@ export function deriveTurnTokenUsageFromActivities(
       inputTokens,
       outputTokens,
       reasoningOutputTokens: reasoning,
+      usedTokens,
       durationMs,
     };
 
@@ -171,6 +180,7 @@ export function deriveTurnResponseStats(input: {
     durationLabel,
     inputTokens: usage?.inputTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
+    usedTokens: usage?.usedTokens ?? null,
   };
 }
 
@@ -214,6 +224,11 @@ export function formatTurnResponseStatsLine(input: {
     if (inLabel !== null) tokenParts.push(`↑${inLabel}`);
     if (outLabel !== null) tokenParts.push(`↓${outLabel}`);
     parts.push(tokenParts.join(" "));
+  } else {
+    const usedLabel = formatCompactTokenCount(stats.usedTokens);
+    if (usedLabel !== null) {
+      parts.push(usedLabel);
+    }
   }
 
   if (parts.length === 0) return null;

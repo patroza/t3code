@@ -192,6 +192,8 @@ interface CursorSessionContext {
    * continues it, and only the last remaining prompt settles the turn. */
   promptsInFlight: number;
   stopped: boolean;
+  /** Last `usedTokens` emitted so repeated `_meta.totalTokens` updates do not flood activities. */
+  lastEmittedUsedTokens: number | undefined;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -900,6 +902,7 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
             activeTurnId: undefined,
             promptsInFlight: 0,
             stopped: false,
+            lastEmittedUsedTokens: undefined,
           };
 
           yield* acp.processExit.pipe(
@@ -1001,9 +1004,10 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
                     );
                     const usage = normalizeAcpUsageUpdate({
                       used: event.used,
-                      size: event.size,
+                      ...(event.size !== undefined ? { size: event.size } : {}),
                     });
-                    if (usage !== undefined) {
+                    if (usage !== undefined && usage.usedTokens !== ctx.lastEmittedUsedTokens) {
+                      ctx.lastEmittedUsedTokens = usage.usedTokens;
                       yield* offerRuntimeEvent(
                         makeAcpTokenUsageUpdatedEvent({
                           stamp: yield* makeEventStamp(),
@@ -1201,6 +1205,7 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
           if (ctx.promptsInFlight === 1) {
             const promptUsage = normalizeAcpPromptUsage(result.usage);
             if (promptUsage !== undefined) {
+              ctx.lastEmittedUsedTokens = promptUsage.usedTokens;
               yield* offerRuntimeEvent(
                 makeAcpTokenUsageUpdatedEvent({
                   stamp: yield* makeEventStamp(),

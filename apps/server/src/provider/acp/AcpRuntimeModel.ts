@@ -110,10 +110,11 @@ export type AcpParsedSessionEvent =
       readonly rawPayload: unknown;
     }
   | {
-      /** ACP session-level context window update (`sessionUpdate: "usage_update"`). */
+      /** ACP session-level context window update (`sessionUpdate: "usage_update"`)
+       * or Grok's `_meta.totalTokens` on ordinary session updates. */
       readonly _tag: "UsageUpdated";
       readonly used: number;
-      readonly size: number;
+      readonly size?: number;
       readonly rawPayload: unknown;
     };
 
@@ -604,5 +605,42 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       break;
   }
 
+  appendUsageFromSessionMeta(params, events);
+
   return { ...(modeId !== undefined ? { modeId } : {}), events };
+}
+
+function totalTokensFromMeta(value: unknown): number | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const totalTokens = value.totalTokens;
+  if (typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens <= 0) {
+    return undefined;
+  }
+  return Math.round(totalTokens);
+}
+
+/**
+ * Grok reports running token totals on `_meta.totalTokens` of ordinary session
+ * updates (tool_call, agent_message_chunk, …) and does not emit `usage_update`.
+ */
+function appendUsageFromSessionMeta(
+  params: EffectAcpSchema.SessionNotification,
+  events: Array<AcpParsedSessionEvent>,
+): void {
+  if (events.some((event) => event._tag === "UsageUpdated")) {
+    return;
+  }
+  const used =
+    totalTokensFromMeta(isRecord(params.update) ? params.update._meta : undefined) ??
+    totalTokensFromMeta(params._meta);
+  if (used === undefined) {
+    return;
+  }
+  events.push({
+    _tag: "UsageUpdated",
+    used,
+    rawPayload: params,
+  });
 }
