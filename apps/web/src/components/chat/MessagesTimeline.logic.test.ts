@@ -11,9 +11,21 @@ import {
   interleaveTimelineEntriesForSteeredTurn,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
 import type { TimelineEntry } from "../../session-logic";
 import { MessageId, TurnId } from "@t3tools/contracts";
+
+describe("shouldPreserveAssistantLineBreaks", () => {
+  it("preserves Claude insight formatting without changing regular markdown", () => {
+    expect(
+      shouldPreserveAssistantLineBreaks(
+        "★ Insight ─────────────────\\nFirst observation\\nSecond observation\\n─────────────────",
+      ),
+    ).toBe(true);
+    expect(shouldPreserveAssistantLineBreaks("A normal\\nmarkdown paragraph")).toBe(false);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {

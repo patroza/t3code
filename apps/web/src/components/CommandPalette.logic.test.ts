@@ -9,13 +9,44 @@ import {
 } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
+  filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   type CommandPaletteGroup,
   reduceCommandPaletteUiState,
 } from "./CommandPalette.logic";
+
+describe("browseInputEndPaddingClass", () => {
+  it("reserves the widest space for the create action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: true,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-38");
+  });
+
+  it("reserves space for the wider highlighted-item shortcut", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: true,
+      }),
+    ).toContain("pe-30");
+  });
+
+  it("keeps the compact reserve for the normal add action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-24");
+  });
+});
 
 describe("enumerateCommandPaletteItems", () => {
   it("assigns positional jump shortcuts to the first nine displayed items", () => {
@@ -424,6 +455,42 @@ describe("reduceCommandPaletteUiState", () => {
       open: true,
       mode: "command",
       openIntent: null,
+    });
+  });
+});
+
+describe("filterPinnedBrowseEntries", () => {
+  const entries = [
+    { name: "repo", fullPath: "/projects/repo" },
+    { name: "work", fullPath: "/projects/work" },
+  ];
+
+  it("shows sibling folders without losing an existing pinned destination", () => {
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: entries,
+        filterQuery: "repo",
+        pinnedDirectoryName: "repo",
+        caseSensitive: true,
+      }),
+    ).toEqual({ visibleEntries: entries, exactEntry: entries[0] });
+  });
+
+  it("matches an existing pinned destination without Windows casing", () => {
+    const windowsEntries = [
+      { name: "Repo", fullPath: "C:\\projects\\Repo" },
+      { name: "work", fullPath: "C:\\projects\\work" },
+    ];
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: windowsEntries,
+        filterQuery: "repo",
+        pinnedDirectoryName: "repo",
+        caseSensitive: false,
+      }),
+    ).toEqual({
+      visibleEntries: windowsEntries,
+      exactEntry: windowsEntries[0],
     });
   });
 });
