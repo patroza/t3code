@@ -6,6 +6,7 @@ export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 export const PICK_OPEN_WITH_APPLICATION_CHANNEL = "desktop:pick-open-with-application";
 export const RESOLVE_OPEN_WITH_PRESENTATIONS_CHANNEL = "desktop:resolve-open-with-presentations";
 export const OPEN_WITH_CHANNEL = "desktop:open-with";
+export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";
 export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state";

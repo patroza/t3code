@@ -1097,6 +1097,12 @@ export interface DesktopBridge {
   pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
   resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
   openWith: (input: DesktopOpenWithInput) => Promise<void>;
+  /**
+   * Probe this desktop machine for installed remote-capable editor CLIs
+   * (used for remote open-in-editor deep links). Optional: older desktop
+   * builds lack it; callers fall back to VS Code only.
+   */
+  probeRemoteEditors?: () => Promise<readonly EditorId[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
@@ -1218,6 +1224,7 @@ export interface LocalApi {
       items: readonly ContextMenuItem<T>[],
       position?: { x: number; y: number },
     ) => Promise<T | null>;
+    close: () => Promise<void>;
   };
   persistence: {
     getClientSettings: () => Promise<ClientSettings | null>;
