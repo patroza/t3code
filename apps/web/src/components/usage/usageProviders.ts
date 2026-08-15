@@ -2,60 +2,42 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import { ClaudeAI, GrokIcon, type Icon, KimiIcon, OpenAI } from "../Icons";
 
-/**
- * Series and table order. The chart layers the providers from a shared zero
- * baseline, so this only fixes the reading order of legends, tables and hover
- * rows; it does not decide which series sits above the others.
- */
-export const PROVIDER_ORDER = [
-  "codex",
-  "claude",
-  "grok",
-  "kimi",
-] as const satisfies readonly UsageProviderKind[];
-
-/**
- * A provider added to `UsageProviderKind` but not to {@link PROVIDER_ORDER}
- * would still appear in the summary rows (those come from `merged.providers`)
- * while silently vanishing from the daily columns, chart bands, legends and
- * skeletons, all of which iterate this order. The `Record` maps below are
- * exhaustive by their own type; this makes the order exhaustive too, so the
- * omission is a compile error rather than a missing column nobody notices.
- */
-type AssertNoUnorderedProvider<T extends never> = T;
-export type UsageProviderOrderIsExhaustive = AssertNoUnorderedProvider<
-  Exclude<UsageProviderKind, (typeof PROVIDER_ORDER)[number]>
->;
-
-export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  grok: "Grok",
-  kimi: "Kimi",
+type UsageProviderPresentation = {
+  readonly label: string;
+  readonly color: string;
+  readonly mark: Icon;
 };
 
 /**
- * Claude's brand orange against a neutral white for Codex, with Grok and Kimi
- * on their own brand hues. All four have to stay distinguishable side by side
- * in a stacked band, so Kimi's warmer orange is kept clear of Claude's.
- */
-export const PROVIDER_COLOR: Record<UsageProviderKind, string> = {
-  claude: "#d97757",
-  codex: "#e6e6e6",
-  grok: "#8b8b8b",
-  kimi: "#ff6a3d",
-};
-
-/**
- * Brand marks, reused from the provider picker.
+ * Exhaustive presentation for providers supported by the usage contract.
+ * Declaration order is reused by every chart, table, legend, and skeleton, so
+ * adding a provider only requires its contract support and one entry here.
  *
- * These ship their own fills (`#d97757` for Claude, white on dark for OpenAI),
- * which are the same colours as the chart bands, so swapping a colour dot for a
- * mark keeps the series association intact rather than trading it away.
+ * All four have to stay distinguishable side by side in a stacked band, so
+ * Kimi's warmer orange is kept clear of Claude's.
  */
-export const PROVIDER_MARK: Record<UsageProviderKind, Icon> = {
-  claude: ClaudeAI,
-  codex: OpenAI,
-  grok: GrokIcon,
-  kimi: KimiIcon,
-};
+export const PROVIDER_PRESENTATION = {
+  codex: {
+    label: "Codex",
+    color: "var(--foreground)",
+    mark: OpenAI,
+  },
+  claude: {
+    label: "Claude Code",
+    color: "#d97757",
+    mark: ClaudeAI,
+  },
+  grok: {
+    label: "Grok",
+    color: "#8b8b8b",
+    mark: GrokIcon,
+  },
+  kimi: {
+    label: "Kimi",
+    color: "#ff6a3d",
+    mark: KimiIcon,
+  },
+} satisfies Record<UsageProviderKind, UsageProviderPresentation>;
+
+/** The chart layers every series from zero, so order only controls how it is read. */
+export const PROVIDER_ORDER = Object.keys(PROVIDER_PRESENTATION) as UsageProviderKind[];

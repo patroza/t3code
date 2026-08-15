@@ -42,6 +42,7 @@ import {
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
 import {
@@ -225,13 +226,18 @@ export function BranchToolbarBranchSelector({
   );
   const trimmedBranchQuery = branchQuery.trim();
   const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
+  // The server filters refs by substring, so it has to be given the sanitized
+  // name as well: querying the raw "new branch" drops an existing new-branch
+  // from the response entirely, which would defeat the collision check below.
+  // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
+  const branchRefQuery = sanitizeNewRefName(deferredTrimmedBranchQuery);
   const branchRefTarget = useMemo(
     () => ({
       environmentId,
       cwd: branchCwd,
-      query: deferredTrimmedBranchQuery,
+      query: branchRefQuery,
     }),
-    [branchCwd, deferredTrimmedBranchQuery, environmentId],
+    [branchCwd, branchRefQuery, environmentId],
   );
   const branchRefState = usePaginatedBranches(branchRefTarget);
   const refs = branchRefState.refs;
@@ -264,7 +270,11 @@ export function BranchToolbarBranchSelector({
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
   const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
-  const hasExactBranchMatch = branchByName.has(trimmedBranchQuery);
+  // The ref is created under its sanitized name, so the collision check has to
+  // use that name too. Matching on the raw query would offer to create a ref
+  // that already exists whenever sanitizing changes the name.
+  const newRefName = sanitizeNewRefName(trimmedBranchQuery);
+  const hasExactBranchMatch = branchByName.has(newRefName);
   const createBranchItemValue = canCreateBranch
     ? `__create_new_branch__:${trimmedBranchQuery}`
     : null;
@@ -446,7 +456,7 @@ export function BranchToolbarBranchSelector({
   };
 
   const createRef = (rawName: string) => {
-    const name = rawName.trim();
+    const name = sanitizeNewRefName(rawName);
     if (!branchCwd || !name || isBranchActionPending) return;
 
     setIsBranchMenuOpen(false);
@@ -665,7 +675,7 @@ export function BranchToolbarBranchSelector({
           className="pe-1.5"
           onClick={() => createRef(trimmedBranchQuery)}
         >
-          <span className="truncate">Create new ref &quot;{trimmedBranchQuery}&quot;</span>
+          <span className="truncate">Create new ref &quot;{newRefName}&quot;</span>
         </ComboboxItem>
       );
     }

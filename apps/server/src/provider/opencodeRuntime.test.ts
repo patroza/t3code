@@ -47,7 +47,10 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
         environment: {
           PATH: "/project/bin",
           KEEP: "value",
-          OPENCODE_CONFIG_CONTENT: "direnv-must-not-win",
+          // Upstream #4242: a caller-supplied config wins. Forcing "{}" here
+          // used to clobber the user's opencode config and hide their
+          // providers; only an unset value falls back to the empty config.
+          OPENCODE_CONFIG_CONTENT: '{"provider":{}}',
         },
         port: 4310,
       })
@@ -66,7 +69,7 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
     expect(command.options.env).toEqual({
       PATH: "/project/bin",
       KEEP: "value",
-      OPENCODE_CONFIG_CONTENT: "{}",
+      OPENCODE_CONFIG_CONTENT: '{"provider":{}}',
     });
     const closeFiber = yield* Scope.close(sessionScope, Exit.void).pipe(Effect.forkChild);
     yield* TestClock.adjust("1 second");

@@ -34,12 +34,13 @@ const setup = (trial: boolean) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      // CLI and server write from separate processes; wait rather than fail with
+      // SQLITE_BUSY. Bounded so auth (websocket-ticket) cannot hang indefinitely
+      // when writers hold the single SQL permit longer than expected.
+      yield* sql`PRAGMA busy_timeout = 5000;`;
       yield* sql`PRAGMA foreign_keys = ON;`;
       if (!trial) {
         yield* sql`PRAGMA journal_mode = WAL;`;
-        // Bound lock waits so auth (websocket-ticket) cannot hang indefinitely when
-        // writers hold the single SQL permit longer than expected.
-        yield* sql`PRAGMA busy_timeout = 5000;`;
         yield* runMigrations();
       }
     }),
