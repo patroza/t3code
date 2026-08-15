@@ -609,8 +609,8 @@ export const makeNTBSProcessor = <AdapterId>(
     /**
      * Resumes one stored NTBS thread after the processor starts.
      *
-     * Starts the original turn when it is missing, resumes monitoring while it
-     * is active, or posts its outcome when it already finished.
+     * Starts the original turn when it is missing, leaves active turns to the
+     * live event listener, or posts the outcome when a turn already finished.
      */
     const recoverThread = (
       threadCreated: NTBS.ThreadCreated,
@@ -627,26 +627,31 @@ export const makeNTBSProcessor = <AdapterId>(
             threadCreated.snapshot,
             threadCreated.attachments,
           );
-        } else {
-          yield* ensureUniqueOutcome(
-            userMessageId,
-            Effect.gen(function* () {
-              const currentRecord = yield* adapter
-                .findByThreadId(threadId)
-                .pipe(orFail("Failed reloading the NTBS lifecycle during recovery"));
-
-              if (currentRecord.state === "thread.response.posted") {
-                markResponsePosted(userMessageId);
-                return;
-              }
-
-              const response = yield* resolveT3Outcome(threadId, userMessageId);
-              if (response !== null) {
-                yield* postResponse(currentRecord, response);
-              }
-            }),
-          );
+          return;
         }
+
+        if (turn.state === "pending" || turn.state === "running") {
+          return;
+        }
+
+        yield* ensureUniqueOutcome(
+          userMessageId,
+          Effect.gen(function* () {
+            const currentRecord = yield* adapter
+              .findByThreadId(threadId)
+              .pipe(orFail("Failed reloading the NTBS lifecycle during recovery"));
+
+            if (currentRecord.state === "thread.response.posted") {
+              markResponsePosted(userMessageId);
+              return;
+            }
+
+            const response = yield* resolveT3Outcome(threadId, userMessageId);
+            if (response !== null) {
+              yield* postResponse(currentRecord, response);
+            }
+          }),
+        );
       });
 
     /*
