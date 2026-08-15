@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "~/components/Icons";
+import { repositoryFromChangeRequestUrl } from "~/components/pullRequest/pullRequestDetail.logic";
 import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
@@ -105,7 +106,7 @@ interface GitActionsControlProps {
    * Opens the thread's own change request beside it. Absent when the thread has no project to
    * place it against, in which case it still opens in the browser.
    */
-  onOpenPullRequest?: ((number: number) => void) | undefined;
+  onOpenPullRequest?: ((number: number, repository?: string | null) => void) | undefined;
 }
 
 interface PendingDefaultBranchAction {
@@ -1239,7 +1240,7 @@ export default function GitActionsControl({
     // Beside the thread where it was made, the way the browser opens beside it. Checked before
     // the shell, which opening in the app does not need.
     if (openPr && onOpenPullRequest) {
-      onOpenPullRequest(openPr.number);
+      onOpenPullRequest(openPr.number, repositoryFromChangeRequestUrl(openPr.url));
       return;
     }
     const api = readLocalApi();

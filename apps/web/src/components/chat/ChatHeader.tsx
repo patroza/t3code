@@ -78,7 +78,7 @@ interface ChatHeaderProps {
   /** For showing usage dot on the active thread's model at conversation level. */
   activeThreadDriverKind?: ProviderDriverKind | null;
   activeThreadModel?: string | null;
-  readonly onOpenPullRequest?: ((number: number) => void) | undefined;
+  readonly onOpenPullRequest?: ((number: number, repository?: string | null) => void) | undefined;
   onNewThreadInProject: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
