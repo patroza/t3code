@@ -1,4 +1,5 @@
 import {
+  buildRemoteOpenUrl,
   EditorId,
   EnvironmentId,
   OpenWithEntry as OpenWithEntrySchema,
@@ -35,6 +36,7 @@ import {
 } from "../../openWith";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
+import { openRemoteEditorUrl, useRemoteOpenState } from "../../remoteOpen";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { shellEnvironment } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -261,6 +263,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   const updateClientSettings = useUpdateClientSettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
+  const remote = useRemoteOpenState(environmentId);
   const canManageCustom =
     !compact &&
     environmentId === primaryEnvironmentId &&
@@ -382,6 +385,20 @@ export const OpenInPicker = memo(function OpenInPicker({
         }
         return;
       }
+      // Remote environment (upstream #6572): openInEditorMutation would launch the
+      // editor on the *server*, which for a remote environment is the wrong
+      // machine. Hand the viewing machine a Remote-SSH deep link instead.
+      if (remote.mode === "remote-unavailable") return;
+      if (remote.mode === "remote-links") {
+        const url = buildRemoteOpenUrl({
+          editor: option.id,
+          host: remote.host.host,
+          absolutePath: openInCwd,
+        });
+        if (url === undefined) return;
+        await openRemoteEditorUrl(url);
+        return;
+      }
       const localApi = readLocalApi();
       if (localApi) {
         const uri = resolveDesktopEditorUri(option.id, openInCwd);
@@ -404,7 +421,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         );
       }
     },
-    [environmentId, openInCwd, openInEditorMutation, persistPreference],
+    [environmentId, openInCwd, openInEditorMutation, persistPreference, remote],
   );
 
   useEffect(() => {
