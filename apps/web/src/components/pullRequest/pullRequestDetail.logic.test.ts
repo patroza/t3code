@@ -17,8 +17,10 @@ import {
   handoffPrompt,
   handoffReviewComments,
   isThreadOwnPullRequest,
+  repositoryFromChangeRequestUrl,
   orderPullRequestComments,
   pullRequestActionNeedsHostRefresh,
+  pullRequestActionMenuHasGroup,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
@@ -52,6 +54,12 @@ const TIMELINE_SOURCE: Pick<
   mergedAt: null,
   closedAt: null,
 };
+
+describe("pull request action menu", () => {
+  it("keeps the group divider when auto-merge is the only action", () => {
+    expect(pullRequestActionMenuHasGroup(false, true, false)).toBe(true);
+  });
+});
 
 describe("pull request state description", () => {
   it("keeps draft and conflicts orthogonal to the terminal states", () => {
@@ -907,6 +915,27 @@ describe("whether the panel is showing the thread's own pull request", () => {
         surface,
       ),
     ).toBe(false);
+  });
+});
+
+describe("repositoryFromChangeRequestUrl", () => {
+  it("reads owner/name from a GitHub pull request URL", () => {
+    expect(repositoryFromChangeRequestUrl("https://github.com/patroza/t3code/pull/410")).toBe(
+      "patroza/t3code",
+    );
+    expect(
+      repositoryFromChangeRequestUrl("https://github.com/pingdotgg/t3code/pull/6613/files"),
+    ).toBe("pingdotgg/t3code");
+  });
+
+  it("reads a nested GitLab path", () => {
+    expect(
+      repositoryFromChangeRequestUrl("https://gitlab.com/group/sub/service/-/merge_requests/12"),
+    ).toBe("group/sub/service");
+  });
+
+  it("returns null when the URL is not a change request", () => {
+    expect(repositoryFromChangeRequestUrl("https://github.com/patroza/t3code")).toBeNull();
   });
 });
 

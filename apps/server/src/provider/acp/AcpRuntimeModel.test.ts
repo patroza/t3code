@@ -359,6 +359,60 @@ describe("AcpRuntimeModel", () => {
         },
       },
     ]);
+
+    const grokMetaUsage = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "hello from grok",
+        },
+        _meta: {
+          totalTokens: 139_982,
+          eventId: "evt-1",
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(grokMetaUsage.events).toEqual([
+      {
+        _tag: "ContentDelta",
+        text: "hello from grok",
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "hello from grok",
+            },
+            _meta: {
+              totalTokens: 139_982,
+              eventId: "evt-1",
+            },
+          },
+        },
+      },
+      {
+        _tag: "UsageUpdated",
+        used: 139_982,
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "hello from grok",
+            },
+            _meta: {
+              totalTokens: 139_982,
+              eventId: "evt-1",
+            },
+          },
+        },
+      },
+    ]);
   });
 
   it("keeps permission request parsing compatible with loose extension payloads", () => {

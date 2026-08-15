@@ -1534,7 +1534,7 @@ it.effect("refuses line comments on a host that takes only a summary", () =>
         number: 1,
         verdict: "comment",
         body: "",
-        comments: [{ path: "src/a.ts", line: 1, side: "right", body: "nit" }],
+        comments: [{ path: "src/a.ts", position: { kind: "added", newLine: 1 }, body: "nit" }],
       }),
     );
 
@@ -2769,6 +2769,107 @@ it("falls back to the path's last segment where an Azure identity has no name", 
   } as never);
   assert.strictEqual(selector, "checkout");
 });
+
+it("lists origin and upstream so a fork PR is still this project's", () => {
+  const names = PullRequestService.repositoriesOf({
+    repositoryIdentity: {
+      provider: "github",
+      displayName: "pingdotgg/t3code",
+      owner: "pingdotgg",
+      name: "t3code",
+      remotes: [
+        {
+          remoteName: "origin",
+          remoteUrl: "https://github.com/patroza/t3code.git",
+          owner: "patroza",
+          name: "t3code",
+          canonicalKey: "github.com/patroza/t3code",
+        },
+        {
+          remoteName: "upstream",
+          remoteUrl: "https://github.com/pingdotgg/t3code.git",
+          owner: "pingdotgg",
+          name: "t3code",
+          canonicalKey: "github.com/pingdotgg/t3code",
+        },
+      ],
+    },
+  } as never);
+  assert.deepStrictEqual(names.toSorted(), ["patroza/t3code", "pingdotgg/t3code"]);
+});
+
+it.effect("reads a fork pull request against origin, not the upstream identity", () =>
+  Effect.gen(function* () {
+    let requested: string | null = null;
+    const fork = project({
+      id: "p1",
+      title: "t3code",
+      workspaceRoot: "/t3code",
+      repository: "pingdotgg/t3code",
+    });
+    const identity = fork.repositoryIdentity!;
+    const withRemotes = {
+      ...fork,
+      repositoryIdentity: {
+        ...identity,
+        remotes: [
+          {
+            remoteName: "origin",
+            remoteUrl: "https://github.com/patroza/t3code.git",
+            owner: "patroza",
+            name: "t3code",
+            canonicalKey: "github.com/patroza/t3code",
+          },
+          {
+            remoteName: "upstream",
+            remoteUrl: "https://github.com/pingdotgg/t3code.git",
+            owner: "pingdotgg",
+            name: "t3code",
+            canonicalKey: "github.com/pingdotgg/t3code",
+          },
+        ],
+      },
+    };
+    const service = yield* makeService({
+      projects: [withRemotes],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: (input) => {
+            requested = input.repository;
+            return Effect.succeed({
+              ...changeRequest(410, "2026-08-15T00:00:00Z"),
+              url: "https://github.com/patroza/t3code/pull/410",
+              body: "",
+              changedFiles: 1,
+              mergedAt: null,
+              closedAt: null,
+              reviewers: [],
+              checks: [],
+              mergeCapabilities: { merge: true, squash: true, rebase: true },
+              viewerPermissions: {
+                actions: ["merge"],
+                comment: true,
+                resolve: true,
+                verdicts: ["comment", "approve", "request-changes"],
+                requestReviewers: true,
+              },
+            });
+          },
+        }),
+      ],
+    });
+
+    const detail = yield* service.detail({
+      projectId: "p1" as ProjectId,
+      repository: "patroza/t3code",
+      number: 410,
+    });
+
+    assert.strictEqual(requested, "patroza/t3code");
+    assert.strictEqual(detail.repository, "patroza/t3code");
+    assert.strictEqual(detail.number, 410);
+  }),
+);
 
 it("keeps a GitLab identity's whole path, because a nested group is part of the name", () => {
   const selector = PullRequestService.repositoryIdentityOf({

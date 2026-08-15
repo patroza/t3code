@@ -115,6 +115,28 @@ describe("VcsProcess.run", () => {
     }).pipe(provideLive),
   );
 
+  it.effect("keeps guest App-wrapper diagnostics off the process error message", () =>
+    Effect.gen(function* () {
+      const wrapperLine =
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)";
+      const error = yield* run({
+        operation: "test.wrapper-diagnostic",
+        command: "node",
+        args: ["-e", "process.stderr.write(process.argv[1]); process.exit(1)", wrapperLine],
+        cwd: process.cwd(),
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(VcsProcessExitError);
+      expect(error).toMatchObject({
+        failureKind: "command-failed",
+        publicDiagnostic: wrapperLine,
+      });
+      // Operators see this on GitHubCli.detail; the VCS message stays canned.
+      expect(error.message).not.toContain("pingdotgg");
+      expect(error.message).toContain("Process exited with a non-zero status.");
+    }).pipe(provideLive),
+  );
+
   it.effect("classifies authentication failures without retaining stderr", () =>
     Effect.gen(function* () {
       const secretStderr = "authentication failed for token super-secret-token";
@@ -296,4 +318,26 @@ describe("VcsProcess.run", () => {
       expect(error).toBeInstanceOf(VcsProcessTimeoutError);
     }).pipe(provideLive),
   );
+});
+
+describe("publicDiagnosticFromStderr", () => {
+  it("keeps only guest wrapper lines, and drops GraphQL bodies", () => {
+    expect(
+      VcsProcess.publicDiagnosticFromStderr(
+        "GraphQL: Could not resolve to a PullRequest with the number of 6613. (repository.pullRequest)",
+      ),
+    ).toBeUndefined();
+    expect(
+      VcsProcess.publicDiagnosticFromStderr(
+        "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+      ),
+    ).toBe(
+      "t3-github-app-token: app is not installed on pingdotgg/t3code (or repo does not exist)",
+    );
+    expect(
+      VcsProcess.publicDiagnosticFromStderr(
+        "gh-app-wrapper: auth failed (exit 4); reminting and retrying once after 3s",
+      ),
+    ).toMatch(/^gh-app-wrapper:/);
+  });
 });

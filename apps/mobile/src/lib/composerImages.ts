@@ -1,9 +1,11 @@
 import {
+  isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { estimateBase64ByteSize } from "./base64";
+import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 
 export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
@@ -69,6 +71,10 @@ export async function pickComposerImages(input: { readonly existingCount: number
   // photosPermission: false (no NSPhotoLibraryUsageDescription), and modern
   // system pickers (PHPicker / Android photo picker) do not need library
   // access. Requesting permission without a usage string hard-crashes iOS.
+  //
+  // The picker covers the Android activity, which reports the app as
+  // backgrounded; the guard keeps background-triggered restarts away mid-pick.
+  const endHandoff = beginForegroundHandoff();
   let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
   try {
     result = await imagePicker.launchImageLibraryAsync({
@@ -86,6 +92,8 @@ export async function pickComposerImages(input: { readonly existingCount: number
           ? error.message
           : "Could not open the photo library to attach images.",
     };
+  } finally {
+    endHandoff();
   }
 
   if (result.canceled) {
@@ -102,6 +110,10 @@ export async function pickComposerImages(input: { readonly existingCount: number
     const mimeType = asset.mimeType?.toLowerCase();
     if (!mimeType?.startsWith("image/")) {
       error = `Unsupported file type for '${asset.fileName ?? "image"}'.`;
+      continue;
+    }
+    if (!isProviderSendTurnSupportedImageMimeType(mimeType)) {
+      error = `'${asset.fileName ?? "image"}' is not a supported image type. Attach GIF, JPEG, PNG, or WebP images.`;
       continue;
     }
 

@@ -296,15 +296,16 @@ export function normalizeAcpPromptUsage(
  */
 export function normalizeAcpUsageUpdate(input: {
   readonly used: number;
-  readonly size: number;
+  readonly size?: number;
 }): ThreadTokenUsageSnapshot | undefined {
   const usedTokens = nonNegativeInt(input.used);
-  const maxTokens = nonNegativeInt(input.size);
+  const maxTokens = input.size === undefined ? undefined : nonNegativeInt(input.size);
   if (usedTokens === undefined || usedTokens <= 0) {
     return undefined;
   }
   return {
     usedTokens,
+    lastUsedTokens: usedTokens,
     ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
   };
 }

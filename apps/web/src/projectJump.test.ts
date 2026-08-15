@@ -52,6 +52,84 @@ describe("project jumps", () => {
     );
   });
 
+  it("matches a repository the project only carries as a secondary remote", () => {
+    const withSubtreeRemote = {
+      ...project,
+      repositoryIdentity: {
+        ...project.repositoryIdentity,
+        remotes: [
+          {
+            remoteName: "effect-app-libs",
+            remoteUrl: "https://github.com/effect-app/libs.git",
+            canonicalKey: "github.com/effect-app/libs",
+            owner: "effect-app",
+            name: "libs",
+          },
+        ],
+      },
+    } as EnvironmentProject;
+
+    expect(resolveProjectJumpTarget("libs", [withSubtreeRemote], [])?.project).toBe(
+      withSubtreeRemote,
+    );
+  });
+
+  it("prefers the project itself over a busier clone that only lists it as a remote", () => {
+    const scannerWithLibsRemote = {
+      ...project,
+      id: ProjectId.make("scanner-with-libs-remote"),
+      environmentId: EnvironmentId.make("remote"),
+      repositoryIdentity: {
+        ...project.repositoryIdentity,
+        remotes: [
+          {
+            remoteName: "effect-app-libs",
+            remoteUrl: "https://github.com/effect-app/libs.git",
+            canonicalKey: "github.com/effect-app/libs",
+            owner: "effect-app",
+            name: "libs",
+          },
+        ],
+      },
+    } as EnvironmentProject;
+    const libs = {
+      ...project,
+      id: ProjectId.make("libs-project"),
+      title: "libs",
+      workspaceRoot: "/work/effect-app/libs",
+      repositoryIdentity: {
+        canonicalKey: "github.com/effect-app/libs",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "git@example/libs.git",
+        },
+        owner: "effect-app",
+        name: "libs",
+      },
+    } as EnvironmentProject;
+    const threads = [
+      {
+        id: ThreadId.make("busy"),
+        projectId: scannerWithLibsRemote.id,
+        environmentId: scannerWithLibsRemote.environmentId,
+        archivedAt: null,
+        updatedAt: "2026-04-01T00:00:00.000Z",
+      },
+      {
+        id: ThreadId.make("stale"),
+        projectId: libs.id,
+        environmentId: libs.environmentId,
+        archivedAt: null,
+        updatedAt: "2026-01-03T00:00:00.000Z",
+      },
+    ] as EnvironmentThreadShell[];
+
+    const target = resolveProjectJumpTarget("libs", [scannerWithLibsRemote, libs], threads);
+    expect(target?.project).toBe(libs);
+    expect(target?.latestThread?.id).toBe("stale");
+  });
+
   it("defaults unknown actions to reveal", () => {
     expect(parseProjectJumpAction(undefined)).toBe("reveal");
     expect(parseProjectJumpAction("latest")).toBe("latest");

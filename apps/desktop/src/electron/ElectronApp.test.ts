@@ -8,6 +8,7 @@ const {
   autoUpdaterRemoveListenerMock,
   exitMock,
   getAppPathMock,
+  getSystemLocaleMock,
   getVersionMock,
   isDefaultProtocolClientMock,
   onMock,
@@ -30,6 +31,7 @@ const {
   autoUpdaterRemoveListenerMock: vi.fn(),
   exitMock: vi.fn(),
   getAppPathMock: vi.fn(() => "/app"),
+  getSystemLocaleMock: vi.fn(() => "en-GB"),
   getVersionMock: vi.fn(() => "1.2.3"),
   isDefaultProtocolClientMock: vi.fn(() => false),
   onMock: vi.fn(),
@@ -62,6 +64,7 @@ vi.mock("electron", () => ({
       setIcon: setDockIconMock,
     },
     getAppPath: getAppPathMock,
+    getSystemLocale: getSystemLocaleMock,
     getVersion: getVersionMock,
     isDefaultProtocolClient: isDefaultProtocolClientMock,
     isPackaged: true,
@@ -112,6 +115,23 @@ describe("ElectronApp", () => {
         resourcesPath: process.resourcesPath,
         runningUnderArm64Translation: false,
       });
+    }).pipe(Effect.provide(ElectronApp.layer)),
+  );
+
+  it.effect("reads the OS locale through the service", () =>
+    Effect.gen(function* () {
+      const electronApp = yield* ElectronApp.ElectronApp;
+
+      assert.strictEqual(yield* electronApp.systemLocale, "en-GB");
+    }).pipe(Effect.provide(ElectronApp.layer)),
+  );
+
+  it.effect("normalizes POSIX-style locale identifiers that Intl rejects", () =>
+    Effect.gen(function* () {
+      getSystemLocaleMock.mockImplementationOnce(() => "en_GB");
+      const electronApp = yield* ElectronApp.ElectronApp;
+
+      assert.strictEqual(yield* electronApp.systemLocale, "en-GB");
     }).pipe(Effect.provide(ElectronApp.layer)),
   );
 

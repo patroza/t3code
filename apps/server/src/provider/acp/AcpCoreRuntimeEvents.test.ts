@@ -7,7 +7,10 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTokenUsageUpdatedEvent,
   makeAcpToolCallEvent,
+  normalizeAcpPromptUsage,
+  normalizeAcpUsageUpdate,
 } from "./AcpCoreRuntimeEvents.ts";
 
 describe("AcpCoreRuntimeEvents", () => {
@@ -189,6 +192,62 @@ describe("AcpCoreRuntimeEvents", () => {
       payload: {
         itemType: "assistant_message",
         status: "inProgress",
+      },
+    });
+  });
+
+  it("maps _meta.totalTokens-style usage updates without a window size", () => {
+    expect(normalizeAcpUsageUpdate({ used: 139_982 })).toEqual({
+      usedTokens: 139_982,
+      lastUsedTokens: 139_982,
+    });
+    expect(normalizeAcpUsageUpdate({ used: 42_000, size: 256_000 })).toEqual({
+      usedTokens: 42_000,
+      lastUsedTokens: 42_000,
+      maxTokens: 256_000,
+    });
+    expect(normalizeAcpUsageUpdate({ used: 0 })).toBeUndefined();
+  });
+
+  it("maps ACP prompt usage to last in/out token fields", () => {
+    expect(
+      normalizeAcpPromptUsage({
+        inputTokens: 1_000,
+        outputTokens: 400,
+        thoughtTokens: 100,
+        cachedReadTokens: 200,
+        totalTokens: 1_500,
+      }),
+    ).toEqual({
+      usedTokens: 1_500,
+      lastUsedTokens: 1_500,
+      inputTokens: 1_000,
+      lastInputTokens: 1_000,
+      outputTokens: 400,
+      lastOutputTokens: 400,
+      reasoningOutputTokens: 100,
+      lastReasoningOutputTokens: 100,
+      cachedInputTokens: 200,
+      lastCachedInputTokens: 200,
+    });
+  });
+
+  it("builds a thread.token-usage.updated runtime event", () => {
+    const stamp = { eventId: "event-1" as never, createdAt: "2026-03-27T00:00:00.000Z" };
+    expect(
+      makeAcpTokenUsageUpdatedEvent({
+        stamp,
+        provider: ProviderDriverKind.make("grok"),
+        threadId: "thread-1" as never,
+        turnId: TurnId.make("turn-1"),
+        usage: { usedTokens: 139_982, lastUsedTokens: 139_982 },
+        method: "session/update",
+        rawPayload: { _meta: { totalTokens: 139_982 } },
+      }),
+    ).toMatchObject({
+      type: "thread.token-usage.updated",
+      payload: {
+        usage: { usedTokens: 139_982, lastUsedTokens: 139_982 },
       },
     });
   });

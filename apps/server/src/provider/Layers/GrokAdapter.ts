@@ -143,6 +143,8 @@ interface GrokSessionContext {
   promptsInFlight: number;
   currentModelId: string | undefined;
   stopped: boolean;
+  /** Last `usedTokens` emitted so Grok `_meta.totalTokens` spam does not flood activities. */
+  lastEmittedUsedTokens: number | undefined;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -1080,6 +1082,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             promptsInFlight: 0,
             currentModelId: boundModelId,
             stopped: false,
+            lastEmittedUsedTokens: undefined,
           };
 
           yield* acp.processExit.pipe(
@@ -1183,9 +1186,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   case "UsageUpdated": {
                     const usage = normalizeAcpUsageUpdate({
                       used: event.used,
-                      size: event.size,
+                      ...(event.size !== undefined ? { size: event.size } : {}),
                     });
-                    if (usage !== undefined) {
+                    if (usage !== undefined && usage.usedTokens !== ctx.lastEmittedUsedTokens) {
+                      ctx.lastEmittedUsedTokens = usage.usedTokens;
                       yield* offerRuntimeEvent(
                         makeAcpTokenUsageUpdatedEvent({
                           stamp,
@@ -1220,7 +1224,13 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             Effect.catch((cause) =>
               Effect.logError("Failed to process Grok runtime notification.", { cause }),
             ),
-            Effect.forkIn(sessionScope),
+            // Fork into the session scope, not the calling fiber. `forkChild`
+            // makes this a child of `startSession`, and Effect interrupts a
+            // fiber's children when it completes, so the consumer died as soon
+            // as `startSession` returned and every later notification was
+            // dropped. The scope is created, stored on the context and closed
+            // on teardown already; only the fork target was wrong.
+            Effect.forkIn(ctx.scope),
           );
 
           ctx.notificationFiber = nf;
@@ -1558,6 +1568,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 const completedStopReason = completedStopReasonFromPromptResponse(result);
                 const promptUsage = normalizeAcpPromptUsage(result.usage);
                 if (promptUsage !== undefined) {
+                  ctx.lastEmittedUsedTokens = promptUsage.usedTokens;
                   yield* offerRuntimeEvent(
                     makeAcpTokenUsageUpdatedEvent({
                       stamp: yield* makeEventStamp(),

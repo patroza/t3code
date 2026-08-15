@@ -34,6 +34,7 @@ import {
   appendOpenCodeAssistantTextDelta,
   makeOpenCodeAdapter,
   mergeOpenCodeAssistantText,
+  normalizeOpenCodeTokenUsage,
 } from "./OpenCodeAdapter.ts";
 
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
@@ -865,6 +866,98 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("maps OpenCode token rollups to last in/out usage", () =>
+    Effect.sync(() => {
+      NodeAssert.deepEqual(
+        normalizeOpenCodeTokenUsage({
+          total: 1_500,
+          input: 1_000,
+          output: 400,
+          reasoning: 100,
+          cache: { read: 200, write: 0 },
+        }),
+        {
+          usedTokens: 1_500,
+          lastUsedTokens: 1_500,
+          inputTokens: 1_200,
+          lastInputTokens: 1_200,
+          outputTokens: 400,
+          lastOutputTokens: 400,
+          reasoningOutputTokens: 100,
+          lastReasoningOutputTokens: 100,
+          cachedInputTokens: 200,
+          lastCachedInputTokens: 200,
+        },
+      );
+      NodeAssert.equal(
+        normalizeOpenCodeTokenUsage({
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        }),
+        undefined,
+      );
+    }),
+  );
+
+  it.effect("emits thread token usage from OpenCode assistant message tokens", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-token-usage");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "message.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            info: {
+              id: "msg-tokens",
+              role: "assistant",
+              tokens: {
+                total: 1_500,
+                input: 1_000,
+                output: 400,
+                reasoning: 100,
+                cache: { read: 200, write: 0 },
+              },
+            },
+          },
+        },
+      ];
+
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const usageEvent = events.find((event) => event.type === "thread.token-usage.updated");
+      NodeAssert.ok(usageEvent);
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        NodeAssert.deepEqual(usageEvent.payload.usage, {
+          usedTokens: 1_500,
+          lastUsedTokens: 1_500,
+          inputTokens: 1_200,
+          lastInputTokens: 1_200,
+          outputTokens: 400,
+          lastOutputTokens: 400,
+          reasoningOutputTokens: 100,
+          lastReasoningOutputTokens: 100,
+          cachedInputTokens: 200,
+          lastCachedInputTokens: 200,
+        });
+      }
+    }),
+  );
+
   it.effect("does not strip coincidental prefix overlap from OpenCode part deltas", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -986,6 +1079,73 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.ok(metadataUpdated);
       if (metadataUpdated.type === "thread.metadata.updated") {
         NodeAssert.equal(metadataUpdated.payload.name, "Investigate OpenCode title sync");
+      }
+    }),
+  );
+
+  it.effect("passes the thread title to session.create when provided", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-title-provided");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+        title: "Investigate reconnect failures",
+      });
+
+      NodeAssert.equal(runtimeMock.state.sessionCreateCalls.length, 1);
+      NodeAssert.equal(
+        (runtimeMock.state.sessionCreateCalls[0]?.input as { title?: string } | undefined)?.title,
+        "Investigate reconnect failures",
+      );
+    }),
+  );
+
+  it.effect("does not mirror OpenCode's default placeholder session titles", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-placeholder-title");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "session.updated",
+          properties: {
+            info: {
+              id: "http://127.0.0.1:9999/session",
+              title: "New session - 2026-08-09T10:20:30.456Z",
+            },
+          },
+        },
+        {
+          type: "session.updated",
+          properties: {
+            info: {
+              id: "http://127.0.0.1:9999/session",
+              title: "Investigate reconnect failures",
+            },
+          },
+        },
+      ];
+
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const metadataUpdated = events.filter((event) => event.type === "thread.metadata.updated");
+      NodeAssert.equal(metadataUpdated.length, 1);
+      if (metadataUpdated[0]?.type === "thread.metadata.updated") {
+        NodeAssert.equal(metadataUpdated[0].payload.name, "Investigate reconnect failures");
       }
     }),
   );

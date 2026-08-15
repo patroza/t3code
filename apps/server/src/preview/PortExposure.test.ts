@@ -77,6 +77,10 @@ const netLayer = (listeningPorts: ReadonlyArray<number>) =>
   Layer.succeed(Net.NetService, {
     canListenOnHost: () => Effect.succeed(true),
     isPortAvailableOnLoopback: (port: number) => Effect.succeed(!listeningPorts.includes(port)),
+    // Added upstream in #6572 for SSH host reachability. The bind-side checks
+    // above answer "could I listen"; this one answers "is something already
+    // listening", which is exactly what listeningPorts models.
+    hasListenerOnHost: (port: number) => Effect.succeed(listeningPorts.includes(port)),
     reserveLoopbackPort: () => Effect.succeed(0),
     findAvailablePort: (preferred: number) => Effect.succeed(preferred),
   } as Net.NetServiceShape);

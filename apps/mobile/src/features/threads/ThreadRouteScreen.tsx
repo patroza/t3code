@@ -792,7 +792,6 @@ function ThreadRouteContent(
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
-          activeThreadBusy={composer.activeThreadBusy}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
           selectedThreadFeed={composer.selectedThreadFeed}
           activeWorkStartedAt={composer.activeWorkStartedAt}

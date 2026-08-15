@@ -122,6 +122,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       runningUnderArm64Translation: false,
     }),
     name: Effect.succeed("T3 Code"),
+    systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
     quit: Effect.void,
     exit: () => Effect.void,
