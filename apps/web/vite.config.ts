@@ -87,6 +87,11 @@ const isolatedUnitTestFiles = [
   "src/components/chat/MessagesTimeline.test.tsx",
   "src/components/chat/draftHeroTransition.test.ts",
   "src/components/files/projectFilesQueryState.test.ts",
+  // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
+  // the same worker can bind the real module first, and the mock then never
+  // applies — the icon falls back to the browser mockup and the stored-favicon
+  // assertion fails, depending only on how files land across workers.
+  "src/components/preview/PreviewFaviconIcon.test.tsx",
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
