@@ -153,7 +153,10 @@ import {
   selectThreadPreviewMiniPlayer,
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
-import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
+import {
+  isThreadOwnPullRequest,
+  repositoryFromChangeRequestUrl,
+} from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
@@ -3511,18 +3514,19 @@ function ChatViewContent(props: ChatViewProps) {
   // project there is nothing to resolve it against, so the caller falls back to the browser.
   const threadRepository = activeProject?.repositoryIdentity?.displayName ?? null;
   const openThreadPullRequest = useCallback(
-    (number: number) => {
+    (number: number, repository: string | null = threadRepository) => {
+      const selectedRepository = repository ?? threadRepository;
       if (
         !supportsPullRequests ||
         !activeThreadRef ||
         !activeProject ||
-        threadRepository === null
+        selectedRepository === null
       ) {
         return;
       }
       useRightPanelStore.getState().openPullRequest(activeThreadRef, {
         projectId: activeProject.id,
-        repository: threadRepository,
+        repository: selectedRepository,
         number,
       });
     },
@@ -4464,12 +4468,15 @@ function ChatViewContent(props: ChatViewProps) {
   });
   // The right panel offers the thread's own change request, so it can only offer it once the
   // branch has one; until then the picker says so rather than opening an empty panel.
+  const threadPullRequestRepository =
+    (activeThreadPr !== null ? repositoryFromChangeRequestUrl(activeThreadPr.url) : null) ??
+    threadRepository;
   const addPullRequestSurface = useCallback(() => {
     if (activeThreadPr === null) return;
-    openThreadPullRequest(activeThreadPr.number);
-  }, [activeThreadPr, openThreadPullRequest]);
+    openThreadPullRequest(activeThreadPr.number, threadPullRequestRepository);
+  }, [activeThreadPr, openThreadPullRequest, threadPullRequestRepository]);
   const pullRequestSurfaceAvailable =
-    supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+    supportsPullRequests && activeThreadPr !== null && threadPullRequestRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -6739,7 +6746,7 @@ function ChatViewContent(props: ChatViewProps) {
           isThreadOwnPullRequest(
             {
               projectId: activeProject?.id ?? null,
-              repository: threadRepository,
+              repository: threadPullRequestRepository,
               number: activeThreadPr?.number ?? null,
             },
             {

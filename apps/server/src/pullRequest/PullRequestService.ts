@@ -390,6 +390,23 @@ export function repositoryIdentityOf(project: OrchestrationProjectShell): string
   return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
 }
 
+/**
+ * Every repository this checkout answers to. A fork records both origin and
+ * upstream; the primary identity prefers upstream, but a change request on the
+ * fork is still this project's.
+ */
+export function repositoriesOf(project: OrchestrationProjectShell): ReadonlyArray<string> {
+  const names = new Set<string>();
+  const primary = repositoryIdentityOf(project);
+  if (primary) names.add(primary.toLowerCase());
+  for (const remote of project.repositoryIdentity?.remotes ?? []) {
+    if (remote.owner && remote.name) {
+      names.add(`${remote.owner}/${remote.name}`.toLowerCase());
+    }
+  }
+  return [...names];
+}
+
 export const make = Effect.gen(function* () {
   const registry = yield* PullRequestProviderRegistry;
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
@@ -524,9 +541,11 @@ export const make = Effect.gen(function* () {
         if (!match) {
           return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
         }
-        // The repository travels through the client, so it is checked against the project's
-        // own remote rather than being handed to a provider verbatim.
-        if (match.repository.toLowerCase() !== ref.repository.trim().toLowerCase()) {
+        // The repository travels through the client, so it is checked against the
+        // checkout's remotes rather than being handed to a provider verbatim.
+        // Upstream is the primary identity on a fork; origin is still ours.
+        const requested = ref.repository.trim().toLowerCase();
+        if (!repositoriesOf(match.project).includes(requested)) {
           return Effect.fail(
             new PullRequestOperationError({
               operation: "resolveRepository",
@@ -534,7 +553,11 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return Effect.succeed(match);
+        return Effect.succeed(
+          requested === match.repository.toLowerCase()
+            ? match
+            : { ...match, repository: ref.repository.trim() },
+        );
       }),
     );
 

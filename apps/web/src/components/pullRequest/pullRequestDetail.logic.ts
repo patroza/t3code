@@ -19,6 +19,16 @@ import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/re
  * number are not enough: one environment can hold two checkouts of the same repository under
  * different projects, and the other project's checkout is somebody else's branch.
  */
+/** Owner/name from a change-request URL, so a fork PR is not opened against upstream. */
+export function repositoryFromChangeRequestUrl(url: string): string | null {
+  const trimmed = url.trim();
+  const github = /^https:\/\/[^/\s]+\/([^/\s]+\/[^/\s]+)\/pull\/\d+(?:[/?#].*)?$/i.exec(trimmed);
+  if (github?.[1]) return github[1];
+  const gitlab = /^https:\/\/[^/\s]+\/(.+)\/-\/merge_requests\/\d+(?:[/?#].*)?$/i.exec(trimmed);
+  if (gitlab?.[1]) return gitlab[1];
+  return null;
+}
+
 export function isThreadOwnPullRequest(
   thread: {
     readonly projectId: string | null;
