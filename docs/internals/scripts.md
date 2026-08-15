@@ -61,15 +61,15 @@ authenticated.
 - `vp run typecheck`: Strict TypeScript checks for all packages.
 - `vp run test`: Runs workspace tests.
 - `vp run lint:mobile`: Mobile native static analysis (`scripts/mobile-native-static-check.ts`).
-- `pnpm pr:ready`: Agent publish path — runs the ship gate (`vp check`, `vpr typecheck`,
-  `vp run test`), then marks the open draft PR ready. Do not use raw `gh pr ready` from coding
-  agents; the `.tools/bin/gh` shim blocks undraft side channels (installed by
-  `scripts/install-git-hooks.mjs` on `prepare`).
+- `pnpm pr:ready`: Agent publish path — requires HEAD to contain latest `fork/dev`, runs the full
+  ship gate (`vp check`, `vpr typecheck`, `vp run test`), then marks the open draft PR ready. Do
+  not use raw `gh pr ready` from coding agents; the `.tools/bin/gh` shim runs the same gate first
+  (installed by `scripts/install-git-hooks.mjs` on `prepare`).
 - `pnpm test:agent-gate`: Unit tests for the agent pre-push / PR-state / gh-policy helpers.
 - Husky: `pre-commit` runs `pnpm lint-staged` (`vp fmt` on staged files + `vp lint --fix` on staged
   code files);
-  `pre-push` runs `scripts/agent-pre-push.mjs` (agents only: static gate — `vp check` + typecheck —
-  on draft / no PR; full ship gate including unit tests on ready PRs / publish; staged SHA cache in
+  `pre-push` runs `scripts/agent-pre-push.mjs` (agents only: changed-file `vp check` on draft /
+  no PR; full ship gate including unit tests on ready PRs / publish; full-gate SHA cache in
   `.run/agent-ship-gate.json`).
 - `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
   an isolated T3 SQLite database; writes create a private backup first.

@@ -5,16 +5,16 @@
  * Humans: no-op (exit 0) — self-responsible; not forced by the hook.
  *
  * Agents:
- *   - Draft PR or no open PR: static gate only — steps 1–2 below.
- *     A push that does not lint/typecheck helps nobody, draft or not; what
- *     draft buys is skipping the unit suite, not skipping correctness.
+ *   - Draft PR or no open PR: changed-file `vp check` only (fmt + lint of
+ *     files changed against fork/dev). Commits already pay lint-staged.
  *   - Ready-for-review PR (or unknown PR state): full ship gate (1–3).
- *   - Publish path is `pnpm pr:ready` (not raw `gh pr ready`) — same full gate,
- *     then undraft. See scripts/agent-pr-ready.mjs + scripts/agent-gh.mjs.
+ *   - Publish path is `pnpm pr:ready` (not raw `gh pr ready`) — catch up to
+ *     fork/dev, run the full gate, then undraft.
+ *     See scripts/agent-pr-ready.mjs + scripts/agent-gh.mjs.
  *
  * Ship gate mirrors the CI JS quality path:
- *   1. `vp check` — format + lint
- *   2. `vpr typecheck` — workspace TypeScript
+ *   1. `vp check` — format + lint (changed files on draft; workspace on full)
+ *   2. `vpr typecheck` — workspace TypeScript (full / publish only)
  *   3. `vp run test` — unit tests (full / publish only)
  *
  * Detection: GROK_AGENT / T3_AGENT / AI_AGENT / Claude / Cursor / Codex env.
@@ -26,6 +26,7 @@ import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 import { isCodingAgent } from "./lib/agent-env.mjs";
+import { listChangedFilesAgainstForkDev } from "./lib/agent-fork-dev.mjs";
 import { resolveOpenPrState, shipGateScopeForPush } from "./lib/agent-pr-state.mjs";
 import {
   isShipGateForce,
@@ -73,43 +74,53 @@ const run = (label, args, opts = {}) => {
 };
 
 /**
- * Agent ship gate: static (check + typecheck) and optionally full (+ unit tests).
- * Shared by pre-push (every agent push) and `pnpm pr:ready`.
+ * Agent ship gate. Shared by pre-push and `pnpm pr:ready`.
  *
- * `scope: "static"` stops after typecheck — draft / no-PR pushes.
- * `scope: "full"` (default) adds `vp run test` — ready PRs and publish.
+ * `scope: "changed"` — `vp check` on files changed against fork/dev (draft / no-PR).
+ * `scope: "full"` (default) — workspace `vp check` + `vpr typecheck` + `vp run test`.
  *
- * Caches HEAD SHA under `.run/agent-ship-gate.json` so push + ready never
- * double-run for an already-validated commit. Force: AGENT_SHIP_GATE_FORCE=1.
+ * Caches HEAD SHA under `.run/agent-ship-gate.json` so a full run is never
+ * double-paid for the same commit. Changed-file runs are not cached as full.
+ * Force: AGENT_SHIP_GATE_FORCE=1.
  *
- * @param {{ root?: string, scope?: "full" | "static", force?: boolean, env?: NodeJS.ProcessEnv }} [opts]
- * @returns {Promise<{ status: "cached" | "ok", sha: string | null, scope: "full" | "static" }>}
+ * @param {{ root?: string, scope?: "full" | "changed", force?: boolean, env?: NodeJS.ProcessEnv }} [opts]
+ * @returns {Promise<{ status: "cached" | "ok", sha: string | null, scope: "full" | "changed" }>}
  */
 export const runAgentShipGate = async (opts = {}) => {
   const root = opts.root ?? NodeProcess.cwd();
   const env = withRepoBin(root, opts.env ?? NodeProcess.env);
   const force = opts.force === true || isShipGateForce(env);
-  const scope = opts.scope === "static" ? "static" : "full";
+  const scope = opts.scope === "changed" || opts.scope === "static" ? "changed" : "full";
   const headSha = readHeadSha(root);
   const cache = readShipGateCache(root);
 
-  const alreadyCached =
-    scope === "static"
-      ? !force && headSha && isShipGateStaticCached(headSha, cache)
-      : !force && headSha && isShipGateShaCached(headSha, cache);
+  if (scope === "changed") {
+    const files = listChangedFilesAgainstForkDev({ cwd: root });
+    if (files.length === 0) {
+      console.error("agent ship-gate: no files changed against fork/dev — skip");
+      return { status: "ok", sha: headSha, scope };
+    }
+    run("vp check (changed)", ["vp", "check", "--no-error-on-unmatched-pattern", ...files], {
+      cwd: root,
+      env,
+    });
+    console.error(
+      `agent ship-gate: changed ok — ${files.length} file${files.length === 1 ? "" : "s"}; full gate on publish`,
+    );
+    return { status: "ok", sha: headSha, scope };
+  }
+
+  const alreadyCached = !force && headSha && isShipGateShaCached(headSha, cache);
 
   if (alreadyCached) {
     console.error(
-      `agent ship-gate: skip — ${headSha.slice(0, 12)} already validated${
-        scope === "static" ? " (static)" : ""
-      } (cache .run/agent-ship-gate.json; force with AGENT_SHIP_GATE_FORCE=1)`,
+      `agent ship-gate: skip — ${headSha.slice(0, 12)} already validated (cache .run/agent-ship-gate.json; force with AGENT_SHIP_GATE_FORCE=1)`,
     );
     return { status: "cached", sha: headSha, scope };
   }
 
   const staticCached = !force && headSha && isShipGateStaticCached(headSha, cache);
 
-  // Mirror CI check + typecheck (always). Unit tests only on full scope.
   if (staticCached) {
     console.error(
       `agent ship-gate: skip check/typecheck — ${headSha.slice(0, 12)} already passed static`,
@@ -117,23 +128,6 @@ export const runAgentShipGate = async (opts = {}) => {
   } else {
     run("vp check", ["vp", "check"], { cwd: root, env });
     run("vpr typecheck", ["vpr", "typecheck"], { cwd: root, env });
-  }
-
-  if (scope === "static") {
-    if (headSha) {
-      try {
-        writeShipGateCache(root, headSha, { stage: "static" });
-        console.error(
-          `agent ship-gate: cached static ${headSha.slice(0, 12)} (.run/agent-ship-gate.json)`,
-        );
-      } catch (error) {
-        console.error(`agent ship-gate: could not write static cache: ${error?.message ?? error}`);
-      }
-    }
-    console.error(
-      "agent ship-gate: static ok — unit tests run on ready / publish (`pnpm pr:ready`)",
-    );
-    return { status: "ok", sha: headSha, scope };
   }
 
   run("vp run test", ["vp", "run", "test"], { cwd: root, env });
@@ -163,13 +157,13 @@ if (invokedAs === thisFile) {
   const prState = resolveOpenPrState({ cwd: root });
   const scope = shipGateScopeForPush(prState.mode);
 
-  if (scope === "static") {
+  if (scope === "changed") {
     const why =
       prState.mode === "draft"
         ? `draft PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""}`
         : "no open PR";
     console.error(
-      `agent pre-push: ${why} — static gate only (check + typecheck; unit tests on publish via pnpm pr:ready)`,
+      `agent pre-push: ${why} — changed-file check only (full gate on publish via pnpm pr:ready)`,
     );
   } else if (prState.mode === "unknown") {
     console.error(

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Agent (and human) publish path: run the ship gate, then mark the PR ready.
+ * Agent (and human) publish path: require HEAD to contain latest fork/dev,
+ * run the full ship gate, then mark the PR ready.
  *
  *   pnpm pr:ready
  *
@@ -13,6 +14,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeProcess from "node:process";
 import { runAgentShipGate } from "./agent-pre-push.mjs";
+import { assertUpToDateWithForkDev } from "./lib/agent-fork-dev.mjs";
 import { resolveOpenPrState } from "./lib/agent-pr-state.mjs";
 
 const root = NodeProcess.cwd();
@@ -30,6 +32,13 @@ if (prState.mode === "unknown") {
   NodeProcess.exit(1);
 }
 
+const forkDev = assertUpToDateWithForkDev({ cwd: root });
+if (!forkDev.ok) {
+  console.error(`agent pr:ready: ${forkDev.detail}`);
+  NodeProcess.exit(1);
+}
+console.error(`agent pr:ready: up to date with ${forkDev.ref}`);
+
 if (prState.mode === "ready") {
   console.error(
     `agent pr:ready: PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""} is already ready — running ship gate only`,
@@ -38,9 +47,9 @@ if (prState.mode === "ready") {
   NodeProcess.exit(0);
 }
 
-// draft → gate then undraft
+// draft → full gate then undraft
 console.error(
-  `agent pr:ready: ship gate then ready PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""}`,
+  `agent pr:ready: full ship gate then ready PR${prState.pr?.number != null ? ` #${prState.pr.number}` : ""}`,
 );
 await runAgentShipGate({ root });
 

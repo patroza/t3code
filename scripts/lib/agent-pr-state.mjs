@@ -2,8 +2,8 @@
  * Resolve whether the current branch's open PR should enforce the agent ship gate.
  *
  * Modes:
- *   none    — no open PR (or closed/merged): static gate only
- *   draft   — open draft PR: static gate only (lighter than publish)
+ *   none    — no open PR (or closed/merged): changed-file check only
+ *   draft   — open draft PR: changed-file check only
  *   ready   — open non-draft PR: full ship gate on every agent push
  *   unknown — gh missing / failed: fail closed (run the full gate)
  *
@@ -39,14 +39,13 @@ export const shouldRunShipGateOnPush = (mode) => mode === "ready" || mode === "u
 /**
  * How much of the gate a push pays for.
  *
- * Nothing is free any more: a push that does not format, lint or typecheck is
- * worthless to a reviewer whether or not the PR says "draft". What draft buys
- * is the *expensive* half — full unit suite stays on the ready/publish path.
+ * Draft / no-PR: format + lint of files changed against fork/dev.
+ * Ready / unknown: full workspace check + typecheck + unit tests.
  *
  * @param {"none" | "draft" | "ready" | "unknown"} mode
- * @returns {"full" | "static"}
+ * @returns {"full" | "changed"}
  */
-export const shipGateScopeForPush = (mode) => (shouldRunShipGateOnPush(mode) ? "full" : "static");
+export const shipGateScopeForPush = (mode) => (shouldRunShipGateOnPush(mode) ? "full" : "changed");
 
 /** Strip ANSI color codes so `gh --json` stays parseable when color is forced. */
 const stripAnsi = (text) => String(text).replace(/\u001b\[[0-9;]*m/g, "");
