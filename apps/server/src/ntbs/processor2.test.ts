@@ -16,7 +16,7 @@ import {
   type NTBSAdapter,
   type NTBSResponse,
 } from "./adapter.ts";
-import type { NTBSInput, NTBSLifecycle, ThreadCreated } from "./lifecycle.ts";
+import type { Request, ExchangeState, ThreadCreated } from "./exchange.ts";
 import { makeNTBSProcessor, makeNTBSProcessorTag } from "./processor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -85,7 +85,7 @@ class TestAdapterState extends Context.Service<
   TestAdapterState,
   {
     /** Lifecycle records keyed by T3 thread — seed before acting, inspect after. */
-    readonly records: Map<ThreadId, NTBSLifecycle>;
+    readonly records: Map<ThreadId, ExchangeState>;
     readonly postedAcks: Array<ThreadCreated>;
     readonly postedResponses: Array<{
       readonly record: ThreadCreated;
@@ -99,7 +99,7 @@ class TestAdapterState extends Context.Service<
     TestAdapterState,
     Effect.gen(function* () {
       return {
-        records: new Map<ThreadId, NTBSLifecycle>(),
+        records: new Map<ThreadId, ExchangeState>(),
         postedAcks: [],
         postedResponses: [],
         threadLookups: yield* Queue.unbounded<ThreadId>(),
@@ -118,7 +118,7 @@ const AdapterFromState = Layer.effect(
     const adapter: NTBSAdapter = {
       save: (lifecycleEvent) =>
         Effect.sync(() => {
-          state.records.set(lifecycleEvent.t3Data.threadId, lifecycleEvent);
+          state.records.set(lifecycleEvent.t3.threadId, lifecycleEvent);
         }),
       acknowledge: (record) =>
         Effect.sync(() => {
@@ -200,16 +200,16 @@ const sessionSetEvent = (threadId: ThreadId): Effect.Effect<OrchestrationEvent> 
     };
   });
 
-const makeRequest = (platformMessageId: string): NTBSInput => ({
+const makeRequest = (platformMessageId: string): Request => ({
   sourceUri: platformMessageId,
   snapshot: "please look into this",
   attachments: [],
 });
 
-const recordedThread = (request: NTBSInput, threadId: ThreadId): ThreadCreated => ({
+const recordedThread = (request: Request, threadId: ThreadId): ThreadCreated => ({
   ...request,
   state: "thread.created",
-  t3Data: { threadId, userMessageId: MessageId.make(`message-for-${threadId}`) },
+  t3: { threadId, userMessageId: MessageId.make(`message-for-${threadId}`) },
 });
 
 describe("NTBSProcessor (layer harness)", () => {

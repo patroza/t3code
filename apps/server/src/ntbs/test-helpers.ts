@@ -7,7 +7,7 @@ import {
   ThreadId,
   VcsCreateWorktreeResult,
 } from "@t3tools/contracts";
-import type { NTBSInput, NTBSLifecycle, ThreadCreated } from "./lifecycle.ts";
+import type { Request, ExchangeState, ThreadCreated } from "./exchange.ts";
 import type { T3Context } from "./processor.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSResponse } from "./adapter.ts";
@@ -58,7 +58,7 @@ export const createGitLayerMock = () => {
 export const createAdapterRequest = (
   uniqueId: string,
 ): {
-  request: NTBSInput;
+  request: Request;
   t3Context: T3Context;
 } => ({
   request: {
@@ -168,7 +168,7 @@ class TestAdapterState extends Context.Service<
     /**
      * Lifecycle records keyed by T3 thread.
      */
-    readonly records: Map<ThreadId, NTBSLifecycle>;
+    readonly records: Map<ThreadId, ExchangeState>;
     readonly postedAcks: Map<string, ThreadCreated>;
     readonly postedResponses: Map<
       string,
@@ -189,7 +189,7 @@ class TestAdapterState extends Context.Service<
     Effect.gen(function* () {
       return {
         // lifecycleEvents: [],
-        records: new Map<ThreadId, NTBSLifecycle>(),
+        records: new Map<ThreadId, ExchangeState>(),
         postedAcks: new Map<string, ThreadCreated>(),
         postedResponses: new Map<
           string,
@@ -214,7 +214,7 @@ const TestAdapterFromState = Layer.effect(
     return {
       save: (event) =>
         Effect.sync(() => {
-          adapterState.records.set(event.t3Data.threadId, event);
+          adapterState.records.set(event.t3.threadId, event);
         }),
       acknowledge: (state) =>
         Effect.sync(() => {
