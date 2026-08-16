@@ -36,7 +36,10 @@ export type Request = {
   attachments: ReadonlyArray<ChatAttachment>;
 };
 
-type AcceptedRequest = Request & {
+/**
+ * The base data type common to all member of ExchangeState
+ */
+type ExchangeStateBase = Request & {
   t3: {
     /** The T3 thread created by the lifecycle event */
     threadId: ThreadId;
@@ -49,17 +52,57 @@ type AcceptedRequest = Request & {
   };
 };
 
-export type ThreadCreated = AcceptedRequest & {
-  /**
-   * T3 has created the new thread and the adapter has recorded its relationship
-   * to the platform request. The first turn may not have started yet.
-   */
-  state: "thread.created";
+/**
+ * The platform inbound code (Jira Webhook e.g.) admitted the request,
+ * trigger and actor checks passed, and the processor records the request
+ * as being claimed by the system.
+ *
+ * From here, the processor alone drives the exchange to a terminal state.
+ */
+type RequestClaimed = ExchangeStateBase & {
+  state: "request-claimed";
 };
 
-export type ResponsePosted = AcceptedRequest & {
-  state: "thread.response.posted";
-  responseMessageId: string;
+/**
+ * T3 has created the new thread and the adapter has recorded its relationship
+ * to the platform request. The first turn may not have started yet.
+ * Turn existence and progress are T3-owned.
+ */
+type ThreadCreated = ExchangeStateBase & {
+  state: "thread-created";
+};
+
+/**
+ * T3 reached a terminal outcome; the exact reply payload is stored
+ * verbatim so every posting attempt sends the same content.
+ */
+type ReplyPending = ExchangeStateBase & {
+  state: "reply-pending";
+  reply: string;
+};
+
+/**
+ * Terminal state.
+ * The platform accepted the reply; its message ID is stored.
+ */
+type ReplyPosted = ExchangeStateBase & {
+  state: "reply-posted";
+  reply: string;
+  replySourceUuri: string;
+};
+
+/**
+ * Terminal state.
+ * A finished reply exists but posting was given up after bounded attempts.
+ * Stores the undelivered payload and the cause.
+ * Common causes could be: the original discussion or message has been deleted
+ * or locked (Jira/Github issue, Discord thread), the bot has been kicked, etc.
+ * The tombstone keeps dedup intact and stops the processor from retrying together.
+ */
+type Undeliverable = ExchangeStateBase & {
+  state: "undeliverable";
+  reply: string;
+  cause: unknown;
 };
 
 /**
@@ -67,4 +110,9 @@ export type ResponsePosted = AcceptedRequest & {
  * creation through final-response delivery. Adapters store the latest state to
  * track progress and resume incomplete exchanges after a restart.
  */
-export type ExchangeState = ThreadCreated | ResponsePosted;
+export type ExchangeState =
+  | RequestClaimed
+  | ThreadCreated
+  | ReplyPending
+  | ReplyPosted
+  | Undeliverable;
