@@ -213,3 +213,126 @@ The central design requirement is not merely to add more union members. The
 state machine must claim requests atomically, store intent before non-atomic
 effects, keep T3 authoritative for T3-owned facts, and make every incomplete
 state safely reconcilable.
+
+---
+
+## Review feedback (Claude, 2026-08-16)
+
+Diagnosis verified against `processor.ts` / `adapter.ts`: the three problem
+sections above are real, and the coordinator-state direction is right.
+Amendments below, one decision each — outcomes go in the decision log at the
+bottom.
+
+### 1. Cut `AwaitingOutcome` (five states → four)
+
+`AwaitingOutcome` is `TurnRequested` by another name and fails this doc's own
+argument against `TurnStarted`: its entry transition pairs a non-atomic T3
+dispatch with an adapter save, so it lies in one order and leaves a crash
+window in the other. It carries no new data, and its reconcile rule collapses
+into `ThreadCreated`'s — "ensure the turn is requested" already requires
+`getTurn`, and after `getTurn` you know whether to start, wait, or materialize
+the outcome. That is exactly today's `recoverThread` branch. Resulting model:
+
+```text
+RequestClaimed  request + T3 context + planned IDs    ensure thread/worktree exist
+ThreadCreated   + confirmed T3 IDs                    ensure turn requested; on
+                                                      terminal outcome write ReplyPending
+ReplyPending    + exact NTBSResponse + delivery key   post idempotently
+ReplyPosted     + platform message ID                 do nothing
+```
+
+### 2. De-scope multi-instance; keep expected-state CAS
+
+The real deployment is one Node process per home dir. Leases and cross-instance
+coordination solve a deployment that does not exist — answer "no" to both.
+Keep expected-state CAS anyway: `transition(from, to)` is a one-line `WHERE`
+clause in SQLite, makes backwards writes impossible at the storage layer, and
+gives the conformance suite something to assert. Contract becomes `claim`
+(insert-if-absent, returns new-or-existing) + `transition` (CAS with a
+stale-state signal) + lookups, replacing generic `save`.
+
+### 3. Reconcile-on-redelivery is a quick win, independent of the schema
+
+Today, when `process` finds an existing record it returns — so a failed turn
+start stays stuck until a server restart. Making redelivery call the same
+reconciler as startup recovery and live events fixes that hole now, with no
+contract change. Land it first.
+
+### 4. Proposed answers to the open questions
+
+- **IDs at claim time:** `threadId`, `userMessageId`, branch name. Command IDs
+  can be re-minted per attempt; both effects are verify-before-retry.
+- **`projectId`/`baseRef`:** yes, in the claim payload. They are provisioning
+  inputs that go dead once `ThreadCreated` is reached, so no sync burden.
+- **CAS vs version:** expected-state CAS only; states are few and monotone.
+- **Platform idempotency keys:** none exist for Jira/Discord/GitHub message
+  creation. Recovery searches for the stored exact payload (plus a delivery-key
+  marker where the platform tolerates one) — reliable precisely because the
+  payload is persisted, not recomputed.
+- **Separate outbox entity:** no. `ReplyPending` is the outbox; one reply per
+  exchange; retry metadata is adapter-local.
+- **Permanently failed provisioning:** after bounded attempts, materialize
+  `ReplyPending` with a failure text so the requester hears about it through
+  the normal delivery pipe. Terminal `Abandoned` only when posting itself is
+  impossible. Invariant: every claim ends in `ReplyPosted` or `Abandoned`.
+- **Acknowledgement metadata:** adapter-local, never a blocking shared state.
+  (Note: today an ack is only attempted inside `process`, never on recovery.)
+- **Leases:** no — idempotent reconciliation plus the in-process outcome lock.
+
+### Invariants to record regardless of the decisions
+
+- Turn-start idempotency rests on `getTurn` being read-your-writes at reconcile
+  time; a lagging projection would double-start a turn.
+- Provisioning recovery makes worktree creation reentrant: the reconciler must
+  handle "branch already exists from a pre-crash attempt" by reusing it.
+
+## Decision log
+
+Working through the amendments one topic at a time; record each outcome here.
+
+- [x] 1. State model: cut `AwaitingOutcome`, four durable states — **decided
+     2026-08-16**: storage lies less but says less; the `getTurn` query it
+     forces is cheap, local, and already written.
+- [x] 2. Contract invariants — **decided 2026-08-16**, stated at behavior
+     level: (a) one exchange per `sourceUri` for its whole life; duplicate
+     deliveries join it, never create another; (b) forward-only lifecycle —
+     moving backwards is an error, not a write (failure may jump ahead to
+     `ReplyPending`). No leases, no multi-process machinery. How adapters
+     enforce the invariants is implementation, decided later.
+- [x] 3. Recovery ownership — **decided 2026-08-16**, supersedes amendment 3:
+     duplicate deliveries are pure dedup (drop, no repair) because platform
+     redelivery is not a guaranteed retry mechanism. The processor owns
+     recovery: one reconciler, three triggers — startup, relevant T3 events,
+     and a periodic sweep over incomplete exchanges. The sweep is the
+     guarantee; live events are the fast path.
+- [x] 4a. Claim contents — **decided 2026-08-16** (tentative, revisit if
+      implementation fights it): the claim stores the full request
+      (`sourceUri`, snapshot, attachments), the T3 context (`projectId`,
+      `baseRef`), and pre-minted planned IDs (`threadId`, `userMessageId`,
+      branch name) so a cold-start sweep can redo provisioning without the
+      original webhook and can detect an already-created thread instead of
+      duplicating it.
+- [x] 4b. Reply delivery — **decided 2026-08-16**: identity and content are
+      separate. The adapter must answer with **certainty** whether its reply
+      for this exact exchange exists on the platform, via structural
+      attribution (Discord reply referencing the trigger message, Jira comment
+      linkage), or an embedded exchange UUID as last resort — never content
+      matching, since identical texts legitimately recur. The verbatim payload
+      persisted in `ReplyPending` is only the content, so retries post the
+      same thing. Recovery: check existence → post if absent → record posted.
+- [x] 4c. Failure path — **decided 2026-08-16**: states track delivery, not
+      outcome quality. Any permanent failure (provisioning, turn, lost thread)
+      becomes a failure-typed reply through the normal pipe after bounded
+      attempts; delivering it ends the exchange in `ReplyPosted`, a completed
+      job from the processor's view. `Undeliverable` (renamed from
+      `Abandoned`) is the only other terminal state, entered solely from
+      `ReplyPending` when posting itself is given up: the stored verbatim
+      reply plus the cause, never retried again. Every exchange ends
+      `ReplyPosted` or `Undeliverable`.
+- [x] 4d. Acknowledgement — **decided 2026-08-16**: the processor has no
+      business knowing whether the ack succeeded; no exchange state waits on
+      it. The adapter records the ack message ID locally and may deliver the
+      final reply by editing that ack instead of posting fresh — a rendering
+      choice it owns. An adapter doing so must count the edited ack as the
+      existing reply in its certainty check (4b). Crash before ack ⇒ ack is
+      simply never posted; the final reply is unaffected.
