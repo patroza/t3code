@@ -1,5 +1,5 @@
 import type { ThreadId } from "@t3tools/contracts";
-import * as NTBS from "./lifecycle.ts";
+import * as NTBS from "./exchange.ts";
 import { Context, Data, Effect } from "effect";
 
 export class ThreadNotFound extends Data.TaggedError("ThreadNotFound") {}
@@ -33,7 +33,7 @@ export interface NTBSAdapter {
   /**
    * Stores a lifecycle state. Does not perform any other business logic.
    */
-  readonly save: (lifecycleEvent: NTBS.NTBSLifecycle) => Effect.Effect<void, AdapterError>;
+  readonly save: (lifecycleEvent: NTBS.ExchangeState) => Effect.Effect<void, AdapterError>;
   /**
    * Posts the working acknowledgement at the response destination,
    * described by the event.
@@ -61,8 +61,8 @@ export interface NTBSAdapter {
    * Any lifecycle state means the request already has a T3 thread.
    */
   readonly findByRequest: (
-    request: NTBS.NTBSInput,
-  ) => Effect.Effect<NTBS.NTBSLifecycle | null, AdapterError>;
+    request: NTBS.Request,
+  ) => Effect.Effect<NTBS.ExchangeState | null, AdapterError>;
   /**
    * Searches the response destination for a matching response previously
    * posted by this adapter.
@@ -81,7 +81,7 @@ export interface NTBSAdapter {
    */
   readonly findByThreadId: (
     threadId: ThreadId,
-  ) => Effect.Effect<NTBS.NTBSLifecycle, ThreadNotFound | AdapterError>;
+  ) => Effect.Effect<NTBS.ExchangeState, ThreadNotFound | AdapterError>;
   /**
    * Loads records that reached `ThreadCreated` but have no recorded
    * `ResponsePosted` state.

@@ -8,7 +8,7 @@ import {
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import type * as NTBS from "./lifecycle.ts";
+import type * as NTBS from "./exchange.ts";
 import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
 import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -35,7 +35,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
   2. Platform-specific inbound code:
     - Receives raw platform data from Jira, Discord, GitHub, or Teams.
     - Applies platform trigger and actor checks.
-    - Builds `NTBSInput<P>` and `T3Context`.
+    - Builds `Request` and `t3` context.
     - Calls the processor.
 
   3. Adapter
@@ -77,7 +77,7 @@ export interface NTBSProcessor {
    * or backpressure for the time being. This choice can be reviewed later.
    */
   readonly process: (
-    request: NTBS.NTBSInput,
+    request: NTBS.Request,
     t3Context: T3Context,
   ) => Effect.Effect<void, NTBSProcessorError>;
 
@@ -345,7 +345,7 @@ export const makeNTBSProcessor = <AdapterId>(
           })
           .pipe(orFail("Failed recording the posted NTBS response"));
 
-        markResponsePosted(threadCreated.t3Data.userMessageId);
+        markResponsePosted(threadCreated.t3.userMessageId);
       });
 
     /**
@@ -378,7 +378,7 @@ export const makeNTBSProcessor = <AdapterId>(
           At the same time a thread may have different messages. We're only interested
           in the last user message that appears in the adapter records. 
          */
-        const userMessageId = recordedThread.t3Data.userMessageId;
+        const userMessageId = recordedThread.t3.userMessageId;
 
         yield* ensureUniqueOutcome(
           userMessageId,
@@ -616,7 +616,7 @@ export const makeNTBSProcessor = <AdapterId>(
       threadCreated: NTBS.ThreadCreated,
     ): Effect.Effect<void, NTBSProcessorError> =>
       Effect.gen(function* () {
-        const { threadId, userMessageId } = threadCreated.t3Data;
+        const { threadId, userMessageId } = threadCreated.t3;
 
         const turn = yield* getTurn(threadId, userMessageId);
 
@@ -665,7 +665,7 @@ export const makeNTBSProcessor = <AdapterId>(
       4. Start the first T3 turn with that message ID, the snapshot, and attachments.
       5. Attempt to post the acknowledgement independently.
     */
-    const process = (request: NTBS.NTBSInput, t3Context: T3Context) =>
+    const process = (request: NTBS.Request, t3Context: T3Context) =>
       Effect.gen(function* () {
         /*
           In-flight dedup first. We check if the processor is *currently*
@@ -702,7 +702,7 @@ export const makeNTBSProcessor = <AdapterId>(
           const threadCreated: NTBS.ThreadCreated = {
             ...request,
             state: "thread.created",
-            t3Data: {
+            t3: {
               threadId,
               userMessageId,
             },
@@ -749,8 +749,8 @@ export const makeNTBSProcessor = <AdapterId>(
             recoverThread(threadCreated).pipe(
               Effect.catch((cause) =>
                 Effect.logWarning("Failed recovering an NTBS thread", {
-                  threadId: threadCreated.t3Data.threadId,
-                  userMessageId: threadCreated.t3Data.userMessageId,
+                  threadId: threadCreated.t3.threadId,
+                  userMessageId: threadCreated.t3.userMessageId,
                   cause,
                 }),
               ),

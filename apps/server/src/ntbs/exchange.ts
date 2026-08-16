@@ -1,6 +1,6 @@
 import type { ChatAttachment, MessageId, ThreadId } from "@t3tools/contracts";
 
-export type NTBSInput = {
+export type Request = {
   /**
    * Adapter-encoded URI locating the originating platform message,
    * e.g. `discord://<guildId>/<channelId>/<messageId>` or
@@ -36,8 +36,8 @@ export type NTBSInput = {
   attachments: ReadonlyArray<ChatAttachment>;
 };
 
-export type ThreadEvent = NTBSInput & {
-  t3Data: {
+export type ThreadEvent = Request & {
+  t3: {
     /** The T3 thread created by the lifecycle event */
     threadId: ThreadId;
     /**
@@ -62,4 +62,9 @@ export type ResponsePosted = ThreadEvent & {
   responseMessageId: string;
 };
 
-export type NTBSLifecycle = ThreadCreated | ResponsePosted;
+/**
+ * The state of an exchange between an external platform and T3, from thread
+ * creation through final-response delivery. Adapters store the latest state to
+ * track progress and resume incomplete exchanges after a restart.
+ */
+export type ExchangeState = ThreadCreated | ResponsePosted;
