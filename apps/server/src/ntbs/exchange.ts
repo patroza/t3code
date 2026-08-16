@@ -36,7 +36,7 @@ export type Request = {
   attachments: ReadonlyArray<ChatAttachment>;
 };
 
-export type ThreadEvent = Request & {
+type AcceptedRequest = Request & {
   t3: {
     /** The T3 thread created by the lifecycle event */
     threadId: ThreadId;
@@ -49,7 +49,7 @@ export type ThreadEvent = Request & {
   };
 };
 
-export type ThreadCreated = ThreadEvent & {
+export type ThreadCreated = AcceptedRequest & {
   /**
    * T3 has created the new thread and the adapter has recorded its relationship
    * to the platform request. The first turn may not have started yet.
@@ -57,7 +57,7 @@ export type ThreadCreated = ThreadEvent & {
   state: "thread.created";
 };
 
-export type ResponsePosted = ThreadEvent & {
+export type ResponsePosted = AcceptedRequest & {
   state: "thread.response.posted";
   responseMessageId: string;
 };
