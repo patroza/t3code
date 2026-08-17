@@ -16,7 +16,7 @@ RequestClaimed -> ThreadCreated -> ReplyPending -> ReplyPosted
 - **`ThreadCreated`** — the planned thread exists; the IDs are confirmed facts. No turn state is stored: turn existence and progress are T3-owned.
 - **`ReplyPending`** — T3 reached a terminal outcome; the exact reply payload is stored verbatim so every posting attempt sends the same content.
 - **`ReplyPosted`** — terminal. The platform accepted the reply; its message ID is stored.
-- **`Undeliverable`** — terminal, entered only from `ReplyPending`: a finished reply exists but posting was given up after bounded attempts. Stores the undelivered payload and the cause. The tombstone keeps dedup intact and stops the sweep from retrying forever.
+- **`Undeliverable`** — terminal, entered only from `ReplyPending`: a finished reply exists but the platform definitively rejected delivery. Stores the undelivered payload and a serializable explanation. The tombstone keeps dedup intact and stops the sweep from retrying forever.
 
 ## Invariants
 
@@ -32,206 +32,48 @@ The processor owns recovery. One reconciler, three triggers: startup, relevant T
 
 ## Pure decider
 
-The branching rules are one pure function, `stored state + retrieved observation (+ attempts) -> next action`, with companion transition constructors that turn an action's _result_ into the next stored state. Decision and transition stay separate so no state ever records an effect that has not happened. Each state names the single observation to fetch first:
+The branching rules are pure: `stored state + retrieved observation -> next action`. Decision and transition stay separate so no state records an external effect before it happens. The processor retrieves the one observation relevant to the current state and interprets the returned action:
 
 ```text
-RequestClaimed  planned thread exists?                Provision | AdvanceToThreadCreated
-ThreadCreated   turn missing | active | terminal(r)   StartTurn | Wait | StoreReply(r)
-ReplyPending    my reply on platform? no | yes(id)    Post | RecordPosted(id) | GiveUp(cause)
+RequestClaimed  planned thread missing | present      Provision | RecordThreadCreated
+ThreadCreated   turn missing | active | completed(r)  StartTurn | Wait | RecordReplyPending(r)
+ReplyPending    my reply missing | posted(id)         PostReply | RecordReplyPosted(id)
 ReplyPosted / Undeliverable                           Done
 ```
 
-`StartTurn` persists no exchange transition — turn existence is T3's fact. The bounded-retry give-up rule lives inside the decider so it is testable. Orchestration proper — scheduling the triggers, fetching observations, executing effects, the in-process outcome lock, persisting transitions — stays in the processor.
-
-### Proposed decider signatures
-
-The processor already has to inspect the stored state to know which live facts to retrieve, so the decider can be split into one function per state. These functions receive only plain, already-retrieved data: never adapters, repositories, clocks, `Effect`s, or query functions. `fromX` is concise when the functions are members of an `ExchangeDecider`; standalone functions should prefer `decideFromX`, since a bare `fromX` sounds like a state constructor.
-
-Retry policy may be captured once when constructing the decider. Attempt history is part of its input:
+The state-specific contexts contain only plain, already-retrieved data—never adapters, repositories, clocks, `Effect`s, or query functions:
 
 ```ts
-type AttemptHistory<E> = {
-  readonly failedAttempts: number;
-  readonly lastFailure: E | null;
-};
-
-type ExchangeRetryPolicy = {
-  readonly provisionThreadMaxAttempts: number;
-  readonly startTurnMaxAttempts: number;
-  readonly postReplyMaxAttempts: number;
-};
-
-type ProvisionFailure = {
-  readonly cause: unknown;
-};
-
-type TurnStartFailure = {
-  readonly cause: unknown;
-};
-
-type ReplyPostFailure = {
-  readonly cause: unknown;
-};
-```
-
-Each context describes only the observation relevant to that stored state. A
-discriminated union avoids supplying retry information on branches that cannot
-use it:
-
-```ts
-type RequestClaimedContext =
-  | {
-      readonly plannedThread: "present";
-    }
-  | {
-      readonly plannedThread: "missing";
-      readonly provisioning: AttemptHistory<ProvisionFailure>;
-    };
+type RequestClaimedContext = { readonly thread: "missing" } | { readonly thread: "present" };
 
 type ThreadCreatedContext =
-  | {
-      readonly firstTurn: "missing";
-      readonly starting: AttemptHistory<TurnStartFailure>;
-    }
-  | {
-      readonly firstTurn: "active";
-    }
-  | {
-      readonly firstTurn: "terminal";
-      readonly reply: NTBSResponse;
-    }
-  | {
-      readonly firstTurn: "lost";
-      readonly cause: unknown;
-    };
+  | { readonly turn: "missing" }
+  | { readonly turn: "active" }
+  | { readonly turn: "completed"; readonly reply: Reply };
 
 type ReplyPendingContext =
+  | { readonly platformReply: "missing" }
   | {
-      readonly platformReply: "present";
+      readonly platformReply: "posted";
       readonly replySourceUri: string;
-    }
-  | {
-      readonly platformReply: "absent";
-      readonly posting: AttemptHistory<ReplyPostFailure>;
     };
 ```
 
-Decisions are commands interpreted by the processor, not effects performed by
-the decider:
+Transient operational failures do not enter this model: the processor leaves the current state unchanged and the periodic sweep tries again. A definitive provisioning or turn-start failure becomes a failure-typed `ReplyPending`; a definitive platform delivery rejection becomes `Undeliverable`. Those classifications belong to the impure operation boundary, not the decider context.
 
-```ts
-type RequestClaimedDecision =
-  | { readonly type: "provision-thread" }
-  | { readonly type: "record-thread-created" }
-  | {
-      readonly type: "record-reply-pending";
-      readonly reply: NTBSResponse;
-    };
-
-type ThreadCreatedDecision =
-  | { readonly type: "start-turn" }
-  | { readonly type: "wait" }
-  | {
-      readonly type: "record-reply-pending";
-      readonly reply: NTBSResponse;
-    };
-
-type ReplyPendingDecision =
-  | { readonly type: "post-reply" }
-  | {
-      readonly type: "record-reply-posted";
-      readonly replySourceUri: string;
-    }
-  | {
-      readonly type: "record-undeliverable";
-      readonly cause: ReplyPostFailure;
-    };
-
-type TerminalDecision = {
-  readonly type: "done";
-};
-```
-
-The state-specific pure API is:
-
-```ts
-type ExchangeDecider = {
-  readonly fromRequestClaimed: (
-    state: RequestClaimed,
-    context: RequestClaimedContext,
-  ) => RequestClaimedDecision;
-
-  readonly fromThreadCreated: (
-    state: ThreadCreated,
-    context: ThreadCreatedContext,
-  ) => ThreadCreatedDecision;
-
-  readonly fromReplyPending: (
-    state: ReplyPending,
-    context: ReplyPendingContext,
-  ) => ReplyPendingDecision;
-
-  readonly fromReplyPosted: (state: ReplyPosted) => TerminalDecision;
-
-  readonly fromUndeliverable: (state: Undeliverable) => TerminalDecision;
-};
-
-declare const makeExchangeDecider: (policy: ExchangeRetryPolicy) => ExchangeDecider;
-```
-
-If a single public entry point is useful for tests or orchestration, it can be
-a total dispatcher over correlated state/context pairs:
-
-```ts
-type ExchangeDecisionInput =
-  | {
-      readonly state: RequestClaimed;
-      readonly context: RequestClaimedContext;
-    }
-  | {
-      readonly state: ThreadCreated;
-      readonly context: ThreadCreatedContext;
-    }
-  | {
-      readonly state: ReplyPending;
-      readonly context: ReplyPendingContext;
-    }
-  | {
-      readonly state: ReplyPosted;
-    }
-  | {
-      readonly state: Undeliverable;
-    };
-
-type ExchangeDecision =
-  | RequestClaimedDecision
-  | ThreadCreatedDecision
-  | ReplyPendingDecision
-  | TerminalDecision;
-
-declare const decideExchange: (
-  decider: ExchangeDecider,
-  input: ExchangeDecisionInput,
-) => ExchangeDecision;
-```
-
-State construction remains a separate concern. This keeps a decision from
-claiming that an external effect has already succeeded:
+Pure transition constructors preserve the forward-only lifecycle:
 
 ```ts
 declare const toThreadCreated: (state: RequestClaimed) => ThreadCreated;
 
-declare const toReplyPending: (
-  state: RequestClaimed | ThreadCreated,
-  reply: NTBSResponse,
-) => ReplyPending;
+declare const toReplyPending: (state: RequestClaimed | ThreadCreated, reply: Reply) => ReplyPending;
 
 declare const toReplyPosted: (state: ReplyPending, replySourceUri: string) => ReplyPosted;
 
-declare const toUndeliverable: (state: ReplyPending, cause: ReplyPostFailure) => Undeliverable;
+declare const toUndeliverable: (state: ReplyPending, cause: UndeliverableCause) => Undeliverable;
 ```
 
-This signature design exposes one unresolved persistence question: bounded retry cannot reliably use process-local counters. If retry limits must survive restarts, `AttemptHistory` must be stored durably, either in the applicable exchange state or in a durable envelope around it.
+`StartTurn` persists no exchange transition—turn existence is T3's fact. Orchestration proper—scheduling triggers, fetching observations, executing actions, classifying operational failures, applying transitions, and persisting them—stays in the processor.
 
 ## Reply delivery
 
@@ -244,7 +86,7 @@ Delivery is: check existence -> post if absent -> record posted.
 
 ## Failure path
 
-Any permanent failure (provisioning, turn, lost thread) becomes a failure-typed reply through the normal delivery pipe after bounded attempts; delivering it ends the exchange in `ReplyPosted` — a completed job from the processor's view. Only when posting itself is given up does the exchange end `Undeliverable`.
+Any definitive failure while provisioning, starting a turn, or recovering a lost thread becomes a failure-typed reply through the normal delivery pipe; delivering it ends the exchange in `ReplyPosted`—a completed job from the processor's view. Transient failures leave the current state unchanged for the sweep to retry. Only a definitive rejection of reply delivery ends the exchange in `Undeliverable`.
 
 ## Acknowledgement
 
@@ -264,7 +106,7 @@ decided during the build.
 
 Model → contract → orchestration; each phase leaves the previous one settled.
 
-1. **Exchange (the model).** The five states with their decided contents. Transition constructors as the only way to build each state from its predecessor plus an effect result. The observation and action vocabularies, and the pure decider with its give-up rule. Pure table tests for decider and transitions — no Effect scaffolding.
+1. **Exchange (the model).** The five states with their decided contents. Transition constructors as the only way to build each state from its predecessor plus an effect result. The observation and action vocabularies, and the pure decider. Pure table tests for decider and transitions—no Effect scaffolding.
 
 2. **Adapter (the contract).** Reshape the interface around the model per "Adapter contract" above. Update the in-memory test adapter.
 

@@ -11,11 +11,6 @@ export class AdapterError extends Data.TaggedError("AdapterError")<{
   readonly reason: string;
 }> {}
 
-export type NTBSResponse = {
-  readonly type: "answer" | "failure" | "cancellation";
-  readonly text: string;
-};
-
 /**
  * Defines the platform-specific operations used by the shared NTBS processor.
  *

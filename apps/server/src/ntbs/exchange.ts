@@ -1,4 +1,9 @@
-import type { ChatAttachment, MessageId, ThreadId } from "@t3tools/contracts";
+import type { ChatAttachment, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+
+/*
+This file exposes the core model (data type and the business logic) of
+`Exchange`s. An Exchange represent a two-way data bla bla.
+*/
 
 export type Request = {
   /**
@@ -22,18 +27,27 @@ export type Request = {
    * Only the adapter that wrote it may parse it; the processor treats
    * it as an opaque string.
    */
-  sourceUri: string;
+  readonly sourceUri: string;
   /**
    * The captured source text sent as the first T3 user message.
    * Platform independent.
    * Must not exceed T3's 120,000-character input limit.
    */
-  snapshot: string;
+  readonly snapshot: string;
   /**
    * References to attachments stored by T3 and sent with the first user message.
    * The processor creates them from attachment data provided by the adapter.
    */
-  attachments: ReadonlyArray<ChatAttachment>;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+};
+
+export type Reply = {
+  readonly type: "answer" | "failure" | "cancellation";
+  readonly text: string;
+};
+
+export type UndeliverableCause = {
+  readonly message: string;
 };
 
 /**
@@ -41,14 +55,19 @@ export type Request = {
  */
 type ExchangeStateBase = Request & {
   t3: {
+    projectId: ProjectId;
+    baseRef: string;
+    // Planned while RequestClaimed; confirmed by ThreadCreated.
+
     /** The T3 thread created by the lifecycle event */
-    threadId: ThreadId;
+    readonly threadId: ThreadId;
     /**
      * The first T3 user message created for this external request.
-     * This identifies the correct turn and response even if the thread later
+     * This identifies the correct turn and reply even if the thread later
      * receives other messages.
      */
-    userMessageId: MessageId;
+    readonly userMessageId: MessageId;
+    readonly branchName: string;
   };
 };
 
@@ -60,7 +79,7 @@ type ExchangeStateBase = Request & {
  * From here, the processor alone drives the exchange to a terminal state.
  */
 type RequestClaimed = ExchangeStateBase & {
-  state: "request-claimed";
+  tag: "request-claimed";
 };
 
 /**
@@ -69,7 +88,7 @@ type RequestClaimed = ExchangeStateBase & {
  * Turn existence and progress are T3-owned.
  */
 type ThreadCreated = ExchangeStateBase & {
-  state: "thread-created";
+  tag: "thread-created";
 };
 
 /**
@@ -77,8 +96,8 @@ type ThreadCreated = ExchangeStateBase & {
  * verbatim so every posting attempt sends the same content.
  */
 type ReplyPending = ExchangeStateBase & {
-  state: "reply-pending";
-  reply: string;
+  tag: "reply-pending";
+  reply: Reply;
 };
 
 /**
@@ -86,9 +105,9 @@ type ReplyPending = ExchangeStateBase & {
  * The platform accepted the reply; its message ID is stored.
  */
 type ReplyPosted = ExchangeStateBase & {
-  state: "reply-posted";
-  reply: string;
-  replySourceUuri: string;
+  tag: "reply-posted";
+  reply: Reply;
+  replySourceUri: string;
 };
 
 /**
@@ -100,14 +119,14 @@ type ReplyPosted = ExchangeStateBase & {
  * The tombstone keeps dedup intact and stops the processor from retrying together.
  */
 type Undeliverable = ExchangeStateBase & {
-  state: "undeliverable";
-  reply: string;
-  cause: unknown;
+  tag: "undeliverable";
+  reply: Reply;
+  cause: UndeliverableCause;
 };
 
 /**
  * The state of an exchange between an external platform and T3, from thread
- * creation through final-response delivery. Adapters store the latest state to
+ * creation through final-reply delivery. Adapters store the latest state to
  * track progress and resume incomplete exchanges after a restart.
  */
 export type ExchangeState =
@@ -116,3 +135,111 @@ export type ExchangeState =
   | ReplyPending
   | ReplyPosted
   | Undeliverable;
+
+/*
+Decider/Policy pattern.
+
+Let's compare the command/reducer pattern with the decider/policy one.
+
+The command/reducer pattern is about applying mechanical and deterministic changes to a state of the program, via a command, to get the new state.
+
+reducer: (currentState, command) -> state
+
+The command expresses intent, and the reducer owns state transitions. In the command/reducer pattern we already know what should happen with the state, we only need to define how.
+
+A different pattern to the previous one is presented by the **policy/decider** pattern. Here, the goal is not to decide the next state of the program, but to answer: given this state, and this context, what should be the next action/command?
+
+decider: (state, content) -> command
+
+The decider/policy pattern is important in the NTBS module because we have to frequently ask:
+"given this information I have about the exchange and this context (e.g. checking external platforms or t3 thread states) what should we do next?"
+
+This can be later combined with the reducer pattern again to describe the reconciliation flow:
+1. load state               effect
+2. retrieve observations    effect
+3. make decision            pure
+4. execute decision         effect
+5. persist resulting state  effect
+*/
+
+export type RequestClaimedContext = { readonly thread: "missing" } | { readonly thread: "present" };
+
+export type ThreadCreatedContext =
+  | {
+      readonly turn: "missing";
+    }
+  | { readonly turn: "active" }
+  | { readonly turn: "completed"; readonly reply: Reply };
+
+export type ReplyPendingContext =
+  | {
+      readonly platformReply: "missing";
+    }
+  | {
+      readonly platformReply: "posted";
+      readonly replySourceUri: string;
+    };
+
+export const toThreadCreated = (state: RequestClaimed): ThreadCreated => ({
+  ...state,
+  tag: "thread-created",
+});
+
+export const toReplyPending = (
+  state: RequestClaimed | ThreadCreated,
+  reply: Reply,
+): ReplyPending => ({
+  ...state,
+  tag: "reply-pending",
+  reply,
+});
+
+export const toReplyPosted = (state: ReplyPending, replySourceUri: string): ReplyPosted => ({
+  ...state,
+  tag: "reply-posted",
+  replySourceUri,
+});
+
+export const toUndeliverable = (state: ReplyPending, cause: UndeliverableCause): Undeliverable => ({
+  ...state,
+  tag: "undeliverable",
+  cause,
+});
+
+export type RequestClaimedDecision =
+  | { readonly type: "provision-thread" }
+  | { readonly type: "record-thread-created" };
+
+export type ThreadCreatedDecision =
+  | { readonly type: "start-turn" }
+  | { readonly type: "wait" }
+  | {
+      readonly type: "record-reply-pending";
+      readonly reply: Reply;
+    };
+
+export type ReplyPendingDecision =
+  | { readonly type: "post-reply" }
+  | {
+      readonly type: "record-reply-posted";
+      readonly replySourceUri: string;
+    };
+
+export type FromRequestClaimed = (input: {
+  readonly state: RequestClaimed;
+  readonly context: RequestClaimedContext;
+}) => RequestClaimedDecision;
+
+// TODO: Continue from here implementing the business logic
+
+export const fromRequestClaimed: FromRequestClaimed = (input) => ({});
+
+export type FromThreadCreated = (input: {
+  readonly state: ThreadCreated;
+  readonly context: ThreadCreatedContext;
+}) => ThreadCreatedDecision;
+
+export type FromReplyPending = (input: {
+  readonly state: ReplyPending;
+  readonly context: ReplyPendingContext;
+}) => ReplyPendingDecision;
