@@ -1,8 +1,8 @@
 import type { ChatAttachment, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 
 /*
-This file exposes the core model (data type and the business logic) of
-`Exchange`s. An Exchange represent a two-way data bla bla.
+This file defines the durable state and pure business rules for an exchange:
+one admitted external request, its T3 work, and delivery of the eventual reply back to the originating platform.
 */
 
 export type Request = {
@@ -51,15 +51,14 @@ export type UndeliverableCause = {
 };
 
 /**
- * The base data type common to all member of ExchangeState
+ * The base data type common to all members of ExchangeState
  */
 type ExchangeStateBase = Request & {
-  t3: {
-    projectId: ProjectId;
-    baseRef: string;
+  readonly t3: {
+    readonly projectId: ProjectId;
+    readonly baseRef: string;
     // Planned while RequestClaimed; confirmed by ThreadCreated.
 
-    /** The T3 thread created by the lifecycle event */
     readonly threadId: ThreadId;
     /**
      * The first T3 user message created for this external request.
@@ -78,56 +77,54 @@ type ExchangeStateBase = Request & {
  *
  * From here, the processor alone drives the exchange to a terminal state.
  */
-type RequestClaimed = ExchangeStateBase & {
-  tag: "request-claimed";
+export type RequestClaimed = ExchangeStateBase & {
+  readonly tag: "request-claimed";
 };
 
 /**
- * T3 has created the new thread and the adapter has recorded its relationship
- * to the platform request. The first turn may not have started yet.
- * Turn existence and progress are T3-owned.
+ * The planned T3 thread exists. The first turn may not have started yet. Turn existence and progress are T3-owned.
  */
-type ThreadCreated = ExchangeStateBase & {
-  tag: "thread-created";
+export type ThreadCreated = ExchangeStateBase & {
+  readonly tag: "thread-created";
 };
 
 /**
  * T3 reached a terminal outcome; the exact reply payload is stored
  * verbatim so every posting attempt sends the same content.
+ * This state may also follow `RequestClaimed` directly after a definitive provisioning failure, so it and later states do not imply the thread existed.
+ * Reply delivery needs only `sourceUri`.
  */
-type ReplyPending = ExchangeStateBase & {
-  tag: "reply-pending";
-  reply: Reply;
+export type ReplyPending = ExchangeStateBase & {
+  readonly tag: "reply-pending";
+  readonly reply: Reply;
 };
 
 /**
  * Terminal state.
  * The platform accepted the reply; its message ID is stored.
  */
-type ReplyPosted = ExchangeStateBase & {
-  tag: "reply-posted";
-  reply: Reply;
-  replySourceUri: string;
+export type ReplyPosted = ExchangeStateBase & {
+  readonly tag: "reply-posted";
+  readonly reply: Reply;
+  readonly replySourceUri: string;
 };
 
 /**
  * Terminal state.
- * A finished reply exists but posting was given up after bounded attempts.
+ * A finished reply exists, but the platform definitively rejected delivery.
  * Stores the undelivered payload and the cause.
  * Common causes could be: the original discussion or message has been deleted
  * or locked (Jira/Github issue, Discord thread), the bot has been kicked, etc.
- * The tombstone keeps dedup intact and stops the processor from retrying together.
+ * The tombstone keeps dedup intact and stops the processor from retrying forever.
  */
-type Undeliverable = ExchangeStateBase & {
-  tag: "undeliverable";
-  reply: Reply;
-  cause: UndeliverableCause;
+export type Undeliverable = ExchangeStateBase & {
+  readonly tag: "undeliverable";
+  readonly reply: Reply;
+  readonly cause: UndeliverableCause;
 };
 
 /**
- * The state of an exchange between an external platform and T3, from thread
- * creation through final-reply delivery. Adapters store the latest state to
- * track progress and resume incomplete exchanges after a restart.
+ * The state of an exchange between an external platform and T3, from request claim through final-reply delivery. Adapters store the latest state to track progress and resume incomplete exchanges after a restart.
  */
 export type ExchangeState =
   | RequestClaimed
@@ -136,30 +133,32 @@ export type ExchangeState =
   | ReplyPosted
   | Undeliverable;
 
+export const makeRequestClaimed = (input: Omit<RequestClaimed, "tag">): RequestClaimed => ({
+  ...input,
+  tag: "request-claimed",
+});
+
 /*
 Decider/Policy pattern.
 
-Let's compare the command/reducer pattern with the decider/policy one.
+The decider answers: given the stored state and the relevant live context,
+what should happen next?
 
-The command/reducer pattern is about applying mechanical and deterministic changes to a state of the program, via a command, to get the new state.
-
-reducer: (currentState, command) -> state
-
-The command expresses intent, and the reducer owns state transitions. In the command/reducer pattern we already know what should happen with the state, we only need to define how.
-
-A different pattern to the previous one is presented by the **policy/decider** pattern. Here, the goal is not to decide the next state of the program, but to answer: given this state, and this context, what should be the next action/command?
-
-decider: (state, content) -> command
+decider: (state, context) -> action
 
 The decider/policy pattern is important in the NTBS module because we have to frequently ask:
 "given this information I have about the exchange and this context (e.g. checking external platforms or t3 thread states) what should we do next?"
 
-This can be later combined with the reducer pattern again to describe the reconciliation flow:
-1. load state               effect
-2. retrieve observations    effect
-3. make decision            pure
-4. execute decision         effect
-5. persist resulting state  effect
+A decision does not transition the exchange. The processor first executes the
+chosen effect; only after it succeeds does the processor construct the legal
+transition, passing along any result data the effect produced.
+The reconciliation flow is:
+
+1. load state                                  effect
+2. retrieve observations                       effect
+3. make decision                               pure
+4. execute decision                            effect
+5. construct the transition from its result    pure, then persist as an effect
 */
 
 export type RequestClaimedContext = { readonly thread: "missing" } | { readonly thread: "present" };
@@ -225,21 +224,43 @@ export type ReplyPendingDecision =
       readonly replySourceUri: string;
     };
 
-export type FromRequestClaimed = (input: {
-  readonly state: RequestClaimed;
-  readonly context: RequestClaimedContext;
-}) => RequestClaimedDecision;
+export const fromRequestClaimed = (
+  _state: RequestClaimed,
+  context: RequestClaimedContext,
+): RequestClaimedDecision =>
+  context.thread === "missing" ? { type: "provision-thread" } : { type: "record-thread-created" };
 
-// TODO: Continue from here implementing the business logic
+export const fromThreadCreated = (
+  _state: ThreadCreated,
+  context: ThreadCreatedContext,
+): ThreadCreatedDecision => {
+  switch (context.turn) {
+    case "missing":
+      return { type: "start-turn" };
 
-export const fromRequestClaimed: FromRequestClaimed = (input) => ({});
+    case "active":
+      return { type: "wait" };
 
-export type FromThreadCreated = (input: {
-  readonly state: ThreadCreated;
-  readonly context: ThreadCreatedContext;
-}) => ThreadCreatedDecision;
+    case "completed":
+      return {
+        type: "record-reply-pending",
+        reply: context.reply,
+      };
+  }
+};
 
-export type FromReplyPending = (input: {
-  readonly state: ReplyPending;
-  readonly context: ReplyPendingContext;
-}) => ReplyPendingDecision;
+export const fromReplyPending = (
+  _state: ReplyPending,
+  context: ReplyPendingContext,
+): ReplyPendingDecision => {
+  switch (context.platformReply) {
+    case "missing":
+      return { type: "post-reply" };
+
+    case "posted":
+      return {
+        type: "record-reply-posted",
+        replySourceUri: context.replySourceUri,
+      };
+  }
+};
