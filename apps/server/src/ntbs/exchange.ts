@@ -53,12 +53,11 @@ export type UndeliverableCause = {
 /**
  * The base data type common to all members of ExchangeState
  */
-type ExchangeStateBase = Request & {
+export type ExchangeStateBase = Request & {
   readonly t3: {
     readonly projectId: ProjectId;
     readonly baseRef: string;
     // Planned while RequestClaimed; confirmed by ThreadCreated.
-
     readonly threadId: ThreadId;
     /**
      * The first T3 user message created for this external request.
