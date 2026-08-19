@@ -9,15 +9,15 @@ export type Request = {
   /**
    * Adapter-encoded URI locating the originating platform message,
    * e.g. `discord://<guildId>/<channelId>/<messageId>` or
-   * `jira://<issueKey>/comment/<commentId>`.
+   * `jira://<cloudId>/issue/<issueKey>/comment/<commentId>`.
    *
    * Two contracts:
    *
    * Identity — the same platform request must carry the same string
    * across redeliveries and restarts; distinct requests must carry
-   * distinct strings. This is the durable dedup key `findByRequest`
+   * distinct strings. This is the durable dedup key `findBySourceUri`
    * looks up, the key the processor serializes concurrent deliveries
-   * on, and the natural unique key for the adapter's stored records.
+   * on, and the natural unique key for the repository's stored records.
    *
    * Addressability — it must contain everything needed to reach the
    * message through the platform API from a cold start, because
@@ -122,15 +122,37 @@ export type Undeliverable = ExchangeStateBase & {
   readonly cause: UndeliverableCause;
 };
 
+/** States for exchanges that still have work left to do. */
+export type NonTerminalExchangeState = RequestClaimed | ThreadCreated | ReplyPending;
+
+/** States for exchanges that have finished, with the reply either posted or undeliverable. */
+export type TerminalExchangeState = ReplyPosted | Undeliverable;
+
 /**
- * The state of an exchange between an external platform and T3, from request claim through final-reply delivery. Adapters store the latest state to track progress and resume incomplete exchanges after a restart.
+ * The state of an exchange between an external platform and T3, from request
+ * claim through final-reply delivery. The exchange repository stores the latest
+ * state to track progress and resume non-terminal exchanges after a restart.
  */
-export type ExchangeState =
-  | RequestClaimed
-  | ThreadCreated
-  | ReplyPending
-  | ReplyPosted
-  | Undeliverable;
+export type ExchangeState = NonTerminalExchangeState | TerminalExchangeState;
+
+export const isTerminalState = (state: ExchangeState): state is TerminalExchangeState => {
+  // An exhaustive switch makes new lifecycle states require an explicit classification.
+  // This way it is impossible to break the program semantics by adding a new state
+  // and forgetting to deal with it, because it would not typecheck.
+  switch (state.tag) {
+    case "reply-posted":
+    case "undeliverable":
+      return true;
+
+    case "request-claimed":
+    case "thread-created":
+    case "reply-pending":
+      return false;
+  }
+};
+
+export const isNonTerminalState = (state: ExchangeState): state is NonTerminalExchangeState =>
+  !isTerminalState(state);
 
 export const makeRequestClaimed = (input: Omit<RequestClaimed, "tag">): RequestClaimed => ({
   ...input,

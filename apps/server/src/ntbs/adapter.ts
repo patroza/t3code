@@ -43,9 +43,9 @@ export interface NTBSAdapter {
    * Returns the platform's idenitifier for the posted message.
    * The processor uses that identifier to save `ResponsePosted`.
    */
-  readonly postResponse: (
+  readonly postReply: (
     state: NTBS.ThreadCreated,
-    response: NTBSResponse,
+    reply: NTBS.Reply,
   ) => Effect.Effect<string, AdapterError>;
 
   /**
@@ -55,9 +55,10 @@ export interface NTBSAdapter {
    * may continue.
    * Any lifecycle state means the request already has a T3 thread.
    */
-  readonly findByRequest: (
-    request: NTBS.Request,
-  ) => Effect.Effect<NTBS.ExchangeState | null, AdapterError>;
+  // TODO: Remove?
+  // readonly findByRequest: (
+  //   request: NTBS.Request,
+  // ) => Effect.Effect<NTBS.ExchangeState | null, AdapterError>;
   /**
    * Searches the response destination for a matching response previously
    * posted by this adapter.
