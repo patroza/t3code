@@ -34,6 +34,7 @@ export function resolveDiscordFollowUpDelivery(
 export type ParsedMentionIntent =
   | { readonly kind: "interrupt" }
   | { readonly kind: "help" }
+  | { readonly kind: "today-recap" }
   | { readonly kind: "refresh-indicators" }
   | { readonly kind: "compact" }
   | LinkThreadCommand
@@ -41,6 +42,7 @@ export type ParsedMentionIntent =
 
 const INTERRUPT_PROMPTS = new Set(["stop", "cancel", "abort", "interrupt"]);
 const HELP_PROMPTS = new Set(["help"]);
+const TODAY_RECAP_PROMPTS = new Set(["today-recap", "today recap"]);
 const COMPACT_PROMPTS = new Set(["compact"]);
 const REFRESH_INDICATORS_PROMPTS = new Set([
   "refresh-indicators",
@@ -124,6 +126,10 @@ export function parseMentionIntent(raw: string): ParsedMentionIntent {
 
   if (HELP_PROMPTS.has(normalizedPrompt)) {
     return { kind: "help" };
+  }
+
+  if (TODAY_RECAP_PROMPTS.has(normalizedPrompt)) {
+    return { kind: "today-recap" };
   }
 
   if (COMPACT_PROMPTS.has(normalizedPrompt)) {

@@ -152,6 +152,18 @@ describe("parseMentionIntent", () => {
     expect(parseMentionIntent(" help! ")).toEqual({ kind: "help" });
   });
 
+  it("recognizes today-recap as a recap command", () => {
+    expect(parseMentionIntent("today-recap")).toEqual({ kind: "today-recap" });
+    expect(parseMentionIntent(" today recap! ")).toEqual({ kind: "today-recap" });
+  });
+
+  it("keeps extra text after today-recap as a normal prompt", () => {
+    expect(parseMentionIntent("today-recap for last week")).toMatchObject({
+      kind: "prompt",
+      prompt: "today-recap for last week",
+    });
+  });
+
   it("recognizes compact as a control command", () => {
     expect(parseMentionIntent("compact")).toEqual({ kind: "compact" });
     expect(parseMentionIntent(" Compact! ")).toEqual({ kind: "compact" });

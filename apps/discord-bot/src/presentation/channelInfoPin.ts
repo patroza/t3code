@@ -130,6 +130,7 @@ function buildChannelInfoPinBody(input: {
     "```text",
     "/omegent ask prompt:…           Start or continue work",
     "  options: model provider base local plan steer queue",
+    "/omegent today-recap            Daily PR recap for this channel's repo",
     "/omegent steer prompt:…         Mid-turn: inject now",
     "/omegent queue prompt:…         Mid-turn: park (same as default)",
     "/omegent steernow               Inject the whole parked queue",

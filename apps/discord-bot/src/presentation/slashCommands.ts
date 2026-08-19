@@ -143,6 +143,11 @@ export const OMEGENT_SLASH_COMMAND = {
     },
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
+      name: "today-recap",
+      description: "Daily PR recap for the repo bound to this channel",
+    },
+    {
+      type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "help",
       description: "Show the channel info / help pin",
     },

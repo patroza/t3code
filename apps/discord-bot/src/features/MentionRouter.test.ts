@@ -33,12 +33,28 @@ describe("T3 connect-wait queue", () => {
   });
 });
 
+describe("today-recap slash command", () => {
+  it("registers /omegent today-recap and opens a recap thread on the project channel", () => {
+    expect(mentionRouterSource).toContain('"today-recap": Effect.gen(function* () {');
+    expect(mentionRouterSource).toContain("openTodayRecapThread");
+    expect(mentionRouterSource).toContain("buildTodayRecapPrompt");
+    expect(mentionRouterSource).toContain("local: true, plan: false, prompt: opened.prompt");
+  });
+});
+
 describe("shouldShowThreadBootstrapReaction", () => {
   it("marks channel prompts that need a Discord/T3 thread bootstrap", () => {
     expect(
       shouldShowThreadBootstrapReaction({
         inThread: false,
         intentKind: "prompt",
+        hasPromptOrAttachment: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowThreadBootstrapReaction({
+        inThread: false,
+        intentKind: "today-recap",
         hasPromptOrAttachment: true,
       }),
     ).toBe(true);
