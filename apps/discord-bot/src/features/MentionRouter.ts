@@ -2617,6 +2617,7 @@ const make = (botConfig: DiscordBotConfig) =>
               flags: { local: true, plan: false, prompt: opened.prompt },
               topic,
               parentChannelId: parentId,
+              presentationMode: "final-only",
               mentionMessage: {
                 ...mentionMessage,
                 id: opened.starterId,
@@ -2877,6 +2878,7 @@ const make = (botConfig: DiscordBotConfig) =>
             flags: { local: true, plan: false, prompt: opened.prompt },
             topic,
             parentChannelId: event.channel_id,
+            presentationMode: "final-only",
             mentionMessage,
             ...(pendingReadyReaction === undefined ? {} : { pendingReadyReaction }),
           }).pipe(Effect.catch((error) => reportError(opened.discordThread.id, error)));
@@ -3529,6 +3531,7 @@ const make = (botConfig: DiscordBotConfig) =>
                   flags: { local: true, plan: false, prompt: opened.prompt },
                   topic,
                   parentChannelId: projectChannelId,
+                  presentationMode: "final-only",
                   mentionMessage: {
                     ...requester,
                     id: opened.starterId,

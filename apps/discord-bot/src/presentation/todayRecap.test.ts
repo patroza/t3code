@@ -32,7 +32,7 @@ describe("today recap helpers", () => {
         shortName: "scanner",
         date: "2026-08-18",
       }),
-    ).toBe("**joshuadima** asked for today's recap of `scanner` (2026-08-18).");
+    ).toBe("**joshuadima** asked for today's recap of `scanner` (2026-08-18 UTC).");
   });
 
   it("scopes the prompt to the calling channel's repo and the recap format", () => {
@@ -45,7 +45,11 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("`scanner`");
     expect(prompt).toContain("<#1176897071815610458>");
     expect(prompt).toContain("2026-08-18");
-    expect(prompt).toContain("Do not recap other repos");
+    expect(prompt).toContain("GitHub's UTC calendar day 2026-08-18");
+    expect(prompt).toContain("Read-only");
+    expect(prompt).toContain("do not open a PR");
+    expect(prompt).toContain("opened that day and still open");
+    expect(prompt).toContain("not the rest of the open backlog");
     expect(prompt).toContain("[PR #N](github-url)");
     expect(prompt).toContain("bare URL");
     expect(prompt).toContain("## 🟢 MERGED");

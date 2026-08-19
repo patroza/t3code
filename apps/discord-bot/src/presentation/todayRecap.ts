@@ -1,8 +1,4 @@
-/**
- * Manual daily recap: `/omegent today-recap` (alias `/agent today-recap`).
- * The Discord channel (topic `t3-<shortName>`) picks the repo. No schedule —
- * someone has to run the command.
- */
+/** Channel topic `t3-<shortName>` picks the repo. No schedule. */
 
 export const TODAY_RECAP_SUBCOMMAND = "today-recap" as const;
 
@@ -17,7 +13,7 @@ export function formatTodayRecapAck(input: {
   readonly shortName: string;
   readonly date: string;
 }): string {
-  return `**${input.displayName}** asked for today's recap of \`${input.shortName}\` (${input.date}).`;
+  return `**${input.displayName}** asked for today's recap of \`${input.shortName}\` (${input.date} UTC).`;
 }
 
 export function formatTodayRecapThreadTitle(input: {
@@ -27,19 +23,21 @@ export function formatTodayRecapThreadTitle(input: {
   return `today recap ${input.shortName} ${input.date}`;
 }
 
-/**
- * Prompt the agent posts in the recap thread. Format is the one we iterated in
- * Discord: what/why from PR bodies, `PR #N` links, bare thread URLs, status
- * headings with color circles, type outline (fix/feat/…).
- */
 export function buildTodayRecapPrompt(input: {
   readonly shortName: string;
   readonly date: string;
   readonly parentChannelId: string;
 }): string {
   return [
-    `Write a small daily recap of GitHub PR opens, merges, and closes on ${input.date} (UTC calendar day) for the \`${input.shortName}\` repo bound to this Discord channel (<#${input.parentChannelId}>).`,
-    "Do not recap other repos or companies.",
+    `Write a small daily recap of GitHub PRs for the \`${input.shortName}\` repo bound to this Discord channel (<#${input.parentChannelId}>).`,
+    `Use GitHub's UTC calendar day ${input.date}. Query this workspace's GitHub origin — not other repos.`,
+    "",
+    "Read-only: do not edit files, do not checkout/commit/push, do not open a PR. The recap is the Discord message.",
+    "",
+    "Include only PRs that moved on that UTC day:",
+    "- MERGED: merged that day",
+    "- CLOSED: closed without merge that day",
+    "- OPEN: opened that day and still open — not the rest of the open backlog",
     "",
     "Use PR descriptions for what happened and why — not the code. Discord thread links are in PR descriptions.",
     "",

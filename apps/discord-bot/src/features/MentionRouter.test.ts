@@ -39,6 +39,7 @@ describe("today-recap slash command", () => {
     expect(mentionRouterSource).toContain("openTodayRecapThread");
     expect(mentionRouterSource).toContain("buildTodayRecapPrompt");
     expect(mentionRouterSource).toContain("local: true, plan: false, prompt: opened.prompt");
+    expect(mentionRouterSource).toContain('presentationMode: "final-only"');
   });
 });
 
