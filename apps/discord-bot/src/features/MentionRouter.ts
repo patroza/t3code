@@ -150,6 +150,12 @@ import {
   slashReply,
   threadTalkSlashReply,
 } from "../presentation/slashCommands.ts";
+import {
+  buildTodayRecapPrompt,
+  formatTodayRecapAck,
+  formatTodayRecapThreadTitle,
+  utcDateStamp,
+} from "../presentation/todayRecap.ts";
 import { extractT3ThreadId } from "../presentation/t3ThreadRef.ts";
 import {
   buildDiscordTurnPrompt,
@@ -199,7 +205,11 @@ export function shouldShowThreadBootstrapReaction(input: {
   readonly intentKind: ReturnType<typeof parseMentionIntent>["kind"];
   readonly hasPromptOrAttachment: boolean;
 }): boolean {
-  return !input.inThread && input.intentKind === "prompt" && input.hasPromptOrAttachment;
+  return (
+    !input.inThread &&
+    (input.intentKind === "prompt" || input.intentKind === "today-recap") &&
+    input.hasPromptOrAttachment
+  );
 }
 
 class DiscordImageDownloadError extends Schema.TaggedErrorClass<DiscordImageDownloadError>()(
@@ -1966,6 +1976,30 @@ const make = (botConfig: DiscordBotConfig) =>
           ),
         );
 
+    const openTodayRecapThread = (input: {
+      readonly projectChannelId: string;
+      readonly shortName: string;
+      readonly starterContent: string;
+      readonly starterMessageId?: string;
+    }) =>
+      Effect.gen(function* () {
+        const date = utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe()));
+        const prompt = buildTodayRecapPrompt({
+          shortName: input.shortName,
+          date,
+          parentChannelId: input.projectChannelId,
+        });
+        const starterId =
+          input.starterMessageId ??
+          (yield* rest.createMessage(input.projectChannelId, { content: input.starterContent })).id;
+        const discordThread = yield* openOrReuseThread(
+          input.projectChannelId,
+          starterId,
+          formatTodayRecapThreadTitle({ shortName: input.shortName, date }),
+        );
+        return { date, prompt, starterId, discordThread };
+      });
+
     const watchedDiscordLinkRequests = new Set<string>();
     const completedDiscordLinkRequests = new Set<string>();
     const linkingDiscordThreads = new Set<string>();
@@ -2410,7 +2444,9 @@ const make = (botConfig: DiscordBotConfig) =>
           inThread,
           intentKind: intent.kind,
           hasPromptOrAttachment:
-            (intent.kind === "prompt" && intent.prompt.length > 0) || gatewayAttachments.length > 0,
+            (intent.kind === "prompt" && intent.prompt.length > 0) ||
+            intent.kind === "today-recap" ||
+            gatewayAttachments.length > 0,
         })
           ? { channelId: event.channel_id, messageId: event.id }
           : undefined;
@@ -2537,6 +2573,59 @@ const make = (botConfig: DiscordBotConfig) =>
 
             yield* rest.createMessage(event.channel_id, {
               content: `Channel info: ${discordMessageUrl(event.guild_id, pin.channelId, pin.messageId)}`,
+              message_reference: { message_id: event.id },
+            });
+            return;
+          }
+
+          if (intent.kind === "today-recap") {
+            if (parentUnavailable) {
+              yield* rest.createMessage(event.channel_id, {
+                content: missingProjectBindingMessage({ inThread: true, parentUnavailable: true }),
+                message_reference: { message_id: event.id },
+              });
+              return;
+            }
+            const shortName = parseTopicShortName(topic);
+            if (shortName === null || parentId === null) {
+              yield* rest.createMessage(event.channel_id, {
+                content: missingProjectBindingMessage({
+                  inThread: true,
+                  parentUnavailable: false,
+                }),
+                message_reference: { message_id: event.id },
+              });
+              return;
+            }
+            const displayName = event.author?.global_name ?? event.author?.username ?? "Someone";
+            const ack = formatTodayRecapAck({
+              displayName,
+              shortName,
+              date: utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe())),
+            });
+            const opened = yield* openTodayRecapThread({
+              projectChannelId: parentId,
+              shortName,
+              starterContent: ack,
+            });
+            const mentionMessage = discordMessageFromEvent({ ...event, content });
+            yield* startBridgedTurn({
+              discordThreadId: opened.discordThread.id,
+              channelId: parentId,
+              guildId: event.guild_id ?? "",
+              prompt: opened.prompt,
+              flags: { local: true, plan: false, prompt: opened.prompt },
+              topic,
+              parentChannelId: parentId,
+              presentationMode: "final-only",
+              mentionMessage: {
+                ...mentionMessage,
+                id: opened.starterId,
+                content: ack,
+              },
+            }).pipe(Effect.catch((error) => reportError(opened.discordThread.id, error)));
+            yield* rest.createMessage(event.channel_id, {
+              content: `${ack}\n→ ${discordChannelUrl(event.guild_id, opened.discordThread.id)}`,
               message_reference: { message_id: event.id },
             });
             return;
@@ -2753,6 +2842,46 @@ const make = (botConfig: DiscordBotConfig) =>
             content: `Channel info: ${discordMessageUrl(event.guild_id, pin.channelId, pin.messageId)}`,
             message_reference: { message_id: event.id },
           });
+          return;
+        }
+
+        if (intent.kind === "today-recap") {
+          const shortName = parseTopicShortName(topic);
+          if (parentUnavailable || shortName === null) {
+            yield* rest.createMessage(event.channel_id, {
+              content: missingProjectBindingMessage({
+                inThread: false,
+                parentUnavailable,
+              }),
+              message_reference: { message_id: event.id },
+            });
+            return;
+          }
+          const displayName = event.author?.global_name ?? event.author?.username ?? "Someone";
+          const ack = formatTodayRecapAck({
+            displayName,
+            shortName,
+            date: utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe())),
+          });
+          const opened = yield* openTodayRecapThread({
+            projectChannelId: event.channel_id,
+            shortName,
+            starterContent: ack,
+            starterMessageId: event.id,
+          });
+          const mentionMessage = discordMessageFromEvent({ ...event, content });
+          yield* startBridgedTurn({
+            discordThreadId: opened.discordThread.id,
+            channelId: event.channel_id,
+            guildId: event.guild_id ?? "",
+            prompt: opened.prompt,
+            flags: { local: true, plan: false, prompt: opened.prompt },
+            topic,
+            parentChannelId: event.channel_id,
+            presentationMode: "final-only",
+            mentionMessage,
+            ...(pendingReadyReaction === undefined ? {} : { pendingReadyReaction }),
+          }).pipe(Effect.catch((error) => reportError(opened.discordThread.id, error)));
           return;
         }
 
@@ -3346,6 +3475,91 @@ const make = (botConfig: DiscordBotConfig) =>
             ask: promptSlashHandler(),
             steer: promptSlashHandler("steer"),
             queue: promptSlashHandler("queue"),
+
+            "today-recap": Effect.gen(function* () {
+              const interaction = yield* Ix.Interaction;
+              const channelId = interaction.channel_id;
+              if (channelId === undefined || channelId.length === 0) {
+                return slashReply("today-recap only works inside a server channel or thread.", {
+                  ephemeral: true,
+                });
+              }
+
+              const channel = yield* rest.getChannel(channelId);
+              const inThread = isThreadChannel(channel.type);
+              const topicLookup = yield* resolveProjectTopic(channel);
+              const parentUnavailable = topicLookup.kind === "parent-unavailable";
+              const parentId =
+                topicLookup.kind === "parent-unavailable"
+                  ? topicLookup.parentChannelId
+                  : (topicLookup.parentChannelId ??
+                    (inThread && "parent_id" in channel && typeof channel.parent_id === "string"
+                      ? channel.parent_id
+                      : null));
+              const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
+              const shortName = parseTopicShortName(topic);
+              if (parentUnavailable || shortName === null) {
+                return slashReply(missingProjectBindingMessage({ inThread, parentUnavailable }), {
+                  ephemeral: true,
+                });
+              }
+
+              const projectChannelId = parentId ?? channelId;
+              const requester = interactionRequester(interaction);
+              const displayName =
+                requester.author?.displayName ?? requester.author?.username ?? "Someone";
+              const date = utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe()));
+              const ack = formatTodayRecapAck({ displayName, shortName, date });
+              const opened = yield* openTodayRecapThread({
+                projectChannelId,
+                shortName,
+                starterContent: ack,
+              });
+
+              yield* Effect.logInfo("Slash /omegent today-recap: starting bridged turn", {
+                channelId: projectChannelId,
+                discordThreadId: opened.discordThread.id,
+                shortName,
+                date,
+              });
+              yield* forkSlashBackground(
+                startBridgedTurn({
+                  discordThreadId: opened.discordThread.id,
+                  channelId: projectChannelId,
+                  guildId: interaction.guild_id ?? "",
+                  prompt: opened.prompt,
+                  flags: { local: true, plan: false, prompt: opened.prompt },
+                  topic,
+                  parentChannelId: projectChannelId,
+                  presentationMode: "final-only",
+                  mentionMessage: {
+                    ...requester,
+                    id: opened.starterId,
+                    content: ack,
+                  },
+                }).pipe(
+                  Effect.tap(() =>
+                    Effect.logInfo("Slash /omegent today-recap: bridged turn started", {
+                      channelId: projectChannelId,
+                      discordThreadId: opened.discordThread.id,
+                    }),
+                  ),
+                  Effect.catch((error) => reportError(opened.discordThread.id, error)),
+                ),
+              );
+
+              const jump = discordChannelUrl(interaction.guild_id, opened.discordThread.id);
+              return slashReply(`${ack}\n→ ${jump}`);
+            }).pipe(
+              Effect.catch((error: unknown) =>
+                Effect.succeed(
+                  slashReply(
+                    `today-recap failed: ${error instanceof Error ? error.message : String(error)}`,
+                    { ephemeral: true },
+                  ),
+                ),
+              ),
+            ),
 
             steernow: Effect.gen(function* () {
               const interaction = yield* Ix.Interaction;

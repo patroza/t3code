@@ -76,6 +76,7 @@ describe("channel info pin helpers", () => {
     expect(rendered).toContain("/tmp/t3code");
     expect(rendered).toContain("Bot commands (prefer **/omegent**, alias **/agent**):");
     expect(rendered).toContain("/omegent ask prompt:…");
+    expect(rendered).toContain("/omegent today-recap");
     expect(rendered).toContain("/omegent help");
     expect(rendered).toContain("/omegent stop");
     expect(rendered).toContain("/omegent compact");
