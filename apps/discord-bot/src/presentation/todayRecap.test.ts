@@ -50,6 +50,7 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("do not open a PR");
     expect(prompt).toContain("opened that day and still open");
     expect(prompt).toContain("not the rest of the open backlog");
+    expect(prompt).toContain("no change");
     expect(prompt).toContain("[PR #N](github-url)");
     expect(prompt).toContain("bare URL");
     expect(prompt).toContain("## 🟢 MERGED");

@@ -56,6 +56,6 @@ export function buildTodayRecapPrompt(input: {
     "  (omit empty type headings and empty status sections)",
     "- Group related PRs. A few sentences of what/why each. Not verbose.",
     "",
-    "No code dumps. No process status. If nothing moved that day, say so in one line.",
+    "No code dumps. No process status. If nothing merged, closed, or opened that day, reply with exactly: no change",
   ].join("\n");
 }
