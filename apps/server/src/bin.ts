@@ -17,6 +17,7 @@ import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+import { triageCommand } from "./cli/triage.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 
 // Identity is residual-free and required by the server command graph type.
@@ -59,6 +60,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       backfillGrokCommand,
       serviceCommand,
       servicePreflightCommand,
+      triageCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,
     ]),
   );

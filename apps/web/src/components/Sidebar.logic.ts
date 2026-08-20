@@ -476,7 +476,7 @@ export function isThreadSettledForDisplay(
     effectiveSettled(thread, {
       now: input.now,
       autoSettleAfterDays: input.autoSettleAfterDays,
-      changeRequestState: input.changeRequestState,
+      changeRequest: input.changeRequestState === null ? null : { state: input.changeRequestState },
     })
   );
 }

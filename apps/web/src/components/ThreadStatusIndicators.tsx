@@ -191,6 +191,7 @@ export function threadChangeRequestSnapshotsEqual(
     left.pr.baseRef === right.pr.baseRef &&
     left.pr.headRef === right.pr.headRef &&
     left.pr.state === right.pr.state &&
+    (left.pr.updatedAt ?? null) === (right.pr.updatedAt ?? null) &&
     sourceControlProvidersEqual(left.sourceControlProvider, right.sourceControlProvider)
   );
 }
@@ -470,7 +471,6 @@ export function ComposerDraftDot({ className }: { className?: string }) {
   return (
     <span
       aria-label="Unsent draft"
-      title="Unsent draft"
       data-testid="composer-draft-dot"
       className={cn("size-1.5 shrink-0 rounded-full bg-blue-500", className)}
     />

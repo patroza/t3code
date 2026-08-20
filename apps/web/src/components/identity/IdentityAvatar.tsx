@@ -28,7 +28,7 @@ export function IdentityAvatar(props: {
   return (
     <span
       aria-hidden={title === undefined}
-      title={title}
+      {...(title === undefined ? {} : { "aria-label": title })}
       className={cn(
         "inline-flex shrink-0 items-center justify-center rounded-full font-semibold tracking-tight select-none",
         sizeClass,

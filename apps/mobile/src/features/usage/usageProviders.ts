@@ -1,5 +1,5 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
-import { useColorScheme } from "react-native";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
 /**
  * Series and table order. The chart stacks providers from the bottom in this
@@ -38,7 +38,7 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
  * matching background.
  */
 export function useProviderColors(): Record<UsageProviderKind, string> {
-  const scheme = useColorScheme();
+  const { themeAppearance: scheme } = useAppearancePreferences();
   const dark = scheme === "dark";
   return {
     claude: "#d97757",

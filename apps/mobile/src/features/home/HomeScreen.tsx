@@ -13,6 +13,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import type { ChangeRequestSettleSource } from "@t3tools/client-runtime/state/thread-settled";
 import type {
   EnvironmentId,
   SidebarProjectGroupingMode,
@@ -523,18 +524,24 @@ export function HomeScreen(props: HomeScreenProps) {
   // optimistic holds.
   // PR states stream in per-row. The next partition applies the configured
   // merge rule and the always-on close rule, matching web.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+  const [changeRequestByKey, setChangeRequestByKey] = useState<
+    ReadonlyMap<string, ChangeRequestSettleSource>
   >(() => new Map());
   const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
-      setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
+    (threadKey: string, changeRequest: ChangeRequestSettleSource | null) => {
+      setChangeRequestByKey((current) => {
+        const existing = current.get(threadKey) ?? null;
+        if (
+          (existing?.state ?? null) === (changeRequest?.state ?? null) &&
+          (existing?.updatedAt ?? null) === (changeRequest?.updatedAt ?? null)
+        ) {
+          return current;
+        }
         const next = new Map(current);
-        if (state === null) {
+        if (changeRequest === null) {
           next.delete(threadKey);
         } else {
-          next.set(threadKey, state);
+          next.set(threadKey, changeRequest);
         }
         return next;
       });
@@ -667,7 +674,7 @@ export function HomeScreen(props: HomeScreenProps) {
         effectiveSettled(thread, {
           now,
           autoSettleAfterDays: 3,
-          changeRequestState: null,
+          changeRequest: null,
         })
       ) {
         keys.add(scopedThreadKey(thread.environmentId, thread.id));
@@ -885,7 +892,7 @@ export function HomeScreen(props: HomeScreenProps) {
       orderByRecency: props.threadGrouping === "recency",
       searchQuery: props.searchQuery,
       matchedThreadKeys,
-      changeRequestStateByKey,
+      changeRequestByKey,
       autoSettleOnMerge,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
@@ -897,7 +904,7 @@ export function HomeScreen(props: HomeScreenProps) {
       selectedThreadKey: null,
     });
   }, [
-    changeRequestStateByKey,
+    changeRequestByKey,
     autoSettleOnMerge,
     nowMinute,
     snoozeWakeTick,

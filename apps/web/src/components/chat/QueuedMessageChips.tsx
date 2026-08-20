@@ -52,7 +52,7 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
           <ListEndIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
           <span
             className="min-w-0 flex-1 truncate text-sm text-foreground/90"
-            title={queuedMessage.text}
+            aria-label={queuedMessage.text}
           >
             {queuedMessage.text.length > 0
               ? queuedMessage.text

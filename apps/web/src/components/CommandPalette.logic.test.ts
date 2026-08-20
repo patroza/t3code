@@ -48,6 +48,77 @@ describe("browseInputEndPaddingClass", () => {
   });
 });
 
+describe("reduceCommandPaletteUiState", () => {
+  const closedState = { open: false, mode: "command", openIntent: null } as const;
+
+  it("toggles each overlay mode open and closed", () => {
+    const filesOpen = reduceCommandPaletteUiState(closedState, {
+      _tag: "ToggleMode",
+      mode: "files",
+    });
+    expect(filesOpen).toEqual({ open: true, mode: "files", openIntent: null });
+
+    const contentOpen = reduceCommandPaletteUiState(filesOpen, {
+      _tag: "ToggleMode",
+      mode: "content",
+    });
+    expect(contentOpen).toEqual({ open: true, mode: "content", openIntent: null });
+
+    expect(
+      reduceCommandPaletteUiState(contentOpen, { _tag: "ToggleMode", mode: "content" }),
+    ).toEqual({ open: false, mode: "content", openIntent: null });
+  });
+
+  it("switches between open modes without closing", () => {
+    const filesOpen = reduceCommandPaletteUiState(closedState, {
+      _tag: "ToggleMode",
+      mode: "files",
+    });
+    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "ToggleMode", mode: "command" })).toEqual(
+      {
+        open: true,
+        mode: "command",
+        openIntent: null,
+      },
+    );
+  });
+
+  it("routes open intents to command mode", () => {
+    const filesOpen = reduceCommandPaletteUiState(closedState, {
+      _tag: "ToggleMode",
+      mode: "files",
+    });
+    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "OpenAddProject" })).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: { kind: "add-project" },
+    });
+    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "OpenNewThreadIn" })).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: { kind: "new-thread-in" },
+    });
+  });
+
+  it("preserves the mode on close and resets it on open", () => {
+    const filesOpen = reduceCommandPaletteUiState(closedState, {
+      _tag: "ToggleMode",
+      mode: "files",
+    });
+
+    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: false })).toEqual({
+      open: false,
+      mode: "files",
+      openIntent: null,
+    });
+    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: true })).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: null,
+    });
+  });
+});
+
 describe("enumerateCommandPaletteItems", () => {
   it("assigns positional jump shortcuts to the first nine displayed items", () => {
     const items = Array.from({ length: 10 }, (_, index) => ({
@@ -385,77 +456,6 @@ describe("buildBrowseGroups", () => {
     finishNavigation?.();
     await action;
     expect(actionSettled).toBe(true);
-  });
-});
-
-describe("reduceCommandPaletteUiState", () => {
-  const closedState = { open: false, mode: "command", openIntent: null } as const;
-
-  it("toggles each overlay mode open and closed", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-    expect(filesOpen).toEqual({ open: true, mode: "files", openIntent: null });
-
-    const contentOpen = reduceCommandPaletteUiState(filesOpen, {
-      _tag: "ToggleMode",
-      mode: "content",
-    });
-    expect(contentOpen).toEqual({ open: true, mode: "content", openIntent: null });
-
-    expect(
-      reduceCommandPaletteUiState(contentOpen, { _tag: "ToggleMode", mode: "content" }),
-    ).toEqual({ open: false, mode: "command", openIntent: null });
-  });
-
-  it("switches between open modes without closing", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "ToggleMode", mode: "command" })).toEqual(
-      {
-        open: true,
-        mode: "command",
-        openIntent: null,
-      },
-    );
-  });
-
-  it("routes open intents to command mode", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "OpenAddProject" })).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: { kind: "add-project" },
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "OpenNewThreadIn" })).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: { kind: "new-thread-in" },
-    });
-  });
-
-  it("resets to command mode for dialog-driven opens and closes", () => {
-    const filesOpen = reduceCommandPaletteUiState(closedState, {
-      _tag: "ToggleMode",
-      mode: "files",
-    });
-
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: false })).toEqual({
-      open: false,
-      mode: "command",
-      openIntent: null,
-    });
-    expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: true })).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: null,
-    });
   });
 });
 

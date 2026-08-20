@@ -30,6 +30,53 @@ export function browseInputEndPaddingClass(input: {
   return "*:data-[slot=autocomplete-input]:pe-24!";
 }
 
+/**
+ * The global search overlay hosts three mutually exclusive surfaces: the
+ * command palette (⌘K), the project file picker (⌘P), and project content
+ * search (⇧⌘F). One reducer owns open/mode state so the surfaces can never
+ * stack and re-triggering a mode's shortcut toggles it closed.
+ */
+export type SearchOverlayMode = "command" | "files" | "content";
+
+export interface CommandPaletteOpenIntent {
+  readonly kind: "add-project" | "new-thread-in";
+}
+
+export interface CommandPaletteUiState {
+  readonly open: boolean;
+  readonly mode: SearchOverlayMode;
+  readonly openIntent: CommandPaletteOpenIntent | null;
+}
+
+export type CommandPaletteUiAction =
+  | { readonly _tag: "SetOpen"; readonly open: boolean }
+  | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
+  | { readonly _tag: "OpenAddProject" }
+  | { readonly _tag: "OpenNewThreadIn" }
+  | { readonly _tag: "ClearOpenIntent" };
+
+export function reduceCommandPaletteUiState(
+  state: CommandPaletteUiState,
+  action: CommandPaletteUiAction,
+): CommandPaletteUiState {
+  switch (action._tag) {
+    case "SetOpen":
+      return action.open
+        ? { open: true, mode: "command", openIntent: state.openIntent }
+        : { ...state, open: false, openIntent: null };
+    case "ToggleMode":
+      return state.open && state.mode === action.mode
+        ? { ...state, open: false, openIntent: null }
+        : { open: true, mode: action.mode, openIntent: null };
+    case "OpenAddProject":
+      return { open: true, mode: "command", openIntent: { kind: "add-project" } };
+    case "OpenNewThreadIn":
+      return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
+    case "ClearOpenIntent":
+      return state.openIntent ? { ...state, openIntent: null } : state;
+  }
+}
+
 export interface CommandPaletteThreadContentMatch {
   readonly source: "user" | "assistant";
   readonly snippet: string;
@@ -134,6 +181,7 @@ export function buildProjectActionItems(input: {
   icon: (project: Project) => ReactNode;
   runProject: (project: Project) => Promise<void>;
   searchTerms?: (project: Project) => ReadonlyArray<string>;
+  renderDescription?: (project: Project) => ReactNode;
   shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => ({
@@ -141,7 +189,7 @@ export function buildProjectActionItems(input: {
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
     searchTerms: [project.title, project.workspaceRoot, ...(input.searchTerms?.(project) ?? [])],
     title: project.title,
-    description: project.workspaceRoot,
+    description: input.renderDescription?.(project) ?? project.workspaceRoot,
     icon: input.icon(project),
     ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
     run: async () => {
@@ -459,48 +507,5 @@ export function getCommandPaletteInputPlaceholder(mode: CommandPaletteMode): str
       return "Search...";
     case "submenu-browse":
       return "Enter path (e.g. ~/projects/my-app)";
-  }
-}
-
-export type SearchOverlayMode = "command" | "files" | "content";
-
-export interface CommandPaletteOpenIntent {
-  readonly kind: "add-project" | "new-thread-in";
-}
-
-export interface CommandPaletteUiState {
-  readonly open: boolean;
-  readonly mode: SearchOverlayMode;
-  readonly openIntent: CommandPaletteOpenIntent | null;
-}
-
-export type CommandPaletteUiAction =
-  | { readonly _tag: "SetOpen"; readonly open: boolean }
-  | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
-  | { readonly _tag: "OpenAddProject" }
-  | { readonly _tag: "OpenNewThreadIn" }
-  | { readonly _tag: "ClearOpenIntent" };
-
-export function reduceCommandPaletteUiState(
-  state: CommandPaletteUiState,
-  action: CommandPaletteUiAction,
-): CommandPaletteUiState {
-  switch (action._tag) {
-    case "SetOpen":
-      return {
-        open: action.open,
-        mode: "command",
-        openIntent: action.open ? state.openIntent : null,
-      };
-    case "ToggleMode":
-      return state.open && state.mode === action.mode
-        ? { open: false, mode: "command", openIntent: null }
-        : { open: true, mode: action.mode, openIntent: null };
-    case "OpenAddProject":
-      return { open: true, mode: "command", openIntent: { kind: "add-project" } };
-    case "OpenNewThreadIn":
-      return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
-    case "ClearOpenIntent":
-      return state.openIntent ? { ...state, openIntent: null } : state;
   }
 }

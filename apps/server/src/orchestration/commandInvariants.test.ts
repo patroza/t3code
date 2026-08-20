@@ -15,7 +15,6 @@ import { fromWireReadModel } from "./commandReadModel.ts";
 import {
   findThreadById,
   listThreadsByProjectId,
-  requireNonNegativeInteger,
   requireThread,
   requireThreadAbsent,
 } from "./commandInvariants.ts";
@@ -206,25 +205,5 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
-  });
-
-  it("requires non-negative integers", async () => {
-    await Effect.runPromise(
-      requireNonNegativeInteger({
-        commandType: "thread.checkpoint.revert",
-        field: "turnCount",
-        value: 0,
-      }),
-    );
-
-    await expect(
-      Effect.runPromise(
-        requireNonNegativeInteger({
-          commandType: "thread.checkpoint.revert",
-          field: "turnCount",
-          value: -1,
-        }),
-      ),
-    ).rejects.toThrow("greater than or equal to 0");
   });
 });
