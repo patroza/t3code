@@ -158,7 +158,6 @@ import {
 } from "../presentation/slashCommands.ts";
 import {
   buildTodayRecapPrompt,
-  formatTodayRecapAck,
   formatTodayRecapThreadTitle,
   utcDateStamp,
 } from "../presentation/todayRecap.ts";
@@ -2013,7 +2012,6 @@ const make = (botConfig: DiscordBotConfig) =>
     const openTodayRecapThread = (input: {
       readonly projectChannelId: string;
       readonly shortName: string;
-      readonly starterContent: string;
       readonly starterMessageId?: string;
     }) =>
       Effect.gen(function* () {
@@ -2023,15 +2021,16 @@ const make = (botConfig: DiscordBotConfig) =>
           date,
           parentChannelId: input.projectChannelId,
         });
-        const starterId =
-          input.starterMessageId ??
-          (yield* rest.createMessage(input.projectChannelId, { content: input.starterContent })).id;
-        const discordThread = yield* openOrReuseThread(
-          input.projectChannelId,
-          starterId,
-          formatTodayRecapThreadTitle({ shortName: input.shortName, date }),
-        );
-        return { date, prompt, starterId, discordThread };
+        const title = formatTodayRecapThreadTitle({ shortName: input.shortName, date });
+        const discordThread =
+          input.starterMessageId === undefined
+            ? yield* rest.createThread(input.projectChannelId, {
+                name: title,
+                auto_archive_duration: 1440,
+                type: 11,
+              })
+            : yield* openOrReuseThread(input.projectChannelId, input.starterMessageId, title);
+        return { date, prompt, discordThread };
       });
 
     const watchedDiscordLinkRequests = new Set<string>();
@@ -2631,16 +2630,9 @@ const make = (botConfig: DiscordBotConfig) =>
               });
               return;
             }
-            const displayName = event.author?.global_name ?? event.author?.username ?? "Someone";
-            const ack = formatTodayRecapAck({
-              displayName,
-              shortName,
-              date: utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe())),
-            });
             const opened = yield* openTodayRecapThread({
               projectChannelId: parentId,
               shortName,
-              starterContent: ack,
             });
             const mentionMessage = discordMessageFromEvent({ ...event, content });
             yield* startBridgedTurn({
@@ -2652,14 +2644,10 @@ const make = (botConfig: DiscordBotConfig) =>
               topic,
               parentChannelId: parentId,
               presentationMode: "final-only",
-              mentionMessage: {
-                ...mentionMessage,
-                id: opened.starterId,
-                content: ack,
-              },
+              mentionMessage,
             }).pipe(Effect.catch((error) => reportError(opened.discordThread.id, error)));
             yield* rest.createMessage(event.channel_id, {
-              content: `${ack}\n→ ${discordChannelUrl(event.guild_id, opened.discordThread.id)}`,
+              content: `→ ${discordChannelUrl(event.guild_id, opened.discordThread.id)}`,
               message_reference: { message_id: event.id },
             });
             return;
@@ -2891,16 +2879,9 @@ const make = (botConfig: DiscordBotConfig) =>
             });
             return;
           }
-          const displayName = event.author?.global_name ?? event.author?.username ?? "Someone";
-          const ack = formatTodayRecapAck({
-            displayName,
-            shortName,
-            date: utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe())),
-          });
           const opened = yield* openTodayRecapThread({
             projectChannelId: event.channel_id,
             shortName,
-            starterContent: ack,
             starterMessageId: event.id,
           });
           const mentionMessage = discordMessageFromEvent({ ...event, content });
@@ -3540,21 +3521,16 @@ const make = (botConfig: DiscordBotConfig) =>
 
               const projectChannelId = parentId ?? channelId;
               const requester = interactionRequester(interaction);
-              const displayName =
-                requester.author?.displayName ?? requester.author?.username ?? "Someone";
-              const date = utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe()));
-              const ack = formatTodayRecapAck({ displayName, shortName, date });
               const opened = yield* openTodayRecapThread({
                 projectChannelId,
                 shortName,
-                starterContent: ack,
               });
 
               yield* Effect.logInfo("Slash /omegent today-recap: starting bridged turn", {
                 channelId: projectChannelId,
                 discordThreadId: opened.discordThread.id,
                 shortName,
-                date,
+                date: opened.date,
               });
               yield* forkSlashBackground(
                 startBridgedTurn({
@@ -3566,11 +3542,7 @@ const make = (botConfig: DiscordBotConfig) =>
                   topic,
                   parentChannelId: projectChannelId,
                   presentationMode: "final-only",
-                  mentionMessage: {
-                    ...requester,
-                    id: opened.starterId,
-                    content: ack,
-                  },
+                  mentionMessage: requester,
                 }).pipe(
                   Effect.tap(() =>
                     Effect.logInfo("Slash /omegent today-recap: bridged turn started", {
@@ -3582,8 +3554,12 @@ const make = (botConfig: DiscordBotConfig) =>
                 ),
               );
 
-              const jump = discordChannelUrl(interaction.guild_id, opened.discordThread.id);
-              return slashReply(`${ack}\n→ ${jump}`);
+              return slashReply(
+                `→ ${discordChannelUrl(interaction.guild_id, opened.discordThread.id)}`,
+                {
+                  ephemeral: true,
+                },
+              );
             }).pipe(
               Effect.catch((error: unknown) =>
                 Effect.succeed(

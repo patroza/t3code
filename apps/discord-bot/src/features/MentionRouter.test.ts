@@ -40,6 +40,8 @@ describe("today-recap slash command", () => {
     expect(mentionRouterSource).toContain("buildTodayRecapPrompt");
     expect(mentionRouterSource).toContain("local: true, plan: false, prompt: opened.prompt");
     expect(mentionRouterSource).toContain('presentationMode: "final-only"');
+    expect(mentionRouterSource).toContain("rest.createThread(input.projectChannelId");
+    expect(mentionRouterSource).not.toContain("starterContent");
   });
 });
 
