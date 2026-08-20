@@ -2138,6 +2138,25 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             NULL
           ),
           (
+            'thread-split',
+            'project-search',
+            'Split answer thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-05-01T00:00:04.000Z',
+            '2026-05-01T00:00:05.000Z',
+            NULL,
+            NULL
+          ),
+          (
             'thread-percent-decoy',
             'project-search',
             'Literal 100x fix',
@@ -2234,10 +2253,20 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-active',
             'turn-active',
             'assistant',
-            'Interim needle must not be searchable.',
+            'Interim needle from an earlier segment of the same answer.',
             0,
             '2026-05-01T00:00:14.000Z',
             '2026-05-01T00:00:14.000Z'
+          ),
+          (
+            'message-split',
+            'thread-split',
+            'turn-split',
+            'assistant',
+            'Second half of a split answer mentioning halfmarker once.',
+            0,
+            '2026-05-01T00:00:18.000Z',
+            '2026-05-01T00:00:18.000Z'
           ),
           (
             'message-system',
@@ -2305,9 +2334,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         [[ThreadId.make("thread-active"), "user"]],
       );
 
+      // An answer streamed as several assistant items is searchable in every
+      // part, not only the one the turn names as its terminal message.
+      const interim = yield* snapshotQuery.searchThreads({ query: "interim needle" });
       assert.deepStrictEqual(
-        (yield* snapshotQuery.searchThreads({ query: "interim needle" })).matches,
-        [],
+        interim.matches.map((match) => [match.threadId, match.source]),
+        [[ThreadId.make("thread-active"), "assistant"]],
+      );
+
+      // A split answer whose matching half is not the turn's assistant_message_id.
+      const split = yield* snapshotQuery.searchThreads({ query: "halfmarker" });
+      assert.deepStrictEqual(
+        split.matches.map((match) => [match.threadId, match.source]),
+        [[ThreadId.make("thread-split"), "assistant"]],
       );
       assert.deepStrictEqual(
         (yield* snapshotQuery.searchThreads({ query: "system needle" })).matches,

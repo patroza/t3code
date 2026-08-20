@@ -985,17 +985,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             AND threads.archived_at IS NULL
             AND projects.deleted_at IS NULL
             AND messages.is_streaming = 0
-            AND (
-              messages.role = 'user'
-              OR (
-                messages.role = 'assistant'
-                AND messages.message_id IN (
-                  SELECT turns.assistant_message_id
-                  FROM projection_turns AS turns
-                  WHERE turns.assistant_message_id IS NOT NULL
-                )
-              )
-            )
+            -- Every settled message the user actually reads, not just the one
+            -- assistant row a turn happens to name as its terminal message.
+            -- Providers stream an answer as many assistant items (~10 per turn
+            -- and climbing), and only the last is linked as
+            -- turns.assistant_message_id, so restricting to that link made most
+            -- assistant text unsearchable. Tool calls are not messages at all --
+            -- they live in projection_thread_activities -- so they stay out by
+            -- construction, and 'system' notices are excluded here.
+            AND messages.role IN ('user', 'assistant')
             AND messages.text LIKE ${pattern} ESCAPE '!'
         )
         SELECT
