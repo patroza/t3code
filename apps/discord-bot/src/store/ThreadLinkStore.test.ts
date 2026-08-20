@@ -80,6 +80,7 @@ describe("migrateV1Link / parseLinksDocument", () => {
       streamDiscordMessageIds: undefined,
       sentDiscordUserMessageIds: undefined,
       jiraIssueKeys: undefined,
+      sentryIssueUrls: undefined,
       prUrls: undefined,
       infoDiscordMessageId: undefined,
       initialModelLine: undefined,
@@ -289,6 +290,45 @@ it.effect("persists jira keys in first-seen order and info message id", () =>
     const link = yield* reloaded.getByDiscordThreadId("discord-thread-1");
     assert.deepStrictEqual(link?.jiraIssueKeys, ["PROJ-2", "PROJ-1", "PROJ-3"]);
     assert.strictEqual(link?.infoDiscordMessageId, "info-msg-1");
+  }),
+);
+
+it.effect("persists sentry issue urls in first-seen order across reloads and minimal puts", () =>
+  Effect.gen(function* () {
+    const dataDir = yield* makeTempDir;
+    const store = yield* makeThreadLinkStore(dataDir);
+
+    yield* store.put({
+      discordThreadId: "discord-thread-1",
+      t3ThreadId: ThreadIdBrand.make("thread-1"),
+      projectId: ProjectIdBrand.make("project-1"),
+      channelId: "channel-1",
+      guildId: "guild-1",
+      createdAt: "2026-07-18T00:00:00.000Z",
+    });
+    yield* store.appendSentryIssueUrls("discord-thread-1", [
+      "https://macs-scanner.sentry.io/issues/SCANNER-313/?project=1",
+      "https://macs-scanner.sentry.io/issues/7506163172/",
+    ]);
+    yield* store.appendSentryIssueUrls("discord-thread-1", [
+      "https://macs-scanner.sentry.io/issues/SCANNER-313",
+    ]);
+
+    yield* store.put({
+      discordThreadId: "discord-thread-1",
+      t3ThreadId: ThreadIdBrand.make("thread-1"),
+      projectId: ProjectIdBrand.make("project-1"),
+      channelId: "channel-1",
+      guildId: "guild-1",
+      createdAt: "2026-07-18T00:00:00.000Z",
+    });
+
+    const reloaded = yield* makeThreadLinkStore(dataDir);
+    const link = yield* reloaded.getByDiscordThreadId("discord-thread-1");
+    assert.deepStrictEqual(link?.sentryIssueUrls, [
+      "https://macs-scanner.sentry.io/issues/SCANNER-313",
+      "https://macs-scanner.sentry.io/issues/7506163172",
+    ]);
   }),
 );
 

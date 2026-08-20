@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off
 import { formatJiraLinksForDiscord } from "./jiraLinks.ts";
 import { formatPullRequestLinksForDiscord } from "./prLinks.ts";
+import { formatSentryLinksForDiscord } from "./sentryLinks.ts";
 
 /** Stable marker so we can find/update the pinned thread-info message after restarts. */
 export const THREAD_INFO_PIN_MARKER = "Omegent Info";
@@ -16,6 +17,7 @@ export type ThreadInfoPinRenderInput = {
   readonly worktreeLine: string | null;
   readonly webLink: string | null;
   readonly extraLines?: ReadonlyArray<string | null | undefined>;
+  readonly sentryIssueUrls?: ReadonlyArray<string>;
   readonly jiraIssueKeys?: ReadonlyArray<string>;
   readonly jiraBrowseBaseUrl?: string | undefined;
   readonly prUrls?: ReadonlyArray<string>;
@@ -167,6 +169,12 @@ export function renderThreadInfoPin(input: ThreadInfoPinRenderInput): string {
     const alreadyLabelled =
       input.webLink.startsWith("Open in Omegent:") || input.webLink.startsWith("Open in T3:");
     lines.push(alreadyLabelled ? input.webLink : `Open in Omegent: ${input.webLink}`);
+  }
+
+  const sentrySection = formatSentryLinksForDiscord(input.sentryIssueUrls ?? []);
+  if (sentrySection !== null) {
+    lines.push("");
+    lines.push(sentrySection);
   }
 
   const jiraSection = formatJiraLinksForDiscord(input.jiraIssueKeys ?? [], input.jiraBrowseBaseUrl);

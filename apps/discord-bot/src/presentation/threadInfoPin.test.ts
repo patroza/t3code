@@ -15,6 +15,7 @@ describe("renderThreadInfoPin", () => {
       modelLine: "grok/grok-4.5",
       worktreeLine: "Worktree off `main`",
       webLink: "http://198.18.83.2:3773/?thread=abc",
+      sentryIssueUrls: ["https://macs-scanner.sentry.io/issues/SCANNER-313"],
       jiraIssueKeys: ["PROJ-367", "PROJ-400"],
       jiraBrowseBaseUrl: "https://example.atlassian.net",
       channelGithubRepoSlug: "example-org/scanner",
@@ -28,6 +29,8 @@ describe("renderThreadInfoPin", () => {
     expect(rendered).toContain("Model: `grok/grok-4.5`");
     expect(rendered).toContain("Worktree off `main`");
     expect(rendered).toContain("Open in Omegent: http://198.18.83.2:3773/?thread=abc");
+    expect(rendered).toContain("**Sentry**");
+    expect(rendered).toContain("[SCANNER-313](https://macs-scanner.sentry.io/issues/SCANNER-313)");
     expect(rendered).toContain("**Jira**");
     expect(rendered).toContain("[PROJ-367](https://example.atlassian.net/browse/PROJ-367)");
     expect(rendered).toContain("[PROJ-400](https://example.atlassian.net/browse/PROJ-400)");
@@ -37,6 +40,7 @@ describe("renderThreadInfoPin", () => {
     expect(rendered).toContain(
       "[example-org/configurator PR #123](https://github.com/example-org/configurator/pull/123)",
     );
+    expect(rendered.indexOf("**Sentry**")).toBeLessThan(rendered.indexOf("**Jira**"));
     expect(rendered.indexOf("**Jira**")).toBeLessThan(rendered.indexOf("**PRs**"));
   });
 
@@ -48,6 +52,7 @@ describe("renderThreadInfoPin", () => {
       jiraIssueKeys: [],
       prUrls: [],
     });
+    expect(rendered).not.toContain("**Sentry**");
     expect(rendered).not.toContain("**Jira**");
     expect(rendered).not.toContain("**PRs**");
     expect(rendered).toContain("Mode: local (no worktree)");

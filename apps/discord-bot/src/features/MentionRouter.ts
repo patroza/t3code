@@ -113,9 +113,12 @@ import {
 } from "../presentation/mentions.ts";
 import {
   extractJiraIssueKeysFromDiscordMessage,
-  mergeJiraIssueKeys,
+  jiraIssueKeysAfterExcludingSentryFalsePositives,
+  jiraIssueKeysMaskedBySentryFromMessages,
 } from "../presentation/jiraLinks.ts";
 import { extractPullRequestUrlsFromDiscordMessage } from "../presentation/prLinks.ts";
+import { extractSentryIssueUrlsFromDiscordMessage } from "../presentation/sentryLinks.ts";
+import { isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
 import {
   resolveUniqueT3ThreadIdForWorkItems,
   serverWorkItemsPathFromStateSqlite,
@@ -437,9 +440,24 @@ function jiraKeysFromMessages(
   const keys: string[] = [];
   for (const message of messages) {
     if (message === null || message === undefined) continue;
+    if (isThreadInfoPinContent(message.content ?? null)) continue;
     keys.push(...extractJiraIssueKeysFromDiscordMessage(message));
   }
   return keys;
+}
+
+function sentryUrlsFromMessages(
+  ...messages: ReadonlyArray<
+    DiscordMessageLike | null | undefined | { readonly content?: string | null }
+  >
+): ReadonlyArray<string> {
+  const urls: string[] = [];
+  for (const message of messages) {
+    if (message === null || message === undefined) continue;
+    if (isThreadInfoPinContent(message.content ?? null)) continue;
+    urls.push(...extractSentryIssueUrlsFromDiscordMessage(message));
+  }
+  return urls;
 }
 
 function prUrlsFromMessages(
@@ -1135,19 +1153,25 @@ const make = (botConfig: DiscordBotConfig) =>
             prompt: input.prompt,
             attachments: stagedFiles.saved,
           });
-          // Re-inject durable thread Jira keys so later turns (e.g. create PR) still see them.
-          const turnJiraIssueKeys = mergeJiraIssueKeys(
-            existing.jiraIssueKeys,
-            jiraKeysFromMessages(input.mentionMessage, input.referencedMessage, {
-              content: input.prompt,
-            }),
-          );
           // Re-load thread starter so co-author trailers stay available mid-thread.
           const continueStarter = yield* loadThreadStarter({
             discordThreadId: input.discordThreadId,
             parentChannelId: input.parentChannelId,
             ...(input.mentionMessage === undefined ? {} : { mentionMessage: input.mentionMessage }),
           });
+          const continueWorkItemMessages = [
+            continueStarter,
+            input.mentionMessage,
+            input.referencedMessage,
+            { content: input.prompt },
+          ];
+          // Re-inject durable thread Jira keys so later turns (e.g. create PR) still see them.
+          // Drop Sentry short ids that were previously stored as Jira (SCANNER-313 etc.).
+          const turnJiraIssueKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
+            existing.jiraIssueKeys,
+            jiraKeysFromMessages(...continueWorkItemMessages),
+            jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages),
+          );
           const prompt = buildDiscordTurnPrompt({
             mentionPrompt: promptWithAttachments,
             requester: input.mentionMessage,
@@ -1396,12 +1420,10 @@ const make = (botConfig: DiscordBotConfig) =>
             discordThreadId: input.discordThreadId,
             t3ThreadId: existing.t3ThreadId,
             botConfig,
-            incomingJiraKeys: jiraKeysFromMessages(input.mentionMessage, input.referencedMessage, {
-              content: input.prompt,
-            }),
-            incomingPrUrls: prUrlsFromMessages(input.mentionMessage, input.referencedMessage, {
-              content: input.prompt,
-            }),
+            incomingJiraKeys: jiraKeysFromMessages(...continueWorkItemMessages),
+            dropJiraIssueKeys: jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages),
+            incomingSentryIssueUrls: sentryUrlsFromMessages(...continueWorkItemMessages),
+            incomingPrUrls: prUrlsFromMessages(...continueWorkItemMessages),
             modelSelection: continueModelSelection ?? continueShell?.modelSelection ?? null,
             worktreePath: continueShell?.worktreePath ?? null,
             local: continueShell?.worktreePath === null,
@@ -1456,12 +1478,16 @@ const make = (botConfig: DiscordBotConfig) =>
           mentionPrompt: prompt,
           referencedMessage: input.referencedMessage,
         });
-        const firstTurnJiraIssueKeys = jiraKeysFromMessages(
+        const firstTurnWorkItemMessages = [
           starter,
           input.mentionMessage,
           input.referencedMessage,
           { content: input.prompt },
-        );
+        ];
+        const firstTurnJiraIssueKeys = jiraKeysFromMessages(...firstTurnWorkItemMessages);
+        const firstTurnSentryIssueUrls = sentryUrlsFromMessages(...firstTurnWorkItemMessages);
+        const firstTurnSentryMaskedJira =
+          jiraIssueKeysMaskedBySentryFromMessages(firstTurnWorkItemMessages);
         const enrichedPrompt = buildFirstTurnPrompt({
           starter,
           mentionMessage: input.mentionMessage,
@@ -1516,9 +1542,8 @@ const make = (botConfig: DiscordBotConfig) =>
           createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
           sentDiscordUserMessageIds: [messageId],
           jiraIssueKeys: firstTurnJiraIssueKeys,
-          prUrls: prUrlsFromMessages(starter, input.mentionMessage, input.referencedMessage, {
-            content: input.prompt,
-          }),
+          sentryIssueUrls: firstTurnSentryIssueUrls,
+          prUrls: prUrlsFromMessages(...firstTurnWorkItemMessages),
         });
         yield* Effect.logInfo("Persisted new Discord↔T3 thread link", {
           discordThreadId: input.discordThreadId,
@@ -1536,9 +1561,9 @@ const make = (botConfig: DiscordBotConfig) =>
           t3ThreadId: threadId,
           botConfig,
           incomingJiraKeys: firstTurnJiraIssueKeys,
-          incomingPrUrls: prUrlsFromMessages(starter, input.mentionMessage, {
-            content: input.prompt,
-          }),
+          dropJiraIssueKeys: firstTurnSentryMaskedJira,
+          incomingSentryIssueUrls: firstTurnSentryIssueUrls,
+          incomingPrUrls: prUrlsFromMessages(...firstTurnWorkItemMessages),
           modelSelection,
           baseBranchLabel: input.flags.base ?? botConfig.t3DefaultBaseBranch,
           local: input.flags.local,
@@ -1615,9 +1640,9 @@ const make = (botConfig: DiscordBotConfig) =>
           t3ThreadId: threadId,
           botConfig,
           incomingJiraKeys: firstTurnJiraIssueKeys,
-          incomingPrUrls: prUrlsFromMessages(starter, input.mentionMessage, {
-            content: input.prompt,
-          }),
+          dropJiraIssueKeys: firstTurnSentryMaskedJira,
+          incomingSentryIssueUrls: firstTurnSentryIssueUrls,
+          incomingPrUrls: prUrlsFromMessages(...firstTurnWorkItemMessages),
           modelSelection,
           baseBranchLabel: input.flags.base ?? botConfig.t3DefaultBaseBranch,
           local: input.flags.local,

@@ -5,6 +5,8 @@ import {
   extractJiraIssueKeysFromDiscordMessage,
   formatJiraLinksForDiscord,
   jiraBrowseUrl,
+  jiraIssueKeysAfterExcludingSentryFalsePositives,
+  jiraIssueKeysMaskedBySentryContext,
   mergeJiraIssueKeys,
   normalizeJiraIssueKey,
   resolveJiraBrowseBaseUrl,
@@ -70,6 +72,73 @@ describe("extractJiraIssueKeys", () => {
         ],
       }),
     ).toEqual(["PROJ-50"]);
+  });
+
+  it("does not treat sentry.io short ids as Jira keys", () => {
+    expect(extractJiraIssueKeys("see https://macs-scanner.sentry.io/issues/SCANNER-313/")).toEqual(
+      [],
+    );
+    expect(
+      extractJiraIssueKeysFromDiscordMessage({
+        author: { username: "Sentry", bot: true },
+        content: "",
+        embeds: [
+          {
+            title: "T3 did not become ready after a server restart",
+            url: "https://macs-scanner.sentry.io/issues/7506163172/",
+            footer: { text: "SCANNER-313" },
+          },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("still extracts Atlassian keys next to a Sentry embed", () => {
+    expect(
+      extractJiraIssueKeysFromDiscordMessage({
+        author: { username: "Sentry", bot: true },
+        content: "also https://example.atlassian.net/browse/PROJ-9",
+        embeds: [
+          {
+            url: "https://macs-scanner.sentry.io/issues/7506163172/",
+            footer: { text: "SCANNER-313" },
+          },
+        ],
+      }),
+    ).toEqual(["PROJ-9"]);
+  });
+});
+
+describe("sentry-masked Jira false positives", () => {
+  it("returns the Sentry short id so stored Jira keys can be dropped", () => {
+    expect(
+      jiraIssueKeysMaskedBySentryContext({
+        author: { username: "Sentry", bot: true },
+        embeds: [
+          {
+            url: "https://macs-scanner.sentry.io/issues/7506163172/",
+            footer: { text: "SCANNER-313" },
+          },
+        ],
+      }),
+    ).toEqual(["SCANNER-313"]);
+  });
+
+  it("drops stored Sentry short ids unless they were also extracted as real Jira", () => {
+    expect(
+      jiraIssueKeysAfterExcludingSentryFalsePositives(
+        ["SCANNER-313", "PROJ-1"],
+        ["PROJ-1"],
+        ["SCANNER-313"],
+      ),
+    ).toEqual(["PROJ-1"]);
+    expect(
+      jiraIssueKeysAfterExcludingSentryFalsePositives(
+        ["SCANNER-313"],
+        ["SCANNER-313"],
+        ["SCANNER-313"],
+      ),
+    ).toEqual(["SCANNER-313"]);
   });
 });
 
