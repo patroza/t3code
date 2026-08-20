@@ -3,7 +3,16 @@
  *
  * Keys are stored in first-seen order. Duplicates are ignored (case-insensitive match
  * with canonical uppercase key form).
+ *
+ * Sentry short ids (`SCANNER-313`) match the Jira key shape. Tokens inside sentry.io
+ * URLs, Sentry Discord embeds, or Sentry-bot messages are not treated as Jira.
  */
+
+import {
+  discordMessageLooksLikeSentry,
+  sentryIssueUrlRanges,
+  type SentryDiscordMessageInput,
+} from "./sentryLinks.ts";
 
 /** Classic Jira issue key: PROJ-123 (project 2–10 alnum chars, numeric id). */
 const JIRA_ISSUE_KEY_PATTERN = /\b([A-Z][A-Z0-9]{1,9}-\d{1,7})\b/g;
@@ -59,61 +68,77 @@ export function jiraBrowseUrl(baseUrl: string | undefined, key: string): string 
   return `${base}/browse/${normalized}`;
 }
 
+export type ExtractJiraIssueKeysOptions = {
+  /**
+   * When false, only keys from Atlassian browse / selectedIssue URLs are returned.
+   * Default true, unless the text already contains a sentry.io URL (bare keys in
+   * that blob are Sentry short ids, not Jira).
+   */
+  readonly includeBareKeys?: boolean;
+  /** Skip tokens whose match index sits inside a sentry.io URL. Default true. */
+  readonly skipSentryUrls?: boolean;
+};
+
+type JiraKeyHit = { readonly index: number; readonly key: string };
+
+function collectJiraKeyHits(
+  text: string,
+  patterns: ReadonlyArray<RegExp>,
+  sentryRanges: ReadonlyArray<{ readonly start: number; readonly end: number }>,
+  skipSentryUrls: boolean,
+): JiraKeyHit[] {
+  const hits: JiraKeyHit[] = [];
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const matchIndex = match.index;
+      if (
+        skipSentryUrls &&
+        sentryRanges.some((range) => matchIndex >= range.start && matchIndex < range.end)
+      ) {
+        continue;
+      }
+      const key = normalizeJiraIssueKey(match[1] ?? "");
+      if (key === null) continue;
+      hits.push({ index: matchIndex, key });
+    }
+  }
+  hits.sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
+  return hits;
+}
+
+const ATLASSIAN_KEY_PATTERNS = [JIRA_BROWSE_URL_PATTERN, JIRA_SELECTED_ISSUE_PATTERN];
+const ALL_KEY_PATTERNS = [...ATLASSIAN_KEY_PATTERNS, JIRA_ISSUE_KEY_PATTERN];
+
 /**
  * Extract issue keys from free text (message content, embed fields, etc.)
  * in left-to-right first-seen order without duplicates.
  */
-export function extractJiraIssueKeys(text: string | null | undefined): ReadonlyArray<string> {
+export function extractJiraIssueKeys(
+  text: string | null | undefined,
+  options?: ExtractJiraIssueKeysOptions,
+): ReadonlyArray<string> {
   if (text === null || text === undefined || text.length === 0) return [];
+
+  const skipSentryUrls = options?.skipSentryUrls ?? true;
+  const sentryRanges =
+    skipSentryUrls || options?.includeBareKeys === false ? sentryIssueUrlRanges(text) : [];
+  const includeBareKeys =
+    options?.includeBareKeys ?? (skipSentryUrls ? sentryRanges.length === 0 : true);
 
   const found: string[] = [];
   const seen = new Set<string>();
-
-  const push = (raw: string) => {
-    const key = normalizeJiraIssueKey(raw);
-    if (key === null || seen.has(key)) return;
-    seen.add(key);
-    found.push(key);
-  };
-
-  // Prefer URL-sourced keys first so they appear in URL order when mixed with bare keys
-  // in the same string — still overall left-to-right via a single scan of positions.
-  type Hit = { readonly index: number; readonly key: string };
-  const hits: Hit[] = [];
-
-  for (const pattern of [
-    JIRA_BROWSE_URL_PATTERN,
-    JIRA_SELECTED_ISSUE_PATTERN,
-    JIRA_ISSUE_KEY_PATTERN,
-  ]) {
-    pattern.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(text)) !== null) {
-      const key = normalizeJiraIssueKey(match[1] ?? "");
-      if (key === null) continue;
-      hits.push({ index: match.index, key });
-    }
-  }
-
-  hits.sort((a, b) => a.index - b.index || a.key.localeCompare(b.key));
-  for (const hit of hits) {
-    push(hit.key);
+  const patterns = includeBareKeys ? ALL_KEY_PATTERNS : ATLASSIAN_KEY_PATTERNS;
+  for (const hit of collectJiraKeyHits(text, patterns, sentryRanges, skipSentryUrls)) {
+    if (seen.has(hit.key)) continue;
+    seen.add(hit.key);
+    found.push(hit.key);
   }
   return found;
 }
 
-export function extractJiraIssueKeysFromDiscordMessage(input: {
-  readonly content?: string | null | undefined;
-  readonly embeds?:
-    | ReadonlyArray<{
-        readonly url?: string | null | undefined;
-        readonly title?: string | null | undefined;
-        readonly description?: string | null | undefined;
-        readonly footer?: { readonly text?: string | null | undefined } | null | undefined;
-      }>
-    | null
-    | undefined;
-}): ReadonlyArray<string> {
+function joinDiscordMessageText(input: SentryDiscordMessageInput): string {
   const parts: string[] = [];
   if (input.content) parts.push(input.content);
   for (const embed of input.embeds ?? []) {
@@ -122,7 +147,73 @@ export function extractJiraIssueKeysFromDiscordMessage(input: {
     if (embed.description) parts.push(embed.description);
     if (embed.footer?.text) parts.push(embed.footer.text);
   }
-  return extractJiraIssueKeys(parts.join("\n"));
+  return parts.join("\n");
+}
+
+export function extractJiraIssueKeysFromDiscordMessage(
+  input: SentryDiscordMessageInput,
+): ReadonlyArray<string> {
+  const text = joinDiscordMessageText(input);
+  const sentryContext = discordMessageLooksLikeSentry(input);
+  return extractJiraIssueKeys(text, {
+    includeBareKeys: !sentryContext,
+    skipSentryUrls: true,
+  });
+}
+
+/**
+ * Jira-shaped tokens in a Sentry alert / sentry.io URL that must not be stored as Jira keys.
+ * Atlassian browse URLs in the same message are kept (not returned here).
+ */
+export function jiraIssueKeysMaskedBySentryContext(
+  input: SentryDiscordMessageInput,
+): ReadonlyArray<string> {
+  const text = joinDiscordMessageText(input);
+  const sentryContext = discordMessageLooksLikeSentry(input);
+  const sentryRanges = sentryIssueUrlRanges(text);
+  if (!sentryContext && sentryRanges.length === 0) return [];
+
+  const atlassianOnly = new Set(
+    extractJiraIssueKeys(text, { includeBareKeys: false, skipSentryUrls: true }),
+  );
+  return extractJiraIssueKeys(text, { includeBareKeys: true, skipSentryUrls: false }).filter(
+    (key) => !atlassianOnly.has(key),
+  );
+}
+
+export function jiraIssueKeysMaskedBySentryFromMessages(
+  messages: ReadonlyArray<SentryDiscordMessageInput | null | undefined>,
+): ReadonlyArray<string> {
+  const keys: string[] = [];
+  for (const message of messages) {
+    if (message === null || message === undefined) continue;
+    keys.push(...jiraIssueKeysMaskedBySentryContext(message));
+  }
+  return mergeJiraIssueKeys([], keys);
+}
+
+/** Drop `omit` from `keys` (canonical uppercase), preserving first-seen order. */
+export function omitJiraIssueKeys(
+  keys: ReadonlyArray<string> | null | undefined,
+  omit: ReadonlyArray<string> | null | undefined,
+): ReadonlyArray<string> {
+  const dropped = new Set(mergeJiraIssueKeys([], omit));
+  if (dropped.size === 0) return mergeJiraIssueKeys([], keys);
+  return mergeJiraIssueKeys([], keys).filter((key) => !dropped.has(key));
+}
+
+/**
+ * Merge stored + newly extracted Jira keys, then drop Sentry short ids that were
+ * never independently extracted from a non-Sentry message / Atlassian URL.
+ */
+export function jiraIssueKeysAfterExcludingSentryFalsePositives(
+  existing: ReadonlyArray<string> | null | undefined,
+  extracted: ReadonlyArray<string> | null | undefined,
+  sentryMasked: ReadonlyArray<string> | null | undefined,
+): ReadonlyArray<string> {
+  const keptExtracted = mergeJiraIssueKeys([], extracted);
+  const drop = omitJiraIssueKeys(sentryMasked, keptExtracted);
+  return omitJiraIssueKeys(mergeJiraIssueKeys(existing, keptExtracted), drop);
 }
 
 /** Append newly seen keys preserving first-seen order; never duplicates. */

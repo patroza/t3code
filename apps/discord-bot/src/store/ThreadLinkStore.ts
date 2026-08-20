@@ -10,6 +10,8 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
+import { mergeSentryIssueUrls } from "../presentation/sentryLinks.ts";
+
 export const LINKS_DOCUMENT_VERSION = 2 as const;
 
 export const ThreadLinkStatus = Schema.Literals(["active", "tombstone"]);
@@ -67,6 +69,13 @@ export const ThreadLink = Schema.Struct({
    */
   jiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
   /**
+   * Sentry issue URLs observed for this Discord thread, in first-seen order
+   * (canonical https://*.sentry.io/issues/…, no duplicates).
+   * Surfaced on the pinned thread-info message next to Jira — Sentry short ids
+   * look like Jira keys and must not be stored as jiraIssueKeys.
+   */
+  sentryIssueUrls: Schema.optional(Schema.Array(Schema.String)),
+  /**
    * GitHub pull request URLs observed for this Discord thread, in first-seen order
    * (canonical https://github.com/owner/repo/pull/N, no duplicates).
    * Surfaced on the pinned thread-info message next to Jira.
@@ -105,6 +114,7 @@ export type ThreadLink = {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
   readonly initialModelLine?: string | undefined;
@@ -134,6 +144,7 @@ export type ThreadLinkInput = {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
   readonly initialModelLine?: string | undefined;
@@ -177,6 +188,7 @@ const ThreadLinkV1 = Schema.Struct({
   streamDiscordMessageIds: Schema.optional(Schema.Array(Schema.String)),
   sentDiscordUserMessageIds: Schema.optional(Schema.Array(Schema.String)),
   jiraIssueKeys: Schema.optional(Schema.Array(Schema.String)),
+  sentryIssueUrls: Schema.optional(Schema.Array(Schema.String)),
   prUrls: Schema.optional(Schema.Array(Schema.String)),
   infoDiscordMessageId: Schema.optional(Schema.String),
 });
@@ -257,6 +269,7 @@ function asThreadLink(link: {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
   readonly initialModelLine?: string | undefined;
@@ -284,6 +297,7 @@ function asThreadLink(link: {
     streamDiscordMessageIds: link.streamDiscordMessageIds,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
+    sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
     initialModelLine: link.initialModelLine,
@@ -305,6 +319,7 @@ export function migrateV1Link(link: {
   readonly streamDiscordMessageIds?: ReadonlyArray<string> | undefined;
   readonly sentDiscordUserMessageIds?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
   readonly infoDiscordMessageId?: string | undefined;
   readonly initialModelLine?: string | undefined;
@@ -330,6 +345,7 @@ export function migrateV1Link(link: {
     streamDiscordMessageIds: link.streamDiscordMessageIds,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
+    sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
     initialModelLine: link.initialModelLine,
@@ -361,6 +377,7 @@ export function normalizeThreadLinkInput(link: ThreadLinkInput): ThreadLink {
     streamDiscordMessageIds: link.streamDiscordMessageIds,
     sentDiscordUserMessageIds: link.sentDiscordUserMessageIds,
     jiraIssueKeys: link.jiraIssueKeys,
+    sentryIssueUrls: link.sentryIssueUrls,
     prUrls: link.prUrls,
     infoDiscordMessageId: link.infoDiscordMessageId,
     initialModelLine: link.initialModelLine,
@@ -466,6 +483,15 @@ export interface ThreadLinkStoreService {
   readonly setJiraIssueKeys: (
     discordThreadId: string,
     jiraIssueKeys: ReadonlyArray<string>,
+  ) => Effect.Effect<ThreadLink | null>;
+  /** Merge newly observed Sentry issue URLs in first-seen order (no duplicates). */
+  readonly appendSentryIssueUrls: (
+    discordThreadId: string,
+    sentryIssueUrls: ReadonlyArray<string>,
+  ) => Effect.Effect<ThreadLink | null>;
+  readonly setSentryIssueUrls: (
+    discordThreadId: string,
+    sentryIssueUrls: ReadonlyArray<string>,
   ) => Effect.Effect<ThreadLink | null>;
   /** Merge newly observed GitHub PR URLs in first-seen order (no duplicates). */
   readonly appendPrUrls: (
@@ -651,6 +677,10 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
                         link.jiraIssueKeys !== undefined
                           ? normalized.jiraIssueKeys
                           : existing.jiraIssueKeys,
+                      sentryIssueUrls:
+                        link.sentryIssueUrls !== undefined
+                          ? normalized.sentryIssueUrls
+                          : existing.sentryIssueUrls,
                       prUrls: link.prUrls !== undefined ? normalized.prUrls : existing.prUrls,
                       infoDiscordMessageId:
                         link.infoDiscordMessageId !== undefined
@@ -785,6 +815,32 @@ export const makeThreadLinkStore = (dataDirRaw: string) =>
           return {
             ...existing,
             jiraIssueKeys: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+
+      appendSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
+        updateLink(discordThreadId, (existing) => {
+          const merged = mergeSentryIssueUrls(existing.sentryIssueUrls, sentryIssueUrls);
+          if (
+            merged.length === (existing.sentryIssueUrls?.length ?? 0) &&
+            merged.every((url, index) => url === existing.sentryIssueUrls?.[index])
+          ) {
+            return existing;
+          }
+          return {
+            ...existing,
+            sentryIssueUrls: merged.length > 0 ? merged : undefined,
+            updatedAt: nowIso(),
+          };
+        }),
+
+      setSentryIssueUrls: (discordThreadId, sentryIssueUrls) =>
+        updateLink(discordThreadId, (existing) => {
+          const merged = mergeSentryIssueUrls([], sentryIssueUrls);
+          return {
+            ...existing,
+            sentryIssueUrls: merged.length > 0 ? merged : undefined,
             updatedAt: nowIso(),
           };
         }),

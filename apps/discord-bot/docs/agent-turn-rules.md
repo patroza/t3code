@@ -20,6 +20,7 @@ URL forms only; never bare snowflakes.
 **t3url:** private GitHub repo → turn `t3 full=…`; public repo → turn `t3 short=…` (host is always just `t3vm`). Prefer short when unsure (don't leak internal hosts on public PRs).
 
 **jira:** put turn keys in PR body (prefer primary in title/branch).
+**sentry:** turn `sentry:` URLs are Sentry issues — not Jira. Fetch via Sentry MCP.
 
 **ref:** referenced msg is primary context when present.
 

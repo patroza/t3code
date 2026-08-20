@@ -8,8 +8,13 @@ import type { DiscordBotConfig } from "../config.ts";
 import { resolveGitHubUrlForWorkspace } from "../presentation/githubLinks.ts";
 import {
   extractJiraIssueKeysFromDiscordMessage,
-  mergeJiraIssueKeys,
+  jiraIssueKeysAfterExcludingSentryFalsePositives,
+  jiraIssueKeysMaskedBySentryContext,
 } from "../presentation/jiraLinks.ts";
+import {
+  extractSentryIssueUrlsFromDiscordMessage,
+  mergeSentryIssueUrls,
+} from "../presentation/sentryLinks.ts";
 import {
   buildDiscordThreadJumpUrl,
   buildT3WebThreadUrl,
@@ -44,6 +49,7 @@ interface DiscordMessageSummary {
     readonly url?: string | null;
     readonly title?: string | null;
     readonly description?: string | null;
+    readonly author?: { readonly name?: string | null } | null;
     readonly footer?: { readonly text?: string | null } | null;
   }> | null;
   readonly author?: {
@@ -66,6 +72,7 @@ export interface ThreadInfoPinMessageRef {
   readonly channelId: string;
   readonly messageId: string;
   readonly jiraIssueKeys: ReadonlyArray<string>;
+  readonly sentryIssueUrls: ReadonlyArray<string>;
   readonly prUrls: ReadonlyArray<string>;
 }
 
@@ -148,6 +155,7 @@ export function buildThreadInfoRenderInput(input: {
   readonly local?: boolean | undefined;
   readonly webLink?: string | null | undefined;
   readonly extraLines?: ReadonlyArray<string | null | undefined> | undefined;
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
   readonly jiraBrowseBaseUrl?: string | undefined;
   readonly prUrls?: ReadonlyArray<string> | undefined;
@@ -178,6 +186,7 @@ export function buildThreadInfoRenderInput(input: {
     worktreeLine,
     webLink: input.webLink ?? null,
     extraLines: [...(input.titleLine ? [input.titleLine] : []), ...(input.extraLines ?? [])],
+    sentryIssueUrls: input.sentryIssueUrls ?? [],
     jiraIssueKeys: input.jiraIssueKeys ?? [],
     jiraBrowseBaseUrl: input.jiraBrowseBaseUrl,
     prUrls: input.prUrls ?? [],
@@ -524,13 +533,16 @@ export const ensureThreadInfoPin = (input: {
   });
 
 /**
- * Persist any newly observed Jira keys / PR URLs, then create/update + pin the thread-info message.
+ * Persist any newly observed Jira keys / Sentry / PR URLs, then create/update + pin the thread-info message.
  */
 export const upsertThreadInfoPin = (input: {
   readonly discordThreadId: string;
   readonly t3ThreadId: string;
   readonly botConfig: DiscordBotConfig;
   readonly incomingJiraKeys?: ReadonlyArray<string>;
+  /** Sentry short ids that were previously stored as Jira keys and should be dropped. */
+  readonly dropJiraIssueKeys?: ReadonlyArray<string>;
+  readonly incomingSentryIssueUrls?: ReadonlyArray<string>;
   readonly incomingPrUrls?: ReadonlyArray<string>;
   readonly modelSelection?: { readonly instanceId: string; readonly model: string } | null;
   readonly worktreePath?: string | null;
@@ -545,14 +557,33 @@ export const upsertThreadInfoPin = (input: {
     const links = yield* ThreadLinkStore;
     const existing = yield* links.getByDiscordThreadId(input.discordThreadId);
 
-    let jiraIssueKeys = mergeJiraIssueKeys(existing?.jiraIssueKeys, input.incomingJiraKeys ?? []);
-    if ((input.incomingJiraKeys?.length ?? 0) > 0) {
-      const updated = yield* links.appendJiraIssueKeys(
-        input.discordThreadId,
-        input.incomingJiraKeys ?? [],
-      );
+    let jiraIssueKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
+      existing?.jiraIssueKeys,
+      input.incomingJiraKeys ?? [],
+      input.dropJiraIssueKeys ?? [],
+    );
+    const existingJira = existing?.jiraIssueKeys ?? [];
+    const jiraUnchanged =
+      jiraIssueKeys.length === existingJira.length &&
+      jiraIssueKeys.every((key, index) => key === existingJira[index]);
+    if (!jiraUnchanged) {
+      const updated = yield* links.setJiraIssueKeys(input.discordThreadId, jiraIssueKeys);
       if (updated !== null) {
         jiraIssueKeys = updated.jiraIssueKeys ?? jiraIssueKeys;
+      }
+    }
+
+    let sentryIssueUrls = mergeSentryIssueUrls(
+      existing?.sentryIssueUrls,
+      input.incomingSentryIssueUrls ?? [],
+    );
+    if ((input.incomingSentryIssueUrls?.length ?? 0) > 0) {
+      const updated = yield* links.appendSentryIssueUrls(
+        input.discordThreadId,
+        input.incomingSentryIssueUrls ?? [],
+      );
+      if (updated !== null) {
+        sentryIssueUrls = updated.sentryIssueUrls ?? sentryIssueUrls;
       }
     }
 
@@ -613,6 +644,7 @@ export const upsertThreadInfoPin = (input: {
         webLink: t3WebThreadUrl(input.botConfig.webUiBaseUrl, input.t3ThreadId),
         extraLines: input.extraLines,
         titleLine: input.titleLine,
+        sentryIssueUrls,
         jiraIssueKeys,
         jiraBrowseBaseUrl: input.botConfig.jiraBrowseBaseUrl,
         prUrls,
@@ -636,6 +668,7 @@ export const upsertThreadInfoPin = (input: {
       channelId: pin.channelId,
       messageId: pin.messageId,
       jiraIssueKeys,
+      sentryIssueUrls,
       prUrls,
     } satisfies ThreadInfoPinMessageRef;
   });
@@ -713,21 +746,37 @@ const backfillOneThreadInfoPin = (link: ThreadLink, botConfig: DiscordBotConfig)
     const history = yield* fetchChannelMessagesOldestFirst(link.discordThreadId);
 
     const keysFromHistory: string[] = [];
+    const sentryMaskedFromHistory: string[] = [];
+    const sentryUrlsFromHistory: string[] = [];
     const prUrlsFromHistory: string[] = [];
     let discoveredInfoMessageId: string | null = link.infoDiscordMessageId ?? null;
 
     for (const message of history) {
+      if (isThreadInfoPinContent(message.content)) {
+        if (discoveredInfoMessageId === null) discoveredInfoMessageId = message.id;
+        // Do not re-parse our own pin — it can echo previously misclassified Jira keys.
+        continue;
+      }
       const keys = extractJiraIssueKeysFromDiscordMessage(message);
       for (const key of keys) keysFromHistory.push(key);
+      for (const key of jiraIssueKeysMaskedBySentryContext(message)) {
+        sentryMaskedFromHistory.push(key);
+      }
+      for (const url of extractSentryIssueUrlsFromDiscordMessage(message)) {
+        sentryUrlsFromHistory.push(url);
+      }
       const prUrls = extractPullRequestUrlsFromDiscordMessage(message);
       for (const url of prUrls) prUrlsFromHistory.push(url);
-      if (discoveredInfoMessageId === null && isThreadInfoPinContent(message.content)) {
-        discoveredInfoMessageId = message.id;
-      }
     }
 
-    const mergedKeys = mergeJiraIssueKeys(link.jiraIssueKeys, keysFromHistory);
+    const mergedKeys = jiraIssueKeysAfterExcludingSentryFalsePositives(
+      link.jiraIssueKeys,
+      keysFromHistory,
+      sentryMaskedFromHistory,
+    );
     yield* links.setJiraIssueKeys(link.discordThreadId, mergedKeys);
+    const mergedSentryUrls = mergeSentryIssueUrls(link.sentryIssueUrls, sentryUrlsFromHistory);
+    yield* links.setSentryIssueUrls(link.discordThreadId, mergedSentryUrls);
     const mergedPrUrls = mergePullRequestUrls(link.prUrls, prUrlsFromHistory);
     yield* links.setPrUrls(link.discordThreadId, mergedPrUrls);
     if (discoveredInfoMessageId !== null && discoveredInfoMessageId !== link.infoDiscordMessageId) {
@@ -743,6 +792,8 @@ const backfillOneThreadInfoPin = (link: ThreadLink, botConfig: DiscordBotConfig)
       t3ThreadId: link.t3ThreadId,
       botConfig,
       incomingJiraKeys: [],
+      dropJiraIssueKeys: sentryMaskedFromHistory,
+      incomingSentryIssueUrls: [],
       incomingPrUrls: [],
       modelSelection,
       worktreePath,

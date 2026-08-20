@@ -18,6 +18,7 @@ import {
   toT3PublicShortThreadUrl,
 } from "./discordPrAttribution.ts";
 import { mergeJiraIssueKeys } from "./jiraLinks.ts";
+import { formatLinkedSentryWorkItemsBlock } from "./sentryLinks.ts";
 
 function discordBotPackageRoot(): string {
   // presentation/ → src/ → package root
@@ -81,6 +82,12 @@ export interface ThreadBootstrapContext {
    * Re-injected every turn so later PR/work turns still see earlier ticket links.
    */
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  /**
+   * Durable Sentry issue URLs for this Discord thread (first-seen order).
+   * Re-injected every turn so later investigation turns still see them as Sentry,
+   * not Jira.
+   */
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   /** Browse base for turning keys into links (e.g. https://org.atlassian.net). */
   readonly jiraBrowseBaseUrl?: string | undefined;
   /** Guild snowflake — required to build a real Discord thread jump URL for PR footers. */
@@ -217,6 +224,7 @@ export function buildDiscordTurnPrompt(input: {
   readonly referencedMessage?: DiscordMessageLike | null | undefined;
   readonly referencedMessageUrl?: string | undefined;
   readonly jiraIssueKeys?: ReadonlyArray<string> | undefined;
+  readonly sentryIssueUrls?: ReadonlyArray<string> | undefined;
   readonly jiraBrowseBaseUrl?: string | undefined;
   readonly guildId?: string | null | undefined;
   readonly discordThreadId?: string | null | undefined;
@@ -235,6 +243,9 @@ export function buildDiscordTurnPrompt(input: {
           url: input.referencedMessageUrl,
         })}`
       : "";
+
+  const sentryBlock = formatLinkedSentryWorkItemsBlock(input.sentryIssueUrls);
+  const sentrySection = sentryBlock !== null ? `\n${sentryBlock}` : "";
 
   const jiraBlock = formatLinkedJiraWorkItemsBlock({
     jiraIssueKeys: input.jiraIssueKeys,
@@ -262,7 +273,7 @@ export function buildDiscordTurnPrompt(input: {
   // Discord overlay path is surface-specific static policy for this turn.
   return `## Discord conversation context
 rules: ${overlayRulesPath}
-req: ${formatRequesterLine(input.requester)}${jiraSection}${prFooterSection}${t3Section}
+req: ${formatRequesterLine(input.requester)}${sentrySection}${jiraSection}${prFooterSection}${t3Section}
 
 ## User request
 ${input.mentionPrompt.trim()}${referencedBlock}`;
@@ -379,6 +390,7 @@ export function buildFirstTurnPrompt(input: ThreadBootstrapContext): string {
     referencedMessage: input.referencedMessage,
     referencedMessageUrl: input.referencedMessageUrl,
     jiraIssueKeys: input.jiraIssueKeys,
+    sentryIssueUrls: input.sentryIssueUrls,
     jiraBrowseBaseUrl: input.jiraBrowseBaseUrl,
     guildId: input.guildId,
     discordThreadId: input.discordThreadId,
@@ -470,6 +482,7 @@ ${buildDiscordTurnPrompt({
   starter: input.starter,
   // Referenced / starter bodies are rendered in dedicated bootstrap sections below.
   jiraIssueKeys: input.jiraIssueKeys,
+  sentryIssueUrls: input.sentryIssueUrls,
   jiraBrowseBaseUrl: input.jiraBrowseBaseUrl,
   guildId: input.guildId,
   discordThreadId: input.discordThreadId,

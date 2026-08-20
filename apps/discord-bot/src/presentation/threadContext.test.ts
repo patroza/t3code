@@ -175,6 +175,7 @@ describe("resolveAgentTurnRulesPath", () => {
     expect(body).toContain("PR footer");
     expect(body).toContain("Style:");
     expect(body).toContain("client overlay");
+    expect(body).toContain("**sentry:**");
   });
 });
 
@@ -277,6 +278,17 @@ describe("buildDiscordTurnPrompt", () => {
       jiraBrowseBaseUrl: "https://example.atlassian.net",
     });
     expect(prompt).not.toContain("jira:");
+    expect(prompt).not.toContain("sentry:");
+  });
+
+  it("injects sentry issue URLs (not as Jira keys)", () => {
+    const prompt = buildDiscordTurnPrompt({
+      mentionPrompt: "what happened here?",
+      sentryIssueUrls: ["https://macs-scanner.sentry.io/issues/SCANNER-313"],
+    });
+    expect(prompt).toContain("sentry: https://macs-scanner.sentry.io/issues/SCANNER-313");
+    expect(prompt).not.toContain("jira:");
+    expect(prompt).toContain("what happened here?");
   });
 
   it("leaves identity attribution to the server", () => {
