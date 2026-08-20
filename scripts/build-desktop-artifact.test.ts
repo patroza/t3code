@@ -490,7 +490,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // and .bin shims never ship.
       assert.equal(
         WINDOWS_SERVER_ASAR_UNPACK_GLOB,
-        "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}",
+        "{*.node,**/*.node,*.dll,**/*.dll,*.exe,**/*.exe,*.so,**/*.so,*.so.*,**/*.so.*,*.dylib,**/*.dylib}",
       );
       assert.deepStrictEqual(WINDOWS_SERVER_ASAR_IGNORE_GLOBS, [
         "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
