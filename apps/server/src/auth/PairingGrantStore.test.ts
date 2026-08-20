@@ -1,4 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { LOCAL_BOOTSTRAP_CREDENTIAL_FILE } from "@t3tools/shared/serverRuntime";
 import { expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -34,6 +39,29 @@ const makePairingGrantStoreLayer = (
   PairingGrantStore.layer.pipe(
     Layer.provide(SqlitePersistenceMemory),
     Layer.provide(makeServerConfigLayer(overrides)),
+  );
+
+const makeLocalBootstrapGrantStoreLayer = (credential: string) =>
+  PairingGrantStore.layer.pipe(
+    Layer.provide(SqlitePersistenceMemory),
+    Layer.provide(
+      Layer.effect(
+        ServerConfig.ServerConfig,
+        Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          NodeFS.writeFileSync(
+            NodePath.join(config.stateDir, LOCAL_BOOTSTRAP_CREDENTIAL_FILE),
+            `${credential}\n`,
+            { mode: 0o600 },
+          );
+          return config;
+        }),
+      ).pipe(
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-auth-local-bootstrap-test-" }),
+        ),
+      ),
+    ),
   );
 
 const makePairingGrantStoreTestLayer = (
@@ -188,6 +216,28 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
           makePairingGrantStoreLayer({
             desktopBootstrapToken: "desktop-bootstrap-token",
           }),
+          TestClock.layer(),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("seeds the local bootstrap file as a long-lived reusable grant", () =>
+    Effect.gen(function* () {
+      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
+
+      yield* TestClock.adjust(Duration.hours(25));
+      const afterADay = yield* bootstrapCredentials.consume("local-file-bootstrap-token");
+      expect(afterADay.method).toBe("desktop-bootstrap");
+      expect(afterADay.subject).toBe("local-bootstrap");
+
+      yield* TestClock.adjust(Duration.days(400));
+      const monthsLater = yield* bootstrapCredentials.consume("local-file-bootstrap-token");
+      expect(monthsLater.subject).toBe("local-bootstrap");
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          makeLocalBootstrapGrantStoreLayer("local-file-bootstrap-token"),
           TestClock.layer(),
         ),
       ),

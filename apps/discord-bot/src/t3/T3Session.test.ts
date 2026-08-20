@@ -1,12 +1,17 @@
+// @effect-diagnostics nodeBuiltinImport:off - existence contract reads T3Session source on disk.
+import * as NodeFS from "node:fs";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  isT3InvalidCredentialError,
   isT3TransportError,
   shouldContinueWaitingForT3Ready,
   shouldPersistThreadModelSelectionForNextTurn,
   T3_STILL_CONNECTING_MESSAGE,
 } from "./T3Session.ts";
+
+const t3SessionSource = NodeFS.readFileSync(new URL("./T3Session.ts", import.meta.url), "utf8");
 
 describe("isT3TransportError", () => {
   it("matches SocketCloseError and ConnectionTransientError", () => {
@@ -23,6 +28,34 @@ describe("isT3TransportError", () => {
   it("does not match ordinary application errors", () => {
     expect(isT3TransportError(new Error("No T3 project registered at /tmp/x"))).toBe(false);
     expect(isT3TransportError(new Error(T3_STILL_CONNECTING_MESSAGE))).toBe(false);
+  });
+});
+
+describe("isT3InvalidCredentialError", () => {
+  it("matches bootstrap/bearer rejection copy", () => {
+    expect(
+      isT3InvalidCredentialError(
+        new Error(
+          "Bootstrap failed: The environment rejected this client's credentials (invalid_credential).",
+        ),
+      ),
+    ).toBe(true);
+    expect(isT3InvalidCredentialError(new Error('reason: "invalid_credential"'))).toBe(true);
+  });
+
+  it("does not match transport or timeout copy", () => {
+    expect(isT3InvalidCredentialError(new Error("SocketCloseError: 1005"))).toBe(false);
+    expect(isT3InvalidCredentialError(new Error(T3_STILL_CONNECTING_MESSAGE))).toBe(false);
+  });
+});
+
+describe("persisted T3 bearer", () => {
+  it("reuses a stored bearer on connect and falls back to bootstrap when rejected", () => {
+    expect(t3SessionSource).toContain("readPersistedBearerSession(botConfig.dataDir)");
+    expect(t3SessionSource).toContain("shouldReusePersistedBearer({");
+    expect(t3SessionSource).toContain("writePersistedBearerSession(botConfig.dataDir");
+    expect(t3SessionSource).toContain("Persisted T3 bearer rejected; falling back to bootstrap");
+    expect(t3SessionSource).toContain("clearPersistedBearerSession(botConfig.dataDir)");
   });
 });
 

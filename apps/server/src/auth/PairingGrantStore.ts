@@ -265,6 +265,12 @@ const DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES = Duration.minutes(5);
 // window can still recover by re-bootstrapping rather than locking
 // the user out of the backend.
 const DESKTOP_BOOTSTRAP_TTL_HOURS = Duration.hours(24);
+// File-backed local bootstrap (`local-bootstrap-credential` in stateDir) is for
+// colocated trusted clients — the Discord bot on t3vm re-exchanges it on every
+// process start. It must outlive a long-running server: a 24h TTL meant any bot
+// restart more than a day after `t3code-server` started failed with
+// `invalid_credential` until the server itself was restarted.
+const LOCAL_BOOTSTRAP_TTL = Duration.days(3650);
 // A dev server's startup token is read off a log by whoever (or whatever) is
 // driving the session, often minutes later — after a `node --watch` restart, a
 // detour into another task, or a hand-off to the person actually doing the
@@ -353,7 +359,7 @@ export const make = Effect.gen(function* () {
       scopes: AuthAdministrativeScopes,
       subject: "local-bootstrap",
       expiresAt: DateTime.add(now, {
-        milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
+        milliseconds: Duration.toMillis(LOCAL_BOOTSTRAP_TTL),
       }),
       remainingUses: "unbounded",
     });

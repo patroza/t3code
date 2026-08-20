@@ -65,6 +65,13 @@ import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
 import { newCommandId, newMessageId, newThreadId, shortId } from "./ids.ts";
+import {
+  clearPersistedBearerSession,
+  persistedBearerExpiresAtIso,
+  readPersistedBearerSession,
+  shouldReusePersistedBearer,
+  writePersistedBearerSession,
+} from "./PersistedBearer.ts";
 
 function wsBaseUrl(httpBaseUrl: string): string {
   const url = new URL(httpBaseUrl);
@@ -96,6 +103,12 @@ export function isT3TransportError(cause: unknown): boolean {
   if (/ECONNREFUSED|ECONNRESET|ENOTFOUND|EPIPE|ETIMEDOUT/i.test(msg)) return true;
   if (/websocket/i.test(msg) && /close|closed|reset|refused|not connected/i.test(msg)) return true;
   return false;
+}
+
+/** True when T3 rejected a bearer/bootstrap credential (re-bootstrap, don't loop). */
+export function isT3InvalidCredentialError(cause: unknown): boolean {
+  const msg = messageFromCause(cause);
+  return /invalid_credential|rejected this client's credentials/i.test(msg);
 }
 
 /**
@@ -685,29 +698,73 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
             : new T3SessionError(messageFromCause(cause), { cause }),
       });
 
+    const persistBootstrappedBearer = (accessToken: string, expiresInSeconds: number) =>
+      Effect.gen(function* () {
+        const nowMs = yield* Clock.currentTimeMillis;
+        try {
+          writePersistedBearerSession(botConfig.dataDir, {
+            accessToken,
+            expiresAt: persistedBearerExpiresAtIso(nowMs, expiresInSeconds),
+            httpBaseUrl: botConfig.t3HttpBaseUrl,
+          });
+        } catch (cause) {
+          yield* Effect.logWarning(
+            `Could not persist T3 bearer session: ${messageFromCause(cause)}`,
+          );
+        }
+      });
+
+    const connectWithBootstrapCredential = () =>
+      Effect.gen(function* () {
+        const tokenSession = yield* Effect.tryPromise({
+          try: () =>
+            runtime.runPromise(
+              bootstrapRemoteBearerSession({
+                httpBaseUrl: botConfig.t3HttpBaseUrl,
+                credential: botConfig.t3BootstrapCredential!,
+                clientMetadata: { label: "T3 Discord Bot", deviceType: "bot" },
+              }),
+            ),
+          catch: (cause) =>
+            new T3SessionError(`Bootstrap failed: ${messageFromCause(cause)}`, { cause }),
+        });
+        yield* persistBootstrappedBearer(tokenSession.access_token, tokenSession.expires_in);
+        yield* connectPrepared(botConfig.t3HttpBaseUrl, tokenSession.access_token);
+      });
+
     const connect = () =>
       Effect.gen(function* () {
         if (botConfig.t3BearerToken !== undefined && botConfig.t3BearerToken !== "") {
           yield* connectPrepared(botConfig.t3HttpBaseUrl, botConfig.t3BearerToken);
           return;
         }
+
+        const nowMs = yield* Clock.currentTimeMillis;
+        const persisted = readPersistedBearerSession(botConfig.dataDir);
+        if (
+          persisted !== null &&
+          shouldReusePersistedBearer({
+            record: persisted,
+            nowMs,
+            httpBaseUrl: botConfig.t3HttpBaseUrl,
+          })
+        ) {
+          const persistedConnect = yield* Effect.result(
+            connectPrepared(botConfig.t3HttpBaseUrl, persisted.accessToken),
+          );
+          if (Result.isSuccess(persistedConnect)) return;
+          if (!isT3InvalidCredentialError(persistedConnect.failure)) {
+            return yield* Effect.fail(persistedConnect.failure);
+          }
+          yield* Effect.logWarning("Persisted T3 bearer rejected; falling back to bootstrap");
+          clearPersistedBearerSession(botConfig.dataDir);
+        }
+
         if (
           botConfig.t3BootstrapCredential !== undefined &&
           botConfig.t3BootstrapCredential !== ""
         ) {
-          const tokenSession = yield* Effect.tryPromise({
-            try: () =>
-              runtime.runPromise(
-                bootstrapRemoteBearerSession({
-                  httpBaseUrl: botConfig.t3HttpBaseUrl,
-                  credential: botConfig.t3BootstrapCredential!,
-                  clientMetadata: { label: "T3 Discord Bot", deviceType: "bot" },
-                }),
-              ),
-            catch: (cause) =>
-              new T3SessionError(`Bootstrap failed: ${messageFromCause(cause)}`, { cause }),
-          });
-          yield* connectPrepared(botConfig.t3HttpBaseUrl, tokenSession.access_token);
+          yield* connectWithBootstrapCredential();
           return;
         }
         yield* connectPrepared(botConfig.t3HttpBaseUrl);
