@@ -32,6 +32,13 @@ export type SentryDiscordMessageInput = {
         readonly description?: string | null | undefined;
         readonly author?: { readonly name?: string | null | undefined } | null | undefined;
         readonly footer?: { readonly text?: string | null | undefined } | null | undefined;
+        readonly fields?:
+          | ReadonlyArray<{
+              readonly name?: string | null | undefined;
+              readonly value?: string | null | undefined;
+            }>
+          | null
+          | undefined;
       }>
     | null
     | undefined;
@@ -80,6 +87,9 @@ export function discordMessageLooksLikeSentry(input: SentryDiscordMessageInput):
     }
     if (typeof embed.footer?.text === "string" && textHasSentryIssueUrl(embed.footer.text)) {
       return true;
+    }
+    for (const field of embed.fields ?? []) {
+      if (typeof field.value === "string" && textHasSentryIssueUrl(field.value)) return true;
     }
   }
   return false;
@@ -141,17 +151,75 @@ export function extractSentryIssueUrls(text: string | null | undefined): Readonl
   return found;
 }
 
-export function extractSentryIssueUrlsFromDiscordMessage(
-  input: SentryDiscordMessageInput,
-): ReadonlyArray<string> {
+/**
+ * Sentry Discord footers start with the qualified short id (`SCANNER-313`,
+ * `EXAMPLE-PROJECT-API-JW`). Used to label numeric `/issues/123` URLs.
+ */
+export function sentryShortIdFromText(text: string | null | undefined): string | null {
+  if (text === null || text === undefined) return null;
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  const match = /^([A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+)\b/u.exec(trimmed);
+  const id = match?.[1];
+  if (id === undefined || id.length < 3) return null;
+  return id;
+}
+
+/** Replace a numeric `/issues/123` path with a Sentry short id when we have one. */
+export function applySentryShortIdToIssueUrl(url: string, shortId: string): string {
+  const normalized = normalizeSentryIssueUrl(url);
+  if (normalized === null) return url;
+  try {
+    const parsed = new URL(normalized);
+    if (/\/issues\/\d+$/u.test(parsed.pathname)) {
+      parsed.pathname = parsed.pathname.replace(/\/issues\/\d+$/u, `/issues/${shortId}`);
+      return parsed.toString();
+    }
+  } catch {
+    return normalized;
+  }
+  return normalized;
+}
+
+function joinSentryMessageText(input: SentryDiscordMessageInput): string {
   const parts: string[] = [];
   if (input.content) parts.push(input.content);
   for (const embed of input.embeds ?? []) {
     if (embed.url) parts.push(embed.url);
     if (embed.title) parts.push(embed.title);
     if (embed.description) parts.push(embed.description);
+    if (embed.footer?.text) parts.push(embed.footer.text);
+    for (const field of embed.fields ?? []) {
+      if (field.value) parts.push(field.value);
+    }
   }
-  return extractSentryIssueUrls(parts.join("\n"));
+  return parts.join("\n");
+}
+
+export function extractSentryIssueUrlsFromDiscordMessage(
+  input: SentryDiscordMessageInput,
+): ReadonlyArray<string> {
+  const urls = extractSentryIssueUrls(joinSentryMessageText(input));
+  const shortId =
+    sentryShortIdFromText(input.embeds?.find((embed) => embed.footer?.text)?.footer?.text) ??
+    sentryShortIdFromText(input.content);
+  if (shortId === null) return urls;
+  return mergeSentryIssueUrls(
+    [],
+    urls.map((url) => applySentryShortIdToIssueUrl(url, shortId)),
+  );
+}
+
+/**
+ * Durable per-thread Sentry issue URLs for agent turns (one line).
+ * Omitted when none are known so ordinary prompts stay compact.
+ */
+export function formatLinkedSentryWorkItemsBlock(
+  urls: ReadonlyArray<string> | null | undefined,
+): string | null {
+  const ordered = mergeSentryIssueUrls([], urls);
+  if (ordered.length === 0) return null;
+  return `sentry: ${ordered.join(" ")}`;
 }
 
 /** Compact pin/prompt label: issue path id (`SCANNER-313` or numeric id). */

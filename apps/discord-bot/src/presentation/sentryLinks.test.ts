@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  applySentryShortIdToIssueUrl,
   discordMessageLooksLikeSentry,
   extractSentryIssueUrls,
   extractSentryIssueUrlsFromDiscordMessage,
+  formatLinkedSentryWorkItemsBlock,
   formatSentryLinksForDiscord,
   mergeSentryIssueUrls,
   normalizeSentryIssueUrl,
   sentryIssueLabelFromUrl,
+  sentryShortIdFromText,
 } from "./sentryLinks.ts";
 
 const SCANNER_SENTRY_URL = "https://macs-scanner.sentry.io/issues/SCANNER-313";
@@ -51,7 +54,7 @@ describe("discordMessageLooksLikeSentry / extract from Discord", () => {
       ],
     };
     expect(discordMessageLooksLikeSentry(message)).toBe(true);
-    expect(extractSentryIssueUrlsFromDiscordMessage(message)).toEqual([NUMERIC_SENTRY_URL]);
+    expect(extractSentryIssueUrlsFromDiscordMessage(message)).toEqual([SCANNER_SENTRY_URL]);
   });
 
   it("detects a pasted sentry.io link from a human", () => {
@@ -88,5 +91,29 @@ describe("formatSentryLinksForDiscord", () => {
   it("returns null for empty lists", () => {
     expect(formatSentryLinksForDiscord([])).toBeNull();
     expect(mergeSentryIssueUrls(["x"], [SCANNER_SENTRY_URL])).toEqual([SCANNER_SENTRY_URL]);
+  });
+});
+
+describe("sentry short ids on numeric issue URLs", () => {
+  it("reads the qualified short id from a Sentry footer", () => {
+    expect(sentryShortIdFromText("SCANNER-313")).toBe("SCANNER-313");
+    expect(sentryShortIdFromText("SCANNER-313 via Scanner API • Today at 12:55 PM")).toBe(
+      "SCANNER-313",
+    );
+    expect(sentryShortIdFromText("please look at PROJ-367")).toBeNull();
+  });
+
+  it("rewrites numeric /issues/N paths", () => {
+    expect(applySentryShortIdToIssueUrl(NUMERIC_SENTRY_URL, "SCANNER-313")).toBe(
+      SCANNER_SENTRY_URL,
+    );
+    expect(applySentryShortIdToIssueUrl(SCANNER_SENTRY_URL, "OTHER-1")).toBe(SCANNER_SENTRY_URL);
+  });
+
+  it("formats durable agent-turn URLs", () => {
+    expect(formatLinkedSentryWorkItemsBlock([`${NUMERIC_SENTRY_URL}/`, SCANNER_SENTRY_URL])).toBe(
+      `sentry: ${NUMERIC_SENTRY_URL} ${SCANNER_SENTRY_URL}`,
+    );
+    expect(formatLinkedSentryWorkItemsBlock([])).toBeNull();
   });
 });

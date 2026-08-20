@@ -117,7 +117,10 @@ import {
   jiraIssueKeysMaskedBySentryFromMessages,
 } from "../presentation/jiraLinks.ts";
 import { extractPullRequestUrlsFromDiscordMessage } from "../presentation/prLinks.ts";
-import { extractSentryIssueUrlsFromDiscordMessage } from "../presentation/sentryLinks.ts";
+import {
+  extractSentryIssueUrlsFromDiscordMessage,
+  mergeSentryIssueUrls,
+} from "../presentation/sentryLinks.ts";
 import { isThreadInfoPinContent } from "../presentation/threadInfoPin.ts";
 import {
   resolveUniqueT3ThreadIdForWorkItems,
@@ -1172,6 +1175,10 @@ const make = (botConfig: DiscordBotConfig) =>
             jiraKeysFromMessages(...continueWorkItemMessages),
             jiraIssueKeysMaskedBySentryFromMessages(continueWorkItemMessages),
           );
+          const turnSentryIssueUrls = mergeSentryIssueUrls(
+            existing.sentryIssueUrls,
+            sentryUrlsFromMessages(...continueWorkItemMessages),
+          );
           const prompt = buildDiscordTurnPrompt({
             mentionPrompt: promptWithAttachments,
             requester: input.mentionMessage,
@@ -1179,6 +1186,7 @@ const make = (botConfig: DiscordBotConfig) =>
             referencedMessage: input.referencedMessage,
             referencedMessageUrl: input.referencedMessageUrl,
             jiraIssueKeys: turnJiraIssueKeys,
+            sentryIssueUrls: turnSentryIssueUrls,
             jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
             guildId: input.guildId,
             discordThreadId: input.discordThreadId,
@@ -1498,6 +1506,7 @@ const make = (botConfig: DiscordBotConfig) =>
           workspaceRoot: resolved.project.workspaceRoot,
           honeycombTraceUrlTemplate: botConfig.honeycombTraceUrlTemplate,
           jiraIssueKeys: firstTurnJiraIssueKeys,
+          sentryIssueUrls: firstTurnSentryIssueUrls,
           jiraBrowseBaseUrl: botConfig.jiraBrowseBaseUrl,
           guildId: input.guildId,
           discordThreadId: input.discordThreadId,
