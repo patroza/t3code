@@ -192,7 +192,7 @@ export function buildNeedsAttentionEntries<
       effectiveSettled(thread, {
         now,
         autoSettleAfterDays,
-        changeRequestState: null,
+        changeRequest: null,
       })
     ) {
       continue;

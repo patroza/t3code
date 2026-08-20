@@ -18,9 +18,10 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import type { ChangeRequestSettleSource } from "@t3tools/client-runtime/state/thread-settled";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from "react-native";
-import { Platform, Pressable, StyleSheet, TextInput, View, useColorScheme } from "react-native";
+import { Platform, Pressable, StyleSheet, TextInput, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -49,6 +50,7 @@ import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { BoardScreen } from "../board/BoardScreen";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
   DEFAULT_OWNERSHIP_FILTER,
   hasCustomHomeListOptions,
@@ -125,6 +127,8 @@ function SidebarHeaderButtonGroup(props: {
   readonly children: ReactNode;
   readonly colorScheme: "light" | "dark";
 }) {
+  const fallbackBackground = useThemeColor("--color-glass-surface");
+  const fallbackBorder = useThemeColor("--color-header-border");
   if (isLiquidGlassSupported) {
     return (
       <LiquidGlassView
@@ -142,9 +146,7 @@ function SidebarHeaderButtonGroup(props: {
     <View
       style={[
         styles.headerButtonGroup,
-        props.colorScheme === "dark"
-          ? { backgroundColor: "rgba(118,118,128,0.24)", borderColor: "rgba(255,255,255,0.08)" }
-          : { backgroundColor: "rgba(255,255,255,0.72)", borderColor: "rgba(0,0,0,0.08)" },
+        { backgroundColor: fallbackBackground, borderColor: fallbackBorder },
         { borderWidth: StyleSheet.hairlineWidth },
       ]}
     >
@@ -215,7 +217,7 @@ function ThreadNavigationSidebarPane(
   props: ThreadNavigationSidebarProps & { readonly nativeChrome: boolean },
 ) {
   const insets = useSafeAreaInsets();
-  const colorScheme = useColorScheme() === "dark" ? "dark" : "light";
+  const { themeAppearance: colorScheme } = useAppearancePreferences();
   const projects = useProjects();
   const threads = useThreadShells();
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
@@ -507,18 +509,24 @@ function ThreadNavigationSidebarPane(
   // (HomeScreen.tsx): flat creation-order card block + settled recency tail.
   // PR states stream in per-row. The next partition applies the configured
   // merge rule and the always-on close rule.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+  const [changeRequestByKey, setChangeRequestByKey] = useState<
+    ReadonlyMap<string, ChangeRequestSettleSource>
   >(() => new Map());
   const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
-      setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
+    (threadKey: string, changeRequest: ChangeRequestSettleSource | null) => {
+      setChangeRequestByKey((current) => {
+        const existing = current.get(threadKey) ?? null;
+        if (
+          (existing?.state ?? null) === (changeRequest?.state ?? null) &&
+          (existing?.updatedAt ?? null) === (changeRequest?.updatedAt ?? null)
+        ) {
+          return current;
+        }
         const next = new Map(current);
-        if (state === null) {
+        if (changeRequest === null) {
           next.delete(threadKey);
         } else {
-          next.set(threadKey, state);
+          next.set(threadKey, changeRequest);
         }
         return next;
       });
@@ -606,7 +614,7 @@ function ThreadNavigationSidebarPane(
         effectiveSettled(thread, {
           now,
           autoSettleAfterDays: 3,
-          changeRequestState: null,
+          changeRequest: null,
         })
       ) {
         keys.add(scopedThreadKey(thread.environmentId, thread.id));
@@ -818,7 +826,7 @@ function ThreadNavigationSidebarPane(
       orderByRecency: options.threadGrouping === "recency",
       searchQuery: props.searchQuery,
       matchedThreadKeys,
-      changeRequestStateByKey,
+      changeRequestByKey,
       autoSettleOnMerge,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
@@ -830,7 +838,7 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
-    changeRequestStateByKey,
+    changeRequestByKey,
     autoSettleOnMerge,
     nowMinute,
     snoozeWakeTick,

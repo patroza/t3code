@@ -39,6 +39,7 @@ import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -992,7 +993,9 @@ export function DiagnosticsSettingsPanel() {
     : false;
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer width="expanded" className="gap-10">
+      <ResourceTelemetryDiagnostics />
+
       {primaryEnvironment ? (
         <SettingsSection title="Host Resources">
           <div className="space-y-2 px-4 py-3 sm:px-5">

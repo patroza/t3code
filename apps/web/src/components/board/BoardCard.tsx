@@ -182,7 +182,6 @@ function BoardCardBody({
             <button
               type="button"
               aria-label={prStatus.tooltip}
-              title={prStatus.tooltip}
               className={cn(
                 "inline-flex cursor-pointer items-center gap-0.5 text-xs tabular-nums hover:underline",
                 prStatus.colorClass,

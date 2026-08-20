@@ -72,6 +72,9 @@ const buildSourcemap: boolean | "hidden" =
 
 const isolatedUnitTestFiles = [
   "src/authBootstrap.test.ts",
+  // Mocks `~/state/session`; same isolate:false hazard as the favicon test —
+  // it failed in one full run and passed in the next, purely on file ordering.
+  "src/browserHistoryStore.test.ts",
   "src/browser/browserRecording.test.ts",
   "src/browser/browserTargetResolver.test.ts",
   "src/browser/desktopTabLifetime.test.ts",

@@ -7,8 +7,9 @@ import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
 import { memo, useCallback, useMemo, type ComponentProps } from "react";
-import { Platform, Pressable, useColorScheme, useWindowDimensions, View } from "react-native";
+import { Platform, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import Svg, { Circle, Path } from "react-native-svg";
 
 import { AppText as Text } from "../../components/AppText";
@@ -17,6 +18,7 @@ import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderUsageIcon } from "../../components/ProviderUsageIcon";
 import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
+import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -56,10 +58,7 @@ const MONO_FONT = Platform.select({
   default: "monospace",
 });
 
-function pullRequestTintColor(
-  state: ThreadPr["state"],
-  colorScheme: ReturnType<typeof useColorScheme>,
-) {
+function pullRequestTintColor(state: ThreadPr["state"], colorScheme: "light" | "dark") {
   const dark = colorScheme === "dark";
   switch (state) {
     case "open":
@@ -536,7 +535,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   >["simultaneousWithExternalGesture"];
 }) {
   const { width: windowWidth } = useWindowDimensions();
-  const colorScheme = useColorScheme();
+  const { themeAppearance: colorScheme } = useAppearancePreferences();
   const compact = props.variant === "compact";
   const selected = props.selected === true;
   // Recycling-safe: resets when the list container is reused for another
@@ -549,6 +548,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const drawerColor = useThemeColor("--color-drawer");
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
+  const selectedForegroundColor = useThemeColor("--color-user-bubble-foreground");
 
   const {
     thread,
@@ -597,10 +597,16 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     : null;
 
   const backgroundColor = compact ? screenColor : drawerColor;
-  const effectivePressedBackground = selected ? "rgba(255,255,255,0.16)" : pressedBackgroundColor;
+  const effectivePressedBackground = selected
+    ? themeColorWithAlpha(String(selectedForegroundColor), 0.16)
+    : pressedBackgroundColor;
   const effectiveStatus =
     selected && status
-      ? { ...status, pillClassName: "bg-white/20", textClassName: "text-white" }
+      ? {
+          ...status,
+          pillClassName: "bg-user-bubble-foreground/20",
+          textClassName: "text-user-bubble-foreground",
+        }
       : status;
 
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
@@ -673,11 +679,15 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
           <View className="flex-row items-center gap-0.5">
             <PullRequestIcon
               size={compact ? 13 : 11}
-              color={selected ? "#ffffff" : pullRequestTintColor(pr.state, colorScheme)}
+              color={
+                selected
+                  ? String(selectedForegroundColor)
+                  : pullRequestTintColor(pr.state, colorScheme)
+              }
             />
             <Text
               className={`${compact ? "text-sm" : "text-xs"} font-t3-medium ${
-                selected ? "text-white" : pr.textClassName
+                selected ? "text-user-bubble-foreground" : pr.textClassName
               }`}
             >
               {pr.label}

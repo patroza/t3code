@@ -478,13 +478,12 @@ export function BoardScreen(props: BoardScreenProps) {
     const keys = new Set<string>();
     for (const thread of filteredThreads) {
       if (!settlementEnvironmentIds.has(thread.environmentId)) continue;
-      const changeRequestState =
-        resolveThreadChangeRequest(thread.branch, getGitStatus(thread))?.state ?? null;
+      const changeRequest = resolveThreadChangeRequest(thread.branch, getGitStatus(thread));
       if (
         effectiveSettled(thread, {
           now,
           autoSettleAfterDays: AUTO_SETTLE_AFTER_DAYS,
-          changeRequestState,
+          changeRequest,
         })
       ) {
         keys.add(scopedThreadKey(thread.environmentId, thread.id));

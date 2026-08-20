@@ -145,7 +145,6 @@ export function SourceChannelGlyph(props: {
           : "inline-flex size-3.5 shrink-0 items-center justify-center rounded text-[8px] font-semibold text-muted-foreground/70 ring-1 ring-border/60",
         props.className,
       )}
-      title={props.channel}
       data-testid="source-channel-glyph"
       aria-label={`Source ${props.channel}`}
     >

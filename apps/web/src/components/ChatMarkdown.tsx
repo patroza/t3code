@@ -1021,7 +1021,7 @@ const MarkdownWorkspaceImage = memo(function MarkdownWorkspaceImage({
     return (
       <span
         className="my-2 inline-flex max-w-full items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground"
-        title={localPath}
+        aria-label={localPath}
       >
         <span aria-hidden>🖼</span>
         <span className="min-w-0 truncate">
