@@ -8,6 +8,7 @@ import {
   bridgeNeedsHttpReconcile,
   isDeliveryBehindOrchestration,
   isStreamTipDisplacedByForeignMessage,
+  isStreamTipDisplacedByRecentMessages,
   isDiscordContentMessageType,
   pickLatestContentMessageId,
   deliveryFailureBackoffSeconds,
@@ -35,6 +36,7 @@ import {
   firstSnapshotBridgeAction,
   pickLatestContentMessage,
   nextBridgeStateAfterAdoptWorkingAck,
+  nextStateAfterMovingWorkingTip,
   planStreamTipFreezeOnDisplacement,
   resolveThreadTitleChangeRequestFromStatus,
   rewriteInlinePathCodeSpansForDiscord,
@@ -575,6 +577,97 @@ describe("isStreamTipDisplacedByForeignMessage / content message types", () => {
         latestMessageId: "tip-2",
         streamTipId: "tip-1",
         ownedMessageIds: ["tip-1", "tip-2"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isStreamTipDisplacedByRecentMessages", () => {
+  const bot = "bot-1";
+  const owned = ["working-tip", "tasks-msg", "info-pin"];
+
+  it("does not hop when Working is still the channel tip", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [{ id: "working-tip", type: 0, author: { id: bot } }],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hop when latest is Tasks with no human after Working", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "tasks-msg", type: 0, author: { id: bot } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(false);
+  });
+
+  it("hops when humans sat between Working and a later Tasks post", () => {
+    // Working → human chat → channel rename → Tasks. Latest-only missed this.
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "tasks-msg", type: 0, author: { id: bot } },
+          { id: "rename", type: 4, author: { id: bot } },
+          { id: "human-2", type: 0, author: { id: "user-b" } },
+          { id: "human-1", type: 0, author: { id: "user-a" } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(true);
+  });
+
+  it("hops when a human is the latest content message", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "human-1", type: 0, author: { id: "user-a" } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not hop for channel rename + Tasks after Working", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "tasks-msg", type: 0, author: { id: bot } },
+          { id: "rename", type: 4, author: { id: bot } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hop when humans are older than Working", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "working-tip", type: 0, author: { id: bot } },
+          { id: "human-1", type: 0, author: { id: "user-a" } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
       }),
     ).toBe(false);
   });
@@ -1696,6 +1789,40 @@ describe("formatEchoedUserMessage", () => {
     expect(formatEchoedUserMessage(userMessage("user-legacy"))).toBe(
       "💭 from **unknown@unknown**:\nfollow-up",
     );
+  });
+});
+
+describe("nextStateAfterMovingWorkingTip", () => {
+  it("creates the new tip first conceptually: old ids are returned for delete after create", () => {
+    const moved = nextStateAfterMovingWorkingTip({
+      priorDiscordMessageIds: ["working-above"],
+      priorStaleStreamMessageIds: ["stale-a"],
+      newTipIds: ["working-below"],
+    });
+    expect(moved.discordMessageIds).toEqual(["working-below"]);
+    expect(moved.oldIdsToDelete).toEqual(["working-above"]);
+    expect(moved.staleStreamMessageIds).toEqual(["stale-a"]);
+    expect(moved.streamBreakPrefix).toBe("");
+  });
+
+  it("drops deleted ids from stale so finalize does not retry the delete", () => {
+    const moved = nextStateAfterMovingWorkingTip({
+      priorDiscordMessageIds: ["working-above"],
+      priorStaleStreamMessageIds: ["working-above", "stale-a"],
+      newTipIds: ["working-below"],
+    });
+    expect(moved.oldIdsToDelete).toEqual(["working-above"]);
+    expect(moved.staleStreamMessageIds).toEqual(["stale-a"]);
+  });
+
+  it("keeps earlier stream chunks when only the live Working tip moves", () => {
+    const moved = nextStateAfterMovingWorkingTip({
+      priorDiscordMessageIds: ["working-above"],
+      priorStaleStreamMessageIds: [],
+      newTipIds: ["chunk-1", "working-below"],
+    });
+    expect(moved.discordMessageIds).toEqual(["chunk-1", "working-below"]);
+    expect(moved.oldIdsToDelete).toEqual(["working-above"]);
   });
 });
 
