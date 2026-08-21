@@ -36,6 +36,7 @@ import {
   firstSnapshotBridgeAction,
   pickLatestContentMessage,
   nextBridgeStateAfterAdoptWorkingAck,
+  nextStateAfterMovingWorkingTip,
   planStreamTipFreezeOnDisplacement,
   resolveThreadTitleChangeRequestFromStatus,
   rewriteInlinePathCodeSpansForDiscord,
@@ -1788,6 +1789,40 @@ describe("formatEchoedUserMessage", () => {
     expect(formatEchoedUserMessage(userMessage("user-legacy"))).toBe(
       "💭 from **unknown@unknown**:\nfollow-up",
     );
+  });
+});
+
+describe("nextStateAfterMovingWorkingTip", () => {
+  it("creates the new tip first conceptually: old ids are returned for delete after create", () => {
+    const moved = nextStateAfterMovingWorkingTip({
+      priorDiscordMessageIds: ["working-above"],
+      priorStaleStreamMessageIds: ["stale-a"],
+      newTipIds: ["working-below"],
+    });
+    expect(moved.discordMessageIds).toEqual(["working-below"]);
+    expect(moved.oldIdsToDelete).toEqual(["working-above"]);
+    expect(moved.staleStreamMessageIds).toEqual(["stale-a"]);
+    expect(moved.streamBreakPrefix).toBe("");
+  });
+
+  it("drops deleted ids from stale so finalize does not retry the delete", () => {
+    const moved = nextStateAfterMovingWorkingTip({
+      priorDiscordMessageIds: ["working-above"],
+      priorStaleStreamMessageIds: ["working-above", "stale-a"],
+      newTipIds: ["working-below"],
+    });
+    expect(moved.oldIdsToDelete).toEqual(["working-above"]);
+    expect(moved.staleStreamMessageIds).toEqual(["stale-a"]);
+  });
+
+  it("keeps earlier stream chunks when only the live Working tip moves", () => {
+    const moved = nextStateAfterMovingWorkingTip({
+      priorDiscordMessageIds: ["working-above"],
+      priorStaleStreamMessageIds: [],
+      newTipIds: ["chunk-1", "working-below"],
+    });
+    expect(moved.discordMessageIds).toEqual(["chunk-1", "working-below"]);
+    expect(moved.oldIdsToDelete).toEqual(["working-above"]);
   });
 });
 

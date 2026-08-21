@@ -359,7 +359,7 @@ export type DiscordChannelMessageForTipScan = {
  *
  * Walks `recentMessagesNewestFirst` until the live tip. Bot side posts after the tip
  * (Tasks, stream chunks, finals, external-input echoes) and Discord system messages
- * (title renames, pins) are skipped — they must NOT freeze Working. A human *between*
+ * (title renames, pins) are skipped — they must NOT hop Working. A human *between*
  * Working and a later Tasks post **does** displace, even when Tasks is the channel tip.
  *
  * Working → human chat → Tasks used to miss this: latest-only treated Tasks as
@@ -2261,6 +2261,40 @@ export function planStreamTipFreezeOnDisplacement(input: {
 }
 
 /**
+ * Move a displaced Working tip: create the replacement first, then delete the old
+ * message(s). Create-before-delete so Discord never sits without a Working bubble.
+ *
+ * The new tip owns the full current stream (break prefix cleared) — this is a move,
+ * not a freeze with a suffix post.
+ */
+export function nextStateAfterMovingWorkingTip(input: {
+  readonly priorDiscordMessageIds: ReadonlyArray<string>;
+  readonly priorStaleStreamMessageIds: ReadonlyArray<string>;
+  readonly newTipIds: ReadonlyArray<string>;
+}): {
+  readonly discordMessageIds: ReadonlyArray<string>;
+  readonly staleStreamMessageIds: ReadonlyArray<string>;
+  readonly streamBreakPrefix: "";
+  readonly oldIdsToDelete: ReadonlyArray<string>;
+} {
+  const newTipIds = [...new Set(input.newTipIds.map((id) => id.trim()).filter((id) => id !== ""))];
+  const newSet = new Set(newTipIds);
+  const oldIdsToDelete = [
+    ...new Set(input.priorDiscordMessageIds.map((id) => id.trim()).filter((id) => id !== "")),
+  ].filter((id) => !newSet.has(id));
+  const oldSet = new Set(oldIdsToDelete);
+  const staleStreamMessageIds = [
+    ...new Set(input.priorStaleStreamMessageIds.map((id) => id.trim()).filter((id) => id !== "")),
+  ].filter((id) => !oldSet.has(id) && !newSet.has(id));
+  return {
+    discordMessageIds: newTipIds,
+    staleStreamMessageIds,
+    streamBreakPrefix: "",
+    oldIdsToDelete,
+  };
+}
+
+/**
  * Ensure a live bridge is subscribed for this Discord channel.
  * Thin wrapper around {@link BridgeHub.ensure} (singleflight + fiber registry + cap).
  */
@@ -3346,61 +3380,21 @@ export const runBridge = (
           const fullDisplayText = streamDisplayText(text);
           const previousFullDisplayText = streamDisplayText(lastText);
 
-          // If a *foreign* message is under us (human reply), freeze the tip in place —
-          // do NOT delete (that reorders history) and do NOT re-copy its body after the
-          // user message. Later content only appears as a post-break tip.
-          // Bot-owned side posts (live Tasks / approvals / info pin) must NOT break the
-          // tip — they steal channel-tip ownership and left Discord on empty Working..
-          // while T3 streamed intermediate prose.
+          // Humans under Working: move the live tip (create replacement first, then
+          // delete the old message). Bot-owned side posts (Tasks / approvals / info pin)
+          // must NOT hop Working.
+          let displacedTipIdsToDelete: ReadonlyArray<string> = [];
           if (discordMessageIds.length > 0) {
             const tipId = discordMessageIds[discordMessageIds.length - 1] ?? null;
             if (tipId !== null && (yield* isStreamTipDisplaced(tipId))) {
-              const previousTipBody = activeStreamTipText(
-                previousFullDisplayText,
-                streamBreakPrefix,
-              );
-              const freezePlan = planStreamTipFreezeOnDisplacement({
-                previousFullDisplayText,
-                previousTipBody,
-                previousLastAssistantText: lastText,
+              displacedTipIdsToDelete = [...discordMessageIds];
+              yield* Effect.logInfo("Discord stream tip lost channel-tip ownership; moving below", {
+                t3ThreadId: input.t3ThreadId,
+                assistantId: t3MessageId,
+                oldDiscordMessageIds: displacedTipIdsToDelete,
               });
-              if (freezePlan.freezeContent !== null) {
-                yield* rest
-                  .updateMessage(input.discordChannelId, tipId, {
-                    ...idleMessageFields(freezePlan.freezeContent),
-                  })
-                  .pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Failed to freeze displaced stream tip", {
-                        id: tipId,
-                        cause: formatAlertCause(cause, 300),
-                      }),
-                    ),
-                    Effect.asVoid,
-                  );
-              }
-              yield* Effect.logInfo(
-                "Discord stream tip lost channel-tip ownership; freezing in place",
-                {
-                  t3ThreadId: input.t3ThreadId,
-                  assistantId: t3MessageId,
-                  frozenDiscordMessageId: tipId,
-                  // Prefix is *already-shown* text only — never the in-flight body, or mid-turn
-                  // human replies hide everything under an empty Working tip below the user.
-                  breakPrefixLen: freezePlan.nextBreakPrefix.length,
-                  hadFrozenProse: freezePlan.freezeContent !== null,
-                },
-              );
-              // Frozen messages stay visible above the user message; finalize deletes them.
-              staleStreamMessageIds = uniqueDiscordMessageIds([
-                ...staleStreamMessageIds,
-                ...discordMessageIds,
-              ]);
               discordMessageIds = [];
-              streamBreakPrefix = freezePlan.nextBreakPrefix;
-              // Keep lastText as what was already streamed so the next post-break write
-              // diffs against shown content, not against the never-posted full body.
-              lastText = freezePlan.nextLastAssistantText;
+              streamBreakPrefix = "";
             }
           }
 
@@ -3412,10 +3406,8 @@ export const runBridge = (
             activeStreamTipText(previousFullDisplayText, streamBreakPrefix),
           );
 
-          // After a tip break, always keep a post-break Working tip for liveness even when
-          // the model is only running tools (no new prose yet). Previously we returned
-          // early with empty suffix → frozen tip above the user and *no* Working below,
-          // so Discord looked dead while T3 was still busy.
+          // After a move, always keep a Working tip for liveness even when the model is
+          // only running tools (no new prose yet).
           const desiredChunks =
             tipDisplayText.trim() === ""
               ? ([""] as string[])
@@ -3504,6 +3496,21 @@ export const runBridge = (
             const extra = discordMessageIds.slice(desiredChunks.length);
             staleStreamMessageIds = uniqueDiscordMessageIds([...staleStreamMessageIds, ...extra]);
             discordMessageIds = discordMessageIds.slice(0, desiredChunks.length);
+          }
+
+          if (displacedTipIdsToDelete.length > 0) {
+            const moved = nextStateAfterMovingWorkingTip({
+              priorDiscordMessageIds: displacedTipIdsToDelete,
+              priorStaleStreamMessageIds: staleStreamMessageIds,
+              newTipIds: discordMessageIds,
+            });
+            yield* deleteMessages(moved.oldIdsToDelete).pipe(
+              Effect.catchCause(Effect.logWarning),
+              Effect.asVoid,
+            );
+            discordMessageIds = [...moved.discordMessageIds];
+            staleStreamMessageIds = [...moved.staleStreamMessageIds];
+            streamBreakPrefix = moved.streamBreakPrefix;
           }
 
           yield* Ref.update(stateRef, (current) => ({
@@ -4799,43 +4806,18 @@ export const runBridge = (
             return;
           }
 
-          // Humans under Working: freeze the old tip (or delete empty Working-only) and
-          // post a Working-only liveness bubble at the channel end. Do not copy frozen
-          // prose onto the new tip — stream writes paint only the suffix via breakPrefix.
+          // Humans under Working: create the replacement first, then delete the old
+          // message so the original Working bubble actually moves below the humans.
           if (tipId !== null && (yield* isStreamTipDisplaced(tipId))) {
             const displacedTipId = tipId;
-            const previousFullDisplayText = streamDisplayText(state.lastAssistantText);
-            const previousTipBody = activeStreamTipText(
-              previousFullDisplayText,
-              state.streamBreakPrefix,
-            );
-            const freezePlan = planStreamTipFreezeOnDisplacement({
-              previousFullDisplayText,
-              previousTipBody,
-              previousLastAssistantText: state.lastAssistantText,
-            });
-            if (freezePlan.freezeContent !== null) {
-              yield* rest
-                .updateMessage(input.discordChannelId, displacedTipId, {
-                  ...idleMessageFields(freezePlan.freezeContent),
-                })
-                .pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("Failed to freeze displaced Working tip on heartbeat hop", {
-                      id: displacedTipId,
-                      cause: formatAlertCause(cause, 300),
-                    }),
-                  ),
-                  Effect.asVoid,
-                );
-            } else {
-              yield* deleteMessages([displacedTipId]).pipe(
-                Effect.catchCause(Effect.logWarning),
-                Effect.asVoid,
-              );
-            }
+            const tipDisplay = rewriteMarkdownTablesForDiscord(streamDisplayText(hb.tipBody));
+            const chunks =
+              tipDisplay.trim() === ""
+                ? ([""] as string[])
+                : chunkDiscordContent(tipDisplay, STREAM_CHUNK_LIMIT);
+            const tipChunk = chunks.at(-1) ?? "";
             const hopContent = formatInProgressChunk(
-              "",
+              tipChunk,
               true,
               DISCORD_LIMIT,
               workingDots,
@@ -4844,21 +4826,29 @@ export const runBridge = (
             const created = yield* rest.createMessage(input.discordChannelId, {
               ...workingMessageFields(hopContent, input.t3ThreadId),
             });
+            const moved = nextStateAfterMovingWorkingTip({
+              priorDiscordMessageIds: [displacedTipId],
+              priorStaleStreamMessageIds: state.staleStreamMessageIds,
+              newTipIds: [
+                ...state.discordMessageIds.filter((id) => id !== displacedTipId),
+                created.id,
+              ],
+            });
+            yield* deleteMessages(moved.oldIdsToDelete).pipe(
+              Effect.catchCause(Effect.logWarning),
+              Effect.asVoid,
+            );
             yield* Ref.update(stateRef, (current) => ({
               ...current,
-              discordMessageIds: [created.id],
-              staleStreamMessageIds:
-                freezePlan.freezeContent !== null
-                  ? uniqueDiscordMessageIds([...current.staleStreamMessageIds, displacedTipId])
-                  : current.staleStreamMessageIds.filter((id) => id !== displacedTipId),
-              streamBreakPrefix: freezePlan.nextBreakPrefix,
-              lastAssistantText: freezePlan.nextLastAssistantText,
+              discordMessageIds: [...moved.discordMessageIds],
+              staleStreamMessageIds: [...moved.staleStreamMessageIds],
+              streamBreakPrefix: moved.streamBreakPrefix,
             }));
             const afterHop = yield* Ref.get(stateRef);
             yield* persistStreamMessageIds(allStreamIds(afterHop));
             yield* Effect.logInfo("Heartbeat hopped Working tip below human replies", {
               t3ThreadId: input.t3ThreadId,
-              frozenDiscordMessageId: freezePlan.freezeContent !== null ? displacedTipId : null,
+              deletedDiscordMessageId: displacedTipId,
               messageId: created.id,
               toolCallCount,
             });
@@ -4866,8 +4856,7 @@ export const runBridge = (
           }
 
           // Epoch FSM: awaiting → dots only; streaming → current epoch streamText only.
-          // Same GFM→bullets rewrite as the primary stream path. Apply breakPrefix so a
-          // post-hop heartbeat never recopies frozen prose onto the new tip.
+          // Same GFM→bullets rewrite as the primary stream path.
           const tipDisplay = rewriteMarkdownTablesForDiscord(
             activeStreamTipText(streamDisplayText(hb.tipBody), state.streamBreakPrefix),
           );
