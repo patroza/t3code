@@ -192,8 +192,10 @@ import { BridgeHub } from "./BridgeHub.ts";
 import { bridgeThreadToDiscord, getLiveDiscordBridge } from "./ResponseBridge.ts";
 import { upsertThreadInfoPin } from "./ThreadInfoPin.ts";
 import {
+  discordEventMentionsBot,
   formatUnmentionedDiscordPrompt,
   parseThreadTalkCommand,
+  shouldAcceptThreadTalkMessage,
   threadTalkEnabled,
 } from "./ThreadTalkPolicy.ts";
 
@@ -264,21 +266,6 @@ export function createHandledDiscordMessageTracker(limit = MAX_HANDLED_MESSAGE_I
 
 function isThreadChannel(type: number | undefined): boolean {
   return type === 10 || type === 11 || type === 12;
-}
-
-function mentionsBotInContent(content: string, botUserId: string): boolean {
-  return content.includes(`<@${botUserId}>`) || content.includes(`<@!${botUserId}>`);
-}
-
-function mentionsBotInEvent(
-  event: {
-    readonly content?: string | null;
-    readonly mentions?: ReadonlyArray<{ readonly id?: string }> | null;
-  },
-  botUserId: string,
-): boolean {
-  if (mentionsBotInContent(event.content ?? "", botUserId)) return true;
-  return event.mentions?.some((user) => user.id === botUserId) ?? false;
 }
 
 function discordMessageFromEvent(event: {
@@ -2318,26 +2305,40 @@ const make = (botConfig: DiscordBotConfig) =>
         let content = event.content ?? "";
         let gatewayAttachments = (event.attachments ??
           []) as ReadonlyArray<DiscordInboundAttachment>;
-        let mentioned =
-          mentionsBotInEvent(
-            {
-              content: event.content ?? null,
-              mentions: event.mentions ?? null,
-            },
+        const replyPingWithoutBody =
+          event.type === Discord.MessageType.REPLY &&
+          content.length === 0 &&
+          (mentionIds.includes(botUserId) || mentionsBotRole);
+
+        const computeMentioned = (body: string) =>
+          discordEventMentionsBot({
+            content: body,
+            mentions: event.mentions ?? null,
+            mentionRoleIds,
             botUserId,
-          ) ||
-          mentionsBotInContent(content, botUserId) ||
-          mentionsBotRole;
+            botRoleId,
+            messageType: event.type,
+          });
 
-        if (!mentioned && content.includes(botUserId)) {
-          mentioned = true;
-        }
+        let mentioned = computeMentioned(content);
 
-        const unmentionedLink = mentioned
+        let unmentionedLink = mentioned
           ? null
           : yield* links.getByDiscordThreadId(event.channel_id);
-        const automaticThreadMessage = !mentioned && threadTalkEnabled(unmentionedLink);
-        if (!mentioned && !automaticThreadMessage) return;
+        let automaticThreadMessage = shouldAcceptThreadTalkMessage({
+          mentioned,
+          threadTalkEnabled: threadTalkEnabled(unmentionedLink),
+          messageType: event.type,
+        });
+        if (!mentioned && !automaticThreadMessage && !replyPingWithoutBody) {
+          if (event.type === Discord.MessageType.REPLY && mentionIds.includes(botUserId)) {
+            yield* Effect.logInfo("Ignoring Discord reply ping without an in-content mention", {
+              channelId: event.channel_id,
+              messageId: event.id,
+            });
+          }
+          return;
+        }
 
         if (content.length === 0) {
           yield* Effect.logWarning(
@@ -2358,6 +2359,22 @@ const make = (botConfig: DiscordBotConfig) =>
             if (Array.isArray(full.attachments) && full.attachments.length > 0) {
               gatewayAttachments = full.attachments as ReadonlyArray<DiscordInboundAttachment>;
             }
+          }
+          mentioned = computeMentioned(content);
+          unmentionedLink = mentioned ? null : yield* links.getByDiscordThreadId(event.channel_id);
+          automaticThreadMessage = shouldAcceptThreadTalkMessage({
+            mentioned,
+            threadTalkEnabled: threadTalkEnabled(unmentionedLink),
+            messageType: event.type,
+          });
+          if (!mentioned && !automaticThreadMessage) {
+            if (event.type === Discord.MessageType.REPLY) {
+              yield* Effect.logInfo("Ignoring Discord reply ping without an in-content mention", {
+                channelId: event.channel_id,
+                messageId: event.id,
+              });
+            }
+            return;
           }
         }
 
@@ -2438,7 +2455,7 @@ const make = (botConfig: DiscordBotConfig) =>
             threadTalkCommand.kind === "set" ? threadTalkCommand.enabled : threadTalkEnabled(link);
           yield* rest.createMessage(event.channel_id, {
             content: enabled
-              ? "Thread-talk is **on**. New human messages in this linked thread will be sent to T3 without requiring a mention."
+              ? "Thread-talk is **on**. New human messages in this linked thread will be sent to T3 without requiring a mention. Replies still need `@Omegent`."
               : "Thread-talk is **off**. Mention `@Omegent` to send a message to Omegent.",
             message_reference: { message_id: event.id },
           });
