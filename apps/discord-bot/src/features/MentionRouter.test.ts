@@ -33,6 +33,16 @@ describe("T3 connect-wait queue", () => {
   });
 });
 
+describe("unmentioned Discord replies", () => {
+  it("routes mentions through explicit-mention policy and skips reply pings", () => {
+    expect(mentionRouterSource).toContain("discordEventMentionsBot");
+    expect(mentionRouterSource).toContain("shouldAcceptThreadTalkMessage");
+    expect(mentionRouterSource).toContain(
+      "Ignoring Discord reply ping without an in-content mention",
+    );
+  });
+});
+
 describe("today-recap slash command", () => {
   it("registers /omegent today-recap and opens a recap thread on the project channel", () => {
     expect(mentionRouterSource).toContain('"today-recap": Effect.gen(function* () {');
