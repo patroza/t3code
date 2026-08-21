@@ -9,9 +9,14 @@
  * duplicate requests. It does not communicate with T3 or the originating
  * platform.
  */
-import { type Effect, Context, Data } from "effect";
-import { type ExchangeState, type NonTerminalExchangeState } from "./exchange.ts";
+import { Array, Effect, Context, Data, HashMap, Ref, Layer } from "effect";
+import {
+  isNonTerminalState,
+  type ExchangeState,
+  type NonTerminalExchangeState,
+} from "./exchange.ts";
 import type { ThreadId } from "@t3tools/contracts";
+import { isSome } from "effect/Option";
 
 export class ExchangeRepositoryError extends Data.TaggedError("ExchangeRepositoryError")<{
   readonly reason: string;
@@ -36,4 +41,75 @@ export interface ExchangeRepository {
   readonly upsert: (state: ExchangeState) => Effect.Effect<void, ExchangeRepositoryError>;
 }
 
-export const makeRepositoryTag = (key: string) => Context.Service<ExchangeRepository>(key);
+export const ExchangeRepositoryTag = Context.Service<ExchangeRepository>(
+  "t3code/ntbs/ExchangeRepository",
+);
+
+const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
+  const exchanges: Ref.Ref<HashMap.HashMap<string, ExchangeState>> = yield* Ref.make(
+    HashMap.empty<string, ExchangeState>(),
+  );
+
+  const upsert = Effect.fn("ExchangeRepository.upsert")(function* (state: ExchangeState) {
+    // we return conflicting source Uri as the first argument
+    // in case we find that the same threadId belongs already to a different sourceUri
+    const conflictingSourceUri = yield* Ref.modify(exchanges, (map) => {
+      const conflict = HashMap.findFirst(
+        map,
+        (existing, sourceUri) =>
+          sourceUri !== state.sourceUri && existing.t3.threadId === state.t3.threadId,
+      );
+
+      return isSome(conflict)
+        ? [conflict.value[0], map]
+        : [null, HashMap.set(map, state.sourceUri, state)];
+    });
+
+    if (conflictingSourceUri !== null) {
+      return yield* new ExchangeRepositoryError({
+        reason: `Thread ${state.t3.threadId} already belongs to exchange ${conflictingSourceUri}`,
+        cause: {
+          threadId: state.t3.threadId,
+          existingSourceUri: conflictingSourceUri,
+          incomingSourceUri: state.sourceUri,
+        },
+      });
+    }
+  });
+
+  const findBySourceUri = (uri: string) =>
+    Ref.get(exchanges).pipe(
+      Effect.map((map) => HashMap.get(map, uri)),
+      Effect.map((o) => (isSome(o) ? o.value : null)),
+    );
+
+  const findByThreadId = (threadId: ThreadId) =>
+    Ref.get(exchanges).pipe(
+      Effect.map((map) => HashMap.filter(map, (val) => val.t3.threadId === threadId)),
+      // if we get more than one ExchangeState in the HashMap, something's wrong
+      Effect.andThen((map) =>
+        HashMap.size(map) > 1
+          ? new ExchangeRepositoryError({
+              reason: "Exchange Repository contains more than one entry for thredId: " + threadId,
+              cause: map,
+            })
+          : Effect.succeed(Array.fromIterable(HashMap.entries(map))).pipe(
+              Effect.map((arr) => (arr.length === 1 ? arr[0]![1] : null)),
+            ),
+      ),
+    );
+
+  const findNonTerminalExchanges = Ref.get(exchanges).pipe(
+    Effect.map((map) => Array.fromIterable(HashMap.entries(map))),
+    Effect.map((arr) =>
+      Array.filter(
+        arr.map((el) => el[1]),
+        isNonTerminalState,
+      ),
+    ),
+  );
+
+  return { upsert, findBySourceUri, findByThreadId, findNonTerminalExchanges };
+});
+
+export const inMemoryExchangeRepository = Layer.effect(ExchangeRepositoryTag, inMemoryER);
