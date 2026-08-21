@@ -8,6 +8,7 @@ import {
   bridgeNeedsHttpReconcile,
   isDeliveryBehindOrchestration,
   isStreamTipDisplacedByForeignMessage,
+  isStreamTipDisplacedByRecentMessages,
   isDiscordContentMessageType,
   pickLatestContentMessageId,
   deliveryFailureBackoffSeconds,
@@ -575,6 +576,97 @@ describe("isStreamTipDisplacedByForeignMessage / content message types", () => {
         latestMessageId: "tip-2",
         streamTipId: "tip-1",
         ownedMessageIds: ["tip-1", "tip-2"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isStreamTipDisplacedByRecentMessages", () => {
+  const bot = "bot-1";
+  const owned = ["working-tip", "tasks-msg", "info-pin"];
+
+  it("does not hop when Working is still the channel tip", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [{ id: "working-tip", type: 0, author: { id: bot } }],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hop when latest is Tasks with no human after Working", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "tasks-msg", type: 0, author: { id: bot } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(false);
+  });
+
+  it("hops when humans sat between Working and a later Tasks post", () => {
+    // Working → human chat → channel rename → Tasks. Latest-only missed this.
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "tasks-msg", type: 0, author: { id: bot } },
+          { id: "rename", type: 4, author: { id: bot } },
+          { id: "human-2", type: 0, author: { id: "user-b" } },
+          { id: "human-1", type: 0, author: { id: "user-a" } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(true);
+  });
+
+  it("hops when a human is the latest content message", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "human-1", type: 0, author: { id: "user-a" } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not hop for channel rename + Tasks after Working", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "tasks-msg", type: 0, author: { id: bot } },
+          { id: "rename", type: 4, author: { id: bot } },
+          { id: "working-tip", type: 0, author: { id: bot } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hop when humans are older than Working", () => {
+    expect(
+      isStreamTipDisplacedByRecentMessages({
+        recentMessagesNewestFirst: [
+          { id: "working-tip", type: 0, author: { id: bot } },
+          { id: "human-1", type: 0, author: { id: "user-a" } },
+        ],
+        streamTipId: "working-tip",
+        ownedMessageIds: owned,
+        botUserId: bot,
       }),
     ).toBe(false);
   });
