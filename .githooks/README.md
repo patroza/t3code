@@ -20,7 +20,9 @@ typescript-go incremental gaps.
 
 On every **branch** checkout (flag `1`), this hook deletes:
 
-- `apps/*/dist`, `apps/*/dist-electron`, `packages/*/dist`
+- `apps/*/dist` **except** `apps/server/dist` (live-served SPA + `bin.mjs`; wiping
+  it 503s any process still serving from this checkout), `apps/*/dist-electron`,
+  `packages/*/dist`
 - any remaining `*.tsbuildinfo` outside `node_modules` / `.git` / `.vite-plus`
 
 File-only checkouts (flag `0`) are left alone.
