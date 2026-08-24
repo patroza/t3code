@@ -1,5 +1,6 @@
 import { type ProjectId } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
+import { makeRequestClaimed } from "./exchange.ts";
 import { Context, Data, Effect } from "effect";
 import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
@@ -118,7 +119,9 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         const maybeExchange = yield* repo.findBySourceUri(sourceId);
 
         if (!maybeExchange) {
-          // we kick off whatever we need to do
+          const coordinates = yield* t3.planT3Work(t3Context);
+          const claimed = makeRequestClaimed(request, coordinates);
+          yield* repo.upsert(claimed);
         }
       });
 
