@@ -100,4 +100,4 @@ export interface T3Gateway {
   readonly threadActivity: Stream.Stream<ThreadId>;
 }
 
-const t3GatewayTag = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
+export const T3Gateway = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");

@@ -41,7 +41,7 @@ export interface ExchangeRepository {
   readonly upsert: (state: ExchangeState) => Effect.Effect<void, ExchangeRepositoryError>;
 }
 
-export const ExchangeRepositoryTag = Context.Service<ExchangeRepository>(
+export const ExchangeRepository = Context.Service<ExchangeRepository>(
   "t3code/ntbs/ExchangeRepository",
 );
 
@@ -112,4 +112,4 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
   return { upsert, findBySourceUri, findByThreadId, findNonTerminalExchanges };
 });
 
-export const inMemoryExchangeRepository = Layer.effect(ExchangeRepositoryTag, inMemoryER);
+export const inMemoryExchangeRepository = Layer.effect(ExchangeRepository, inMemoryER);
