@@ -3,28 +3,14 @@ The T3 gateway module exposes the interface that the NTBS processor uses to comm
 with T3, similar to how adapter models the interaction with the external platform.
  */
 
-import {
-  type ChatAttachment,
-  CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
-  MessageId,
-  OrchestrationCommand,
-  type OrchestrationEvent,
-  type ProjectId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { type ProjectId, ThreadId } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
-import type { NTBSAdapter } from "./adapter.ts";
+import { Context, Crypto, Data, Effect, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
-import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
-import type { ExchangeStateBase } from "./exchange.ts";
 
 /*
   NTBS architecture:

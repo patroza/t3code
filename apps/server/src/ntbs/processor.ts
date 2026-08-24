@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
 import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
-import type { NTBSAdapter, NTBSResponse } from "./adapter.ts";
+import type { NTBSAdapter } from "./adapter.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -21,31 +21,31 @@ import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 
 /*
-  NTBS architecture:
+The processor is the executor and orchestrator of non-turn-based surfaces: it applies the business rules and connects T3 to the external platform. It does so through three services:
 
-  1. Generic NTBS processor:
-    - Runs the shared workflow for every platform.
-    - Creates a fresh worktree and T3 thread.
-    - Saves `ThreadCreated`.
-    - Starts the first turn with the snapshot and attachments.
-    - Attempts to post the acknowledgement independently.
-    - Watches T3 events for completed work.
-    - Posts the final result through the adapter and saves `ResponsePosted`.
+- the adapter: communication with the external platform
+- the T3 gateway: communication and dispatching of T3 internals
+- the exchange repository: durable link between the two, stores the exchange state
 
-  2. Platform-specific inbound code:
-    - Receives raw platform data from Jira, Discord, GitHub, or Teams.
-    - Applies platform trigger and actor checks.
-    - Builds `Request` and `t3` context.
-    - Calls the processor.
+It exposes two public APIs:
+1. `process` takes an incoming message and starts the work for it.
+2. `run` subscribes to T3 activity and resumes the exchanges a previous run left unfinished.
 
-  3. Adapter
-    - Owns platform storage and platform API calls.
-    - Posts acknowledgements and responses.
-    - Knows how platform identifiers are represented.
-    - Knows nothing about creating T3 threads or interpreting T3 events.
+Both drive an exchange through the same cycle, repeated until it reaches a terminal state:
+
+load the stored state
+-> read live context from the service that owns it
+-> decide what to do given state and context
+-> execute the decision
+-> build the resulting state transition and persist it
+
+The cycle is replay safe: it observes before acting, so a crash or a redelivered message re-runs it without starting a second thread or posting a second reply.
 */
 
-export type T3Context = {
+/**
+ * Describes _where_ the T3 works goes. Not part of the incoming request.
+ */
+export type T3Target = {
   readonly projectId: ProjectId;
   /**
    * The starting point for the thread's worktree: the new branch is created
@@ -68,24 +68,26 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
 
 export interface NTBSProcessor {
   /**
-   * Processes a request received by a platform adapter.
+   * Admits one external request, claims it, and drives it to a started T3 turn.
    *
-   * The request must already have passed its platform-specific trigger and actor
-   * checks. The processor does not perform those.
+   * Returns once the turn is running, not once the request is answered: the
+   * reply is posted later, when T3 reports the turn finished.
    *
-   * Accepts concurrent requests and applies no queue, concurrency cap
-   * or backpressure for the time being. This choice can be reviewed later.
+   * Idempotent per `sourceUri`: a redelivery of an already-claimed request is a
+   * no-op, whatever state that exchange has reached. Concurrent deliveries of
+   * the same request are serialized, so only the first claims it.
    */
   readonly process: (
     request: NTBS.Request,
-    t3Context: T3Context,
+    t3Target: T3Target,
   ) => Effect.Effect<void, NTBSProcessorError>;
 
   /**
-   * The main loop of the processor, consumes T3 events and passes them to `processT3Event`.
+   * The main loop of the processor.
    *
-   * After the live subscription begins, loads stored `ThreadCreated` records.
-   * It starts a missing first turn, or posts the outcome of a turn that already finished.
+   * Subscribes to T3 activity first, then resumes every exchange left incomplete
+   * by a previous run: each is continued from the state it reached. From then on
+   * a T3 thread moving is what wakes its exchange up.
    *
    * Runs until interrupted by its caller.
    * Logs individual processing failures and continues with later events.
