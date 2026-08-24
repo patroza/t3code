@@ -3,7 +3,7 @@ import type * as NTBS from "./exchange.ts";
 import { Context, Data, Effect } from "effect";
 import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
-import type { ExchangeRepository } from "./ExchangeRepository.ts";
+import { ExchangeRepository } from "./ExchangeRepository.ts";
 
 /*
 The processor is the executor and orchestrator of non-turn-based surfaces: it applies the business rules and connects T3 to the external platform. It does so through three services:
@@ -96,6 +96,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
   Effect.gen(function* () {
     const adapter = yield* NTBSAdapter;
     const t3 = yield* T3Gateway;
+    const repo = yield* ExchangeRepository;
 
     const orFail = (reason: string) =>
       Effect.mapError((cause: unknown) => new NTBSProcessorError({ reason, cause }));
@@ -111,7 +112,15 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       4. Start the first T3 turn with that message ID, the snapshot, and attachments.
       5. Attempt to post the acknowledgement independently.
     */
-    const process = (request: NTBS.Request, t3Context: T3Target) => Effect.void;
+    const process = (request: NTBS.Request, t3Context: T3Target) =>
+      Effect.gen(function* () {
+        const sourceId = request.sourceUri;
+        const maybeExchange = yield* repo.findBySourceUri(sourceId);
+
+        if (!maybeExchange) {
+          // we kick off whatever we need to do
+        }
+      });
 
     const run = Effect.never;
 
