@@ -122,7 +122,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
     const unchanged: TransitionResult = { type: "unchanged" };
 
-    const failureReply = (failure: {
+    const createReplyFailure = (failure: {
       readonly reason: string;
       readonly cause: unknown;
     }): NTBS.ReplyFailure => ({
@@ -179,7 +179,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           );
 
           if (rejection !== null) {
-            const next = yield* persist(NTBS.toReplyPending(state, failureReply(rejection)));
+            const next = yield* persist(NTBS.toReplyPending(state, createReplyFailure(rejection)));
             return transitionedTo(next);
           }
 
@@ -220,7 +220,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           );
 
           if (rejection !== null) {
-            const next = yield* persist(NTBS.toReplyPending(state, failureReply(rejection)));
+            const next = yield* persist(NTBS.toReplyPending(state, createReplyFailure(rejection)));
             return transitionedTo(next);
           }
 
