@@ -98,7 +98,7 @@ describe("inMemoryExchangeRepository", () => {
         const undeliverable = toUndeliverable(
           toReplyPending(
             toThreadCreated(makeExchange("test://request/undeliverable", "thread-undeliverable")),
-            { type: "failure", text: "undeliverable reply" },
+            { type: "failure", text: "undeliverable reply", cause: "undeliverable te dico" },
           ),
           { message: "platform rejected the reply" },
         );

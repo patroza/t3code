@@ -9,7 +9,7 @@ import {
 } from "@t3tools/contracts";
 import { DateTime, Deferred, Effect, Layer, PubSub, Stream } from "effect";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSAdapter } from "./adapter.ts";
-import { makeNTBSProcessor, makeNTBSProcessorTag } from "./processor.ts";
+import { makeNTBSProcessor, makeNTBSProcessorTag } from "./t3gateway.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
