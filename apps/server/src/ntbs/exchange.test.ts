@@ -10,28 +10,36 @@ import {
   toUndeliverable,
   type ExchangeBase,
   type ReplyPosted,
+  type Request,
   type RequestClaimed,
+  type T3WorkCoordinates,
 } from "./exchange.ts";
 import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 
-const exchangeStateBase = {
+const request = {
   sourceUri: "test://exchange/test",
   snapshot: "You need to imagine some text here",
   attachments: [],
-  t3: {
-    projectId: ProjectId.make("projectId"),
-    baseRef: "baseRef",
-    threadId: ThreadId.make("threadId"),
-    userMessageId: MessageId.make("messageId"),
-    branchName: "branchName",
-  },
+} satisfies Request;
+
+const coordinates = {
+  projectId: ProjectId.make("projectId"),
+  baseRefSha: "baseRefSha",
+  threadId: ThreadId.make("threadId"),
+  userMessageId: MessageId.make("messageId"),
+  branchName: "branchName",
+} satisfies T3WorkCoordinates;
+
+const exchangeBase = {
+  ...request,
+  t3: coordinates,
 } satisfies ExchangeBase;
 
 describe("RequestClaimed", () => {
-  const claimed = makeRequestClaimed(exchangeStateBase);
+  const claimed = makeRequestClaimed(request, coordinates);
 
   it("makeRequestClaimed tags the base unchanged", () => {
-    expect(claimed).toEqual({ ...exchangeStateBase, tag: "request-claimed" });
+    expect(claimed).toEqual({ ...exchangeBase, tag: "request-claimed" });
   });
 
   // if thread is missing we provision the thread
@@ -44,13 +52,17 @@ describe("RequestClaimed", () => {
   });
 
   it("toThreadCreated retags and carries every claim field forward", () => {
-    expect(toThreadCreated(claimed)).toEqual({ ...exchangeStateBase, tag: "thread-created" });
+    expect(toThreadCreated(claimed)).toEqual({ ...exchangeBase, tag: "thread-created" });
   });
 
   it("provisioning failure jumps ahead with the reply stored verbatim", () => {
-    const reply = { type: "failure", text: "provisioning rejected" } as const;
+    const reply = {
+      type: "failure",
+      text: "provisioning rejected",
+      cause: "project not found",
+    } as const;
     expect(toReplyPending(claimed, reply)).toEqual({
-      ...exchangeStateBase,
+      ...exchangeBase,
       tag: "reply-pending",
       reply,
     });
@@ -58,7 +70,7 @@ describe("RequestClaimed", () => {
 });
 
 describe("ThreadCreated", () => {
-  const threadCreated = toThreadCreated(makeRequestClaimed(exchangeStateBase));
+  const threadCreated = toThreadCreated(makeRequestClaimed(request, coordinates));
   const answer = { type: "answer", text: "The turn's final answer" } as const;
 
   // missing turn -> start it; active turn -> wait; completed turn -> record its reply
@@ -75,7 +87,7 @@ describe("ThreadCreated", () => {
 
   it("completed turn's reply lands in ReplyPending verbatim", () => {
     expect(toReplyPending(threadCreated, answer)).toEqual({
-      ...exchangeStateBase,
+      ...exchangeBase,
       tag: "reply-pending",
       reply: answer,
     });
@@ -85,7 +97,7 @@ describe("ThreadCreated", () => {
 describe("ReplyPending", () => {
   const reply = { type: "answer", text: "The turn's final answer" } as const;
   const replyPending = toReplyPending(
-    toThreadCreated(makeRequestClaimed(exchangeStateBase)),
+    toThreadCreated(makeRequestClaimed(request, coordinates)),
     reply,
   );
 
@@ -102,7 +114,7 @@ describe("ReplyPending", () => {
 
   it("accepted delivery lands in ReplyPosted with the platform message id", () => {
     expect(toReplyPosted(replyPending, "test://exchange/reply")).toEqual({
-      ...exchangeStateBase,
+      ...exchangeBase,
       tag: "reply-posted",
       reply,
       replySourceUri: "test://exchange/reply",
@@ -112,7 +124,7 @@ describe("ReplyPending", () => {
   it("definitive rejection lands in Undeliverable with the reply and cause", () => {
     const cause = { message: "original message was deleted" } as const;
     expect(toUndeliverable(replyPending, cause)).toEqual({
-      ...exchangeStateBase,
+      ...exchangeBase,
       tag: "undeliverable",
       reply,
       cause,
