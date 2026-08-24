@@ -2,6 +2,22 @@
 
 export const TODAY_RECAP_SUBCOMMAND = "today-recap" as const;
 
+/** Interaction tokens last 15 minutes; leave headroom after GitHub lookups. */
+export const TODAY_RECAP_TURN_TIMEOUT_MS = 10 * 60 * 1000;
+export const TODAY_RECAP_TURN_POLL_MS = 1500;
+
+export function extractLatestAssistantText(
+  messages: ReadonlyArray<{ readonly role: string; readonly text?: string | null }>,
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const text = message.text?.trim() ?? "";
+    if (text.length > 0) return text;
+  }
+  return null;
+}
+
 /** YYYY-MM-DD from an ISO timestamp (`DateTime.formatIso`). */
 export function utcDateStamp(isoNow: string): string {
   const stamp = isoNow.slice(0, 10);
