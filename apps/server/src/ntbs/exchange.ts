@@ -65,23 +65,31 @@ export type UndeliverableCause = {
   readonly message: string;
 };
 
+/** Stable identifiers and locations for an exchange's T3 work. */
+export type T3WorkCoordinates = {
+  readonly projectId: ProjectId;
+  /**
+   * The commit used to create the T3 worktree.
+   * We keep the same SHA across retries so the request always runs against the
+   * code selected when it was claimed, even if the original branch moves later.
+   */
+  readonly baseRefSha: string;
+  // Planned while RequestClaimed; confirmed by ThreadCreated.
+  readonly threadId: ThreadId;
+  /**
+   * The first T3 user message created for this external request.
+   * This identifies the correct turn and reply even if the thread later
+   * receives other messages.
+   */
+  readonly userMessageId: MessageId;
+  readonly branchName: string;
+};
+
 /**
  * The base data type common to all members of ExchangeState
  */
 export type ExchangeStateBase = Request & {
-  readonly t3: {
-    readonly projectId: ProjectId;
-    readonly baseRef: string;
-    // Planned while RequestClaimed; confirmed by ThreadCreated.
-    readonly threadId: ThreadId;
-    /**
-     * The first T3 user message created for this external request.
-     * This identifies the correct turn and reply even if the thread later
-     * receives other messages.
-     */
-    readonly userMessageId: MessageId;
-    readonly branchName: string;
-  };
+  readonly t3: T3WorkCoordinates;
 };
 
 /**
@@ -169,8 +177,12 @@ export const isTerminalState = (state: ExchangeState): state is TerminalExchange
 export const isNonTerminalState = (state: ExchangeState): state is NonTerminalExchangeState =>
   !isTerminalState(state);
 
-export const makeRequestClaimed = (input: Omit<RequestClaimed, "tag">): RequestClaimed => ({
-  ...input,
+export const makeRequestClaimed = (
+  request: Request,
+  coordinates: T3WorkCoordinates,
+): RequestClaimed => ({
+  ...request,
+  t3: coordinates,
   tag: "request-claimed",
 });
 

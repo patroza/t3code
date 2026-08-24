@@ -72,11 +72,11 @@ export class T3Rejected extends Data.TaggedError("T3Rejected")<{
 }> {}
 
 export interface T3Gateway {
-  /** Mints the planned thread, message and branch identifiers recorded at claim. */
+  /** Resolves the requested base ref to a commit SHA and mints the thread, message, and branch IDs recorded at claim. */
   readonly planT3Work: (input: {
     readonly projectId: ProjectId;
     readonly baseRef: string;
-  }) => Effect.Effect<NTBS.ExchangeStateBase["t3"], T3GatewayError | T3Rejected>;
+  }) => Effect.Effect<NTBS.T3WorkCoordinates, T3GatewayError | T3Rejected>;
 
   readonly getThreadStatus: (
     state: NTBS.RequestClaimed,
