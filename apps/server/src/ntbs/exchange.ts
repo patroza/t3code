@@ -86,9 +86,9 @@ export type T3WorkCoordinates = {
 };
 
 /**
- * The base data type common to all members of ExchangeState
+ * The data every exchange carries, whatever state it has reached.
  */
-export type ExchangeStateBase = Request & {
+export type ExchangeBase = Request & {
   readonly t3: T3WorkCoordinates;
 };
 
@@ -99,14 +99,14 @@ export type ExchangeStateBase = Request & {
  *
  * From here, the processor alone drives the exchange to a terminal state.
  */
-export type RequestClaimed = ExchangeStateBase & {
+export type RequestClaimed = ExchangeBase & {
   readonly tag: "request-claimed";
 };
 
 /**
  * The planned T3 thread exists. The first turn may not have started yet. Turn existence and progress are T3-owned.
  */
-export type ThreadCreated = ExchangeStateBase & {
+export type ThreadCreated = ExchangeBase & {
   readonly tag: "thread-created";
 };
 
@@ -116,7 +116,7 @@ export type ThreadCreated = ExchangeStateBase & {
  * This state may also follow `RequestClaimed` directly after a definitive provisioning failure, so it and later states do not imply the thread existed.
  * Reply delivery needs only `sourceUri`.
  */
-export type ReplyPending = ExchangeStateBase & {
+export type ReplyPending = ExchangeBase & {
   readonly tag: "reply-pending";
   readonly reply: Reply;
 };
@@ -125,7 +125,7 @@ export type ReplyPending = ExchangeStateBase & {
  * Terminal state.
  * The platform accepted the reply; its message ID is stored.
  */
-export type ReplyPosted = ExchangeStateBase & {
+export type ReplyPosted = ExchangeBase & {
   readonly tag: "reply-posted";
   readonly reply: Reply;
   readonly replySourceUri: string;
@@ -139,26 +139,26 @@ export type ReplyPosted = ExchangeStateBase & {
  * or locked (Jira/Github issue, Discord thread), the bot has been kicked, etc.
  * The tombstone keeps dedup intact and stops the processor from retrying forever.
  */
-export type Undeliverable = ExchangeStateBase & {
+export type Undeliverable = ExchangeBase & {
   readonly tag: "undeliverable";
   readonly reply: Reply;
   readonly cause: UndeliverableCause;
 };
 
-/** States for exchanges that still have work left to do. */
-export type NonTerminalExchangeState = RequestClaimed | ThreadCreated | ReplyPending;
+/** Exchanges that still have work left to do. */
+export type NonTerminalExchange = RequestClaimed | ThreadCreated | ReplyPending;
 
-/** States for exchanges that have finished, with the reply either posted or undeliverable. */
-export type TerminalExchangeState = ReplyPosted | Undeliverable;
+/** Exchanges that have finished, with the reply either posted or undeliverable. */
+export type TerminalExchange = ReplyPosted | Undeliverable;
 
 /**
- * The state of an exchange between an external platform and T3, from request
- * claim through final-reply delivery. The exchange repository stores the latest
- * state to track progress and resume non-terminal exchanges after a restart.
+ * One exchange between an external platform and T3, from request claim through
+ * final-reply delivery. The tag says how far it got; the repository stores the
+ * latest value per `sourceUri` so non-terminal exchanges resume after a restart.
  */
-export type ExchangeState = NonTerminalExchangeState | TerminalExchangeState;
+export type Exchange = NonTerminalExchange | TerminalExchange;
 
-export const isTerminalState = (state: ExchangeState): state is TerminalExchangeState => {
+export const isTerminal = (state: Exchange): state is TerminalExchange => {
   // An exhaustive switch makes new lifecycle states require an explicit classification.
   // This way it is impossible to break the program semantics by adding a new state
   // and forgetting to deal with it, because it would not typecheck.
@@ -174,8 +174,7 @@ export const isTerminalState = (state: ExchangeState): state is TerminalExchange
   }
 };
 
-export const isNonTerminalState = (state: ExchangeState): state is NonTerminalExchangeState =>
-  !isTerminalState(state);
+export const isNonTerminal = (state: Exchange): state is NonTerminalExchange => !isTerminal(state);
 
 export const makeRequestClaimed = (
   request: Request,
