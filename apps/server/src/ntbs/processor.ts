@@ -132,9 +132,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     });
 
     const persist = <State extends NTBS.Exchange>(state: State) =>
-      Effect.succeed(state).pipe(
-        Effect.tap(repo.upsert(state).pipe(orFail("Failed to persist the exchange state"))),
-      );
+      repo.upsert(state).pipe(orFail("Failed to persist the exchange state"), Effect.as(state));
 
     const exchangeLocks = new Map<string, ExchangeLock>();
 
@@ -309,8 +307,11 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       }
     });
 
-    const process = (request: NTBS.Request, t3Target: T3Target) =>
-      withExchangeLock(
+    const process = Effect.fn("NTBSProcessor.process")(function* (
+      request: NTBS.Request,
+      t3Target: T3Target,
+    ) {
+      return yield* withExchangeLock(
         request.sourceUri,
         Effect.gen(function* () {
           /*
@@ -335,6 +336,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           yield* advanceExchange(claimed);
         }),
       );
+    });
 
     const run = Effect.never;
 
