@@ -348,7 +348,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           }
 
           const coordinates = yield* t3
-            .planT3Work(t3Target)
+            .planT3Work(t3Target.projectId, t3Target.baseRef)
             .pipe(orFail("Failed to plan the T3 work"));
           const claimed = NTBS.makeRequestClaimed(request, coordinates);
           yield* persist(claimed);
