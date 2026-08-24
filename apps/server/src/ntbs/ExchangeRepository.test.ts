@@ -3,7 +3,7 @@ import { Effect, Exit } from "effect";
 import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 import {
   ExchangeRepositoryError,
-  ExchangeRepositoryTag,
+  ExchangeRepository,
   inMemoryExchangeRepository,
 } from "./ExchangeRepository.ts";
 import {
@@ -32,7 +32,7 @@ describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("allows the same sourceUri to replace its state", () =>
       Effect.gen(function* () {
-        const repository = yield* ExchangeRepositoryTag;
+        const repository = yield* ExchangeRepository;
         const claimed = makeExchange("test://request/1", "thread-1");
         const threadCreated = toThreadCreated(claimed);
 
@@ -47,7 +47,7 @@ describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("rejects a threadId already owned by another sourceUri", () =>
       Effect.gen(function* () {
-        const repository = yield* ExchangeRepositoryTag;
+        const repository = yield* ExchangeRepository;
         const existing = makeExchange("test://request/1", "shared-thread");
         const conflicting = makeExchange("test://request/2", "shared-thread");
 
@@ -65,7 +65,7 @@ describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("finds an exchange by threadId", () =>
       Effect.gen(function* () {
-        const repository = yield* ExchangeRepositoryTag;
+        const repository = yield* ExchangeRepository;
         const exchange = makeExchange("test://request/1", "thread-1");
 
         yield* repository.upsert(exchange);
@@ -79,7 +79,7 @@ describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("finds only non-terminal exchanges", () =>
       Effect.gen(function* () {
-        const repository = yield* ExchangeRepositoryTag;
+        const repository = yield* ExchangeRepository;
         const claimed = makeExchange("test://request/claimed", "thread-claimed");
         const threadCreated = toThreadCreated(
           makeExchange("test://request/thread-created", "thread-created"),
@@ -119,7 +119,7 @@ describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("preserves existing records when a replacement has a conflicting threadId", () =>
       Effect.gen(function* () {
-        const repository = yield* ExchangeRepositoryTag;
+        const repository = yield* ExchangeRepository;
         const first = makeExchange("test://request/1", "thread-1");
         const second = makeExchange("test://request/2", "thread-2");
         const conflictingReplacement = makeExchange("test://request/2", "thread-1");
@@ -139,7 +139,7 @@ describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("atomically rejects concurrent upserts with the same threadId", () =>
       Effect.gen(function* () {
-        const repository = yield* ExchangeRepositoryTag;
+        const repository = yield* ExchangeRepository;
         const first = makeExchange("test://request/1", "shared-thread");
         const second = makeExchange("test://request/2", "shared-thread");
 
