@@ -7,7 +7,7 @@ import {
   ThreadId,
   VcsCreateWorktreeResult,
 } from "@t3tools/contracts";
-import type { Request, ExchangeState, ThreadCreated } from "./exchange.ts";
+import type { Request, Exchange, ThreadCreated } from "./exchange.ts";
 import type { T3Context } from "./t3gateway.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSResponse } from "./adapter.ts";
@@ -168,7 +168,7 @@ class TestAdapterState extends Context.Service<
     /**
      * Lifecycle records keyed by T3 thread.
      */
-    readonly records: Map<ThreadId, ExchangeState>;
+    readonly records: Map<ThreadId, Exchange>;
     readonly postedAcks: Map<string, ThreadCreated>;
     readonly postedResponses: Map<
       string,
@@ -189,7 +189,7 @@ class TestAdapterState extends Context.Service<
     Effect.gen(function* () {
       return {
         // lifecycleEvents: [],
-        records: new Map<ThreadId, ExchangeState>(),
+        records: new Map<ThreadId, Exchange>(),
         postedAcks: new Map<string, ThreadCreated>(),
         postedResponses: new Map<
           string,

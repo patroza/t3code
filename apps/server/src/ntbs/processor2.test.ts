@@ -16,7 +16,7 @@ import {
   type NTBSAdapter,
   type NTBSResponse,
 } from "./adapter.ts";
-import type { Request, ExchangeState, ThreadCreated } from "./exchange.ts";
+import type { Request, Exchange, ThreadCreated } from "./exchange.ts";
 import { makeNTBSProcessor, makeNTBSProcessorTag } from "./t3gateway.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -85,7 +85,7 @@ class TestAdapterState extends Context.Service<
   TestAdapterState,
   {
     /** Lifecycle records keyed by T3 thread — seed before acting, inspect after. */
-    readonly records: Map<ThreadId, ExchangeState>;
+    readonly records: Map<ThreadId, Exchange>;
     readonly postedAcks: Array<ThreadCreated>;
     readonly postedResponses: Array<{
       readonly record: ThreadCreated;
@@ -99,7 +99,7 @@ class TestAdapterState extends Context.Service<
     TestAdapterState,
     Effect.gen(function* () {
       return {
-        records: new Map<ThreadId, ExchangeState>(),
+        records: new Map<ThreadId, Exchange>(),
         postedAcks: [],
         postedResponses: [],
         threadLookups: yield* Queue.unbounded<ThreadId>(),

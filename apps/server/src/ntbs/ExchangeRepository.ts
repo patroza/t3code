@@ -1,5 +1,5 @@
 /*
- * Defines the repository for durable NTBS exchange state.
+ * Defines the repository for durable NTBS exchanges.
  *
  * An exchange links an admitted external-platform request to its planned T3
  * work and tracks its progress through delivery of the eventual reply.
@@ -10,11 +10,7 @@
  * platform.
  */
 import { Array, Effect, Context, Data, HashMap, Ref, Layer } from "effect";
-import {
-  isNonTerminalState,
-  type ExchangeState,
-  type NonTerminalExchangeState,
-} from "./exchange.ts";
+import { isNonTerminal, type Exchange, type NonTerminalExchange } from "./exchange.ts";
 import type { ThreadId } from "@t3tools/contracts";
 import { isSome } from "effect/Option";
 
@@ -26,19 +22,19 @@ export class ExchangeRepositoryError extends Data.TaggedError("ExchangeRepositor
 export interface ExchangeRepository {
   readonly findBySourceUri: (
     sourceUri: string,
-  ) => Effect.Effect<ExchangeState | null, ExchangeRepositoryError>;
+  ) => Effect.Effect<Exchange | null, ExchangeRepositoryError>;
 
   readonly findByThreadId: (
     threadId: ThreadId,
-  ) => Effect.Effect<ExchangeState | null, ExchangeRepositoryError>;
+  ) => Effect.Effect<Exchange | null, ExchangeRepositoryError>;
 
   readonly findNonTerminalExchanges: Effect.Effect<
-    ReadonlyArray<NonTerminalExchangeState>,
+    ReadonlyArray<NonTerminalExchange>,
     ExchangeRepositoryError
   >;
 
   /** Inserts or replaces the exchange identified by its `sourceUri`. */
-  readonly upsert: (state: ExchangeState) => Effect.Effect<void, ExchangeRepositoryError>;
+  readonly upsert: (exchange: Exchange) => Effect.Effect<void, ExchangeRepositoryError>;
 }
 
 export const ExchangeRepository = Context.Service<ExchangeRepository>(
@@ -46,32 +42,32 @@ export const ExchangeRepository = Context.Service<ExchangeRepository>(
 );
 
 const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
-  const exchanges: Ref.Ref<HashMap.HashMap<string, ExchangeState>> = yield* Ref.make(
-    HashMap.empty<string, ExchangeState>(),
+  const exchanges: Ref.Ref<HashMap.HashMap<string, Exchange>> = yield* Ref.make(
+    HashMap.empty<string, Exchange>(),
   );
 
-  const upsert = Effect.fn("ExchangeRepository.upsert")(function* (state: ExchangeState) {
+  const upsert = Effect.fn("ExchangeRepository.upsert")(function* (exchange: Exchange) {
     // we return conflicting source Uri as the first argument
     // in case we find that the same threadId belongs already to a different sourceUri
     const conflictingSourceUri = yield* Ref.modify(exchanges, (map) => {
       const conflict = HashMap.findFirst(
         map,
         (existing, sourceUri) =>
-          sourceUri !== state.sourceUri && existing.t3.threadId === state.t3.threadId,
+          sourceUri !== exchange.sourceUri && existing.t3.threadId === exchange.t3.threadId,
       );
 
       return isSome(conflict)
         ? [conflict.value[0], map]
-        : [null, HashMap.set(map, state.sourceUri, state)];
+        : [null, HashMap.set(map, exchange.sourceUri, exchange)];
     });
 
     if (conflictingSourceUri !== null) {
       return yield* new ExchangeRepositoryError({
-        reason: `Thread ${state.t3.threadId} already belongs to exchange ${conflictingSourceUri}`,
+        reason: `Thread ${exchange.t3.threadId} already belongs to exchange ${conflictingSourceUri}`,
         cause: {
-          threadId: state.t3.threadId,
+          threadId: exchange.t3.threadId,
           existingSourceUri: conflictingSourceUri,
-          incomingSourceUri: state.sourceUri,
+          incomingSourceUri: exchange.sourceUri,
         },
       });
     }
@@ -86,7 +82,7 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
   const findByThreadId = (threadId: ThreadId) =>
     Ref.get(exchanges).pipe(
       Effect.map((map) => HashMap.filter(map, (val) => val.t3.threadId === threadId)),
-      // if we get more than one ExchangeState in the HashMap, something's wrong
+      // if we get more than one Exchange in the HashMap, something's wrong
       Effect.andThen((map) =>
         HashMap.size(map) > 1
           ? new ExchangeRepositoryError({
@@ -104,7 +100,7 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
     Effect.map((arr) =>
       Array.filter(
         arr.map((el) => el[1]),
-        isNonTerminalState,
+        isNonTerminal,
       ),
     ),
   );

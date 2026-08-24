@@ -1,7 +1,6 @@
 import { type ProjectId } from "@t3tools/contracts";
-import type * as NTBS from "./exchange.ts";
-import { makeRequestClaimed } from "./exchange.ts";
-import { Context, Data, Effect } from "effect";
+import * as NTBS from "./exchange.ts";
+import { Context, Data, Effect, Semaphore } from "effect";
 import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
 import { ExchangeRepository } from "./ExchangeRepository.ts";
@@ -50,7 +49,7 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
 
 export interface NTBSProcessor {
   /**
-   * Claims one external request and drives its exchange.
+   * Handles a request coming from an external platform.
    *
    * Does no filtering: the caller decides whether a request deserves T3 work, and everything passed here starts it.
    *
@@ -74,6 +73,15 @@ export interface NTBSProcessor {
 
 export const makeNTBSProcessorTag = (key: string) => Context.Service<NTBSProcessor>(key);
 
+type TransitionResult =
+  | {
+      readonly type: "transitioned";
+      readonly state: NTBS.Exchange;
+    }
+  | {
+      readonly type: "unchanged";
+    };
+
 type NTBSProcessorRequirements =
   /*
     Communicates with the external platform. Which platform is decided by the context the processor is built in.
@@ -87,6 +95,11 @@ type NTBSProcessorRequirements =
     Stores and loads the exchange state, including the exchanges a previous run left unfinished.
   */
   | ExchangeRepository;
+
+type ExchangeLock = {
+  readonly semaphore: Semaphore.Semaphore;
+  callers: number;
+};
 
 /**
  * Builds a processor for the adapter found in the context.
@@ -102,28 +115,226 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const orFail = (reason: string) =>
       Effect.mapError((cause: unknown) => new NTBSProcessorError({ reason, cause }));
 
-    /*
-      Handles an external request in this order:
+    const transitionedTo = (state: NTBS.Exchange): TransitionResult => ({
+      type: "transitioned",
+      state,
+    });
 
-      1. Ask the adapter whether this platform request already has a recorded
-      `ThreadCreated` or `ResponsePosted`.
-      If yes - stop. . If no - continue
-      2. Create the worktree and T3 thread.
-      3. Generate the first user message ID and record it with ThreadCreated.
-      4. Start the first T3 turn with that message ID, the snapshot, and attachments.
-      5. Attempt to post the acknowledgement independently.
-    */
-    const process = (request: NTBS.Request, t3Context: T3Target) =>
-      Effect.gen(function* () {
-        const sourceId = request.sourceUri;
-        const maybeExchange = yield* repo.findBySourceUri(sourceId);
+    const unchanged: TransitionResult = { type: "unchanged" };
 
-        if (!maybeExchange) {
-          const coordinates = yield* t3.planT3Work(t3Context);
-          const claimed = makeRequestClaimed(request, coordinates);
-          yield* repo.upsert(claimed);
+    const failureReply = (failure: {
+      readonly reason: string;
+      readonly cause: unknown;
+    }): NTBS.ReplyFailure => ({
+      type: "failure",
+      text: failure.reason,
+      cause: failure.cause,
+    });
+
+    const persist = <State extends NTBS.Exchange>(state: State) =>
+      Effect.succeed(state).pipe(
+        Effect.tap(repo.upsert(state).pipe(orFail("Failed to persist the exchange state"))),
+      );
+
+    const exchangeLocks = new Map<string, ExchangeLock>();
+
+    const withExchangeLock = <A, E, R>(sourceUri: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.suspend(() => {
+        let lock = exchangeLocks.get(sourceUri);
+
+        if (lock === undefined) {
+          lock = {
+            semaphore: Semaphore.makeUnsafe(1),
+            callers: 0,
+          };
+          exchangeLocks.set(sourceUri, lock);
         }
+
+        lock.callers += 1;
+
+        return lock.semaphore.withPermit(effect).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              lock.callers -= 1;
+              if (lock.callers === 0 && exchangeLocks.get(sourceUri) === lock) {
+                exchangeLocks.delete(sourceUri);
+              }
+            }),
+          ),
+        );
       });
+
+    const processRequestClaimed = Effect.fn("NTBSProcessor.processRequestClaimed")(function* (
+      state: NTBS.RequestClaimed,
+    ) {
+      const context = yield* t3
+        .getThreadStatus(state)
+        .pipe(orFail("Failed to get the T3 thread status"));
+      const decision = NTBS.fromRequestClaimed(state, context);
+
+      switch (decision.type) {
+        case "provision-thread": {
+          const rejection = yield* t3.provisionThread(state).pipe(
+            Effect.as(null),
+            Effect.catchTag("T3Rejected", (error) => Effect.succeed(error)),
+            orFail("Failed to provision the T3 thread"),
+          );
+
+          if (rejection !== null) {
+            const next = yield* persist(NTBS.toReplyPending(state, failureReply(rejection)));
+            return transitionedTo(next);
+          }
+
+          break;
+        }
+
+        case "record-thread-created":
+          break;
+      }
+
+      const next = yield* persist(NTBS.toThreadCreated(state));
+      yield* adapter.acknowledge(next).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to post the NTBS acknowledgement", {
+            sourceUri: next.sourceUri,
+            threadId: next.t3.threadId,
+            cause,
+          }),
+        ),
+      );
+      return transitionedTo(next);
+    });
+
+    const processThreadCreated = Effect.fn("NTBSProcessor.processThreadCreated")(function* (
+      state: NTBS.ThreadCreated,
+    ) {
+      const context = yield* t3
+        .getTurnStatus(state)
+        .pipe(orFail("Failed to get the T3 turn status"));
+      const decision = NTBS.fromThreadCreated(state, context);
+
+      switch (decision.type) {
+        case "start-turn": {
+          const rejection = yield* t3.startTurn(state).pipe(
+            Effect.as(null),
+            Effect.catchTag("T3Rejected", (error) => Effect.succeed(error)),
+            orFail("Failed to start the T3 turn"),
+          );
+
+          if (rejection !== null) {
+            const next = yield* persist(NTBS.toReplyPending(state, failureReply(rejection)));
+            return transitionedTo(next);
+          }
+
+          return unchanged;
+        }
+
+        case "wait":
+          return unchanged;
+
+        case "record-reply-pending": {
+          const next = yield* persist(NTBS.toReplyPending(state, decision.reply));
+          return transitionedTo(next);
+        }
+      }
+    });
+
+    const processReplyPending = Effect.fn("NTBSProcessor.processReplyPending")(function* (
+      state: NTBS.ReplyPending,
+    ) {
+      const replySourceUri = yield* adapter
+        .findPostedReply(state)
+        .pipe(orFail("Failed to find the posted platform reply"));
+      const context: NTBS.ReplyPendingContext =
+        replySourceUri === null
+          ? { platformReply: "missing" }
+          : { platformReply: "posted", replySourceUri };
+      const decision = NTBS.fromReplyPending(state, context);
+
+      switch (decision.type) {
+        case "post-reply": {
+          const delivery = yield* adapter.postReply(state).pipe(
+            Effect.map((postedReplySourceUri) => ({
+              type: "posted" as const,
+              replySourceUri: postedReplySourceUri,
+            })),
+            Effect.catchTag("ReplyRejected", (error) =>
+              Effect.succeed({ type: "rejected" as const, cause: error.cause }),
+            ),
+            orFail("Failed to post the platform reply"),
+          );
+
+          const next = yield* persist(
+            delivery.type === "posted"
+              ? NTBS.toReplyPosted(state, delivery.replySourceUri)
+              : NTBS.toUndeliverable(state, delivery.cause),
+          );
+          return transitionedTo(next);
+        }
+
+        case "record-reply-posted": {
+          const next = yield* persist(NTBS.toReplyPosted(state, decision.replySourceUri));
+          return transitionedTo(next);
+        }
+      }
+    });
+
+    const advanceExchange = Effect.fn("NTBSProcessor.advanceExchange")(function* (
+      initial: NTBS.Exchange,
+    ) {
+      let state = initial;
+
+      while (NTBS.isNonTerminal(state)) {
+        let result: TransitionResult;
+
+        switch (state.tag) {
+          case "request-claimed":
+            result = yield* processRequestClaimed(state);
+            break;
+
+          case "thread-created":
+            result = yield* processThreadCreated(state);
+            break;
+
+          case "reply-pending":
+            result = yield* processReplyPending(state);
+            break;
+        }
+
+        if (result.type === "unchanged") {
+          return;
+        }
+
+        state = result.state;
+      }
+    });
+
+    const process = (request: NTBS.Request, t3Target: T3Target) =>
+      withExchangeLock(
+        request.sourceUri,
+        Effect.gen(function* () {
+          /*
+        1. Check whether an Exchange exists for this source URI.
+        2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
+        3. If there isn't we get the t3 coordinates, save them and advance the exchange.
+       */
+
+          const existing = yield* repo
+            .findBySourceUri(request.sourceUri)
+            .pipe(orFail("Failed to find the exchange for the platform request"));
+
+          if (existing !== null) {
+            return;
+          }
+
+          const coordinates = yield* t3
+            .planT3Work(t3Target)
+            .pipe(orFail("Failed to plan the T3 work"));
+          const claimed = NTBS.makeRequestClaimed(request, coordinates);
+          yield* persist(claimed);
+          yield* advanceExchange(claimed);
+        }),
+      );
 
     const run = Effect.never;
 

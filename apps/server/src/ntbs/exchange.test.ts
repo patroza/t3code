@@ -8,7 +8,7 @@ import {
   toReplyPosted,
   toThreadCreated,
   toUndeliverable,
-  type ExchangeStateBase,
+  type ExchangeBase,
   type ReplyPosted,
   type RequestClaimed,
 } from "./exchange.ts";
@@ -25,7 +25,7 @@ const exchangeStateBase = {
     userMessageId: MessageId.make("messageId"),
     branchName: "branchName",
   },
-} satisfies ExchangeStateBase;
+} satisfies ExchangeBase;
 
 describe("RequestClaimed", () => {
   const claimed = makeRequestClaimed(exchangeStateBase);
