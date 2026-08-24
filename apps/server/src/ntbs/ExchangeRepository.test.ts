@@ -15,18 +15,20 @@ import {
 } from "./exchange.ts";
 
 const makeExchange = (sourceUri: string, threadId: string) =>
-  makeRequestClaimed({
-    sourceUri,
-    snapshot: "request",
-    attachments: [],
-    t3: {
+  makeRequestClaimed(
+    {
+      sourceUri,
+      snapshot: "request",
+      attachments: [],
+    },
+    {
       projectId: ProjectId.make("project"),
-      baseRef: "main",
+      baseRefSha: "base-ref-sha",
       threadId: ThreadId.make(threadId),
       userMessageId: MessageId.make(`message-${threadId}`),
       branchName: `branch-${threadId}`,
     },
-  });
+  );
 
 describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
