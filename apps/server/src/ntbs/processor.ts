@@ -1,6 +1,6 @@
-import { type ProjectId } from "@t3tools/contracts";
+import { type ProjectId, type ThreadId } from "@t3tools/contracts";
 import * as NTBS from "./exchange.ts";
-import { Context, Data, Effect, Semaphore } from "effect";
+import { Context, Data, Effect, Semaphore, Stream } from "effect";
 import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
 import { ExchangeRepository } from "./ExchangeRepository.ts";
@@ -278,7 +278,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     });
 
     const advanceExchange = Effect.fn("NTBSProcessor.advanceExchange")(function* (
-      initial: NTBS.Exchange,
+      initial: NTBS.NonTerminalExchange,
     ) {
       let state = initial;
 
@@ -305,6 +305,25 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
         state = result.state;
       }
+    });
+
+    const advanceSavedExchange = Effect.fn("NTBSProcessor.advanceSavedExchange")(function* (
+      sourceUri: string,
+    ) {
+      return yield* withExchangeLock(
+        sourceUri,
+        Effect.gen(function* () {
+          const exchange = yield* repo
+            .findBySourceUri(sourceUri)
+            .pipe(orFail("Failed to reload the exchange"));
+
+          if (exchange === null || NTBS.isTerminal(exchange)) {
+            return;
+          }
+
+          yield* advanceExchange(exchange);
+        }),
+      );
     });
 
     const process = Effect.fn("NTBSProcessor.process")(function* (
@@ -338,7 +357,61 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       );
     });
 
-    const run = Effect.never;
+    const processThreadActivity = Effect.fn("NTBSProcessor.processThreadActivity")(function* (
+      threadId: ThreadId,
+    ) {
+      const exchange = yield* repo
+        .findByThreadId(threadId)
+        .pipe(orFail("Failed to find the exchange for the active T3 thread"));
+
+      if (exchange !== null) {
+        yield* advanceSavedExchange(exchange.sourceUri);
+      }
+    });
+
+    const subscribeToThreadActivity = Stream.runForEach(t3.threadActivity, (threadId) =>
+      processThreadActivity(threadId).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to advance an exchange after T3 thread activity", {
+            threadId,
+            cause,
+          }),
+        ),
+      ),
+    );
+
+    const resumeNonTerminalExchanges = repo.findNonTerminalExchanges.pipe(
+      orFail("Failed to load non-terminal exchanges"),
+      Effect.flatMap((exchanges) =>
+        Effect.forEach(
+          exchanges,
+          (exchange) =>
+            advanceSavedExchange(exchange.sourceUri).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to recover an exchange", {
+                  sourceUri: exchange.sourceUri,
+                  threadId: exchange.t3.threadId,
+                  cause,
+                }),
+              ),
+            ),
+          { discard: true },
+        ),
+      ),
+      Effect.catch((cause) =>
+        Effect.logError("Failed to start exchange recovery", {
+          cause,
+        }),
+      ),
+    );
+
+    const run = Effect.scoped(
+      Effect.gen(function* () {
+        yield* subscribeToThreadActivity.pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* resumeNonTerminalExchanges;
+        return yield* Effect.never;
+      }),
+    );
 
     return {
       process,
