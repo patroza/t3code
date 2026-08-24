@@ -123,3 +123,27 @@ Model → contract → orchestration; each phase leaves the previous one settled
 3. **Processor (orchestration).** Collapse `process` / `recoverThread` / `processT3Event` into `process` plus one internal reconciler; the exposed surface stays `process` and `run`. `process` claims, then provisions and starts the turn. `run` calls the reconciler — load → observe → decide → execute → persist — on startup and on T3 events. Serialize per `sourceUri`; the outcome lock and `inFlightRequests` collapse into that. Crash-window tests drive the real loop against the real in-memory repository, with the adapter and T3 gateway faked.
 
 4. **Jira port** (ntbs-plan step 3) as the first real adapter on the settled contract, replacing the legacy bridge path.
+
+## Remaining processor tests
+
+The processor tests are grouped by responsibility: `process`, source serialization, `run`, and reply delivery.
+
+Lifecycle and retry behavior:
+
+- [x] A transient `postReply` failure leaves the exchange in `ReplyPending`; a later recovery retries and reaches `ReplyPosted`.
+- [x] A transient `findPostedReply` failure leaves the exchange in `ReplyPending`; a later recovery repeats discovery before posting.
+- [x] A failed acknowledgement is best-effort: processing still persists `ThreadCreated` and starts the turn.
+- [x] An active turn leaves `ThreadCreated` unchanged and performs no delivery work.
+- [x] A transient `provisionThread` failure leaves `RequestClaimed`; later recovery provisions the thread successfully.
+- [x] A transient `getTurnStatus` failure leaves `ThreadCreated`; later activity retries and records the completed reply.
+- [x] A transient `startTurn` failure leaves `ThreadCreated`; later recovery retries the start.
+- [x] Extend the post-persistence failure test to prove the retained `RequestClaimed` can later be resumed by `run`.
+
+`run` robustness:
+
+- [x] One exchange failing during startup recovery does not prevent another exchange from advancing.
+- [x] One thread-activity event failing does not stop later activity events from being processed.
+- [x] Activity subscription starts before recovery: an event arriving while startup recovery is blocked is not missed.
+- [x] Startup recovery racing with activity for the same exchange posts only one reply.
+
+After these cases, stop expanding the processor suite unless its contract changes. Do not add tests for every `NTBSProcessorError.reason` string, every lifecycle tag already covered by the pure model tests, repository behavior already covered by `ExchangeRepository.test.ts`, internal lock-map deletion with no observable behavior, or every `Reply` subtype that the processor handles identically.
