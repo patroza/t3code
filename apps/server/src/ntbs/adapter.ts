@@ -50,4 +50,7 @@ export interface NTBSAdapter {
   readonly findPostedReply: (state: ReplyPending) => Effect.Effect<string | null, AdapterError>;
 }
 
-export const makeNTBSAdapterTag = (key: string) => Context.Service<NTBSAdapter>(key);
+/**
+ * One tag for every platform. A processor resolves its adapter from the context it is built in, so each one is given the implementation for its own platform.
+ */
+export const NTBSAdapter = Context.Service<NTBSAdapter>("t3code/ntbs/adapter");

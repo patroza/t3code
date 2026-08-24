@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
 import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
-import type { NTBSAdapter } from "./adapter.ts";
+import { NTBSAdapter } from "./adapter.ts";
 import type { T3Gateway } from "./t3gateway.ts";
 import type { ExchangeRepository } from "./ExchangeRepository.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -92,6 +92,10 @@ export const makeNTBSProcessorTag = (key: string) => Context.Service<NTBSProcess
 
 type NTBSProcessorRequirements =
   /*
+    Communicates with the external platform. Which platform is decided by the context the processor is built in.
+  */
+  | NTBSAdapter
+  /*
     Creates worktrees and threads, starts turns, reports their progress, and provides the stream of T3 thread activity.
   */
   | T3Gateway
@@ -101,15 +105,13 @@ type NTBSProcessorRequirements =
   | ExchangeRepository;
 
 /**
- * Creates an NTBS processor for one adapter.
+ * Builds a processor for the adapter found in the context.
  *
- * Resolves the required T3 services and returns processor operations with no remaining requirements.
+ * Build one per platform, each with its own adapter provided.
  */
-export const makeNTBSProcessor = <AdapterId>(
-  adapterTag: Context.Service<AdapterId, NTBSAdapter>,
-): Effect.Effect<NTBSProcessor, never, AdapterId | NTBSProcessorRequirements> =>
+export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcessorRequirements> =
   Effect.gen(function* () {
-    const adapter = yield* adapterTag;
+    const adapter = yield* NTBSAdapter;
 
     const orFail = (reason: string) =>
       Effect.mapError((cause: unknown) => new NTBSProcessorError({ reason, cause }));
