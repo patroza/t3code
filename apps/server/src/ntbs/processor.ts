@@ -11,6 +11,8 @@ import {
 import type * as NTBS from "./exchange.ts";
 import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
 import type { NTBSAdapter } from "./adapter.ts";
+import type { T3Gateway } from "./t3gateway.ts";
+import type { ExchangeRepository } from "./ExchangeRepository.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -43,18 +45,14 @@ The cycle is replay safe: it observes before acting, so a crash or a redelivered
 */
 
 /**
- * Describes _where_ the T3 works goes. Not part of the incoming request.
+ * Describes _where_ the T3 works goes. Necessary for creating worktrees, threads and starting turns.
  */
 export type T3Target = {
   readonly projectId: ProjectId;
   /**
-   * The starting point for the thread's worktree: the new branch is created
-   * from this ref.
+   * The starting point for the thread's worktree: the new branch is created from this ref.
    *
-   * Usually a branch name such as `main`. Before use it is resolved against
-   * `origin`, so the worktree starts from the latest remote commit even when
-   * the local copy of the branch is behind. A commit SHA is also accepted and
-   * is used as-is.
+   * Usually a branch name such as `main`. Before use it is resolved against `origin`, so the worktree starts from the latest remote commit even when the local copy of the branch is behind. A commit SHA is also accepted and is used as-is.
    *
    * Set by the platform-specific inbound code.
    */
@@ -68,14 +66,13 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
 
 export interface NTBSProcessor {
   /**
-   * Admits one external request, claims it, and drives it to a started T3 turn.
+   * Claims one external request and drives its exchange.
    *
-   * Returns once the turn is running, not once the request is answered: the
-   * reply is posted later, when T3 reports the turn finished.
+   * Does no filtering: the caller decides whether a request deserves T3 work, and everything passed here starts it.
    *
-   * Idempotent per `sourceUri`: a redelivery of an already-claimed request is a
-   * no-op, whatever state that exchange has reached. Concurrent deliveries of
-   * the same request are serialized, so only the first claims it.
+   * Returns once the exchange is claimed and under way, not once the request is answered: the reply is posted later, when T3 reports the turn finished.
+   *
+   * Idempotent per `sourceUri`: a redelivery of an already-claimed request is a no-op, whatever state that exchange has reached. Concurrent deliveries of the same request are serialized, so only the first claims it.
    */
   readonly process: (
     request: NTBS.Request,
@@ -84,13 +81,9 @@ export interface NTBSProcessor {
 
   /**
    * The main loop of the processor.
+   * Subscribes to T3 activity, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange only moves when its T3 thread does.
    *
-   * Subscribes to T3 activity first, then resumes every exchange left incomplete
-   * by a previous run: each is continued from the state it reached. From then on
-   * a T3 thread moving is what wakes its exchange up.
-   *
-   * Runs until interrupted by its caller.
-   * Logs individual processing failures and continues with later events.
+   * Never returns. It has no error channel: a failure on one exchange is logged and the next event is still processed.
    */
   readonly run: Effect.Effect<void>;
 }
@@ -99,30 +92,13 @@ export const makeNTBSProcessorTag = (key: string) => Context.Service<NTBSProcess
 
 type NTBSProcessorRequirements =
   /*
-    Dispatches thread creation and turn-start commands.
-    Provides the T3 event stream used to detect outcomes.
-   */
-  | OrchestrationEngineService
-  /*
-    Loads the selected T3 project and reads thread outcomes.
+    Creates worktrees and threads, starts turns, reports their progress, and provides the stream of T3 thread activity.
   */
-  | ProjectionSnapshotQuery
+  | T3Gateway
   /*
-    Finds the exact projected turn associated with the original T3 user message.
+    Stores and loads the exchange state, including the exchanges a previous run left unfinished.
   */
-  | ProjectionTurnRepository
-  /*
-    Creates the isolated branch and worktree for each external request.
-  */
-  | GitWorkflowService
-  /*
-    Runs the project setup scripts in the newly created worktree before agent work begins.
-  */
-  | ProjectSetupScriptRunner
-  /*
-    Generates unique identifiers for the new thread, message, commands, and worktree branch.
-   */
-  | Crypto.Crypto;
+  | ExchangeRepository;
 
 /**
  * Creates an NTBS processor for one adapter.
