@@ -132,6 +132,7 @@ import {
   resolveAssignGithubLogin,
 } from "../presentation/prAssign.ts";
 import {
+  chunkDiscordContent,
   idleMessageFields,
   stripBotMention,
   truncateTitle,
@@ -158,7 +159,10 @@ import {
 } from "../presentation/slashCommands.ts";
 import {
   buildTodayRecapPrompt,
+  extractLatestAssistantText,
   formatTodayRecapThreadTitle,
+  TODAY_RECAP_TURN_POLL_MS,
+  TODAY_RECAP_TURN_TIMEOUT_MS,
   utcDateStamp,
 } from "../presentation/todayRecap.ts";
 import { extractT3ThreadId } from "../presentation/t3ThreadRef.ts";
@@ -2009,28 +2013,55 @@ const make = (botConfig: DiscordBotConfig) =>
           ),
         );
 
-    const openTodayRecapThread = (input: {
-      readonly projectChannelId: string;
+    const runTodayRecapTurn = (input: {
+      readonly deliveryChannelId: string;
       readonly shortName: string;
-      readonly starterMessageId?: string;
+      readonly topic: string | null | undefined;
+      readonly guildId: string;
+      readonly requester: DiscordMessageLike;
     }) =>
       Effect.gen(function* () {
         const date = utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe()));
         const prompt = buildTodayRecapPrompt({
           shortName: input.shortName,
           date,
-          parentChannelId: input.projectChannelId,
+          parentChannelId: input.deliveryChannelId,
         });
-        const title = formatTodayRecapThreadTitle({ shortName: input.shortName, date });
-        const discordThread =
-          input.starterMessageId === undefined
-            ? yield* rest.createThread(input.projectChannelId, {
-                name: title,
-                auto_archive_duration: 1440,
-                type: 11,
-              })
-            : yield* openOrReuseThread(input.projectChannelId, input.starterMessageId, title);
-        return { date, prompt, discordThread };
+        yield* waitForT3ReadyForInbound({
+          discordChannelId: input.deliveryChannelId,
+          reason: "today-recap",
+        });
+        const resolved = yield* resolveProjectFromTopic(input.topic);
+        const modelSelection = yield* t3.resolveModelSelection({ project: resolved.project });
+        const { threadId } = yield* t3.startTurnWithWorktree({
+          project: resolved.project,
+          prompt,
+          titleSeed: formatTodayRecapThreadTitle({ shortName: input.shortName, date }),
+          modelSelection,
+          interactionMode: "default",
+          baseBranch: botConfig.t3DefaultBaseBranch,
+          local: true,
+          sourceHint: discordSourceHint({
+            authorId: input.requester.author?.id,
+            authorUsername: input.requester.author?.username,
+            guildId: input.guildId,
+            channelId: input.deliveryChannelId,
+          }),
+        });
+        const startedAt = yield* Clock.currentTimeMillis;
+        while ((yield* Clock.currentTimeMillis) - startedAt < TODAY_RECAP_TURN_TIMEOUT_MS) {
+          const detail = yield* t3.fetchThreadDetail(threadId);
+          const state = detail?.thread.latestTurn?.state;
+          if (state === "completed" || state === "interrupted") {
+            const text = extractLatestAssistantText(detail?.thread.messages ?? []);
+            if (text !== null) return text;
+            return state === "interrupted"
+              ? "today-recap stopped before a recap was produced."
+              : "no change";
+          }
+          yield* Effect.sleep(`${TODAY_RECAP_TURN_POLL_MS} millis`);
+        }
+        return "today-recap timed out waiting for the recap.";
       });
 
     const watchedDiscordLinkRequests = new Set<string>();
@@ -2630,26 +2661,27 @@ const make = (botConfig: DiscordBotConfig) =>
               });
               return;
             }
-            const opened = yield* openTodayRecapThread({
-              projectChannelId: parentId,
-              shortName,
-            });
             const mentionMessage = discordMessageFromEvent({ ...event, content });
-            yield* startBridgedTurn({
-              discordThreadId: opened.discordThread.id,
-              channelId: parentId,
-              guildId: event.guild_id ?? "",
-              prompt: opened.prompt,
-              flags: { local: true, plan: false, prompt: opened.prompt },
+            const recap = yield* runTodayRecapTurn({
+              deliveryChannelId: event.channel_id,
+              shortName,
               topic,
-              parentChannelId: parentId,
-              presentationMode: "final-only",
-              mentionMessage,
-            }).pipe(Effect.catch((error) => reportError(opened.discordThread.id, error)));
-            yield* rest.createMessage(event.channel_id, {
-              content: `→ ${discordChannelUrl(event.guild_id, opened.discordThread.id)}`,
-              message_reference: { message_id: event.id },
-            });
+              guildId: event.guild_id ?? "",
+              requester: mentionMessage,
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.succeed(
+                  `today-recap failed: ${error instanceof Error ? error.message : String(error)}`,
+                ),
+              ),
+            );
+            const chunks = chunkDiscordContent(recap);
+            for (const [index, chunk] of chunks.entries()) {
+              yield* rest.createMessage(event.channel_id, {
+                content: chunk,
+                ...(index === 0 ? { message_reference: { message_id: event.id } } : {}),
+              });
+            }
             return;
           }
 
@@ -2879,24 +2911,27 @@ const make = (botConfig: DiscordBotConfig) =>
             });
             return;
           }
-          const opened = yield* openTodayRecapThread({
-            projectChannelId: event.channel_id,
-            shortName,
-            starterMessageId: event.id,
-          });
           const mentionMessage = discordMessageFromEvent({ ...event, content });
-          yield* startBridgedTurn({
-            discordThreadId: opened.discordThread.id,
-            channelId: event.channel_id,
-            guildId: event.guild_id ?? "",
-            prompt: opened.prompt,
-            flags: { local: true, plan: false, prompt: opened.prompt },
+          const recap = yield* runTodayRecapTurn({
+            deliveryChannelId: event.channel_id,
+            shortName,
             topic,
-            parentChannelId: event.channel_id,
-            presentationMode: "final-only",
-            mentionMessage,
-            ...(pendingReadyReaction === undefined ? {} : { pendingReadyReaction }),
-          }).pipe(Effect.catch((error) => reportError(opened.discordThread.id, error)));
+            guildId: event.guild_id ?? "",
+            requester: mentionMessage,
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.succeed(
+                `today-recap failed: ${error instanceof Error ? error.message : String(error)}`,
+              ),
+            ),
+          );
+          const chunks = chunkDiscordContent(recap);
+          for (const [index, chunk] of chunks.entries()) {
+            yield* rest.createMessage(event.channel_id, {
+              content: chunk,
+              ...(index === 0 ? { message_reference: { message_id: event.id } } : {}),
+            });
+          }
           return;
         }
 
@@ -3504,13 +3539,6 @@ const make = (botConfig: DiscordBotConfig) =>
               const inThread = isThreadChannel(channel.type);
               const topicLookup = yield* resolveProjectTopic(channel);
               const parentUnavailable = topicLookup.kind === "parent-unavailable";
-              const parentId =
-                topicLookup.kind === "parent-unavailable"
-                  ? topicLookup.parentChannelId
-                  : (topicLookup.parentChannelId ??
-                    (inThread && "parent_id" in channel && typeof channel.parent_id === "string"
-                      ? channel.parent_id
-                      : null));
               const topic = topicLookup.kind === "resolved" ? topicLookup.topic : null;
               const shortName = parseTopicShortName(topic);
               if (parentUnavailable || shortName === null) {
@@ -3519,47 +3547,50 @@ const make = (botConfig: DiscordBotConfig) =>
                 });
               }
 
-              const projectChannelId = parentId ?? channelId;
               const requester = interactionRequester(interaction);
-              const opened = yield* openTodayRecapThread({
-                projectChannelId,
-                shortName,
+              const access = classifyDiscordAgentAccess({
+                people: identityMap.list(),
+                discordId: requester.author?.id ?? null,
+                discordUsername: requester.author?.username ?? null,
+                discordDisplayName: requester.author?.displayName ?? null,
               });
+              if (!access.allowed) {
+                return slashReply(access.userMessage, { ephemeral: true });
+              }
 
-              yield* Effect.logInfo("Slash /omegent today-recap: starting bridged turn", {
-                channelId: projectChannelId,
-                discordThreadId: opened.discordThread.id,
-                shortName,
-                date: opened.date,
-              });
+              const applicationId = interaction.application_id;
+              const token = interaction.token;
               yield* forkSlashBackground(
-                startBridgedTurn({
-                  discordThreadId: opened.discordThread.id,
-                  channelId: projectChannelId,
-                  guildId: interaction.guild_id ?? "",
-                  prompt: opened.prompt,
-                  flags: { local: true, plan: false, prompt: opened.prompt },
-                  topic,
-                  parentChannelId: projectChannelId,
-                  presentationMode: "final-only",
-                  mentionMessage: requester,
+                Effect.gen(function* () {
+                  yield* Effect.sleep("250 millis");
+                  const recap = yield* runTodayRecapTurn({
+                    deliveryChannelId: channelId,
+                    shortName,
+                    topic,
+                    guildId: interaction.guild_id ?? "",
+                    requester,
+                  });
+                  const chunks = chunkDiscordContent(recap);
+                  yield* rest.updateOriginalWebhookMessage(applicationId, token, {
+                    payload: { content: chunks[0] ?? "no change" },
+                  });
+                  for (const extra of chunks.slice(1)) {
+                    yield* rest.createMessage(channelId, { content: extra });
+                  }
                 }).pipe(
-                  Effect.tap(() =>
-                    Effect.logInfo("Slash /omegent today-recap: bridged turn started", {
-                      channelId: projectChannelId,
-                      discordThreadId: opened.discordThread.id,
-                    }),
+                  Effect.catch((error: unknown) =>
+                    rest
+                      .updateOriginalWebhookMessage(applicationId, token, {
+                        payload: {
+                          content: `today-recap failed: ${error instanceof Error ? error.message : String(error)}`,
+                        },
+                      })
+                      .pipe(Effect.ignore),
                   ),
-                  Effect.catch((error) => reportError(opened.discordThread.id, error)),
                 ),
               );
 
-              return slashReply(
-                `→ ${discordChannelUrl(interaction.guild_id, opened.discordThread.id)}`,
-                {
-                  ephemeral: true,
-                },
-              );
+              return slashDefer();
             }).pipe(
               Effect.catch((error: unknown) =>
                 Effect.succeed(
