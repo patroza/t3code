@@ -278,7 +278,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     });
 
     const advanceExchange = Effect.fn("NTBSProcessor.advanceExchange")(function* (
-      initial: NTBS.NonTerminalExchange,
+      initial: NTBS.Exchange,
     ) {
       let state = initial;
 
