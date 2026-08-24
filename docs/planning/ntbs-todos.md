@@ -4,6 +4,18 @@
 
 The old model stored only `ThreadCreated | ResponsePosted` through a generic `save`, so the processor had to re-derive "what already happened" from adapter storage, T3 projections, process-local locks, and the external platform on every step. The settled design replaces it with a claimed, forward-only exchange machine with one reconciler.
 
+## Ports
+
+Three ports, one per thing the exchange has to touch. Each knows only what it wraps, and none of them knows about the others.
+
+- **Exchange repository** — the durable record of where each exchange got to. Stores, looks up by `sourceUri` or `threadId`, and lists the incomplete ones for startup recovery. Nothing in it reaches T3 or the platform.
+- **Adapter** — the originating platform. Posts the acknowledgement and the reply, and answers with certainty whether its reply for this exchange is already there. The only piece that may parse a `sourceUri`.
+- **T3 gateway** — T3 and the VCS lifecycle behind it. Plans the identifiers, provisions the thread and worktree, starts the turn, reports thread and turn status, and signals which threads have moved.
+
+The processor sits above them and holds the orchestration none of them have: it reads the state, asks the relevant port what is true now, decides, executes, and records the transition. It is the only writer of exchange state, and the only place the three ports meet.
+
+No leases and no multi-process machinery anywhere: the real deployment is one server process. How each port enforces the invariants is implementation, decided during the build.
+
 ## States
 
 ```text
@@ -16,19 +28,27 @@ RequestClaimed -> ThreadCreated -> ReplyPending -> ReplyPosted
 - **`ThreadCreated`** — the planned thread exists; the IDs are confirmed facts. No turn state is stored: turn existence and progress are T3-owned.
 - **`ReplyPending`** — T3 reached a terminal outcome; the exact reply payload is stored verbatim so every posting attempt sends the same content.
 - **`ReplyPosted`** — terminal. The platform accepted the reply; its message ID is stored.
-- **`Undeliverable`** — terminal, entered only from `ReplyPending`: a finished reply exists but the platform definitively rejected delivery. Stores the undelivered payload and a serializable explanation. The tombstone keeps dedup intact and stops the sweep from retrying forever.
+- **`Undeliverable`** — terminal, entered only from `ReplyPending`: a finished reply exists but the platform definitively rejected delivery. Stores the undelivered payload and a serializable explanation. The tombstone keeps dedup intact and stops the processor from retrying forever.
 
 ## Invariants
 
 - One exchange per `sourceUri`, for its whole life. Duplicate deliveries join it, never create another; they are pure dedup and trigger no repair.
 - Forward-only lifecycle: moving backwards is an error, not a write. Failure may jump ahead to `ReplyPending`.
 - States track delivery, not outcome quality. Answer, failure, or cancellation is data in the reply payload, never a state. Every exchange ends in `ReplyPosted` or `Undeliverable`.
-- T3 stays authoritative for T3-owned facts — no `TurnStarted` or `AwaitingOutcome` copies in adapter storage.
+- T3 stays authoritative for T3-owned facts — no `TurnStarted` or `AwaitingOutcome` copies in the stored exchange.
 - Turn-start idempotency rests on `getTurn` being read-your-writes at reconcile time; provisioning recovery must treat worktree creation as reentrant (the branch may already exist from a pre-crash attempt).
 
 ## Recovery
 
-The processor owns recovery. One reconciler, three triggers: startup, relevant T3 events, and a periodic sweep over incomplete exchanges. The sweep is the guarantee; live events are only the fast path. Platform redelivery is not a retry mechanism.
+An exchange can be cut in half by the server stopping: a thread was provisioned, but a turn never started, a reply was computed but not posted, etc.
+
+The stored state say how far did the exchange go, so work can be easily resumed.
+
+On startup the processor loads every incomplete exchange and continues it. While running, T3 events tell it when a turn has finished so the reply can be posted.
+
+An optional, additional recovery method can be envisioned by a periodic function checking whether any non-terminal exchange hung and can be resumed. Any of the non-terminal states can strand: provisioning that keeps failing, a turn that was never started, a turn T3 still calls active but that will never finish (the agent died, hit its token limit, the provider hung), a reply whose posting keeps being rejected. None of these produce an event, so nothing wakes the exchange up.
+
+It first requires proper invariants and heuristics to be defined — chiefly, how long a state may legitimately sit before it counts as stuck, which differs per state and is not knowable from the exchange alone.
 
 ## Pure decider
 
@@ -59,7 +79,7 @@ type ReplyPendingContext =
     };
 ```
 
-Transient operational failures do not enter this model: the processor leaves the current state unchanged and the periodic sweep tries again. A definitive provisioning or turn-start failure becomes a failure-typed `ReplyPending`; a definitive platform delivery rejection becomes `Undeliverable`. Those classifications belong to the impure operation boundary, not the decider context.
+Temporary failures do not change the exchange state, so the processor can try the same operation again later. If creating the thread or starting the turn has permanently failed, the processor creates a failure reply and moves the exchange to `ReplyPending`. If the platform permanently refuses to post that reply, the processor moves the exchange to `Undeliverable`. The processor decides whether an error is temporary or permanent when the operation fails; the decider only sees the plain result it needs.
 
 Pure transition constructors preserve the forward-only lifecycle:
 
@@ -86,21 +106,11 @@ Delivery is: check existence -> post if absent -> record posted.
 
 ## Failure path
 
-Any definitive failure while provisioning, starting a turn, or recovering a lost thread becomes a failure-typed reply through the normal delivery pipe; delivering it ends the exchange in `ReplyPosted`—a completed job from the processor's view. Transient failures leave the current state unchanged for the sweep to retry. Only a definitive rejection of reply delivery ends the exchange in `Undeliverable`.
+Any definitive failure while provisioning, starting a turn, or recovering a lost thread becomes a failure-typed reply through the normal delivery pipe; delivering it ends the exchange in `ReplyPosted`—a completed job from the processor's view. Transient failures leave the current state unchanged and are retried in place. Only a definitive rejection of reply delivery ends the exchange in `Undeliverable`.
 
 ## Acknowledgement
 
 The processor never learns whether the ack succeeded; no exchange state waits on it. The adapter records the ack message ID locally and may deliver the final reply by editing that ack instead of posting fresh — a rendering choice it owns. An adapter doing so must count the edited ack as the existing reply in its certainty check. A crash before the ack means it is simply never posted; the final reply is unaffected.
-
-## Adapter contract (shape, not API)
-
-Operations the contract must express: claim (duplicates join the existing
-exchange), persist-transition (forward-only), load-incomplete for the sweep,
-the reply-existence certainty check, post-reply, and fire-and-forget ack.
-Dependencies point at the platform client and storage only — never at the
-processor. No leases, no multi-process machinery: the real deployment is one
-server process. How an adapter enforces the invariants is implementation,
-decided during the build.
 
 ## Build order
 
@@ -108,8 +118,8 @@ Model → contract → orchestration; each phase leaves the previous one settled
 
 1. **Exchange (the model).** The five states with their decided contents. Transition constructors as the only way to build each state from its predecessor plus an effect result. The observation and action vocabularies, and the pure decider. Pure table tests for decider and transitions—no Effect scaffolding.
 
-2. **Adapter (the contract).** Reshape the interface around the model per "Adapter contract" above. Update the in-memory test adapter.
+2. **Ports (the contracts).** The exchange repository, the adapter and the T3 gateway, each shaped around the model per "Ports" above. Update the in-memory test adapter.
 
-3. **Processor (orchestration).** Collapse `process` / `recoverThread` / `processT3Event` into one loop: load → fetch the state's observation → decide → execute → persist. Admission becomes claim-then-reconcile. Add the periodic sweep as the third trigger beside startup and T3 events. Keep the outcome lock; review whether `inFlightRequests` still earns its place. Crash-window tests drive the real loop against the in-memory adapter.
+3. **Processor (orchestration).** Collapse `process` / `recoverThread` / `processT3Event` into `process` plus one internal reconciler; the exposed surface stays `process` and `run`. `process` claims, then provisions and starts the turn. `run` calls the reconciler — load → observe → decide → execute → persist — on startup and on T3 events. Serialize per `sourceUri`; the outcome lock and `inFlightRequests` collapse into that. Crash-window tests drive the real loop against the real in-memory repository, with the adapter and T3 gateway faked.
 
 4. **Jira port** (ntbs-plan step 3) as the first real adapter on the settled contract, replacing the legacy bridge path.
