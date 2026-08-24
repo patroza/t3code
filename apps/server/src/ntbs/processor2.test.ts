@@ -17,7 +17,7 @@ import {
   type NTBSResponse,
 } from "./adapter.ts";
 import type { Request, ExchangeState, ThreadCreated } from "./exchange.ts";
-import { makeNTBSProcessor, makeNTBSProcessorTag } from "./processor.ts";
+import { makeNTBSProcessor, makeNTBSProcessorTag } from "./t3gateway.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";

@@ -41,10 +41,25 @@ export type Request = {
   readonly attachments: ReadonlyArray<ChatAttachment>;
 };
 
-export type Reply = {
-  readonly type: "answer" | "failure" | "cancellation";
+export type ReplyFailure = {
+  readonly type: "failure";
   readonly text: string;
+  readonly cause: unknown;
 };
+
+export type ReplyCancellation = {
+  readonly type: "cancellation";
+  readonly text: string;
+  readonly cause: unknown;
+};
+
+export type Reply =
+  | {
+      readonly type: "answer";
+      readonly text: string;
+    }
+  | ReplyFailure
+  | ReplyCancellation;
 
 export type UndeliverableCause = {
   readonly message: string;

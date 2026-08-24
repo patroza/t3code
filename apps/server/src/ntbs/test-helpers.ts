@@ -8,7 +8,7 @@ import {
   VcsCreateWorktreeResult,
 } from "@t3tools/contracts";
 import type { Request, ExchangeState, ThreadCreated } from "./exchange.ts";
-import type { T3Context } from "./processor.ts";
+import type { T3Context } from "./t3gateway.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { makeNTBSAdapterTag, ThreadNotFound, type NTBSResponse } from "./adapter.ts";
 

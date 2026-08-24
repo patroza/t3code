@@ -1,0 +1,117 @@
+/*
+The T3 gateway module exposes the interface that the NTBS processor uses to communicate
+with T3, similar to how adapter models the interaction with the external platform.
+ */
+
+import {
+  type ChatAttachment,
+  CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  MessageId,
+  OrchestrationCommand,
+  type OrchestrationEvent,
+  type ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
+import type * as NTBS from "./exchange.ts";
+import { Context, Crypto, Data, DateTime, Effect, Stream, Semaphore } from "effect";
+import type { NTBSAdapter } from "./adapter.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
+import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
+import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
+import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import type { ExchangeStateBase } from "./exchange.ts";
+
+/*
+  NTBS architecture:
+
+  1. Adapter
+  Responsible for the communication with the external platform (Jira, Discord, Teams, etc).
+  - `acknowledge` confirms T3 is processing the user request
+  - `postReply` sends the reply to the platform
+  - `findPostedReplies` retries the replies sent to the platform (but maybe not recorded due to crash)
+  
+  2. ExchangeRepository
+  Responsible for saving `Exchange` data, entities that model the incoming message -> reply cycle and the relations to T3 data (threads, messages, turns).
+
+  3. T3 gateway
+  Models the interaction with T3's own api and VCS lifecycle: creating threads, worktrees, starting turns, etc.
+
+  4. NTBS Processor
+  The orchestrator between 1, 2, 3 and 4.
+
+  TODO: Better description of the whole architecture.
+*/
+
+export class T3GatewayError extends Data.TaggedError("T3GatewayError")<{
+  reason: string;
+  cause: unknown;
+}> {}
+
+type T3GatewayRequirements =
+  /*
+    Dispatches thread creation and turn-start commands.
+    Provides the T3 event stream used to detect outcomes.
+   */
+  | OrchestrationEngineService
+  /*
+    Loads the selected T3 project and reads thread outcomes.
+  */
+  | ProjectionSnapshotQuery
+  /*
+    Finds the exact projected turn associated with the original T3 user message.
+  */
+  | ProjectionTurnRepository
+  /*
+    Creates the isolated branch and worktree for each external request.
+  */
+  | GitWorkflowService
+  /*
+    Runs the project setup scripts in the newly created worktree before agent work begins.
+  */
+  | ProjectSetupScriptRunner
+  /*
+    Generates unique identifiers for the new thread, message, commands, and worktree branch.
+   */
+  | Crypto.Crypto;
+
+/** T3 will never accept this work; the processor records a failure reply. */
+export class T3Rejected extends Data.TaggedError("T3Rejected")<{
+  reason: string;
+  cause: unknown;
+}> {}
+
+export interface T3Gateway {
+  /** Mints the planned thread, message and branch identifiers recorded at claim. */
+  readonly planT3Work: (input: {
+    readonly projectId: ProjectId;
+    readonly baseRef: string;
+  }) => Effect.Effect<NTBS.ExchangeStateBase["t3"], T3GatewayError | T3Rejected>;
+
+  readonly getThreadStatus: (
+    state: NTBS.RequestClaimed,
+  ) => Effect.Effect<NTBS.RequestClaimedContext, T3GatewayError>;
+
+  /** Reentrant: worktree, thread creation and setup scripts, each skipped if already done. */
+  readonly provisionThread: (
+    state: NTBS.RequestClaimed,
+  ) => Effect.Effect<void, T3GatewayError | T3Rejected>;
+
+  /** Reports turn progress, interpreting a finished turn into a verbatim `Reply`. */
+  readonly getTurnStatus: (
+    state: NTBS.ThreadCreated,
+  ) => Effect.Effect<NTBS.ThreadCreatedContext, T3GatewayError>;
+
+  readonly startTurn: (
+    state: NTBS.ThreadCreated,
+  ) => Effect.Effect<void, T3GatewayError | T3Rejected>;
+
+  /** Threads whose T3 state just changed; the processor reconciles each. */
+  readonly threadActivity: Stream.Stream<ThreadId>;
+}
+
+const t3GatewayTag = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
