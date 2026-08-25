@@ -147,3 +147,98 @@ Lifecycle and retry behavior:
 - [x] Startup recovery racing with activity for the same exchange posts only one reply.
 
 After these cases, stop expanding the processor suite unless its contract changes. Do not add tests for every `NTBSProcessorError.reason` string, every lifecycle tag already covered by the pure model tests, repository behavior already covered by `ExchangeRepository.test.ts`, internal lock-map deletion with no observable behavior, or every `Reply` subtype that the processor handles identically.
+
+## T3 gateway implementation and tests
+
+There is currently no T3 gateway implementation or focused gateway test file: `t3gateway.ts` only defines the port. The processor tests mock that port and already cover how its contexts and errors drive the exchange lifecycle. The old processor tests exercise an obsolete adapter-owned design and are not useful gateway coverage.
+
+Gateway tests should build the real gateway with fake `ProjectionSnapshotQuery`, `ProjectionTurnRepository`, `GitWorkflowService`, `ProjectSetupScriptRunner`, `OrchestrationEngineService`, and deterministic clock/UUID services. They should assert the gateway result and its calls to those boundaries. They should not construct the real orchestration engine, run Git, or repeat processor recovery and persistence tests.
+
+### Settled gateway contracts
+
+Planning is branch-only. The platform selects a branch name; `planT3Work` fetches `origin` and pins that branch to the fetched commit. Store the selected branch and immutable commit separately from the new worktree branch:
+
+```ts
+type T3WorkCoordinates = {
+  readonly projectId: ProjectId;
+  readonly baseBranchName: string;
+  readonly baseCommitSha: string;
+  readonly worktreeBranchName: string;
+  readonly threadId: ThreadId;
+  readonly userMessageId: MessageId;
+};
+```
+
+Worktree creation uses `baseCommitSha` as `refName`, `baseBranchName` as `baseRefName`, and `worktreeBranchName` as `newRefName`. A fetch or other Git/network failure is operational and becomes `T3GatewayError`, so the exchange remains retryable. A project that does not exist, or a branch that is absent after a successful fetch, is `T3Rejected`.
+
+Provisioning is complete only after the thread and worktree exist and the setup script has completed successfully. The T3 thread projection is the durable readiness marker:
+
+1. Create the thread first with the stored `threadId`, `worktreeBranchName`, and `worktreePath: null`.
+2. Ensure the worktree exists for `worktreeBranchName`.
+3. Run the setup script and wait for successful completion.
+4. Only then dispatch `thread.meta.update` with the branch and final worktree path.
+5. `getThreadStatus` reports `present` only when the thread exists and has a non-null `worktreePath`. An absent thread or a thread with a null path remains incomplete and causes provisioning to resume.
+
+Worktree recovery uses an exact, refreshed local-ref lookup for `worktreeBranchName`: reuse its live worktree, attach the existing branch when it has no worktree, recreate a stale/missing worktree, or create the branch from `baseCommitSha` when it does not exist. Put those Git-specific cases behind an `ensureWorktree` operation on `GitWorkflowService`; the gateway should not reproduce Git worktree bookkeeping.
+
+The existing `ProjectSetupScriptRunner.runForThread` only launches a terminal command. Add a blocking `runForThreadAndWait` operation, backed by `ProcessRunner` in the same style as `ProjectLifecycleScriptRunner`. It returns only after no script is needed or the setup command exits successfully; failure or timeout becomes `T3GatewayError`.
+
+Setup execution is at least once. If setup succeeds and the process dies before `thread.meta.update`, recovery reuses the worktree and runs setup again. Setup scripts must therefore be idempotent. Exactly-once setup would require another durable record and is outside v1.
+
+Error classification is fixed:
+
+- Missing project or missing selected branch after a successful fetch: `T3Rejected`.
+- A worktree-branch collision inconsistent with the stored coordinates: `T3Rejected`.
+- Projection/database, Git/network, setup, UUID, and orchestration persistence failures: `T3GatewayError`.
+- Duplicate thread creation with the matching projected thread: successful recovery.
+- Duplicate thread creation without the matching projection: `T3GatewayError`, because T3 state is inconsistent.
+- Every gateway error preserves the original value as `cause`; classification never inspects arbitrary error text.
+
+Terminal reply conversion is fixed:
+
+- A completed turn with nonblank assistant text produces an answer containing the original text exactly. Trimming is used only to detect blank output.
+- Missing or blank assistant output produces `"T3 completed without producing a reply."` with a serializable `missing-assistant-reply` cause containing the thread, user-message, and assistant-message IDs.
+- An errored turn uses `session.lastError` or `"T3 failed while processing this request."`, with a serializable `turn-error` cause containing the thread ID, user-message ID, and recorded error.
+- An interrupted turn produces `"T3 stopped processing this request."` with a serializable `turn-interrupted` cause containing the thread and user-message IDs.
+
+`threadActivity` emits only `thread.session-set` events, using `payload.threadId`, and preserves repeats. This relies on the orchestration invariant that a terminal session event is observed only after the final turn state and assistant output are readable from the projections.
+
+### Implementation prerequisites
+
+- [ ] Rename the coordinate fields to `baseBranchName`, `baseCommitSha`, and `worktreeBranchName`, and update their construction and consumers.
+- [ ] Add `GitWorkflowService.ensureWorktree` with the exact-branch recovery behavior above.
+- [ ] Add `ProjectSetupScriptRunner.runForThreadAndWait` with an explicit timeout and bounded diagnostic output.
+- [ ] Implement the real `T3Gateway` constructor using the settled contracts before adding its focused tests.
+
+### Focused gateway test checklist
+
+`planT3Work`:
+
+- [ ] For an existing project and branch, fetch `origin`, resolve the remote branch once, and return its exact commit SHA alongside the selected branch, requested project, distinct minted thread/message IDs, and worktree branch derived from the thread ID.
+- [ ] A fetch/network failure is `T3GatewayError`; a branch absent after a successful fetch is `T3Rejected`. Neither case returns unpinned coordinates or performs provisioning work.
+- [ ] A missing project is `T3Rejected`; project-query and UUID failures are `T3GatewayError`. Every case retains its cause and performs no provisioning side effects.
+
+Thread observation and provisioning:
+
+- [ ] `getThreadStatus` queries the stored `threadId`: an absent thread or one with `worktreePath: null` maps to `{ thread: "missing" }`, while a non-null path maps to `{ thread: "present" }`. Projection failure becomes `T3GatewayError`.
+- [ ] The normal `provisionThread` path dispatches `thread.create` with a null path, ensures a worktree from the stored branch/SHA pairing, waits for setup, and finally dispatches `thread.meta.update`. It uses the project's model selection or standard fallback, mints no replacement exchange IDs, and does not start a turn.
+- [ ] A retry after `thread.create` reuses the matching incomplete thread instead of dispatching another. A conflicting duplicate without a matching projection fails as inconsistent T3 state.
+- [ ] Cover `ensureWorktree` recovery through the gateway: reuse a live matching worktree, attach an existing branch without a worktree, recreate a stale/missing worktree, and create an absent branch from the stored SHA. A conflicting branch is `T3Rejected`.
+- [ ] Setup failure or timeout returns `T3GatewayError` and leaves the thread projection incomplete. A later retry reuses the worktree, runs setup again, records the final path, and then reports the thread present.
+- [ ] Failure to persist the final `thread.meta.update` remains retryable. Recovery reruns setup under the documented at-least-once rule and does not create another thread or worktree.
+
+Turn observation and start:
+
+- [ ] `startTurn` dispatches exactly one `thread.turn.start` using the stored `threadId`, `userMessageId`, snapshot, and attachments, with the agreed runtime/interaction defaults and a fresh command ID/timestamp. It does no project, Git, setup, or turn-status work.
+- [ ] Classify representative permanent dispatch rejection as `T3Rejected` and operational dispatch failure as `T3GatewayError`, preserving each cause. The processor tests already cover what happens after either result.
+- [ ] `getTurnStatus` selects the turn whose `pendingMessageId` equals the exchange's stored `userMessageId`, even when the thread contains newer or unrelated turns.
+- [ ] No matching turn maps to `{ turn: "missing" }`; `pending` and `running` map to `{ turn: "active" }`. These cases must not load the heavier thread-detail snapshot.
+- [ ] A completed turn with its matching assistant message preserves the original nonblank text exactly. Missing or blank output produces the fixed failure text and `missing-assistant-reply` cause.
+- [ ] An errored turn produces the recorded error or fixed fallback with a `turn-error` cause; an interrupted turn produces the fixed cancellation text and `turn-interrupted` cause.
+- [ ] Turn-list and terminal thread-detail query failures, or a terminal turn whose thread projection is missing, become `T3GatewayError` with the original diagnostic cause.
+
+Activity stream:
+
+- [ ] `threadActivity` emits `payload.threadId` for `thread.session-set`, filters every other orchestration event, and preserves repeated session events. The processor owns lookup, serialization, and terminal-state deduplication.
+
+Stop there unless the gateway contract grows. Do not retest UUID generation, the branch-name helper, Git command behavior, orchestration projection internals, setup-script internals, or processor state transitions; those belong to their existing modules and suites.
