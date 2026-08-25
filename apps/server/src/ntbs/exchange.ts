@@ -66,14 +66,17 @@ export type UndeliverableCause = {
 };
 
 /** Stable identifiers and locations for an exchange's T3 work. */
-export type T3WorkCoordinates = {
+export type WorkCoordinates = {
   readonly projectId: ProjectId;
   /**
-   * The commit used to create the T3 worktree.
+   * The branch this work starts from, and the commit it pointed at on `origin`
+   * when the request was claimed.
    * We keep the same SHA across retries so the request always runs against the
-   * code selected when it was claimed, even if the original branch moves later.
+   * code selected when it was claimed, even if the branch moves later. The name
+   * is recorded as the worktree's merge base for later diff and PR flows.
    */
-  readonly baseRefSha: string;
+  readonly startBranchName: string;
+  readonly startCommitSha: string;
   // Planned while RequestClaimed; confirmed by ThreadCreated.
   readonly threadId: ThreadId;
   /**
@@ -82,14 +85,15 @@ export type T3WorkCoordinates = {
    * receives other messages.
    */
   readonly userMessageId: MessageId;
-  readonly branchName: string;
+  /** The branch minted for this request's worktree. */
+  readonly worktreeBranchName: string;
 };
 
 /**
  * The data every exchange carries, whatever state it has reached.
  */
 export type ExchangeBase = Request & {
-  readonly t3: T3WorkCoordinates;
+  readonly t3: WorkCoordinates;
 };
 
 /**
@@ -178,7 +182,7 @@ export const isNonTerminal = (state: Exchange): state is NonTerminalExchange => 
 
 export const makeRequestClaimed = (
   request: Request,
-  coordinates: T3WorkCoordinates,
+  coordinates: WorkCoordinates,
 ): RequestClaimed => ({
   ...request,
   t3: coordinates,

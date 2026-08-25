@@ -23,10 +23,11 @@ const makeExchange = (sourceUri: string, threadId: string) =>
     },
     {
       projectId: ProjectId.make("project"),
-      baseRefSha: "base-ref-sha",
+      startBranchName: "main",
+      startCommitSha: "start-commit-sha",
       threadId: ThreadId.make(threadId),
       userMessageId: MessageId.make(`message-${threadId}`),
-      branchName: `branch-${threadId}`,
+      worktreeBranchName: `branch-${threadId}`,
     },
   );
 
