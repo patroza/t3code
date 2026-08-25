@@ -6,6 +6,8 @@ import {
   getCloneDestinationBrowsePath,
   getCloneDestinationPath,
   getCloneDirectoryName,
+  getDefaultCloneUrl,
+  normalizePastedCloneUrl,
 } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
@@ -98,7 +100,13 @@ import {
 import { onOpenCommandPalette } from "../commandPaletteBus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
-import { cn, isMacPlatform, isWindowsPlatform, newProjectId } from "../lib/utils";
+import {
+  cn,
+  getLocalFileManagerName,
+  isMacPlatform,
+  isWindowsPlatform,
+  newProjectId,
+} from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import {
@@ -155,6 +163,7 @@ import {
   CommandDialog,
   CommandDialogPopup,
   CommandFooter,
+  CommandFooterAction,
   CommandInput,
   CommandPanel,
 } from "./ui/command";
@@ -183,16 +192,6 @@ function projectFavicon(project: Project) {
       className={ITEM_ICON_CLASS}
     />
   );
-}
-
-function getLocalFileManagerName(platform: string): string {
-  if (isMacPlatform(platform)) {
-    return "Finder";
-  }
-  if (isWindowsPlatform(platform)) {
-    return "Explorer";
-  }
-  return "Files";
 }
 
 function getEnvironmentBrowsePlatform(os: string | null | undefined): string {
@@ -1902,7 +1901,7 @@ function OpenCommandPaletteDialog(props: {
           source: addProjectCloneFlow.source,
           repositoryInput: rawRepository,
           repository: null,
-          remoteUrl: rawRepository,
+          remoteUrl: normalizePastedCloneUrl(rawRepository),
         });
         setHighlightedItemValue(null);
         setQuery(destinationPath);
@@ -1942,7 +1941,7 @@ function OpenCommandPaletteDialog(props: {
         source: addProjectCloneFlow.source,
         repositoryInput: rawRepository,
         repository,
-        remoteUrl: repository.sshUrl,
+        remoteUrl: getDefaultCloneUrl(repository),
       });
       setHighlightedItemValue(null);
       setQuery(destinationPath);
@@ -2349,6 +2348,128 @@ function OpenCommandPaletteDialog(props: {
     primaryEnvironmentId,
   ]);
 
+  const inputAccessory =
+    addProjectCloneFlow?.step === "repository" ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="outline"
+              size="xs"
+              tabIndex={-1}
+              className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
+              aria-label={`${remoteProjectButtonLabel ?? "Continue"} (Enter)`}
+              disabled={!canSubmitRemoteProjectFlow}
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                void submitAddProjectCloneFlow();
+              }}
+            />
+          }
+        >
+          <span>{isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}</span>
+          <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+            <Kbd>Enter</Kbd>
+          </KbdGroup>
+        </TooltipTrigger>
+        <TooltipPopup side="top">{remoteProjectButtonLabel ?? "Continue"} (Enter)</TooltipPopup>
+      </Tooltip>
+    ) : isBrowsing ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="outline"
+              size="xs"
+              tabIndex={-1}
+              className={cn(
+                "absolute inset-e-2.5 top-1/2 pe-1 ps-2 -translate-y-1/2",
+                hasHighlightedBrowseItem ? "gap-1" : "gap-1.5",
+              )}
+              aria-label={`${submitActionLabel} (${addShortcutLabel})`}
+              disabled={
+                !canCreateProjectInEnvironment(browseEnvironment?.connection.phase) ||
+                relativePathNeedsActiveProject ||
+                (isCloneDestinationStep && isRemoteProjectPending)
+              }
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                if (relativePathNeedsActiveProject) {
+                  return;
+                }
+                if (isCloneDestinationStep) {
+                  void submitAddProjectCloneFlow(resolvedAddProjectPath);
+                } else {
+                  void handleAddProject(resolvedAddProjectPath);
+                }
+              }}
+            />
+          }
+        >
+          <span>
+            {isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
+          </span>
+          <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+            <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>
+          </KbdGroup>
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {submitActionLabel} ({addShortcutLabel})
+        </TooltipPopup>
+      </Tooltip>
+    ) : !isSubmenu ? (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant={includeArchived ? "default" : "outline"}
+              size="xs"
+              tabIndex={-1}
+              className="absolute inset-e-2.5 top-1/2 gap-1.5 -translate-y-1/2"
+              aria-label="Include archived threads"
+              aria-pressed={includeArchived}
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                setIncludeArchived((previous) => !previous);
+              }}
+            />
+          }
+        >
+          <ArchiveIcon className="size-3.5" />
+          <span>Archived</span>
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {includeArchived
+            ? "Hide archived threads from search"
+            : "Include archived threads in search"}
+        </TooltipPopup>
+      </Tooltip>
+    ) : null;
+
+  const footerActionLabel =
+    addProjectCloneFlow?.step === "repository"
+      ? (remoteProjectButtonLabel ?? "Continue")
+      : !canSubmitBrowsePath || hasHighlightedBrowseItem
+        ? "Select"
+        : undefined;
+
+  const footerTrailing = canOpenProjectFromFileManager ? (
+    <CommandFooterAction
+      disabled={isPickingProjectFolder}
+      onClick={() => {
+        void handleOpenProjectFromFileManager();
+      }}
+    >
+      {`Open in ${fileManagerName}`}
+    </CommandFooterAction>
+  ) : null;
+
   return (
     <CommandDialogPopup
       aria-label="Command palette"
@@ -2414,110 +2535,7 @@ function OpenCommandPaletteDialog(props: {
                 : {})}
             onKeyDown={handleKeyDown}
           />
-          {addProjectCloneFlow?.step === "repository" ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    tabIndex={-1}
-                    className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
-                    aria-label={`${remoteProjectButtonLabel ?? "Continue"} (Enter)`}
-                    disabled={!canSubmitRemoteProjectFlow}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                    }}
-                    onClick={() => {
-                      void submitAddProjectCloneFlow();
-                    }}
-                  />
-                }
-              >
-                <span>{isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}</span>
-                <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-                  <Kbd>Enter</Kbd>
-                </KbdGroup>
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {remoteProjectButtonLabel ?? "Continue"} (Enter)
-              </TooltipPopup>
-            </Tooltip>
-          ) : isBrowsing ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    tabIndex={-1}
-                    className={cn(
-                      "absolute inset-e-2.5 top-1/2 pe-1 ps-2 -translate-y-1/2",
-                      hasHighlightedBrowseItem ? "gap-1" : "gap-1.5",
-                    )}
-                    aria-label={`${submitActionLabel} (${addShortcutLabel})`}
-                    disabled={
-                      !canCreateProjectInEnvironment(browseEnvironment?.connection.phase) ||
-                      relativePathNeedsActiveProject ||
-                      (isCloneDestinationStep && isRemoteProjectPending)
-                    }
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                    }}
-                    onClick={() => {
-                      if (relativePathNeedsActiveProject) {
-                        return;
-                      }
-                      if (isCloneDestinationStep) {
-                        void submitAddProjectCloneFlow(resolvedAddProjectPath);
-                      } else {
-                        void handleAddProject(resolvedAddProjectPath);
-                      }
-                    }}
-                  />
-                }
-              >
-                <span>
-                  {isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
-                </span>
-                <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
-                  <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>
-                </KbdGroup>
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {submitActionLabel} ({addShortcutLabel})
-              </TooltipPopup>
-            </Tooltip>
-          ) : !isSubmenu ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant={includeArchived ? "default" : "outline"}
-                    size="xs"
-                    tabIndex={-1}
-                    className="absolute inset-e-2.5 top-1/2 gap-1.5 -translate-y-1/2"
-                    aria-label="Include archived threads"
-                    aria-pressed={includeArchived}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                    }}
-                    onClick={() => {
-                      setIncludeArchived((previous) => !previous);
-                    }}
-                  />
-                }
-              >
-                <ArchiveIcon className="size-3.5" />
-                <span>Archived</span>
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                {includeArchived
-                  ? "Hide archived threads from search"
-                  : "Include archived threads in search"}
-              </TooltipPopup>
-            </Tooltip>
-          ) : null}
+          {inputAccessory}
         </div>
         <CommandPanel className="max-h-[min(28rem,70vh)]">
           {remoteProjectContext ? (
@@ -2576,15 +2594,10 @@ function OpenCommandPaletteDialog(props: {
               </Kbd>
               <span>Navigate</span>
             </KbdGroup>
-            {addProjectCloneFlow?.step === "repository" ? (
+            {footerActionLabel ? (
               <KbdGroup className="items-center gap-1.5">
                 <Kbd>Enter</Kbd>
-                <span>{remoteProjectButtonLabel ?? "Continue"}</span>
-              </KbdGroup>
-            ) : !canSubmitBrowsePath || hasHighlightedBrowseItem ? (
-              <KbdGroup className="items-center gap-1.5">
-                <Kbd>Enter</Kbd>
-                <span>Select</span>
+                <span>{footerActionLabel}</span>
               </KbdGroup>
             ) : null}
             {isSubmenu ? (
@@ -2598,19 +2611,7 @@ function OpenCommandPaletteDialog(props: {
               <span>Close</span>
             </KbdGroup>
           </div>
-          {canOpenProjectFromFileManager ? (
-            <Button
-              variant="ghost"
-              size="xs"
-              className="h-auto px-2 text-muted-foreground text-xs hover:bg-transparent hover:text-foreground"
-              disabled={isPickingProjectFolder}
-              onClick={() => {
-                void handleOpenProjectFromFileManager();
-              }}
-            >
-              {`Open in ${fileManagerName}`}
-            </Button>
-          ) : null}
+          {footerTrailing}
         </CommandFooter>
       </Command>
     </CommandDialogPopup>

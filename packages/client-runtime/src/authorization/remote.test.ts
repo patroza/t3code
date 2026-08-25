@@ -467,6 +467,13 @@ describe("remote environment authorization", () => {
         wsBaseUrl: "wss://remote.example.com/",
         httpBaseUrl: "https://remote.example.com/",
         bearerToken: "bearer-token",
+        clientMetadata: {
+          surface: "mobile",
+          appVersion: "1.2.3",
+          os: "Android",
+          osMajorVersion: 15,
+          deviceModel: "Pixel 9",
+        },
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       const parsed = new URL(url);
@@ -474,6 +481,11 @@ describe("remote environment authorization", () => {
       expect(parsed.searchParams.get("wsTicket")).toBe("ws-ticket");
       expect(parsed.searchParams.get("productFamily")).toBe("omegent-t3");
       expect(parsed.searchParams.get("productToken")).toBeTruthy();
+      expect(parsed.searchParams.get("clientSurface")).toBe("mobile");
+      expect(parsed.searchParams.get("clientAppVersion")).toBe("1.2.3");
+      expect(parsed.searchParams.get("clientOs")).toBe("Android");
+      expect(parsed.searchParams.get("clientOsMajorVersion")).toBe("15");
+      expect(parsed.searchParams.get("clientDeviceModel")).toBe("Pixel 9");
     }),
   );
 });

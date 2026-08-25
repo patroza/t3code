@@ -265,7 +265,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         assert.equal(delta.payload.delta, "hello from mock");
         // The middle segment is a per-run id: it keeps a resumed session from
         // reusing the item ids of its earlier runs.
-        assert.match(String(delta.itemId), /^assistant:mock-session-1:[^:]+:segment:0$/);
+        assert.match(String(delta.itemId), /^assistant:mock-session-1:runtime:[^:]+:segment:0$/);
       }
 
       const assistantCompleted = runtimeEvents.find(
@@ -738,7 +738,10 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             assert.equal(contentDelta.payload.delta, "hello from mock");
             // The middle segment is a per-run id: it keeps a resumed session
             // from reusing the item ids of its earlier runs.
-            assert.match(String(contentDelta.itemId), /^assistant:mock-session-1:[^:]+:segment:0$/);
+            assert.match(
+              String(contentDelta.itemId),
+              /^assistant:mock-session-1:runtime:[^:]+:segment:0$/,
+            );
           }
         });
 

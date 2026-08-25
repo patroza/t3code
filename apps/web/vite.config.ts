@@ -116,6 +116,10 @@ const isolatedUnitTestFiles = [
   "src/hooks/useLocalStorage.test.ts",
   "src/hooks/useTheme.test.ts",
   "src/lib/elementContext.test.ts",
+  // Mocks `@t3tools/client-runtime/state/runtime` without spreading the real
+  // module; under isolate:false that incomplete mock leaks into later files
+  // that import asset URL atoms (PullRequestListFilters.test.tsx).
+  "src/lib/attachmentUploadQueue.test.ts",
   "src/localApi.test.ts",
   "src/providerUpdateDismissal.test.ts",
   "src/uiStateStore.test.ts",
