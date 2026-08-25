@@ -3,9 +3,9 @@ The T3 gateway module exposes the interface that the NTBS processor uses to comm
 with T3, similar to how adapter models the interaction with the external platform.
  */
 
-import { type ProjectId, ThreadId } from "@t3tools/contracts";
+import { MessageId, type ProjectId, ThreadId } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, Effect, Stream } from "effect";
+import { Context, Crypto, Data, Effect, Layer, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -38,7 +38,7 @@ export class T3GatewayError extends Data.TaggedError("T3GatewayError")<{
   cause: unknown;
 }> {}
 
-type T3GatewayRequirements =
+type _T3GatewayRequirements =
   /*
     Dispatches thread creation and turn-start commands.
     Provides the T3 event stream used to detect outcomes.
@@ -101,3 +101,50 @@ export interface T3Gateway {
 }
 
 export const T3Gateway = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
+
+const T3GatewayLive: Effect.Effect<T3Gateway> = Effect.sync(function () {
+  const planT3Work = (
+    projectId: ProjectId,
+    baseRef: string,
+  ): Effect.Effect<NTBS.T3WorkCoordinates, T3GatewayError | T3Rejected> =>
+    Effect.succeed({
+      projectId,
+      baseRefSha: baseRef + " sha",
+      threadId: ThreadId.make("some thread id"),
+      userMessageId: MessageId.make("userMessageId"),
+      branchName: baseRef + " branchName",
+    });
+
+  const getThreadStatus = (
+    _state: NTBS.RequestClaimed,
+  ): Effect.Effect<NTBS.RequestClaimedContext, T3GatewayError> =>
+    Effect.succeed({
+      thread: "missing",
+    });
+
+  const getTurnStatus = (
+    _state: NTBS.ThreadCreated,
+  ): Effect.Effect<NTBS.ThreadCreatedContext, T3GatewayError> =>
+    Effect.succeed({
+      turn: "missing",
+    });
+
+  const startTurn = (_state: NTBS.ThreadCreated) => Effect.void;
+
+  const threadActivity = Stream.never;
+
+  const provisionThread = (
+    _state: NTBS.RequestClaimed,
+  ): Effect.Effect<void, T3GatewayError | T3Rejected> => Effect.void;
+
+  return {
+    startTurn,
+    getTurnStatus,
+    threadActivity,
+    planT3Work,
+    getThreadStatus,
+    provisionThread,
+  };
+});
+
+export const t3GatewayLive = Layer.effect(T3Gateway, T3GatewayLive);
