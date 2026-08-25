@@ -2626,7 +2626,7 @@ describe("session activity performance", () => {
     expect(appendedEntries[1]).toBe(initialEntries[1]);
   });
 
-  it("updates 20,000 ordered tool activities within 100 ms", () => {
+  it("updates 20,000 ordered tool activities within 250 ms", () => {
     const activities = Array.from({ length: 20_000 }, (_, index) =>
       makeActivity({
         id: `benchmark-tool-${index}`,
@@ -2663,6 +2663,8 @@ describe("session activity performance", () => {
 
     const startedAt = performance.now();
     expect(deriveWorkLogEntries(updatedActivities)).toHaveLength(20_001);
-    expect(performance.now() - startedAt).toBeLessThan(100);
+    // GitHub-hosted CI has seen the 100ms #8006 budget fail at ~139ms on the
+    // same tree that passed PR CI. 250ms still fails a quadratic rebuild.
+    expect(performance.now() - startedAt).toBeLessThan(250);
   });
 });
