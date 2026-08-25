@@ -13,7 +13,7 @@ import {
   type ReplyPending,
   type ReplyPosted,
   type Request,
-  type T3WorkCoordinates,
+  type WorkCoordinates,
   type ThreadCreated,
 } from "./exchange.ts";
 import { makeNTBSProcessor, type NTBSProcessor, type T3Target } from "./processor.ts";
@@ -64,12 +64,13 @@ const target: T3Target = {
   baseRef: "fork/dev",
 };
 
-const coordinates: T3WorkCoordinates = {
+const coordinates: WorkCoordinates = {
   projectId,
-  baseRefSha: "base-ref-sha",
+  startBranchName: "fork/dev",
+  startCommitSha: "start-commit-sha",
   threadId: ThreadId.make("thread-1"),
   userMessageId: MessageId.make("message-1"),
-  branchName: "ntbs/thread-1",
+  worktreeBranchName: "ntbs/thread-1",
 };
 
 const secondRequest: Request = {
@@ -77,12 +78,12 @@ const secondRequest: Request = {
   sourceUri: "test://request/2",
 };
 
-const secondCoordinates: T3WorkCoordinates = {
+const secondCoordinates: WorkCoordinates = {
   ...coordinates,
-  baseRefSha: "second-base-ref-sha",
+  startCommitSha: "second-start-commit-sha",
   threadId: ThreadId.make("thread-2"),
   userMessageId: MessageId.make("message-2"),
-  branchName: "ntbs/thread-2",
+  worktreeBranchName: "ntbs/thread-2",
 };
 
 const waitForStoredState = <State extends Exchange>(
@@ -111,9 +112,9 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.sync(() => {
-                t3Calls.push("planT3Work");
+                t3Calls.push("planCoordinates");
                 return coordinates;
               }),
             getThreadStatus: () =>
@@ -152,7 +153,7 @@ describe("NTBSProcessor", () => {
             expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
             expect(acknowledgements).toEqual([expected]);
             expect(t3Calls).toEqual([
-              "planT3Work",
+              "planCoordinates",
               "getThreadStatus",
               "provisionThread",
               "getTurnStatus",
@@ -169,7 +170,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "present" }),
             getTurnStatus: () => Effect.succeed({ turn: "missing" }),
             startTurn: () =>
@@ -209,7 +210,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "present" }),
             getTurnStatus: () => Effect.succeed({ turn: "active" }),
             startTurn: () =>
@@ -252,7 +253,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "missing" }),
             provisionThread: () =>
               Effect.gen(function* () {
@@ -300,7 +301,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "present" }),
             getTurnStatus: () => Effect.succeed({ turn: "missing" }),
             startTurn: () =>
@@ -352,10 +353,10 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.gen(function* () {
                 planCalls += 1;
-                t3Calls.push("planT3Work");
+                t3Calls.push("planCoordinates");
 
                 if (planCalls === 1) {
                   yield* Deferred.succeed(firstPlanStarted, undefined);
@@ -396,7 +397,7 @@ describe("NTBSProcessor", () => {
               .process(request, target)
               .pipe(Effect.forkChild({ startImmediately: true }));
 
-            // The first request now holds the source lock inside planT3Work.
+            // The first request now holds the source lock inside planCoordinates.
             yield* Deferred.await(firstPlanStarted);
 
             const second = yield* processor
@@ -416,7 +417,7 @@ describe("NTBSProcessor", () => {
             expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
             expect(acknowledgements).toEqual([expected]);
             expect(t3Calls).toEqual([
-              "planT3Work",
+              "planCoordinates",
               "getThreadStatus",
               "provisionThread",
               "getTurnStatus",
@@ -437,7 +438,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.gen(function* () {
                 planCalls += 1;
 
@@ -514,7 +515,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.sync(() => {
                 planCalls += 1;
                 return coordinates;
@@ -605,7 +606,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.gen(function* () {
                 planCalls += 1;
 
@@ -675,10 +676,10 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.gen(function* () {
                 planCalls += 1;
-                t3Calls.push("planT3Work");
+                t3Calls.push("planCoordinates");
 
                 if (planCalls === 1) {
                   yield* Deferred.succeed(firstPlanStarted, undefined);
@@ -749,7 +750,7 @@ describe("NTBSProcessor", () => {
             expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
             expect(acknowledgements).toEqual([expected]);
             expect(t3Calls).toEqual([
-              "planT3Work",
+              "planCoordinates",
               "getThreadStatus",
               "provisionThread",
               "getTurnStatus",
@@ -771,7 +772,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () =>
+            planCoordinates: () =>
               Effect.gen(function* () {
                 planCalls += 1;
 
@@ -1664,7 +1665,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "missing" }),
             provisionThread: () =>
               Effect.gen(function* () {
@@ -1722,7 +1723,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "present" }),
             getTurnStatus: () => Effect.succeed({ turn: "missing" }),
             startTurn: () =>
@@ -1779,7 +1780,7 @@ describe("NTBSProcessor", () => {
       return withTestProcessor(
         {
           t3: {
-            planT3Work: () => Effect.succeed(coordinates),
+            planCoordinates: () => Effect.succeed(coordinates),
             getThreadStatus: () => Effect.succeed({ thread: "present" }),
             getTurnStatus: () =>
               Effect.succeed({

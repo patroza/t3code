@@ -11,6 +11,9 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
+import { interrupt } from "effect/Cause";
 
 /*
   NTBS architecture:
@@ -38,7 +41,7 @@ export class T3GatewayError extends Data.TaggedError("T3GatewayError")<{
   cause: unknown;
 }> {}
 
-type _T3GatewayRequirements =
+type T3GatewayRequirements =
   /*
     Dispatches thread creation and turn-start commands.
     Provides the T3 event stream used to detect outcomes.
@@ -71,12 +74,24 @@ export class T3Rejected extends Data.TaggedError("T3Rejected")<{
   cause: unknown;
 }> {}
 
+/** A branch on `origin` and the commit it pointed at when it was resolved. */
+interface RemoteBranchTip {
+  readonly branchName: string;
+  readonly commitSha: string;
+}
+
 export interface T3Gateway {
-  /** Resolves the requested base ref to a commit SHA and mints the thread, message, and branch IDs recorded at claim. */
-  readonly planT3Work: (
+  /**
+   * Pins the requested branch to its current commit on `origin` and mints the thread, message, and
+   * worktree branch identifiers recorded at claim.
+   *
+   * Creates nothing: no thread, no worktree, no turn. Every call mints fresh identifiers, so call it
+   * once per request and persist the result — a second call orphans the work the first one planned.
+   */
+  readonly planCoordinates: (
     projectId: ProjectId,
     baseRef: string,
-  ) => Effect.Effect<NTBS.T3WorkCoordinates, T3GatewayError | T3Rejected>;
+  ) => Effect.Effect<NTBS.WorkCoordinates, T3GatewayError | T3Rejected>;
 
   readonly getThreadStatus: (
     state: NTBS.RequestClaimed,
@@ -102,49 +117,140 @@ export interface T3Gateway {
 
 export const T3Gateway = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
 
-const T3GatewayLive: Effect.Effect<T3Gateway> = Effect.sync(function () {
-  const planT3Work = (
-    projectId: ProjectId,
-    baseRef: string,
-  ): Effect.Effect<NTBS.T3WorkCoordinates, T3GatewayError | T3Rejected> =>
-    Effect.succeed({
-      projectId,
-      baseRefSha: baseRef + " sha",
-      threadId: ThreadId.make("some thread id"),
-      userMessageId: MessageId.make("userMessageId"),
-      branchName: baseRef + " branchName",
-    });
+const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Effect.gen(
+  function* () {
+    const orFail = (reason: string) =>
+      Effect.mapError(
+        (cause: unknown) =>
+          new T3GatewayError({
+            reason,
+            cause,
+          }),
+      );
 
-  const getThreadStatus = (
-    _state: NTBS.RequestClaimed,
-  ): Effect.Effect<NTBS.RequestClaimedContext, T3GatewayError> =>
-    Effect.succeed({
-      thread: "missing",
-    });
+    const orReject = (reason: string) =>
+      Effect.mapError(
+        (cause: unknown) =>
+          new T3Rejected({
+            reason,
+            cause,
+          }),
+      );
 
-  const getTurnStatus = (
-    _state: NTBS.ThreadCreated,
-  ): Effect.Effect<NTBS.ThreadCreatedContext, T3GatewayError> =>
-    Effect.succeed({
-      turn: "missing",
-    });
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
-  const startTurn = (_state: NTBS.ThreadCreated) => Effect.void;
+    const getProject = (projectId: ProjectId) =>
+      projectionSnapshotQuery
+        .getProjectShellById(projectId)
+        .pipe(Effect.andThen(Effect.fromOption), orFail("Failed fetching projectId " + projectId));
 
-  const threadActivity = Stream.never;
+    const gitWorkflowService = yield* GitWorkflowService;
 
-  const provisionThread = (
-    _state: NTBS.RequestClaimed,
-  ): Effect.Effect<void, T3GatewayError | T3Rejected> => Effect.void;
+    /**
+     * Resolves `branchName` to the commit it currently points at on `origin`.
+     *
+     * Fetches first, so the answer reflects the current remote tip even when the local copy is behind. Only `origin` is consulted: local state is never a fallback, because two requests naming the same branch must start from the same commit.
+     *
+     * Rejects when the project has no `origin`, or when `branchName` is not a branch on it.
+     */
+    const resolveRemoteBranchTip = (
+      cwd: string,
+      branchName: string,
+    ): Effect.Effect<RemoteBranchTip, T3Rejected | T3GatewayError> =>
+      Effect.gen(function* () {
+        // Check if origin exist. If not, T3 will never be able to accept this work
+        yield* gitWorkflowService
+          .remoteExists({ cwd, remoteName: "origin" })
+          .pipe(orReject("Remote 'origin' does not exist"));
 
-  return {
-    startTurn,
-    getTurnStatus,
-    threadActivity,
-    planT3Work,
-    getThreadStatus,
-    provisionThread,
-  };
-});
+        // Since it exists, let's fetch the latest remote state
+        yield* gitWorkflowService
+          .fetchRemote({ cwd, remoteName: "origin" })
+          .pipe(orFail("Could not fetch origin. try again"));
+
+        return yield* gitWorkflowService
+          .resolveRemoteTrackingCommit({
+            cwd,
+            refName: branchName,
+            fallbackRemoteName: "origin",
+          })
+          .pipe(
+            Effect.map((resolved) => ({
+              branchName,
+              commitSha: resolved.commitSha,
+            })),
+          )
+          .pipe(orFail("Could not resolve remote tracking commit"));
+      });
+
+    const crypto = yield* Crypto.Crypto;
+    const randomUUID = crypto.randomUUIDv4.pipe(orFail("Failed creating a UUID v4"));
+
+    const planCoordinates = (
+      projectId: ProjectId,
+      baseRef: string,
+    ): Effect.Effect<NTBS.WorkCoordinates, T3GatewayError | T3Rejected> =>
+      Effect.gen(function* () {
+        /*
+          1. Resolve the target project
+          2. Resolve the branch - commit pair against which we will create our work tree.
+          3. Mind thread, branch, message IDs
+        */
+
+        const project = yield* getProject(projectId);
+
+        const remoteBranchTip = yield* resolveRemoteBranchTip(project.workspaceRoot, baseRef);
+
+        const threadUUID = yield* randomUUID;
+        const threadId = ThreadId.make(threadUUID);
+
+        const userMessageId = MessageId.make(yield* randomUUID);
+
+        // Derived from the thread UUID so a stray branch points back at its thread.
+        const worktreeBranchName = buildTemporaryWorktreeBranchName(() => threadUUID);
+
+        const coordinates: NTBS.WorkCoordinates = {
+          projectId,
+          startBranchName: remoteBranchTip.branchName,
+          startCommitSha: remoteBranchTip.commitSha,
+          threadId,
+          userMessageId,
+          worktreeBranchName,
+        };
+        return coordinates;
+      });
+
+    const getThreadStatus = (
+      _state: NTBS.RequestClaimed,
+    ): Effect.Effect<NTBS.RequestClaimedContext, T3GatewayError> =>
+      Effect.succeed({
+        thread: "missing",
+      });
+
+    const getTurnStatus = (
+      _state: NTBS.ThreadCreated,
+    ): Effect.Effect<NTBS.ThreadCreatedContext, T3GatewayError> =>
+      Effect.succeed({
+        turn: "missing",
+      });
+
+    const startTurn = (_state: NTBS.ThreadCreated) => Effect.void;
+
+    const threadActivity = Stream.never;
+
+    const provisionThread = (
+      _state: NTBS.RequestClaimed,
+    ): Effect.Effect<void, T3GatewayError | T3Rejected> => Effect.void;
+
+    return {
+      startTurn,
+      getTurnStatus,
+      threadActivity,
+      planCoordinates,
+      getThreadStatus,
+      provisionThread,
+    };
+  },
+);
 
 export const t3GatewayLive = Layer.effect(T3Gateway, T3GatewayLive);

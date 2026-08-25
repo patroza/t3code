@@ -1,7 +1,7 @@
 import { describe, it } from "@effect/vitest";
 
 describe("T3Gateway", () => {
-  describe("planT3Work", () => {
+  describe("planCoordinates", () => {
     describe("successful planning", () => {
       it.todo("pins the selected branch to the commit fetched from origin");
 

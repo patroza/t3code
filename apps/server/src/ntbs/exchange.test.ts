@@ -12,7 +12,7 @@ import {
   type ReplyPosted,
   type Request,
   type RequestClaimed,
-  type T3WorkCoordinates,
+  type WorkCoordinates,
 } from "./exchange.ts";
 import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 
@@ -24,11 +24,12 @@ const request = {
 
 const coordinates = {
   projectId: ProjectId.make("projectId"),
-  baseRefSha: "baseRefSha",
+  startBranchName: "startBranchName",
+  startCommitSha: "startCommitSha",
   threadId: ThreadId.make("threadId"),
   userMessageId: MessageId.make("messageId"),
-  branchName: "branchName",
-} satisfies T3WorkCoordinates;
+  worktreeBranchName: "worktreeBranchName",
+} satisfies WorkCoordinates;
 
 const exchangeBase = {
   ...request,
