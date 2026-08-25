@@ -80,7 +80,6 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
-import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
@@ -539,9 +538,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
     const sendWillQueue = sendEntersQueue;
-    const hasUserMessage = selectedThreadFeed.some(
-      (entry) => entry.type === "message" && entry.message.role === "user",
-    );
     const messageId = await props.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
@@ -552,28 +548,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     // reader out of history now and leave the anchor armed to fire whenever
     // the queue finally drains.
     if (!sendWillQueue) {
+      // Rejoin the physical live edge before the outgoing-row anchor is
+      // applied. Enabling end maintenance alone is ineffective when the list
+      // was scrolled into older history.
+      listRef.current?.scrollToEnd({ animated: false });
       setSubmittedMessageId(messageId);
-      setAnchorMessageId(
-        resolveThreadFeedSubmissionAnchor({
-          currentAnchorMessageId: anchorMessageId,
-          submittedMessageId: messageId,
-          hasStartedTurn: props.selectedThread.latestTurn !== null,
-          hasUserMessage,
-          queuedMessageCount: props.selectedThreadQueueCount,
-        }),
-      );
+      setAnchorMessageId(messageId);
     }
     composerEditorRef.current?.blur();
     return messageId;
-  }, [
-    anchorMessageId,
-    props.onSendMessage,
-    props.selectedThread.latestTurn,
-    props.selectedThreadQueueCount,
-    selectedThreadFeed,
-    selectedThreadKey,
-    sendEntersQueue,
-  ]);
+  }, [props.onSendMessage, selectedThreadKey, sendEntersQueue]);
 
   const collapseComposer = useCallback(() => {
     composerEditorRef.current?.blur();

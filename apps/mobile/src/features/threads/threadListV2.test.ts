@@ -1038,7 +1038,7 @@ describe("buildThreadListV2ListItems", () => {
     ]);
   });
 
-  it("adds recency headers to active and settled sections while pins stay above them", () => {
+  it("adds recency headers to active and settled sections; inactive pins sit in settled", () => {
     const now = "2026-06-02T12:00:00.000Z";
     const groupedLayout = buildThreadListV2Items({
       threads: [
@@ -1088,7 +1088,6 @@ describe("buildThreadListV2ListItems", () => {
     });
 
     expect(items.map((item) => item.key)).toEqual([
-      `v2-thread:${environmentId}:pinned`,
       "v2-recency-header:active:last_hour",
       `v2-thread:${environmentId}:active-recent`,
       "v2-recency-header:active:yesterday",
@@ -1098,6 +1097,8 @@ describe("buildThreadListV2ListItems", () => {
       `v2-thread:${environmentId}:settled-recent`,
       "v2-recency-header:settled:yesterday",
       `v2-thread:${environmentId}:settled-yesterday`,
+      "v2-recency-header:settled:previous_30_days",
+      `v2-thread:${environmentId}:pinned`,
     ]);
   });
 

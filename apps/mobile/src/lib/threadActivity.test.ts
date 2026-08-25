@@ -713,8 +713,9 @@ describe("buildThreadFeed", () => {
     const collapsed = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set());
     const ids = collapsed.map((entry) => entry.id);
     // Rehome keeps the mis-stamped final on turn-1; first+terminal fold keeps
-    // the first assistant visible and hides tools in between.
-    expect(ids).toContain("assistant-status");
+    // the first assistant visible (as the `::pre` preamble split) and hides
+    // tools in between.
+    expect(ids).toContain("assistant-status::pre");
     expect(ids).toContain("assistant-final-misstamped");
     expect(ids).toContain("turn-fold:turn-1");
     expect(ids.indexOf("assistant-final-misstamped")).toBeGreaterThan(
