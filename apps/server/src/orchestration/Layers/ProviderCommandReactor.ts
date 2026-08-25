@@ -1411,7 +1411,7 @@ const make = Effect.gen(function* () {
         if (
           !latestSession ||
           latestSession.status === "stopped" ||
-          latestSession.status === "ready" ||
+          (latestSession.status === "ready" && latestSession.updatedAt > event.payload.createdAt) ||
           (event.payload.turnId !== undefined &&
             latestSession.activeTurnId !== null &&
             latestSession.activeTurnId !== event.payload.turnId)
@@ -1439,7 +1439,8 @@ const make = Effect.gen(function* () {
         if (
           !stoppedSession ||
           stoppedSession.status === "stopped" ||
-          stoppedSession.status === "ready" ||
+          (stoppedSession.status === "ready" &&
+            stoppedSession.updatedAt > event.payload.createdAt) ||
           (event.payload.turnId !== undefined &&
             stoppedSession.activeTurnId !== null &&
             stoppedSession.activeTurnId !== event.payload.turnId)
@@ -1470,10 +1471,23 @@ const make = Effect.gen(function* () {
     };
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
+    // Clear the projection before touching the provider. This state transition
+    // is authoritative and must not depend on a cooperative protocol peer.
+    yield* setThreadSession({
+      threadId: event.payload.threadId,
+      session: {
+        ...session,
+        status: "ready",
+        activeTurnId: null,
+        updatedAt: event.payload.createdAt,
+      },
+      createdAt: event.payload.createdAt,
+    });
+
     // Provider cancellation is best-effort and bounded. Some protocol peers
     // never answer cancellation; an interruptible timeout releases this
     // thread's command lane even in that case. Failures recover by stopping
-    // the session; a hang times out and settles the projection to ready.
+    // the session; a hang times out after the projection is already ready.
     const interruptResult = yield* providerService
       .interruptTurn({ threadId: event.payload.threadId })
       .pipe(

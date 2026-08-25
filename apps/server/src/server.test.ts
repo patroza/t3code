@@ -9215,7 +9215,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.strictEqual(result.failure.bootstrapThreadDisposition, undefined);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create"],
+        ["thread.create", "thread.delete"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
