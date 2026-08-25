@@ -1029,10 +1029,22 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
   return typeof payload.agentId === "string" && payload.agentId.trim().length > 0;
 }
 
+/** Streaming appends are already ordered; skip the n log n copy+sort on that path. */
+function orderActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  for (let index = 1; index < activities.length; index++) {
+    if (compareActivitiesByOrder(activities[index - 1]!, activities[index]!) > 0) {
+      return activities.toSorted(compareActivitiesByOrder);
+    }
+  }
+  return activities;
+}
+
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderActivities(activities);
   const entries: DerivedWorkLogEntry[] = [];
   // Answers arrive in a separate activity from the questions; fold them back
   // into the entry that asked, so one round trip renders as one Q&A card.
