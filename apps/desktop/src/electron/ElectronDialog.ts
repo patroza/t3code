@@ -107,6 +107,7 @@ export interface ElectronDialogPickFilesInput {
   readonly owner: Option.Option<Electron.BrowserWindow>;
   readonly defaultPath: Option.Option<string>;
   readonly filters: readonly Electron.FileFilter[];
+  readonly multiple: boolean;
 }
 
 export class ElectronDialog extends Context.Service<
@@ -176,7 +177,7 @@ export const make = Effect.gen(function* () {
       });
       const defaultPath = Option.getOrNull(input.defaultPath);
       const openDialogOptions: Electron.OpenDialogOptions = {
-        properties: ["openFile", "multiSelections"],
+        properties: input.multiple ? ["openFile", "multiSelections"] : ["openFile"],
         filters: [...input.filters],
         ...(defaultPath === null ? {} : { defaultPath }),
       };

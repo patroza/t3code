@@ -175,6 +175,13 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
       }),
     ),
     Layer.succeed(
+      ClientCapabilities.ClientPresentation,
+      ClientCapabilities.ClientPresentation.of({
+        metadata: { label: "Test Client", deviceType: "desktop", surface: "web" },
+        scopes: [],
+      }),
+    ),
+    Layer.succeed(
       ClientCapabilities.RelayDeviceIdentity,
       ClientCapabilities.RelayDeviceIdentity.of({
         deviceId: Effect.succeed(Option.some("device-1")),
@@ -222,6 +229,7 @@ describe("ConnectionResolver", () => {
       });
       expect(prepared.socketUrl.startsWith("ws://127.0.0.1:3777/ws?")).toBe(true);
       expect(new URL(prepared.socketUrl).searchParams.get("productFamily")).toBe("omegent-t3");
+      expect(new URL(prepared.socketUrl).searchParams.get("clientSurface")).toBe("web");
     }),
   );
 
