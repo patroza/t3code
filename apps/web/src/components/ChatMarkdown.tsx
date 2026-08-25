@@ -1968,17 +1968,6 @@ function ChatMarkdown({
       img({ node: _node, title: _title, src, alt, ...props }) {
         const srcString = typeof src === "string" ? normalizeMarkdownLinkDestination(src) : "";
         const altText = alt ?? "";
-        // Codex ACP uses `attachment:` / generated_images host paths that the
-        // shared classifier treats as blocked URI schemes.
-        if (isLocalMarkdownImageSrc(srcString) && threadRef) {
-          return (
-            <ChatMarkdownWorkspaceImage
-              threadRef={threadRef}
-              path={normalizeLocalMarkdownImageSrc(srcString)}
-              alt={altText}
-            />
-          );
-        }
         const imageSource = classifyMarkdownImageSource(srcString, cwd);
         if (imageSource._tag === "Direct") {
           return (
@@ -1996,6 +1985,17 @@ function ChatMarkdown({
             <ChatMarkdownWorkspaceImage
               threadRef={threadRef}
               path={imageSource.path}
+              alt={altText}
+            />
+          );
+        }
+        // Codex ACP uses `attachment:` / generated_images host paths that the
+        // shared classifier treats as blocked URI schemes.
+        if (isLocalMarkdownImageSrc(srcString) && threadRef) {
+          return (
+            <ChatMarkdownWorkspaceImage
+              threadRef={threadRef}
+              path={normalizeLocalMarkdownImageSrc(srcString)}
               alt={altText}
             />
           );
