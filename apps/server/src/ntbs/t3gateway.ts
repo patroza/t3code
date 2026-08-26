@@ -5,7 +5,7 @@ with T3, similar to how adapter models the interaction with the external platfor
 
 import { MessageId, type ProjectId, ThreadId } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, Effect, Layer, Stream } from "effect";
+import { Context, Crypto, Data, Effect, Layer, Option, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -139,10 +139,26 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
+    /*
+      The lookup failing is operational; the project being absent is not.
+      A deleted or archived project will never come back, so retrying is pointless.
+    */
     const getProject = (projectId: ProjectId) =>
-      projectionSnapshotQuery
-        .getProjectShellById(projectId)
-        .pipe(Effect.andThen(Effect.fromOption), orFail("Failed fetching projectId " + projectId));
+      projectionSnapshotQuery.getProjectShellById(projectId).pipe(
+        orFail("Could not load project " + projectId),
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () =>
+              Effect.fail(
+                new T3Rejected({
+                  reason: "Project " + projectId + " does not exist",
+                  cause: null,
+                }),
+              ),
+          }),
+        ),
+      );
 
     const gitWorkflowService = yield* GitWorkflowService;
 
@@ -158,16 +174,32 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       branchName: string,
     ): Effect.Effect<RemoteBranchTip, T3Rejected | T3GatewayError> =>
       Effect.gen(function* () {
-        // Check if origin exist. If not, T3 will never be able to accept this work
-        yield* gitWorkflowService
-          .remoteExists({ cwd, remoteName: "origin" })
-          .pipe(orReject("Remote 'origin' does not exist"));
+        // Check if origin exist. If not, T3 will never be able to accept this work.
+        // The lookup failing is operational; a definitive `false` is not.
+        yield* gitWorkflowService.remoteExists({ cwd, remoteName: "origin" }).pipe(
+          orFail("Could not check whether the remote 'origin' exists"),
+          Effect.filterOrFail(
+            (exists) => exists,
+            () =>
+              new T3Rejected({
+                reason: "Remote 'origin' does not exist",
+                cause: null,
+              }),
+          ),
+        );
 
         // Since it exists, let's fetch the latest remote state
         yield* gitWorkflowService
           .fetchRemote({ cwd, remoteName: "origin" })
           .pipe(orFail("Could not fetch origin. try again"));
 
+        /*
+          This reads the tracking ref locally, with no network involved. The two calls above
+          already proved the repository is usable and the remote reachable, so what is left
+          fails only when the branch is absent from origin. A repository broken badly enough
+          to fail the read some other way is reported as a missing branch; the trade buys us
+          a permanent rejection for the case that actually happens, a mistyped branch name.
+        */
         return yield* gitWorkflowService
           .resolveRemoteTrackingCommit({
             cwd,
@@ -180,7 +212,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               commitSha: resolved.commitSha,
             })),
           )
-          .pipe(orFail("Could not resolve remote tracking commit"));
+          .pipe(orReject("Branch '" + branchName + "' does not exist on origin"));
       });
 
     const crypto = yield* Crypto.Crypto;

@@ -13,6 +13,8 @@ describe("T3Gateway", () => {
     describe("rejected planning", () => {
       it.todo("rejects a project that does not exist without performing provisioning work");
 
+      it.todo("rejects a project whose repository has no origin remote");
+
       it.todo(
         "rejects a selected branch that is absent after a successful fetch without performing provisioning work",
       );
@@ -21,9 +23,9 @@ describe("T3Gateway", () => {
     describe("operational failures", () => {
       it.todo("fails retryably when the project lookup fails");
 
-      it.todo("fails retryably when fetching origin fails");
+      it.todo("fails retryably when checking for the origin remote fails");
 
-      it.todo("fails retryably when resolving the fetched branch fails operationally");
+      it.todo("fails retryably when fetching origin fails");
 
       it.todo("fails retryably when the exchange IDs cannot be minted");
     });
