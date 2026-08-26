@@ -5,6 +5,7 @@ import {
   extractLatestAssistantText,
   formatTodayRecapAck,
   formatTodayRecapThreadTitle,
+  formatTodayRecapWorking,
   TODAY_RECAP_SUBCOMMAND,
   utcDateStamp,
 } from "./todayRecap.ts";
@@ -34,6 +35,12 @@ describe("today recap helpers", () => {
         date: "2026-08-18",
       }),
     ).toBe("**joshuadima** asked for today's recap of `scanner` (2026-08-18 UTC).");
+  });
+
+  it("replaces Discord's deferred thinking spinner with a working status", () => {
+    expect(formatTodayRecapWorking({ shortName: "scanner", date: "2026-08-26" })).toBe(
+      "Writing today's recap of `scanner` (2026-08-26 UTC)…",
+    );
   });
 
   it("scopes the prompt to the calling channel's repo and the recap format", () => {

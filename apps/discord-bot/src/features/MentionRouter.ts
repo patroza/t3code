@@ -161,6 +161,7 @@ import {
   buildTodayRecapPrompt,
   extractLatestAssistantText,
   formatTodayRecapThreadTitle,
+  formatTodayRecapWorking,
   TODAY_RECAP_TURN_POLL_MS,
   TODAY_RECAP_TURN_TIMEOUT_MS,
   utcDateStamp,
@@ -2027,6 +2028,11 @@ const make = (botConfig: DiscordBotConfig) =>
           date,
           parentChannelId: input.deliveryChannelId,
         });
+        yield* Effect.logInfo("today-recap starting T3 turn", {
+          shortName: input.shortName,
+          deliveryChannelId: input.deliveryChannelId,
+          date,
+        });
         yield* waitForT3ReadyForInbound({
           discordChannelId: input.deliveryChannelId,
           reason: "today-recap",
@@ -2048,19 +2054,38 @@ const make = (botConfig: DiscordBotConfig) =>
             channelId: input.deliveryChannelId,
           }),
         });
+        yield* Effect.logInfo("today-recap T3 thread started", {
+          shortName: input.shortName,
+          threadId,
+          date,
+        });
         const startedAt = yield* Clock.currentTimeMillis;
         while ((yield* Clock.currentTimeMillis) - startedAt < TODAY_RECAP_TURN_TIMEOUT_MS) {
           const detail = yield* t3.fetchThreadDetail(threadId);
           const state = detail?.thread.latestTurn?.state;
-          if (state === "completed" || state === "interrupted") {
+          if (state === "completed" || state === "interrupted" || state === "error") {
             const text = extractLatestAssistantText(detail?.thread.messages ?? []);
+            yield* Effect.logInfo("today-recap T3 turn settled", {
+              shortName: input.shortName,
+              threadId,
+              state,
+              hasText: text !== null,
+            });
             if (text !== null) return text;
-            return state === "interrupted"
-              ? "today-recap stopped before a recap was produced."
-              : "no change";
+            if (state === "interrupted") {
+              return "today-recap stopped before a recap was produced.";
+            }
+            if (state === "error") {
+              return "today-recap failed before a recap was produced.";
+            }
+            return "no change";
           }
           yield* Effect.sleep(`${TODAY_RECAP_TURN_POLL_MS} millis`);
         }
+        yield* Effect.logWarning("today-recap timed out waiting for the recap", {
+          shortName: input.shortName,
+          threadId,
+        });
         return "today-recap timed out waiting for the recap.";
       });
 
@@ -3563,6 +3588,21 @@ const make = (botConfig: DiscordBotConfig) =>
               yield* forkSlashBackground(
                 Effect.gen(function* () {
                   yield* Effect.sleep("250 millis");
+                  const date = utcDateStamp(DateTime.formatIso(DateTime.nowUnsafe()));
+                  yield* rest
+                    .updateOriginalWebhookMessage(applicationId, token, {
+                      payload: {
+                        content: formatTodayRecapWorking({ shortName, date }),
+                      },
+                    })
+                    .pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning("today-recap working status failed", {
+                          shortName,
+                          error: String(error),
+                        }),
+                      ),
+                    );
                   const recap = yield* runTodayRecapTurn({
                     deliveryChannelId: channelId,
                     shortName,

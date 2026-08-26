@@ -32,6 +32,14 @@ export function formatTodayRecapAck(input: {
   return `**${input.displayName}** asked for today's recap of \`${input.shortName}\` (${input.date} UTC).`;
 }
 
+/** Replaces Discord's deferred "thinking" spinner so the slash does not look stuck. */
+export function formatTodayRecapWorking(input: {
+  readonly shortName: string;
+  readonly date: string;
+}): string {
+  return `Writing today's recap of \`${input.shortName}\` (${input.date} UTC)…`;
+}
+
 export function formatTodayRecapThreadTitle(input: {
   readonly shortName: string;
   readonly date: string;
