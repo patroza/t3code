@@ -82,4 +82,20 @@ case "${deferred_out}" in
     ;;
 esac
 
+# Live t3 serve / Discord-only deploys read apps/server/dist/client from disk.
+# A branch checkout must not 503 "Web assets unavailable" by wiping that tree.
+cd "${work}/main"
+mkdir -p apps/server/dist/client apps/web/dist
+printf '<html>live</html>\n' >apps/server/dist/client/index.html
+printf 'wipe\n' >apps/web/dist/gone.txt
+sh .githooks/post-checkout HEAD HEAD 1 >/dev/null 2>&1
+[ -f apps/server/dist/client/index.html ] || {
+  echo "FAIL: post-checkout wiped apps/server/dist/client" >&2
+  exit 1
+}
+[ ! -e apps/web/dist/gone.txt ] || {
+  echo "FAIL: post-checkout left apps/web/dist" >&2
+  exit 1
+}
+
 echo "worktree post-checkout hook tests passed"
