@@ -46,6 +46,15 @@ clean_ts_project_emit() {
     "$root"/packages/*/dist
   do
     [ -e "$d" ] || continue
+    # Deploy clones (and any long-running `t3 serve` from this checkout) read
+    # apps/server/dist/client from disk per request. Wiping that tree on every
+    # `git switch` immediately 503s the UI with "Web assets unavailable" until
+    # something rebuilds it — including Discord-only deploys that never rebuild
+    # the server. packages/*/dist + tsbuildinfo still clear below for the
+    # incremental-cache workaround.
+    case "$d" in
+      */apps/server/dist) continue ;;
+    esac
     rm -rf "$d"
     removed=1
   done
