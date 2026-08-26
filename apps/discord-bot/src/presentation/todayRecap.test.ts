@@ -2,9 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildTodayRecapPrompt,
+  chunkTodayRecapContent,
   extractLatestAssistantText,
-  formatTodayRecapAck,
   formatTodayRecapThreadTitle,
+  formatTodayRecapWorking,
   TODAY_RECAP_SUBCOMMAND,
   utcDateStamp,
 } from "./todayRecap.ts";
@@ -26,14 +27,10 @@ describe("today recap helpers", () => {
     );
   });
 
-  it("acks who asked and which repo/day", () => {
-    expect(
-      formatTodayRecapAck({
-        displayName: "joshuadima",
-        shortName: "scanner",
-        date: "2026-08-18",
-      }),
-    ).toBe("**joshuadima** asked for today's recap of `scanner` (2026-08-18 UTC).");
+  it("replaces Discord's deferred thinking spinner with a working status", () => {
+    expect(formatTodayRecapWorking({ shortName: "scanner", date: "2026-08-26" })).toBe(
+      "Writing today's recap of `scanner` (2026-08-26 UTC)…",
+    );
   });
 
   it("scopes the prompt to the calling channel's repo and the recap format", () => {
@@ -52,14 +49,34 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("opened that day and still open");
     expect(prompt).toContain("not the rest of the open backlog");
     expect(prompt).toContain("no change");
-    expect(prompt).toContain("[PR #N](github-url)");
-    expect(prompt).toContain("bare URL");
+    expect(prompt).toContain("[PR #N](github-url) (fix)");
+    expect(prompt).toContain("(feat)");
     expect(prompt).toContain("## 🟢 MERGED");
     expect(prompt).toContain("## 🔴 CLOSED");
     expect(prompt).toContain("## 🟠 OPEN");
-    expect(prompt).toContain("### fix");
-    expect(prompt).toContain("### feat");
+    expect(prompt).toContain("Related PRs");
+    expect(prompt).toContain("Tell that history once");
+    expect(prompt).toContain("closed PR with no connection");
+    expect(prompt).toContain("🟢 landed today");
+    expect(prompt).toContain("🔴 closed");
+    expect(prompt).toContain("🟠 still open");
+    expect(prompt).toContain("Do not use ### type headings");
+    expect(prompt).not.toContain("### fix");
+    expect(prompt).not.toContain("### feat");
     expect(prompt).not.toContain("configurator");
+  });
+
+  it("splits long recaps on blank lines so a PR block stays in one message", () => {
+    const prA = `[PR #1880](https://github.com/macs-holding/scanner/pull/1880) (feat)\nBauhaus packing materials were hardcoded.`;
+    const prB = `[PR #2273](https://github.com/macs-holding/scanner/pull/2273) (fix)\n${"x".repeat(1700)}`;
+    const recap = `## 🟢 MERGED\n\n${prA}\n\n## 🟠 OPEN\n\n${prB}`;
+    const chunks = chunkTodayRecapContent(recap, 1800);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toContain("PR #1880");
+    expect(chunks[0]).not.toContain("PR #2273");
+    expect(chunks[1]).toContain("PR #2273");
+    expect(chunks[1]).not.toContain("PR #1880");
+    expect(chunks.every((chunk) => chunk.length <= 1800)).toBe(true);
   });
 
   it("takes the last non-empty assistant message as the recap body", () => {

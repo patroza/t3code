@@ -24,12 +24,12 @@ export function utcDateStamp(isoNow: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(stamp) ? stamp : isoNow;
 }
 
-export function formatTodayRecapAck(input: {
-  readonly displayName: string;
+/** Replaces Discord's deferred "thinking" spinner so the slash does not look stuck. */
+export function formatTodayRecapWorking(input: {
   readonly shortName: string;
   readonly date: string;
 }): string {
-  return `**${input.displayName}** asked for today's recap of \`${input.shortName}\` (${input.date} UTC).`;
+  return `Writing today's recap of \`${input.shortName}\` (${input.date} UTC)…`;
 }
 
 export function formatTodayRecapThreadTitle(input: {
@@ -37,6 +37,53 @@ export function formatTodayRecapThreadTitle(input: {
   readonly date: string;
 }): string {
   return `today recap ${input.shortName} ${input.date}`;
+}
+
+const DISCORD_RECAP_CHUNK_LIMIT = 2000;
+
+/** Split a recap on blank lines so a Discord follow-up never cuts a PR block in half. */
+export function chunkTodayRecapContent(
+  content: string,
+  limit = DISCORD_RECAP_CHUNK_LIMIT,
+): string[] {
+  const trimmed = content.trimEnd();
+  if (trimmed.length === 0) return [""];
+  if (trimmed.length <= limit) return [trimmed];
+
+  const blocks = trimmed.split(/\n{2,}(?=\[PR #\d|## )/);
+  const chunks: string[] = [];
+  let current = "";
+  const flush = () => {
+    if (current.length === 0) return;
+    chunks.push(current);
+    current = "";
+  };
+  for (const block of blocks) {
+    if (block.length > limit) {
+      flush();
+      let remaining = block;
+      while (remaining.length > limit) {
+        let splitAt = remaining.lastIndexOf("\n", limit);
+        if (splitAt < Math.floor(limit * 0.5)) {
+          splitAt = remaining.lastIndexOf(" ", limit);
+        }
+        if (splitAt < Math.floor(limit * 0.5)) splitAt = limit;
+        chunks.push(remaining.slice(0, splitAt).trimEnd());
+        remaining = remaining.slice(splitAt).trimStart();
+      }
+      if (remaining.length > 0) current = remaining;
+      continue;
+    }
+    const next = current.length === 0 ? block : `${current}\n\n${block}`;
+    if (next.length > limit) {
+      flush();
+      current = block;
+    } else {
+      current = next;
+    }
+  }
+  flush();
+  return chunks;
 }
 
 export function buildTodayRecapPrompt(input: {
@@ -58,19 +105,16 @@ export function buildTodayRecapPrompt(input: {
     "Use PR descriptions for what happened and why — not the code. Discord thread links are in PR descriptions.",
     "",
     "Format strictly:",
-    "- Link each PR as [PR #N](github-url). The visible text must be exactly `PR #` plus the number (e.g. PR #2236).",
-    "- Paste each Discord thread URL as a bare URL on its own line. Discord will show the thread title. Do not wrap thread URLs in markdown.",
-    "- Categorize each PR as feat / fix / docs / chore / test / refactor from the branch name or the squashed / first conventional commit (prefer the commit when it disagrees with the title).",
-    "- Separate by status with these headings:",
+    "- Status headings (omit empty sections):",
     "## 🟢 MERGED",
     "## 🔴 CLOSED",
     "## 🟠 OPEN",
-    "- Under each status, outline by type:",
-    "### fix",
-    "### feat",
-    "### docs",
-    "  (omit empty type headings and empty status sections)",
-    "- Group related PRs. A few sentences of what/why each. Not verbose.",
+    "- Related PRs (same change, follow-up, or a first try closed because a later PR handled it) are ONE block headed by the latest PR: OPEN if any is still open, else MERGED, else CLOSED. Tell that history once. Mention earlier related PRs only inline as [PR #N](url) (feat) `🟢 landed today` / `🔴 closed` / `🟠 still open` plus that PR's Discord URL. Do not give them their own blocks.",
+    "- Unrelated PRs: one block each. A closed PR with no connection to another PR that moved today goes only under CLOSED.",
+    "- Heading line: [PR #N](github-url) (fix). Visible text is exactly `PR #` plus the number. Types: (fix) (feat) (docs) (chore) (test) (refactor) from the branch or the squashed / first conventional commit (prefer the commit).",
+    "- Bare Discord thread URL on its own line. Do not wrap thread URLs in markdown. Do not use ### type headings.",
+    "- Plain language: what the user sees now and why. Spell out shop-floor terms on first use (Kein Versand = the app will not ship this order; Packmittel = packing materials; Lieferschein = delivery note). No jargon-only lines.",
+    "- A few sentences. Not verbose. Blank line between blocks.",
     "",
     "No code dumps. No process status. If nothing merged, closed, or opened that day, reply with exactly: no change",
   ].join("\n");
