@@ -226,6 +226,7 @@ const makeThreadRow = (input: {
   archivedAt: input.archivedAt ?? null,
   settledOverride: null,
   settledAt: null,
+  unsettledAt: null,
   snoozedUntil: null,
   pinnedAt: null,
   snoozedAt: null,
