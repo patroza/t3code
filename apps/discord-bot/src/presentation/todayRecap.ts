@@ -24,14 +24,6 @@ export function utcDateStamp(isoNow: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(stamp) ? stamp : isoNow;
 }
 
-export function formatTodayRecapAck(input: {
-  readonly displayName: string;
-  readonly shortName: string;
-  readonly date: string;
-}): string {
-  return `**${input.displayName}** asked for today's recap of \`${input.shortName}\` (${input.date} UTC).`;
-}
-
 /** Replaces Discord's deferred "thinking" spinner so the slash does not look stuck. */
 export function formatTodayRecapWorking(input: {
   readonly shortName: string;
@@ -49,10 +41,7 @@ export function formatTodayRecapThreadTitle(input: {
 
 const DISCORD_RECAP_CHUNK_LIMIT = 2000;
 
-/**
- * Split a recap on blank lines so a Discord 2000-char follow-up never cuts a PR
- * block in half (the live recap split PR #1880 mid-sentence).
- */
+/** Split a recap on blank lines so a Discord follow-up never cuts a PR block in half. */
 export function chunkTodayRecapContent(
   content: string,
   limit = DISCORD_RECAP_CHUNK_LIMIT,
@@ -116,19 +105,16 @@ export function buildTodayRecapPrompt(input: {
     "Use PR descriptions for what happened and why — not the code. Discord thread links are in PR descriptions.",
     "",
     "Format strictly:",
-    "- Related PRs (same change, follow-up, or a first try that was closed because a later PR handled it) are ONE block. Tell that history once. Do not list those related PRs again in MERGED, CLOSED, or OPEN.",
-    "- Head the block with the latest PR in the chain. If any of them is still open, put the block under OPEN. Else if any merged, under MERGED. Else CLOSED.",
-    '- Mention earlier related PRs inline as [PR #N](github-url) (fix) plus that PR\'s Discord thread URL on its own line. Put 🟢 / 🔴 / 🟠 immediately next to the status words so a scan catches them: `🟢 landed today`, `🔴 closed`, `🟠 still open`. Example: [PR #111](url) (fix) then its Discord URL, then "First try was [PR #222](url) (feat) 🔴 closed because [PR #333](url) (feat) 🟢 landed today and handled it better" — then #222 and #333 get no blocks of their own.',
-    "- Unrelated PRs stay one block each. A closed PR with no connection to another PR that moved today goes only under CLOSED.",
-    "- Link the heading PR as [PR #N](github-url) (fix) — type in parentheses on the same line as the link. Visible link text is exactly `PR #` plus the number (e.g. PR #2236). Types: (fix) (feat) (docs) (chore) (test) (refactor) from the branch name or the squashed / first conventional commit (prefer the commit when it disagrees with the title).",
-    "- Do not use ### type headings.",
-    "- Paste each Discord thread URL as a bare URL on its own line. Discord will show the thread title. Do not wrap thread URLs in markdown.",
-    "- Separate by status with these headings (omit empty status sections):",
+    "- Status headings (omit empty sections):",
     "## 🟢 MERGED",
     "## 🔴 CLOSED",
     "## 🟠 OPEN",
-    '- Write so someone who does not know the ticket can understand it: what the user sees now, and why it changed. Spell out shop-floor terms on first use (Kein Versand = the app will not ship this order; Packmittel = packing materials; Lieferschein = delivery note). No jargon-only lines like "tighten packing presentation" or "realigns the marker".',
-    "- A few sentences of what/why. Not verbose. Blank line between blocks so Discord splits never cut a story in half.",
+    "- Related PRs (same change, follow-up, or a first try closed because a later PR handled it) are ONE block headed by the latest PR: OPEN if any is still open, else MERGED, else CLOSED. Tell that history once. Mention earlier related PRs only inline as [PR #N](url) (feat) `🟢 landed today` / `🔴 closed` / `🟠 still open` plus that PR's Discord URL. Do not give them their own blocks.",
+    "- Unrelated PRs: one block each. A closed PR with no connection to another PR that moved today goes only under CLOSED.",
+    "- Heading line: [PR #N](github-url) (fix). Visible text is exactly `PR #` plus the number. Types: (fix) (feat) (docs) (chore) (test) (refactor) from the branch or the squashed / first conventional commit (prefer the commit).",
+    "- Bare Discord thread URL on its own line. Do not wrap thread URLs in markdown. Do not use ### type headings.",
+    "- Plain language: what the user sees now and why. Spell out shop-floor terms on first use (Kein Versand = the app will not ship this order; Packmittel = packing materials; Lieferschein = delivery note). No jargon-only lines.",
+    "- A few sentences. Not verbose. Blank line between blocks.",
     "",
     "No code dumps. No process status. If nothing merged, closed, or opened that day, reply with exactly: no change",
   ].join("\n");

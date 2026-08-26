@@ -4,7 +4,6 @@ import {
   buildTodayRecapPrompt,
   chunkTodayRecapContent,
   extractLatestAssistantText,
-  formatTodayRecapAck,
   formatTodayRecapThreadTitle,
   formatTodayRecapWorking,
   TODAY_RECAP_SUBCOMMAND,
@@ -26,16 +25,6 @@ describe("today recap helpers", () => {
     expect(formatTodayRecapThreadTitle({ shortName: "scanner", date: "2026-08-18" })).toBe(
       "today recap scanner 2026-08-18",
     );
-  });
-
-  it("acks who asked and which repo/day", () => {
-    expect(
-      formatTodayRecapAck({
-        displayName: "joshuadima",
-        shortName: "scanner",
-        date: "2026-08-18",
-      }),
-    ).toBe("**joshuadima** asked for today's recap of `scanner` (2026-08-18 UTC).");
   });
 
   it("replaces Discord's deferred thinking spinner with a working status", () => {
@@ -62,13 +51,11 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("no change");
     expect(prompt).toContain("[PR #N](github-url) (fix)");
     expect(prompt).toContain("(feat)");
-    expect(prompt).toContain("bare URL");
     expect(prompt).toContain("## 🟢 MERGED");
     expect(prompt).toContain("## 🔴 CLOSED");
     expect(prompt).toContain("## 🟠 OPEN");
     expect(prompt).toContain("Related PRs");
     expect(prompt).toContain("Tell that history once");
-    expect(prompt).toContain("Do not list those related PRs again");
     expect(prompt).toContain("closed PR with no connection");
     expect(prompt).toContain("🟢 landed today");
     expect(prompt).toContain("🔴 closed");
@@ -76,7 +63,6 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("Do not use ### type headings");
     expect(prompt).not.toContain("### fix");
     expect(prompt).not.toContain("### feat");
-    expect(prompt).not.toContain("One PR per block");
     expect(prompt).not.toContain("configurator");
   });
 
