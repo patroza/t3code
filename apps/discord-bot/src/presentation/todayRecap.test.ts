@@ -70,6 +70,9 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("Tell that history once");
     expect(prompt).toContain("Do not list those related PRs again");
     expect(prompt).toContain("closed PR with no connection");
+    expect(prompt).toContain("🟢 landed today");
+    expect(prompt).toContain("🔴 closed");
+    expect(prompt).toContain("🟠 still open");
     expect(prompt).toContain("Do not use ### type headings");
     expect(prompt).not.toContain("### fix");
     expect(prompt).not.toContain("### feat");
