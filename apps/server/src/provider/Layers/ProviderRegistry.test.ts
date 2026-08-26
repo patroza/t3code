@@ -36,6 +36,7 @@ import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from ".
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as DirenvEnvironment from "../DirenvEnvironment.ts";
+import * as ModelManifest from "../ModelManifest.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
@@ -391,6 +392,13 @@ it.layer(
             shortDescription: "Debug failing GitHub Actions checks",
           },
         ]);
+        assert.deepStrictEqual(status.slashCommands, [
+          {
+            name: "feedback",
+            description: "Send this thread and Codex logs to OpenAI",
+            input: { hint: "Describe the issue (optional)" },
+          },
+        ]);
       }),
     );
 
@@ -502,7 +510,7 @@ it.layer(
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.installed, false);
         assert.strictEqual(status.auth.status, "unknown");
-        assert.strictEqual(status.message, "Codex CLI (`codex`) is not installed or not on PATH.");
+        assert.strictEqual(status.message, "Codex CLI (`codex`) was not found on PATH.");
       }),
     );
 
@@ -1484,6 +1492,7 @@ it.layer(
               ProviderEventLoggers.NoOpProviderEventLoggers,
             ),
           ),
+          Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
           Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
           // NO spawner mock — `ChildProcessSpawner` is supplied by the
@@ -1525,10 +1534,7 @@ it.layer(
             "Real Codex probe against a missing binary should surface as 'error' in the aggregator",
           );
           assert.strictEqual(codexPersonal?.installed, false);
-          assert.strictEqual(
-            codexPersonal?.message,
-            "Codex CLI (`codex`) is not installed or not on PATH.",
-          );
+          assert.strictEqual(codexPersonal?.message, "Codex CLI (`codex`) was not found on PATH.");
         }).pipe(Effect.provide(runtimeServices));
       }),
     );
@@ -1578,6 +1584,7 @@ it.layer(
               ProviderEventLoggers.NoOpProviderEventLoggers,
             ),
           ),
+          Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
           Layer.updateService(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
             ChildProcessSpawner.make((command) => {
@@ -1688,6 +1695,7 @@ it.layer(
               ProviderEventLoggers.NoOpProviderEventLoggers,
             ),
           ),
+          Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
           Layer.provideMerge(NodeServices.layer),
           Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
@@ -1707,6 +1715,91 @@ it.layer(
           assert.match(ghost?.unavailableReason ?? "", /ghostDriver/);
         }).pipe(Effect.provide(runtimeServices));
       }),
+    );
+
+    it.effect(
+      "keeps Cursor disabled and skips provider probing when settings use their defaults",
+      () =>
+        Effect.gen(function* () {
+          const serverSettings = yield* makeMutableServerSettingsService(
+            decodeServerSettings(
+              deepMerge(encodedDefaultServerSettings, {
+                providers: {
+                  codex: {
+                    enabled: false,
+                  },
+                  grok: {
+                    enabled: false,
+                  },
+                },
+              }),
+            ),
+          );
+          let cursorSpawned = false;
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const providerRegistryLayer = ProviderRegistryLive.pipe(
+            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+            ),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-cursor-defaults-",
+              }),
+            ),
+            Layer.provideMerge(TestHttpClientLive),
+            Layer.provideMerge(
+              Layer.succeed(
+                ProviderEventLoggers.ProviderEventLoggers,
+                ProviderEventLoggers.NoOpProviderEventLoggers,
+              ),
+            ),
+            Layer.provideMerge(ModelManifest.layerTest),
+            Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+            Layer.provideMerge(
+              mockCommandSpawnerLayer((command, args) => {
+                if (command === "cursor-agent") {
+                  cursorSpawned = true;
+                }
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return {
+                    stdout: `${command} 1.0.0\n`,
+                    stderr: "",
+                    code: 0,
+                  };
+                }
+                if (joined === "auth status") {
+                  return {
+                    stdout: '{"authenticated":true}\n',
+                    stderr: "",
+                    code: 0,
+                  };
+                }
+                throw new Error(`Unexpected args: ${command} ${joined}`);
+              }),
+            ),
+          );
+          const runtimeServices = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+              providerRegistryLayer,
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const providers = yield* registry.getProviders;
+            const cursorProvider = providers.find(
+              (provider) => provider.instanceId === ProviderInstanceId.make("cursor"),
+            );
+
+            assert.strictEqual(cursorProvider?.enabled, false);
+            assert.strictEqual(cursorSpawned, false);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
     );
 
     it.effect("keeps cursor disabled and skips probing when the provider setting is disabled", () =>
@@ -1748,6 +1841,7 @@ it.layer(
               ProviderEventLoggers.NoOpProviderEventLoggers,
             ),
           ),
+          Layer.provideMerge(ModelManifest.layerTest),
           Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
           Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
           Layer.provideMerge(
@@ -2201,6 +2295,10 @@ it.layer(
 
         assert.deepStrictEqual(status.slashCommands, [
           {
+            name: "compact",
+            description: "Summarize the conversation and reduce context usage",
+          },
+          {
             name: "review",
             description: "Review a pull request",
             input: { hint: "pr-or-branch" },
@@ -2243,6 +2341,10 @@ it.layer(
         );
 
         assert.deepStrictEqual(status.slashCommands, [
+          {
+            name: "compact",
+            description: "Summarize the conversation and reduce context usage",
+          },
           {
             name: "ui",
             description: "Explore and refine UI",
@@ -2302,10 +2404,7 @@ it.layer(
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.installed, false);
         assert.strictEqual(status.auth.status, "unknown");
-        assert.strictEqual(
-          status.message,
-          "Claude Agent CLI (`claude`) is not installed or not on PATH.",
-        );
+        assert.strictEqual(status.message, "Claude Agent CLI (`claude`) was not found on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn claude ENOENT"))),
     );
 

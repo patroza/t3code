@@ -8,6 +8,7 @@ import {
 } from "@t3tools/client-runtime/state/identity";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Platform } from "react-native";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
@@ -167,7 +168,13 @@ export function HomeRouteScreen() {
   if (layout.usesSplitView) {
     return (
       <>
-        <NativeStackScreenOptions options={{ title: "", headerTitle: "" }} />
+        <NativeStackScreenOptions
+          options={
+            Platform.OS === "android"
+              ? { headerShown: false }
+              : { title: "", headerTitle: "", unstable_headerLeftItems: () => [] }
+          }
+        />
         <WorkspaceSidebarToolbar
           afterSidebarButton={
             <NativeHeaderToolbar.Button
@@ -189,9 +196,14 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Title is owned by HomeHeader (tracks list mode), which carries the
-            connection-aware brand slot — no native-stack title to avoid
-            showing the status twice. */}
+        {/* Restore the header after leaving split view; screen options are
+            shallow-merged. Title/brand stay on HomeHeader (list-mode title +
+            connection-aware slot) so we do not paint the status twice. */}
+        <NativeStackScreenOptions
+          options={{
+            headerShown: true,
+          }}
+        />
         <HomeHeader
           environments={environments}
           projects={projectFilterOptions}

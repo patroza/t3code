@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { Image, ScrollView, Text, useColorScheme, View } from "react-native";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
@@ -10,9 +10,13 @@ import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText.ios
 import type {
   MarkdownCodeHighlighter,
   MarkdownHighlightedToken,
+  MarkdownImageRenderer,
   NativeMarkdownTextStyle,
   SelectableMarkdownSkill,
 } from "./SelectableMarkdownText.types";
+
+/** Set by SelectableMarkdownText so images anywhere in the block tree can use it. */
+export const MarkdownImageRendererContext = createContext<MarkdownImageRenderer | null>(null);
 
 type HighlightedCode = ReadonlyArray<ReadonlyArray<MarkdownHighlightedToken>>;
 
@@ -382,6 +386,7 @@ function NativeMarkdownImage(props: {
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
 }) {
+  const renderImage = useContext(MarkdownImageRendererContext);
   const href = props.node.href;
   if (!href) {
     return (
@@ -392,6 +397,17 @@ function NativeMarkdownImage(props: {
         onLinkPress={props.onLinkPress}
       />
     );
+  }
+
+  if (renderImage) {
+    const rendered = renderImage({
+      href,
+      alt: props.node.alt ?? null,
+      title: props.node.title ?? null,
+    });
+    if (rendered != null) {
+      return <>{rendered}</>;
+    }
   }
 
   return (

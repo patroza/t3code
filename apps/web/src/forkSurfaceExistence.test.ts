@@ -98,9 +98,9 @@ describe("fork surface existence (anti stack-drop)", () => {
 
   it("thread detail loading keeps every composer send path disabled", () => {
     const chatView = readSrc("components/ChatView.tsx");
-    expect(chatView).toContain(
-      'sendDisabledReason={threadDetailLoading ? "Messages loading" : null}',
-    );
+    expect(chatView).toContain("threadDetailLoading");
+    expect(chatView).toContain('"Messages loading"');
+    expect(chatView).toContain("feedbackUploading");
 
     const composer = readSrc("components/chat/ChatComposer.tsx");
     expect(composer).toContain("const isSendDisabled = sendDisabledReason !== null");

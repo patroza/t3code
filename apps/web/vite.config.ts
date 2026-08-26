@@ -88,6 +88,10 @@ const isolatedUnitTestFiles = [
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
   "src/components/chat/MessagesTimeline.test.tsx",
+  // Mocks `../assets/assetUrls` while ChatMarkdown is already bound to the
+  // real module under isolate:false — useAssetUrlState then sees
+  // useAtomValue() === null and throws on `_tag`.
+  "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/chat/draftHeroTransition.test.ts",
   "src/components/files/projectFilesQueryState.test.ts",
   // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
@@ -116,7 +120,14 @@ const isolatedUnitTestFiles = [
   "src/hooks/useLocalStorage.test.ts",
   "src/hooks/useTheme.test.ts",
   "src/lib/elementContext.test.ts",
+  // Mocks `@t3tools/client-runtime/state/runtime` without spreading the real
+  // module; under isolate:false that incomplete mock leaks into later files
+  // that import asset URL atoms (PullRequestListFilters.test.tsx).
+  "src/lib/attachmentUploadQueue.test.ts",
   "src/localApi.test.ts",
+  // Mocks `~/localApi`; under isolate:false terminalCloseConfirm is already
+  // bound to the real module so confirm() is never the mock and pending stays false.
+  "src/lib/terminalCloseConfirm.test.ts",
   "src/providerUpdateDismissal.test.ts",
   "src/uiStateStore.test.ts",
   "src/versionSkew.test.ts",

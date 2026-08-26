@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
-const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:"]);
+const SAFE_WEB_PROTOCOLS = new Set(["http:", "https:"]);
 // Editor URL schemes whose handler runs in the user's graphical session, so the desktop can open a
 // file/folder or a Remote-SSH target even when the t3 server runs headless (e.g. a lingered systemd
 // user service with no display env).
@@ -24,6 +24,26 @@ const SAFE_EDITOR_PROTOCOLS = new Set([
     return scheme === undefined ? [] : [`${scheme}:`];
   }),
 ]);
+const REMOTE_EDITOR_PROTOCOLS = new Set(
+  REMOTE_CAPABLE_EDITOR_IDS.flatMap((id) => {
+    const scheme = remoteSchemeForEditor(id);
+    return scheme === undefined ? [] : [`${scheme}:`];
+  }),
+);
+
+const isRemoteEditorUrl = (url: URL) =>
+  REMOTE_EDITOR_PROTOCOLS.has(url.protocol) &&
+  url.username.length === 0 &&
+  url.password.length === 0 &&
+  url.host === "vscode-remote" &&
+  url.pathname.startsWith("/ssh-remote+") &&
+  url.pathname.length > "/ssh-remote+".length;
+
+const isLocalEditorFileUrl = (url: URL) =>
+  SAFE_EDITOR_PROTOCOLS.has(url.protocol) &&
+  url.username.length === 0 &&
+  url.password.length === 0 &&
+  url.hostname === "file";
 
 export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   if (typeof rawUrl !== "string") {
@@ -32,21 +52,11 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
 
   try {
     const url = new URL(rawUrl);
-    if (SAFE_EXTERNAL_PROTOCOLS.has(url.protocol)) {
-      return Option.some(url.href);
-    }
-    if (SAFE_EDITOR_PROTOCOLS.has(url.protocol)) {
-      // Local open: `<editor>://file/<absolute path>`.
-      if (url.hostname === "file") {
-        return Option.some(url.href);
-      }
-      // Remote-SSH open: `<editor>://vscode-remote/ssh-remote+<authority>/<path>`.
-      if (url.hostname === "vscode-remote" && url.pathname.startsWith("/ssh-remote+")) {
-        return Option.some(url.href);
-      }
-      return Option.none();
-    }
-    return Option.none();
+    return SAFE_WEB_PROTOCOLS.has(url.protocol) ||
+      isRemoteEditorUrl(url) ||
+      isLocalEditorFileUrl(url)
+      ? Option.some(url.href)
+      : Option.none();
   } catch {
     return Option.none();
   }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildTodayRecapPrompt,
+  extractLatestAssistantText,
   formatTodayRecapAck,
   formatTodayRecapThreadTitle,
   TODAY_RECAP_SUBCOMMAND,
@@ -59,5 +60,17 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("### fix");
     expect(prompt).toContain("### feat");
     expect(prompt).not.toContain("configurator");
+  });
+
+  it("takes the last non-empty assistant message as the recap body", () => {
+    expect(
+      extractLatestAssistantText([
+        { role: "user", text: "recap" },
+        { role: "assistant", text: "draft" },
+        { role: "assistant", text: "no change" },
+      ]),
+    ).toBe("no change");
+    expect(extractLatestAssistantText([{ role: "user", text: "recap" }])).toBeNull();
+    expect(extractLatestAssistantText([{ role: "assistant", text: "  " }])).toBeNull();
   });
 });

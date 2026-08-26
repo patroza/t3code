@@ -34,14 +34,14 @@ describe("T3 connect-wait queue", () => {
 });
 
 describe("today-recap slash command", () => {
-  it("registers /omegent today-recap and opens a recap thread on the project channel", () => {
+  it("registers /omegent today-recap and posts the recap in the invoking channel", () => {
     expect(mentionRouterSource).toContain('"today-recap": Effect.gen(function* () {');
-    expect(mentionRouterSource).toContain("openTodayRecapThread");
+    expect(mentionRouterSource).toContain("runTodayRecapTurn");
     expect(mentionRouterSource).toContain("buildTodayRecapPrompt");
-    expect(mentionRouterSource).toContain("local: true, plan: false, prompt: opened.prompt");
-    expect(mentionRouterSource).toContain('presentationMode: "final-only"');
-    expect(mentionRouterSource).toContain("rest.createThread(input.projectChannelId");
-    expect(mentionRouterSource).not.toContain("starterContent");
+    expect(mentionRouterSource).toContain("extractLatestAssistantText");
+    expect(mentionRouterSource).toContain("updateOriginalWebhookMessage");
+    expect(mentionRouterSource).not.toContain("openTodayRecapThread");
+    expect(mentionRouterSource).not.toContain("rest.createThread(input.projectChannelId");
   });
 });
 
