@@ -159,6 +159,7 @@ import {
 } from "../presentation/slashCommands.ts";
 import {
   buildTodayRecapPrompt,
+  chunkTodayRecapContent,
   extractLatestAssistantText,
   formatTodayRecapThreadTitle,
   formatTodayRecapWorking,
@@ -2700,7 +2701,7 @@ const make = (botConfig: DiscordBotConfig) =>
                 ),
               ),
             );
-            const chunks = chunkDiscordContent(recap);
+            const chunks = chunkTodayRecapContent(recap);
             for (const [index, chunk] of chunks.entries()) {
               yield* rest.createMessage(event.channel_id, {
                 content: chunk,
@@ -2950,7 +2951,7 @@ const make = (botConfig: DiscordBotConfig) =>
               ),
             ),
           );
-          const chunks = chunkDiscordContent(recap);
+          const chunks = chunkTodayRecapContent(recap);
           for (const [index, chunk] of chunks.entries()) {
             yield* rest.createMessage(event.channel_id, {
               content: chunk,
@@ -3610,7 +3611,7 @@ const make = (botConfig: DiscordBotConfig) =>
                     guildId: interaction.guild_id ?? "",
                     requester,
                   });
-                  const chunks = chunkDiscordContent(recap);
+                  const chunks = chunkTodayRecapContent(recap);
                   yield* rest.updateOriginalWebhookMessage(applicationId, token, {
                     payload: { content: chunks[0] ?? "no change" },
                   });

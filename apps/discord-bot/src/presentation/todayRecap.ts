@@ -47,6 +47,56 @@ export function formatTodayRecapThreadTitle(input: {
   return `today recap ${input.shortName} ${input.date}`;
 }
 
+const DISCORD_RECAP_CHUNK_LIMIT = 2000;
+
+/**
+ * Split a recap on blank lines so a Discord 2000-char follow-up never cuts a PR
+ * block in half (the live recap split PR #1880 mid-sentence).
+ */
+export function chunkTodayRecapContent(
+  content: string,
+  limit = DISCORD_RECAP_CHUNK_LIMIT,
+): string[] {
+  const trimmed = content.trimEnd();
+  if (trimmed.length === 0) return [""];
+  if (trimmed.length <= limit) return [trimmed];
+
+  const blocks = trimmed.split(/\n{2,}(?=\[PR #\d|## )/);
+  const chunks: string[] = [];
+  let current = "";
+  const flush = () => {
+    if (current.length === 0) return;
+    chunks.push(current);
+    current = "";
+  };
+  for (const block of blocks) {
+    if (block.length > limit) {
+      flush();
+      let remaining = block;
+      while (remaining.length > limit) {
+        let splitAt = remaining.lastIndexOf("\n", limit);
+        if (splitAt < Math.floor(limit * 0.5)) {
+          splitAt = remaining.lastIndexOf(" ", limit);
+        }
+        if (splitAt < Math.floor(limit * 0.5)) splitAt = limit;
+        chunks.push(remaining.slice(0, splitAt).trimEnd());
+        remaining = remaining.slice(splitAt).trimStart();
+      }
+      if (remaining.length > 0) current = remaining;
+      continue;
+    }
+    const next = current.length === 0 ? block : `${current}\n\n${block}`;
+    if (next.length > limit) {
+      flush();
+      current = block;
+    } else {
+      current = next;
+    }
+  }
+  flush();
+  return chunks;
+}
+
 export function buildTodayRecapPrompt(input: {
   readonly shortName: string;
   readonly date: string;
@@ -66,19 +116,16 @@ export function buildTodayRecapPrompt(input: {
     "Use PR descriptions for what happened and why — not the code. Discord thread links are in PR descriptions.",
     "",
     "Format strictly:",
-    "- Link each PR as [PR #N](github-url). The visible text must be exactly `PR #` plus the number (e.g. PR #2236).",
-    "- Paste each Discord thread URL as a bare URL on its own line. Discord will show the thread title. Do not wrap thread URLs in markdown.",
-    "- Categorize each PR as feat / fix / docs / chore / test / refactor from the branch name or the squashed / first conventional commit (prefer the commit when it disagrees with the title).",
-    "- Separate by status with these headings:",
+    "- One PR per block. Never combine two PRs into one summary sentence.",
+    "- Link each PR as [PR #N](github-url) (fix) — type in parentheses on the same line as the link. Visible link text is exactly `PR #` plus the number (e.g. PR #2236). Types: (fix) (feat) (docs) (chore) (test) (refactor) from the branch name or the squashed / first conventional commit (prefer the commit when it disagrees with the title).",
+    "- Do not use ### type headings.",
+    "- Paste each Discord thread URL as a bare URL on its own line under that PR. Discord will show the thread title. Do not wrap thread URLs in markdown.",
+    "- Separate by status with these headings (omit empty status sections):",
     "## 🟢 MERGED",
     "## 🔴 CLOSED",
     "## 🟠 OPEN",
-    "- Under each status, outline by type:",
-    "### fix",
-    "### feat",
-    "### docs",
-    "  (omit empty type headings and empty status sections)",
-    "- Group related PRs. A few sentences of what/why each. Not verbose.",
+    '- Write so someone who does not know the ticket can understand it: what the user sees now, and why it changed. Spell out shop-floor terms on first use (Kein Versand = the app will not ship this order; Packmittel = packing materials; Lieferschein = delivery note). No jargon-only lines like "tighten packing presentation" or "realigns the marker".',
+    "- A few sentences of what/why each. Not verbose. Blank line between PR blocks so Discord splits never cut a PR in half.",
     "",
     "No code dumps. No process status. If nothing merged, closed, or opened that day, reply with exactly: no change",
   ].join("\n");

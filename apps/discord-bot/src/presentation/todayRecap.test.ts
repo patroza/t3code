@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildTodayRecapPrompt,
+  chunkTodayRecapContent,
   extractLatestAssistantText,
   formatTodayRecapAck,
   formatTodayRecapThreadTitle,
@@ -59,14 +60,31 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("opened that day and still open");
     expect(prompt).toContain("not the rest of the open backlog");
     expect(prompt).toContain("no change");
-    expect(prompt).toContain("[PR #N](github-url)");
+    expect(prompt).toContain("[PR #N](github-url) (fix)");
+    expect(prompt).toContain("(feat)");
     expect(prompt).toContain("bare URL");
     expect(prompt).toContain("## 🟢 MERGED");
     expect(prompt).toContain("## 🔴 CLOSED");
     expect(prompt).toContain("## 🟠 OPEN");
-    expect(prompt).toContain("### fix");
-    expect(prompt).toContain("### feat");
+    expect(prompt).toContain("One PR per block");
+    expect(prompt).toContain("Do not use ### type headings");
+    expect(prompt).not.toContain("### fix");
+    expect(prompt).not.toContain("### feat");
+    expect(prompt).not.toContain("Group related PRs");
     expect(prompt).not.toContain("configurator");
+  });
+
+  it("splits long recaps on blank lines so a PR block stays in one message", () => {
+    const prA = `[PR #1880](https://github.com/macs-holding/scanner/pull/1880) (feat)\nBauhaus packing materials were hardcoded.`;
+    const prB = `[PR #2273](https://github.com/macs-holding/scanner/pull/2273) (fix)\n${"x".repeat(1700)}`;
+    const recap = `## 🟢 MERGED\n\n${prA}\n\n## 🟠 OPEN\n\n${prB}`;
+    const chunks = chunkTodayRecapContent(recap, 1800);
+    expect(chunks.length).toBe(2);
+    expect(chunks[0]).toContain("PR #1880");
+    expect(chunks[0]).not.toContain("PR #2273");
+    expect(chunks[1]).toContain("PR #2273");
+    expect(chunks[1]).not.toContain("PR #1880");
+    expect(chunks.every((chunk) => chunk.length <= 1800)).toBe(true);
   });
 
   it("takes the last non-empty assistant message as the recap body", () => {

@@ -41,6 +41,7 @@ describe("today-recap slash command", () => {
     expect(mentionRouterSource).toContain("extractLatestAssistantText");
     expect(mentionRouterSource).toContain("updateOriginalWebhookMessage");
     expect(mentionRouterSource).toContain("formatTodayRecapWorking");
+    expect(mentionRouterSource).toContain("chunkTodayRecapContent");
     expect(mentionRouterSource).toContain("today-recap T3 thread started");
     expect(mentionRouterSource).toContain('state === "error"');
     expect(mentionRouterSource).not.toContain("openTodayRecapThread");
