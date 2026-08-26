@@ -26,6 +26,7 @@ import {
 import { memo, useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react";
 
 import { readLegacyPreferredEditor } from "../../editorPreferences";
+import { editorLabelForPlatform } from "../../editorLabels";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import {
   mergeOpenWithOptions,
@@ -234,7 +235,7 @@ function OptionIcon({
 function optionLabel(option: OpenWithOption, platform: string): string {
   if (option.type === "custom") return option.entry.name;
   if (option.id === "file-manager") {
-    return isMacPlatform(platform) ? "Finder" : isWindowsPlatform(platform) ? "Explorer" : "Files";
+    return editorLabelForPlatform("file-manager", platform);
   }
   return builtinPresentationById.get(option.id)?.label ?? option.id;
 }

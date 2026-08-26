@@ -16,7 +16,10 @@ import {
   groupSortedThreadsByRecency,
   shouldShowRecencySectionHeaders,
 } from "@t3tools/client-runtime/state/thread-recency-groups";
-import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  activeThreadAnchorTimestampMs,
+  sortPinnedThreadsByOrderKey,
+} from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId, ThreadLinkedPullRequest } from "@t3tools/contracts";
 import { threadMatchesAttributeQuery } from "@t3tools/shared/threadAttributeSearch";
 
@@ -196,19 +199,25 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
 }
 
 /**
- * v2 sort: static creation order, newest thread on top. Activity NEVER
- * reorders the list — a row holds its position from open until settled, so
- * the screen only moves at lifecycle transitions. Mirrors web's
- * sortThreadsForSidebarV2.
+ * v2 sort: static order, newest anchor on top. Activity NEVER reorders the
+ * list — a row holds its position between lifecycle transitions. The anchor
+ * is creation time until an un-settle re-anchors it (see
+ * activeThreadAnchorTimestampMs), so an un-settled thread surfaces at the
+ * top instead of sinking back to its creation-order slot. Mirrors web's
+ * sortThreadsForSidebar.
  */
-export function sortThreadsForListV2<T extends { readonly id: string; readonly createdAt: string }>(
-  threads: readonly T[],
-): T[] {
+export function sortThreadsForListV2<
+  T extends {
+    readonly id: string;
+    readonly createdAt: string;
+    readonly unsettledAt?: string | null | undefined;
+  },
+>(threads: readonly T[]): T[] {
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods.
   return [...threads].sort(
     (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
+      activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
       left.id.localeCompare(right.id),
   );
 }

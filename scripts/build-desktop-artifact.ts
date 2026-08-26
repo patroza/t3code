@@ -2053,6 +2053,10 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
 
+function isDesktopPreviewVersion(version: string): boolean {
+  return /-pr\./.test(version);
+}
+
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
 }
@@ -2129,16 +2133,18 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-  if (publishConfig) {
-    buildConfig.publish = [publishConfig];
-  } else if (mockUpdates) {
-    buildConfig.publish = [
-      {
-        provider: "generic",
-        url: resolveMockUpdateServerUrl(mockUpdateServerPort),
-      },
-    ];
+  if (!isDesktopPreviewVersion(version)) {
+    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    if (publishConfig) {
+      buildConfig.publish = [publishConfig];
+    } else if (mockUpdates) {
+      buildConfig.publish = [
+        {
+          provider: "generic",
+          url: resolveMockUpdateServerUrl(mockUpdateServerPort),
+        },
+      ];
+    }
   }
 
   if (platform === "mac") {
