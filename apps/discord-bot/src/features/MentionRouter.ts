@@ -132,7 +132,6 @@ import {
   resolveAssignGithubLogin,
 } from "../presentation/prAssign.ts";
 import {
-  chunkDiscordContent,
   idleMessageFields,
   stripBotMention,
   truncateTitle,
