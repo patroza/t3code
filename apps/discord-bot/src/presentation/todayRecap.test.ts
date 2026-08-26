@@ -66,11 +66,14 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("## 🟢 MERGED");
     expect(prompt).toContain("## 🔴 CLOSED");
     expect(prompt).toContain("## 🟠 OPEN");
-    expect(prompt).toContain("One PR per block");
+    expect(prompt).toContain("Related PRs");
+    expect(prompt).toContain("Tell that history once");
+    expect(prompt).toContain("Do not list those related PRs again");
+    expect(prompt).toContain("closed PR with no connection");
     expect(prompt).toContain("Do not use ### type headings");
     expect(prompt).not.toContain("### fix");
     expect(prompt).not.toContain("### feat");
-    expect(prompt).not.toContain("Group related PRs");
+    expect(prompt).not.toContain("One PR per block");
     expect(prompt).not.toContain("configurator");
   });
 
