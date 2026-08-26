@@ -88,6 +88,10 @@ const isolatedUnitTestFiles = [
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
   "src/components/chat/MessagesTimeline.test.tsx",
+  // Mocks `../assets/assetUrls` while ChatMarkdown is already bound to the
+  // real module under isolate:false — useAssetUrlState then sees
+  // useAtomValue() === null and throws on `_tag`.
+  "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/chat/draftHeroTransition.test.ts",
   "src/components/files/projectFilesQueryState.test.ts",
   // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
