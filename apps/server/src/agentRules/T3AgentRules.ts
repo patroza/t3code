@@ -29,6 +29,11 @@ const T3_AGENT_RULES_FALLBACK_MARKDOWN = `# T3 agent rules (all surfaces)
 Product rules for every T3 turn (web, desktop, mobile, Discord, GitHub, Jira).
 Project \`AGENTS.md\` still owns repo-local conventions.
 
+**Reply surface:** Answer only on the surface this turn started on. Linked
+Jira/GitHub/Sentry IDs are context, not a request to post there. Do not add
+Jira/Confluence comments or GitHub issue/PR discussion comments unless the
+user explicitly asked. Opening a GitHub PR for landable work is allowed.
+
 **Links:** always markdown hyperlinks \`[label](url)\` — never bare \`https://…\` —
 in Jira/Confluence comments, PR bodies, handoff notes, and any reply where a URL
 should be clickable. Prefer short labels (\`[scanner#2036](…)\`, \`[SA-49](…)\`).

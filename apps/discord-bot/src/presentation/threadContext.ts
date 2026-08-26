@@ -273,6 +273,7 @@ export function buildDiscordTurnPrompt(input: {
   // Discord overlay path is surface-specific static policy for this turn.
   return `## Discord conversation context
 rules: ${overlayRulesPath}
+reply: this Discord thread only
 req: ${formatRequesterLine(input.requester)}${sentrySection}${jiraSection}${prFooterSection}${t3Section}
 
 ## User request
