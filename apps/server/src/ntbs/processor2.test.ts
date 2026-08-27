@@ -244,7 +244,7 @@ describe("NTBSProcessor (layer harness)", () => {
 
       yield* processor.process(request, {
         projectId: ProjectId.make("some-project"),
-        baseRef: "main",
+        startBranchName: "main",
       });
 
       // Durable dedup: no new thread or turn, no second acknowledgement.

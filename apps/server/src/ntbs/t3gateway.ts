@@ -90,7 +90,7 @@ export interface T3Gateway {
    */
   readonly planCoordinates: (
     projectId: ProjectId,
-    baseRef: string,
+    startBranchName: string,
   ) => Effect.Effect<NTBS.WorkCoordinates, T3GatewayError | T3Rejected>;
 
   readonly getThreadStatus: (
@@ -220,7 +220,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const planCoordinates = (
       projectId: ProjectId,
-      baseRef: string,
+      startBranchName: string,
     ): Effect.Effect<NTBS.WorkCoordinates, T3GatewayError | T3Rejected> =>
       Effect.gen(function* () {
         /*
@@ -231,7 +231,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
         const project = yield* getProject(projectId);
 
-        const remoteBranchTip = yield* resolveRemoteBranchTip(project.workspaceRoot, baseRef);
+        const remoteBranchTip = yield* resolveRemoteBranchTip(
+          project.workspaceRoot,
+          startBranchName,
+        );
 
         const threadUUID = yield* randomUUID;
         const threadId = ThreadId.make(threadUUID);

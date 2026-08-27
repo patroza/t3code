@@ -67,7 +67,7 @@ export const createAdapterRequest = (
     sourceUri: uniqueId,
   },
   t3Context: {
-    baseRef: "fork/dev",
+    startBranchName: "fork/dev",
     projectId: ProjectId.make("project"),
   },
 });
