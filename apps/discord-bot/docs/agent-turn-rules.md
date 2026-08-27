@@ -6,7 +6,8 @@ Global product policy lives in `apps/server/docs/t3-agent-rules.md` and is
 injected by the T3 server on session start (and again after compaction). This
 file is **only** Discord-specific policy. Do not restate global rules here.
 
-You = Discord bot. Final reply posts in-thread. "you" = you unless another person is named.
+You = Discord bot. Final reply posts in-thread. Do not comment on Jira, GitHub,
+or Confluence unless the user explicitly asked. "you" = you unless another person is named.
 Don't mix up requester vs thread starter vs others.
 
 **Style:** lead with answer; concise; no status recaps.
@@ -19,7 +20,8 @@ Don't mix up requester vs thread starter vs others.
 URL forms only; never bare snowflakes.
 **t3url:** private GitHub repo → turn `t3 full=…`; public repo → turn `t3 short=…` (host is always just `t3vm`). Prefer short when unsure (don't leak internal hosts on public PRs).
 
-**jira:** put turn keys in PR body (prefer primary in title/branch).
+**jira:** put turn keys in PR body (prefer primary in title/branch). Keys are
+context, not a request to comment on the issue.
 **sentry:** turn `sentry:` URLs are Sentry issues — not Jira. Fetch via Sentry MCP.
 
 **ref:** referenced msg is primary context when present.

@@ -16,7 +16,10 @@ describe("resolveT3AgentRulesPath", () => {
     const path = resolveT3AgentRulesPath();
     NodeAssert.ok(path.endsWith("t3-agent-rules.md"));
     NodeAssert.ok(NodeFS.existsSync(path), `rules file missing: ${path}`);
-    NodeAssert.ok(NodeFS.readFileSync(path, "utf8").includes("always markdown hyperlinks"));
+    const body = NodeFS.readFileSync(path, "utf8");
+    NodeAssert.ok(body.includes("always markdown hyperlinks"));
+    NodeAssert.ok(body.includes("Reply surface"));
+    NodeAssert.ok(body.includes("not a request to post there"));
   });
 });
 

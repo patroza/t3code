@@ -113,6 +113,7 @@ describe("looksLikeSentryContext / buildFirstTurnPrompt", () => {
     expect(sentryPrompt).toContain("CarrierErrorWrapped");
     expect(sentryPrompt).toContain("## Discord conversation context");
     expect(sentryPrompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
+    expect(sentryPrompt).toContain("reply: this Discord thread only");
     expect(sentryPrompt).toContain("req: 42@tester Example User");
     expect(sentryPrompt).not.toContain("Lead with the essential answer");
     expect(sentryPrompt).not.toContain("Always open a GitHub PR");
@@ -176,6 +177,8 @@ describe("resolveAgentTurnRulesPath", () => {
     expect(body).toContain("Style:");
     expect(body).toContain("client overlay");
     expect(body).toContain("**sentry:**");
+    expect(body).toContain("Do not comment on Jira");
+    expect(body).toContain("not a request to comment");
   });
 });
 
@@ -195,6 +198,7 @@ describe("buildDiscordTurnPrompt", () => {
 
     expect(prompt).toContain("## Discord conversation context");
     expect(prompt).toContain(`rules: ${resolveAgentTurnRulesPath()}`);
+    expect(prompt).toContain("reply: this Discord thread only");
     expect(prompt).toContain("req: user-1@example-user Example User");
     expect(prompt).not.toContain("Always open a GitHub PR");
     expect(prompt).not.toContain("posted back into the same Discord thread");

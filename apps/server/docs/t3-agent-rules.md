@@ -11,6 +11,11 @@ do not expect the body inline in the prompt.
 Client overlays (e.g. Discord `apps/discord-bot/docs/agent-turn-rules.md`) add
 surface-specific policy only. Put shared policy **here**.
 
+**Reply surface:** Answer only on the surface this turn started on. Linked
+Jira/GitHub/Sentry IDs are context, not a request to post there. Do not add
+Jira/Confluence comments or GitHub issue/PR discussion comments unless the
+user explicitly asked. Opening a GitHub PR for landable work is allowed.
+
 **Links:** always markdown hyperlinks `[label](url)` — never bare `https://…` —
 in Jira/Confluence comments, PR bodies, handoff notes, and any reply where a URL
 should be clickable. Prefer short labels (`[scanner#2036](…)`, `[SA-49](…)`).
