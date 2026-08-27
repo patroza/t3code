@@ -94,7 +94,6 @@ export function buildTodayRecapPrompt(input: {
   return [
     `Write a small daily recap of GitHub PRs for the \`${input.shortName}\` repo bound to this Discord channel (<#${input.parentChannelId}>).`,
     `Use GitHub's UTC calendar day ${input.date}. Query this workspace's GitHub origin — not other repos.`,
-    "List PRs with `gh pr list --state merged|closed|open` and filter that UTC day locally. Do not use `gh search` or `--search closed:DATE` — those miss unmerged closes.",
     "",
     "Read-only: do not edit files, do not checkout/commit/push, do not open a PR. The recap is the Discord message.",
     "",

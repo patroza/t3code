@@ -57,7 +57,6 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("Related PRs");
     expect(prompt).toContain("heading PR's description");
     expect(prompt).toContain('Do not write "landed today"');
-    expect(prompt).toContain("gh pr list");
     expect(prompt).toContain("closed PR with no connection");
     expect(prompt).toContain("Do not use ### type headings");
     expect(prompt).not.toContain("landed today`");
