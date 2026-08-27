@@ -171,7 +171,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
      */
     const resolveRemoteBranchTip = (
       cwd: string,
-      branchName: string,
+      startBranchName: string,
     ): Effect.Effect<RemoteBranchTip, T3Rejected | T3GatewayError> =>
       Effect.gen(function* () {
         // Check if origin exist. If not, T3 will never be able to accept this work.
@@ -193,6 +193,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           .fetchRemote({ cwd, remoteName: "origin" })
           .pipe(orFail("Could not fetch origin. try again"));
 
+        // TODO: Is this correct? It doesn't look like this reads the tracking ref locally.
         /*
           This reads the tracking ref locally, with no network involved. The two calls above
           already proved the repository is usable and the remote reachable, so what is left
@@ -203,16 +204,16 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         return yield* gitWorkflowService
           .resolveRemoteTrackingCommit({
             cwd,
-            refName: branchName,
+            refName: startBranchName,
             fallbackRemoteName: "origin",
           })
           .pipe(
             Effect.map((resolved) => ({
-              branchName,
+              branchName: startBranchName,
               commitSha: resolved.commitSha,
             })),
           )
-          .pipe(orReject("Branch '" + branchName + "' does not exist on origin"));
+          .pipe(orReject("Branch '" + startBranchName + "' does not exist on origin"));
       });
 
     const crypto = yield* Crypto.Crypto;
