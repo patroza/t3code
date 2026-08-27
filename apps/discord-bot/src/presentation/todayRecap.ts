@@ -94,6 +94,7 @@ export function buildTodayRecapPrompt(input: {
   return [
     `Write a small daily recap of GitHub PRs for the \`${input.shortName}\` repo bound to this Discord channel (<#${input.parentChannelId}>).`,
     `Use GitHub's UTC calendar day ${input.date}. Query this workspace's GitHub origin — not other repos.`,
+    "List PRs with `gh pr list --state merged|closed|open` and filter that UTC day locally. Do not use `gh search` or `--search closed:DATE` — those miss unmerged closes.",
     "",
     "Read-only: do not edit files, do not checkout/commit/push, do not open a PR. The recap is the Discord message.",
     "",
@@ -109,7 +110,7 @@ export function buildTodayRecapPrompt(input: {
     "## 🟢 MERGED",
     "## 🔴 CLOSED",
     "## 🟠 OPEN",
-    "- Related PRs (same change, follow-up, or a first try closed because a later PR handled it) are ONE block headed by the latest PR: OPEN if any is still open, else MERGED, else CLOSED. Tell that history once. Mention earlier related PRs only inline as [PR #N](url) (feat) `🟢 landed today` / `🔴 closed` / `🟠 still open` plus that PR's Discord URL. Do not give them their own blocks.",
+    '- Related PRs (same change, follow-up, or a first try closed because a later PR handled it) are ONE block headed by the latest PR: OPEN if any is still open, else MERGED, else CLOSED. Weave earlier related PRs into that heading PR\'s description as [PR #N](url) (feat) plus a short what/why. Do not give them their own blocks. Do not write "landed today".',
     "- Unrelated PRs: one block each. A closed PR with no connection to another PR that moved today goes only under CLOSED.",
     "- Heading line: [PR #N](github-url) (fix). Visible text is exactly `PR #` plus the number. Types: (fix) (feat) (docs) (chore) (test) (refactor) from the branch or the squashed / first conventional commit (prefer the commit).",
     "- Bare Discord thread URL on its own line. Do not wrap thread URLs in markdown. Do not use ### type headings.",
