@@ -61,7 +61,7 @@ const request: Request = {
 
 const target: T3Target = {
   projectId,
-  baseRef: "fork/dev",
+  startBranchName: "fork/dev",
 };
 
 const coordinates: WorkCoordinates = {

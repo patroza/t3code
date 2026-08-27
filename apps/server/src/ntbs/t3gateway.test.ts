@@ -1,5 +1,5 @@
 import { describe, it, assert } from "@effect/vitest";
-import { t3GatewayLive } from "./t3gateway.ts";
+import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
 import { Effect, Layer } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -7,6 +7,7 @@ import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurn
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { Crypto } from "effect/Crypto";
+import { ProjectId } from "@t3tools/contracts";
 
 /*
 T3 Gateway Live is a layer, a constructor of a dependency.
@@ -46,13 +47,17 @@ const t3Dependencies = Layer.mergeAll(
 describe("T3Gateway", () => {
   describe("planCoordinates", () => {
     describe("successful planning", () => {
-      it.todo("pins the selected branch to the commit fetched from origin");
+      const t3GatewayTest = t3GatewayLive.pipe(Layer.provide(t3Dependencies));
 
-      it.layer(t3Dependencies)((it) =>
+      it.layer(t3GatewayTest)((it) =>
         it.effect("pins the selected branch to the commit fetched from origin", () =>
           Effect.gen(function* () {
             // TODO: Continue from here
-            const t3Gateway = yield* t3GatewayLive;
+            const t3Gateway = yield* T3Gateway;
+
+            const projectId = ProjectId.make("test-1");
+
+            t3Gateway.planCoordinates(projectId, "");
           }),
         ),
       );

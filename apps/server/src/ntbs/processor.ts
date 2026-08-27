@@ -33,13 +33,15 @@ The cycle is replay safe: it observes before acting, so a crash or a redelivered
 export type T3Target = {
   readonly projectId: ProjectId;
   /**
-   * The starting point for the thread's worktree: the new branch is created from this ref.
+   * The starting point for the thread's worktree: the new branch is created from this one.
    *
-   * Usually a branch name such as `main`. Before use it is resolved against `origin`, so the worktree starts from the latest remote commit even when the local copy of the branch is behind. A commit SHA is also accepted and is used as-is.
+   * Must be a branch that exists on `origin`; it is resolved there, so the worktree starts from the
+   * latest remote commit even when the local copy is behind. Tags, commit SHAs and local-only
+   * branches are rejected.
    *
    * Set by the platform-specific inbound code.
    */
-  readonly baseRef: string;
+  readonly startBranchName: string;
 };
 
 export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
@@ -348,7 +350,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           }
 
           const coordinates = yield* t3
-            .planCoordinates(t3Target.projectId, t3Target.baseRef)
+            .planCoordinates(t3Target.projectId, t3Target.startBranchName)
             .pipe(orFail("Failed to plan the T3 work"));
           const claimed = NTBS.makeRequestClaimed(request, coordinates);
           yield* persist(claimed);
