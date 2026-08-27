@@ -28,14 +28,15 @@ export type UsageProviderOrderIsExhaustive = AssertNoUnorderedProvider<
 export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   claude: "Claude Code",
   codex: "Codex",
-  grok: "Grok",
+  grok: "Grok Build",
   kimi: "Kimi",
 };
 
 /**
  * Claude's and Kimi's brand oranges hold in both themes; Codex and Grok are
- * neutral and must flip with the theme or their bars vanish against the
+ * neutrals and must flip with the theme or their bars vanish against the
  * matching background.
+
  */
 export function useProviderColors(): Record<UsageProviderKind, string> {
   const { themeAppearance: scheme } = useAppearancePreferences();
@@ -43,7 +44,7 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
   return {
     claude: "#d97757",
     codex: dark ? "#e6e6e6" : "#3c3c43",
-    grok: dark ? "#8b8b8b" : "#6b6b6b",
+    grok: dark ? "#a1a1aa" : "#52525b",
     kimi: "#ff6a3d",
   };
 }

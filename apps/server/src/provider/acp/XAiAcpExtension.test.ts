@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
@@ -12,15 +13,15 @@ import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 
 import {
+  extractGrokPlanMarkdownFromToolCallData,
   extractXAiAskUserQuestions,
-  extractXAiExitPlanModePlanMarkdown,
+  extractXAiExitPlanMarkdown,
+  isGrokPlanMarkdownPath,
   makeXAiAskUserQuestionCancelledResponse,
   makeXAiAskUserQuestionResponse,
-  makeXAiExitPlanModeAbandonedResponse,
-  makeXAiExitPlanModeApprovedResponse,
-  makeXAiExitPlanModeRejectedResponse,
+  makeXAiExitPlanModeCapturedResponse,
   makeXAiPromptCompletionRuntime,
-  resolveXAiExitPlanModeFromFollowUp,
+  XAI_EMPTY_PLAN_MARKDOWN,
   XAiAskUserQuestionRequest,
   XAiExitPlanModeRequest,
 } from "./XAiAcpExtension.ts";
@@ -284,58 +285,6 @@ describe("XAiAcpExtension", () => {
     });
   });
 
-  it("decodes _x.ai/exit_plan_mode request payloads and extracts plan markdown", () => {
-    const decode = Schema.decodeUnknownSync(XAiExitPlanModeRequest);
-    const flat = decode({
-      sessionId: "session-1",
-      toolCallId: "tool-1",
-      planContent: "# Plan\n\n- step\n",
-    });
-    expect(extractXAiExitPlanModePlanMarkdown(flat)).toBe("# Plan\n\n- step\n");
-
-    const wrapped = decode({
-      method: "_x.ai/exit_plan_mode",
-      params: {
-        sessionId: "session-1",
-        toolCallId: "tool-1",
-        planContent: null,
-      },
-    });
-    expect(extractXAiExitPlanModePlanMarkdown(wrapped)).toBeUndefined();
-  });
-
-  it("builds exit_plan_mode response outcomes and maps follow-up turns", () => {
-    expect(makeXAiExitPlanModeApprovedResponse()).toEqual({ outcome: "approved" });
-    expect(makeXAiExitPlanModeApprovedResponse(" ship it ")).toEqual({
-      outcome: "approved",
-      feedback: "ship it",
-    });
-    expect(makeXAiExitPlanModeRejectedResponse("use REST")).toEqual({
-      outcome: "rejected",
-      feedback: "use REST",
-    });
-    expect(makeXAiExitPlanModeAbandonedResponse()).toEqual({ outcome: "abandoned" });
-
-    expect(
-      resolveXAiExitPlanModeFromFollowUp({
-        interactionMode: "default",
-        text: "PLEASE IMPLEMENT THIS PLAN:\n# Plan",
-      }),
-    ).toEqual({ outcome: "approved" });
-    expect(
-      resolveXAiExitPlanModeFromFollowUp({
-        interactionMode: "plan",
-        text: "prefer a smaller approach",
-      }),
-    ).toEqual({ outcome: "rejected", feedback: "prefer a smaller approach" });
-    expect(
-      resolveXAiExitPlanModeFromFollowUp({
-        interactionMode: "plan",
-        text: "  ",
-      }),
-    ).toEqual({ outcome: "abandoned" });
-  });
-
   it.effect("resolves a hung standard prompt from xAI prompt completion", () =>
     Effect.gen(function* () {
       const runtime = yield* makePromptCompletionRuntime({
@@ -356,6 +305,27 @@ describe("XAiAcpExtension", () => {
           promptId,
           requestId: promptId,
         },
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("fails a hung standard prompt from an xAI rate-limit completion", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makePromptCompletionRuntime({
+        T3_ACP_EMIT_XAI_RATE_LIMIT_THEN_HANG: "1",
+      });
+      yield* runtime.start();
+
+      const error = yield* Effect.flip(
+        runtime.prompt({
+          prompt: [{ type: "text", text: "hi" }],
+        }),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "AcpRequestError",
+        code: -32003,
+        errorMessage: "Grok usage limit reached. Try again later.",
       });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -400,8 +370,6 @@ describe("XAiAcpExtension", () => {
         .prompt({ prompt: [{ type: "text", text: "long task" }] })
         .pipe(Effect.forkChild({ startImmediately: true }));
 
-      // Without `steer`, this prompt would wait for the running turn to settle
-      // and neither turn would ever complete.
       const steerResult = yield* runtime
         .prompt({ prompt: [{ type: "text", text: "actually, do this" }] }, { steer: true })
         .pipe(Effect.timeout("10 seconds"));
@@ -430,4 +398,170 @@ describe("XAiAcpExtension", () => {
       expect(Option.isNone(queued)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  it("extracts plan markdown from exit_plan_mode payloads", () => {
+    const decode = Schema.decodeUnknownSync(XAiExitPlanModeRequest);
+    const direct = decode({
+      sessionId: "session-1",
+      toolCallId: "exit-1",
+      planContent: "# Plan\n\n- do the thing\n",
+    });
+    expect(extractXAiExitPlanMarkdown(direct)).toBe("# Plan\n\n- do the thing");
+
+    const wrapped = decode({
+      method: "_x.ai/exit_plan_mode",
+      params: {
+        sessionId: "session-1",
+        toolCallId: "exit-1",
+        planContent: null,
+      },
+    });
+    expect(extractXAiExitPlanMarkdown(wrapped, "  # fallback plan  ")).toBe("# fallback plan");
+    expect(extractXAiExitPlanMarkdown(wrapped, "")).toBe(XAI_EMPTY_PLAN_MARKDOWN);
+    expect(extractXAiExitPlanMarkdown(wrapped)).toBe(XAI_EMPTY_PLAN_MARKDOWN);
+  });
+
+  it("builds an abandoned exit_plan_mode response that captures the plan", () => {
+    expect(makeXAiExitPlanModeCapturedResponse()).toEqual({
+      outcome: "abandoned",
+      feedback:
+        "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.",
+    });
+  });
+
+  it("identifies Grok plan.md paths and extracts markdown from tool call data", () => {
+    const linuxHost = { platform: "linux" as const, environment: {} };
+    const windowsHost = { platform: "win32" as const, environment: {} };
+    const grokHomeHost = {
+      platform: "linux" as const,
+      environment: { GROK_HOME: "/opt/grok-data" },
+    };
+    const home = NodeOS.homedir().replace(/\\/g, "/");
+    const sessionPlan = `${home}/.grok/sessions/abc/plan.md`;
+    const nestedSessionPlan = `${home}/.grok/sessions/%2Fhome%2Fproj/019fd20e-c563-70a0-b801-a6bc51815a9b/plan.md`;
+    expect(isGrokPlanMarkdownPath(sessionPlan, linuxHost)).toBe(true);
+    expect(isGrokPlanMarkdownPath(nestedSessionPlan, linuxHost)).toBe(true);
+    expect(isGrokPlanMarkdownPath("~/.grok/sessions/abc/plan.md", linuxHost)).toBe(true);
+    expect(isGrokPlanMarkdownPath("/tmp/mock-home/.grok/sessions/sess/plan.md", linuxHost)).toBe(
+      true,
+    );
+    expect(isGrokPlanMarkdownPath("/home/other/.grok/sessions/sess/plan.md", linuxHost)).toBe(true);
+    expect(isGrokPlanMarkdownPath("/HOME/other/.grok/sessions/sess/plan.md", linuxHost)).toBe(
+      false,
+    );
+    expect(isGrokPlanMarkdownPath("C:/Users/other/.grok/sessions/id/plan.md", windowsHost)).toBe(
+      true,
+    );
+    expect(isGrokPlanMarkdownPath("c:/users/OTHER/.GROK/SESSIONS/id/PLAN.MD", windowsHost)).toBe(
+      true,
+    );
+    expect(
+      isGrokPlanMarkdownPath("C:\\Users\\other\\.grok\\sessions\\id\\plan.md", windowsHost),
+    ).toBe(true);
+    expect(isGrokPlanMarkdownPath("/opt/grok-data/sessions/sess/plan.md", grokHomeHost)).toBe(true);
+    expect(
+      isGrokPlanMarkdownPath("/OPT/GROK-DATA/sessions/sess/plan.md", {
+        platform: "win32",
+        environment: { GROK_HOME: "/opt/grok-data" },
+      }),
+    ).toBe(true);
+    expect(isGrokPlanMarkdownPath("/OPT/GROK-DATA/sessions/sess/plan.md", grokHomeHost)).toBe(
+      false,
+    );
+    // Workspace plan.md must not be treated as the session plan file.
+    expect(isGrokPlanMarkdownPath("plan.md", linuxHost)).toBe(false);
+    expect(isGrokPlanMarkdownPath("/repo/docs/plan.md", linuxHost)).toBe(false);
+    expect(isGrokPlanMarkdownPath("/tmp/other.md", linuxHost)).toBe(false);
+    expect(isGrokPlanMarkdownPath("/repo/.grok/sessions/example/plan.md", linuxHost)).toBe(false);
+    expect(
+      isGrokPlanMarkdownPath(`${home}/project/.grok/sessions/example/plan.md`, linuxHost),
+    ).toBe(false);
+    expect(
+      isGrokPlanMarkdownPath("/home/other/.grok/sessions/../../project/plan.md", linuxHost),
+    ).toBe(false);
+    expect(
+      isGrokPlanMarkdownPath("/home/other/.grok/sessions/foo/../../../project/plan.md", linuxHost),
+    ).toBe(false);
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          rawInput: {
+            file_path: sessionPlan,
+            content: "# From rawInput\n\n- a\n",
+          },
+        },
+        linuxHost,
+      ),
+    ).toBe("# From rawInput\n\n- a");
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          content: [
+            {
+              type: "diff",
+              path: sessionPlan,
+              oldText: "",
+              newText: "# From diff\n\n- b\n",
+            },
+          ],
+        },
+        linuxHost,
+      ),
+    ).toBe("# From diff\n\n- b");
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          rawInput: { file_path: sessionPlan, content: "" },
+          content: [
+            {
+              type: "diff",
+              path: sessionPlan,
+              oldText: "",
+              newText: "# From diff after empty rawInput\n",
+            },
+          ],
+        },
+        linuxHost,
+      ),
+    ).toBe("# From diff after empty rawInput");
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          rawInput: { file_path: sessionPlan, content: "" },
+        },
+        linuxHost,
+      ),
+    ).toBe("");
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          content: [{ type: "diff", path: sessionPlan, oldText: "# old", newText: "" }],
+        },
+        linuxHost,
+      ),
+    ).toBe("");
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          rawInput: { file_path: "/tmp/readme.md", content: "nope" },
+        },
+        linuxHost,
+      ),
+    ).toBeUndefined();
+
+    expect(
+      extractGrokPlanMarkdownFromToolCallData(
+        {
+          rawInput: { file_path: "/repo/docs/plan.md", content: "# Project plan\n" },
+        },
+        linuxHost,
+      ),
+    ).toBeUndefined();
+  });
 });
