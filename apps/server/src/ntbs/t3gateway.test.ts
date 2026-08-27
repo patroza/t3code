@@ -9,29 +9,52 @@ import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts
 import { Crypto } from "effect/Crypto";
 import { OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { toPersistenceSqlError } from "../persistence/Errors.ts";
 
-/*
-T3 Gateway Live is a layer, a constructor of a dependency.
+/**
+ * Every mocked dependency records into one shared, ordered log.
+ *
+ * One array rather than one per service: only a single sequence can answer questions that span
+ * services — that the project is loaded before git runs, or that a rejection stopped the gateway
+ * before it minted anything. Per-service views are derivable from this; the ordering is not
+ * recoverable from them.
+ */
+type Call = { service: string; method: string; input: unknown };
 
-But it needs its own dependencies and we need to provide/mock them.
+const createCallLog = () => {
+  const calls: Array<Call> = [];
 
-Let's try using Layer.mock to provide those.
-*/
+  const record =
+    (service: string) =>
+    <A>(method: string, input: unknown, value: A) =>
+      Effect.sync(() => {
+        calls.push({ service, method, input });
+        return value;
+      });
 
-const CryptoMock = Layer.unwrap(
-  Effect.gen(function* () {
-    const counter: Ref.Ref<number> = yield* Ref.make(0);
+  return { calls, record };
+};
 
-    return Layer.mock(Crypto, {
-      "~effect/platform/Crypto": "~effect/platform/Crypto",
-      randomUUIDv4: Ref.getAndUpdate(counter, (num) => num + 1).pipe(
-        Effect.map((num) => "randomUUID" + num),
-      ),
-      nextDoubleUnsafe: () => 0,
-      nextIntUnsafe: () => 0,
-    });
-  }),
-);
+type CallRecord = ReturnType<typeof createCallLog>["record"];
+
+const createCryptoMock = (record: CallRecord) => {
+  const recordCrypto = record("Crypto");
+
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const counter: Ref.Ref<number> = yield* Ref.make(0);
+
+      return Layer.mock(Crypto, {
+        "~effect/platform/Crypto": "~effect/platform/Crypto",
+        randomUUIDv4: Ref.getAndUpdate(counter, (num) => num + 1).pipe(
+          Effect.flatMap((num) => recordCrypto("randomUUIDv4", undefined, "randomUUID" + num)),
+        ),
+        nextDoubleUnsafe: () => 0,
+        nextIntUnsafe: () => 0,
+      });
+    }),
+  );
+};
 
 const OrchestrationEngineServiceMock = Layer.mock(OrchestrationEngineService, {});
 
@@ -40,88 +63,99 @@ type PSQMInput = {
     | {
         success: Partial<OrchestrationProjectShell>;
       }
-    | { failure: unknown };
+    | { failure: unknown }
+    | { missing: true };
 };
 
-const createPSQM = (input?: PSQMInput) => {
+const createPSQM = (record: CallRecord, input?: PSQMInput) => {
+  const recordPSQM = record("ProjectionSnapshotQuery");
+
+  const isProjectMissing = input && "missing" in input.getProjectShellById;
+
+  const isGetProjectError = input && "failure" in input.getProjectShellById;
+
   return Layer.mock(ProjectionSnapshotQuery, {
     getProjectShellById: (projectId) =>
-      Effect.option(
-        input && "failure" in input.getProjectShellById
-          ? Effect.fail(String(input.getProjectShellById.failure))
-          : Effect.succeed({
-              id: projectId,
-              workspaceRoot: "root",
-              title: "project-title",
-              createdAt: new Date().toUTCString(),
-              updatedAt: new Date().toUTCString(),
-              defaultModelSelection: null,
-              scripts: [],
-              ...(input &&
-                "success" in input.getProjectShellById && { ...input.getProjectShellById.success }),
-            }),
+      recordPSQM("getProjectShellById", projectId, null).pipe(
+        Effect.andThen(
+          isGetProjectError
+            ? toPersistenceSqlError("some sql error")("somecause")
+            : Effect.option(
+                isProjectMissing
+                  ? Effect.fail("missing")
+                  : Effect.succeed({
+                      id: projectId,
+                      workspaceRoot: "root",
+                      title: "project-title",
+                      createdAt: new Date().toUTCString(),
+                      updatedAt: new Date().toUTCString(),
+                      defaultModelSelection: null,
+                      scripts: [],
+                      ...(input &&
+                        "success" in input.getProjectShellById && {
+                          ...input.getProjectShellById.success,
+                        }),
+                    }),
+              ),
+        ),
       ),
   });
 };
 
 const ProjectionTurnRepositoryMock = Layer.mock(ProjectionTurnRepository, {});
 
-/**
- * One ordered log rather than a bucket per method: only the order proves the fetch happens
- * before the tip is read, and the buckets are derivable from the log while the reverse is not.
- *
- * The layer is built once per `it.layer` block, so the log accumulates across the tests in a
- * block; clear it when asserting an exact sequence.
- */
-type GitCall = { method: string; input: unknown };
-
 // TODO: Can't we simplify it by leveraging default values in params?
 // we can pass default arguments in JS
-const createGitWorkflowServiceMock = (input?: {
-  remoteExists?: boolean;
-  resolvedRemoteSha?: string;
-}) => {
-  const calls: Array<GitCall> = [];
+const createGitWorkflowServiceMock = (
+  record: CallRecord,
+  input?: {
+    remoteExists?: boolean;
+    resolvedRemoteSha?: string;
+  },
+) => {
+  const recordGit = record("GitWorkflowService");
 
-  const record = <A>(method: string, callInput: unknown, value: A) =>
-    Effect.sync(() => {
-      calls.push({ method, input: callInput });
-      return value;
-    });
-
-  const layer = Layer.mock(GitWorkflowService, {
+  return Layer.mock(GitWorkflowService, {
     remoteExists: (callInput) =>
-      record("remoteExists", callInput, !input ? true : !!input.remoteExists),
-    fetchRemote: (callInput) => record("fetchRemote", callInput, undefined),
+      recordGit("remoteExists", callInput, !input ? true : !!input.remoteExists),
+    fetchRemote: (callInput) => recordGit("fetchRemote", callInput, undefined),
     resolveRemoteTrackingCommit: (callInput) =>
-      record("resolveRemoteTrackingCommit", callInput, {
+      recordGit("resolveRemoteTrackingCommit", callInput, {
         commitSha: input?.resolvedRemoteSha ?? "sha123",
         remoteRefName: "remoteRefName",
       }),
   });
-
-  return { calls, layer };
 };
 
 const ProjectSetupScriptRunnerMock = Layer.mock(ProjectSetupScriptRunner, {});
 
-const t3Dependencies = (input?: {
+/**
+ * Builds a gateway plus the log of everything its dependencies were asked to do.
+ *
+ * Called per test rather than per block: each failure mode needs its own mock configuration, so
+ * there is nothing worth sharing, and a log created per test beats resetting a shared one.
+ */
+const createT3Gateway = (input?: {
   pqsm?: PSQMInput;
   gwfs?: {
     remoteExists?: boolean;
   };
 }) => {
-  const git = createGitWorkflowServiceMock(input?.gwfs);
+  const { calls, record } = createCallLog();
 
   return {
-    gitCalls: git.calls,
-    layer: Layer.mergeAll(
-      OrchestrationEngineServiceMock,
-      createPSQM(input?.pqsm ?? { getProjectShellById: { success: {} } }),
-      ProjectSetupScriptRunnerMock,
-      git.layer,
-      ProjectionTurnRepositoryMock,
-      CryptoMock,
+    calls,
+    layer: t3GatewayLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          OrchestrationEngineServiceMock,
+          createPSQM(record, input?.pqsm ?? { getProjectShellById: { success: {} } }),
+          ProjectSetupScriptRunnerMock,
+          createGitWorkflowServiceMock(record, input?.gwfs),
+          ProjectionTurnRepositoryMock,
+          createCryptoMock(record),
+        ),
+      ),
     ),
   };
 };
@@ -151,78 +185,108 @@ describe("T3Gateway", () => {
 
     */
     describe("successful planning", () => {
-      /*
-        Declared once and threaded through the project mock, so the assertion below proves the
-        cwd git receives is the workspace the project lookup returned, rather than two literals
-        that happen to agree.
-      */
-      const workspaceRoot = "/workspaces/project-under-test";
+      it.effect("pins the selected branch to the commit fetched from origin", () => {
+        /*
+          Declared once and threaded through the project mock, so the assertions below prove the
+          cwd git receives is the workspace the project lookup returned, rather than two literals
+          that happen to agree.
+        */
+        const workspaceRoot = "/workspaces/project-under-test";
+        const projectId = ProjectId.make("test-1");
 
-      const dependencies = t3Dependencies({
-        pqsm: { getProjectShellById: { success: { workspaceRoot } } },
-        gwfs: { remoteExists: true },
+        const { calls, layer } = createT3Gateway({
+          pqsm: { getProjectShellById: { success: { workspaceRoot } } },
+          gwfs: { remoteExists: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
+
+          expect(coordinates).toEqual({
+            projectId,
+            startBranchName: "main",
+            startCommitSha: "sha123",
+            threadId: expect.any(String),
+            userMessageId: expect.any(String),
+            worktreeBranchName: expect.any(String),
+          });
+
+          /*
+            The identifiers are whatever the crypto mock hands out, so asserting exact values
+            would only restate the mock. What matters is the two relationships the gateway owns:
+            the thread and its first message are distinct, and the worktree branch is cut from
+            the thread so a stray branch traces back to it.
+          */
+          expect(coordinates.threadId).not.toEqual(coordinates.userMessageId);
+          expect(coordinates.worktreeBranchName).toEqual(
+            buildTemporaryWorktreeBranchName(() => coordinates.threadId),
+          );
+
+          /*
+            Order matters as much as the arguments. The tip is only current because the fetch
+            precedes it — reading first would resolve whatever origin pointed at the last time
+            anything fetched in this workspace. And git must run in the workspace the project
+            lookup returned: the wrong one still resolves a real sha, from the wrong repository.
+          */
+          expect(calls).toEqual([
+            {
+              service: "ProjectionSnapshotQuery",
+              method: "getProjectShellById",
+              input: projectId,
+            },
+            {
+              service: "GitWorkflowService",
+              method: "remoteExists",
+              input: { cwd: workspaceRoot, remoteName: "origin" },
+            },
+            {
+              service: "GitWorkflowService",
+              method: "fetchRemote",
+              input: { cwd: workspaceRoot, remoteName: "origin" },
+            },
+            {
+              service: "GitWorkflowService",
+              method: "resolveRemoteTrackingCommit",
+              input: { cwd: workspaceRoot, refName: "main", fallbackRemoteName: "origin" },
+            },
+            { service: "Crypto", method: "randomUUIDv4", input: undefined },
+            { service: "Crypto", method: "randomUUIDv4", input: undefined },
+          ]);
+        }).pipe(Effect.provide(layer));
       });
-      const t3GatewayTest = t3GatewayLive.pipe(Layer.provide(dependencies.layer));
-
-      it.layer(t3GatewayTest)((it) =>
-        it.effect("pins the selected branch to the commit fetched from origin", () =>
-          Effect.gen(function* () {
-            const t3Gateway = yield* T3Gateway;
-            dependencies.gitCalls.length = 0;
-
-            const projectId = ProjectId.make("test-1");
-
-            const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
-
-            expect(coordinates).toEqual({
-              projectId,
-              startBranchName: "main",
-              startCommitSha: "sha123",
-              threadId: expect.any(String),
-              userMessageId: expect.any(String),
-              worktreeBranchName: expect.any(String),
-            });
-
-            /*
-              The identifiers are whatever the crypto mock hands out, so asserting exact values
-              would only restate the mock — and would break as soon as another test in this block
-              advances the shared counter. What matters is the two relationships the gateway owns:
-              the thread and its first message are distinct, and the worktree branch is cut from
-              the thread so a stray branch traces back to it.
-            */
-            expect(coordinates.threadId).not.toEqual(coordinates.userMessageId);
-            expect(coordinates.worktreeBranchName).toEqual(
-              buildTemporaryWorktreeBranchName(() => coordinates.threadId),
-            );
-
-            /*
-              Order matters as much as the arguments. The tip is only current because the fetch
-              precedes it — reading first would resolve whatever origin pointed at the last time
-              anything fetched in this workspace.
-
-              The cwd matters because it is the one thing the project lookup contributes to this
-              path: the wrong workspace still resolves a real sha, just from the wrong repository.
-            */
-            expect(dependencies.gitCalls).toEqual([
-              { method: "remoteExists", input: { cwd: workspaceRoot, remoteName: "origin" } },
-              { method: "fetchRemote", input: { cwd: workspaceRoot, remoteName: "origin" } },
-              {
-                method: "resolveRemoteTrackingCommit",
-                input: { cwd: workspaceRoot, refName: "main", fallbackRemoteName: "origin" },
-              },
-            ]);
-          }),
-        ),
-      );
     });
 
     describe("rejected planning", () => {
-      const dependencies = t3Dependencies({
-        gwfs: { remoteExists: true },
-      });
-      const t3GatewayTest = t3GatewayLive.pipe(Layer.provide(dependencies.layer));
+      it.effect(
+        "rejects a project that does not exist without performing provisioning work",
+        () => {
+          const projectId = ProjectId.make("non-existing-project");
 
-      it.todo("rejects a project that does not exist without performing provisioning work");
+          const { calls, layer } = createT3Gateway({
+            pqsm: { getProjectShellById: { missing: true } },
+          });
+
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
+
+            const error = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+            // The tag is what the processor branches on to decide between retrying and replying.
+            expect(error._tag).toBe("T3Rejected");
+
+            // Nothing after the lookup: no git, and no identifiers minted for work that cannot run.
+            expect(calls).toEqual([
+              {
+                service: "ProjectionSnapshotQuery",
+                method: "getProjectShellById",
+                input: projectId,
+              },
+            ]);
+          }).pipe(Effect.provide(layer));
+        },
+      );
 
       it.todo("rejects a project whose repository has no origin remote");
 
