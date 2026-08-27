@@ -1,32 +1,51 @@
-import {
-  ProviderDriverKind,
-  DEFAULT_MODEL_BY_PROVIDER,
-  GROK_DEFAULT_MODEL,
-} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
   applyGrokAcpModelSelection,
-  applyGrokAcpSessionMode,
   buildGrokAcpSpawnInput,
+  grokAcpSpawnArgs,
+  isValidGrokReasoningEffortToken,
   resolveGrokAcpBaseModelId,
-  resolveGrokReasoningEffortFromModelSelection,
   resolveGrokReasoningEffortSelection,
   resolveGrokRequestedModeId,
 } from "./GrokAcpSupport.ts";
 
 describe("resolveGrokAcpBaseModelId", () => {
   it("normalizes empty and custom Grok model ids", () => {
-    expect(resolveGrokAcpBaseModelId(undefined)).toBe(GROK_DEFAULT_MODEL);
-    expect(resolveGrokAcpBaseModelId("   ")).toBe(GROK_DEFAULT_MODEL);
+    expect(resolveGrokAcpBaseModelId(undefined)).toBe("grok-4.6");
+    expect(resolveGrokAcpBaseModelId("   ")).toBe("grok-4.6");
     expect(resolveGrokAcpBaseModelId("  grok-test-custom-model  ")).toBe("grok-test-custom-model");
   });
+});
 
-  it("falls back to the shared Grok default rather than Grok Build", () => {
-    expect(GROK_DEFAULT_MODEL).toBe("grok-4.6");
-    expect(DEFAULT_MODEL_BY_PROVIDER[ProviderDriverKind.make("grok")]).toBe(GROK_DEFAULT_MODEL);
+describe("grokAcpSpawnArgs", () => {
+  it("inherits the Grok CLI config when no T3 runtime mode is set", () => {
+    expect(grokAcpSpawnArgs()).toEqual(["agent", "stdio"]);
+  });
+
+  it("forces Grok to ask when T3 is Supervised", () => {
+    expect(grokAcpSpawnArgs("approval-required")).toEqual([
+      "--permission-mode",
+      "default",
+      "agent",
+      "stdio",
+    ]);
+  });
+
+  it("maps Full access to Grok always-approve", () => {
+    expect(grokAcpSpawnArgs("full-access")).toEqual(["agent", "--always-approve", "stdio"]);
+  });
+
+  it("maps Auto-accept edits and Auto onto Grok permission modes", () => {
+    expect(grokAcpSpawnArgs("auto-accept-edits")).toEqual([
+      "--permission-mode",
+      "acceptEdits",
+      "agent",
+      "stdio",
+    ]);
+    expect(grokAcpSpawnArgs("auto")).toEqual(["--permission-mode", "auto", "agent", "stdio"]);
   });
 });
 
@@ -50,63 +69,69 @@ describe("buildGrokAcpSpawnInput", () => {
   });
 
   it("forwards reasoning effort as a process-level agent flag", () => {
-    const spawn = buildGrokAcpSpawnInput({ binaryPath: "grok" }, "/tmp/project", undefined, {
-      reasoningEffort: "medium",
-    });
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "grok" },
+      "/tmp/project",
+      undefined,
+      undefined,
+      {
+        reasoningEffort: "medium",
+      },
+    );
     expect(spawn.args).toEqual(["agent", "--reasoning-effort", "medium", "stdio"]);
   });
 
   it("ignores unknown effort values on spawn", () => {
-    const spawn = buildGrokAcpSpawnInput({ binaryPath: "grok" }, "/tmp/project", undefined, {
-      reasoningEffort: "turbo",
-    });
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "grok" },
+      "/tmp/project",
+      undefined,
+      undefined,
+      {
+        reasoningEffort: "turbo",
+      },
+    );
     expect(spawn.args).toEqual(["agent", "stdio"]);
   });
-});
 
-describe("resolveGrokReasoningEffortSelection", () => {
-  it("reads reasoningEffort and effort option ids", () => {
-    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "High" }])).toBe(
-      "high",
-    );
-    expect(resolveGrokReasoningEffortSelection([{ id: "effort", value: "low" }])).toBe("low");
-    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "nope" }])).toBe(
+  it("puts Supervised on the Grok argv so config always-approve cannot win", () => {
+    const spawn = buildGrokAcpSpawnInput(
+      { binaryPath: "/usr/local/bin/grok" },
+      "/tmp/project",
       undefined,
+      "approval-required",
     );
-  });
-
-  it("reads effort from a model selection", () => {
-    expect(
-      resolveGrokReasoningEffortFromModelSelection({
-        instanceId: "grok" as never,
-        model: "grok-4.5",
-        options: [{ id: "reasoningEffort", value: "medium" }],
-      }),
-    ).toBe("medium");
+    expect(spawn.args).toEqual(["--permission-mode", "default", "agent", "stdio"]);
   });
 });
 
-const makeRecordingRuntime = (failure?: EffectAcpErrors.AcpError) => {
-  const modelCalls: Array<string> = [];
-  const modeCalls: Array<string> = [];
-  const runtime = {
-    setSessionModel: (modelId: string) =>
-      Effect.gen(function* () {
-        modelCalls.push(modelId);
-        if (failure) return yield* failure;
-        return {};
-      }),
-    setMode: (modeId: string) =>
-      Effect.gen(function* () {
-        modeCalls.push(modeId);
-        if (failure) return yield* failure;
-        return {};
-      }),
-  };
-  return { runtime, modelCalls, modeCalls };
-};
+describe("isValidGrokReasoningEffortToken", () => {
+  it("accepts future ACP tokens and rejects malformed metadata values", () => {
+    expect(isValidGrokReasoningEffortToken("xhigh")).toBe(true);
+    expect(isValidGrokReasoningEffortToken("turbo_v2")).toBe(true);
+    expect(isValidGrokReasoningEffortToken("not a token")).toBe(false);
+    expect(isValidGrokReasoningEffortToken("-leading-dash")).toBe(false);
+    expect(isValidGrokReasoningEffortToken("x".repeat(33))).toBe(false);
+  });
+});
 
 describe("applyGrokAcpModelSelection", () => {
+  const makeRecordingRuntime = (failure?: EffectAcpErrors.AcpError) => {
+    const modelCalls: Array<{
+      modelId: string;
+      meta?: { readonly [key: string]: unknown } | null;
+    }> = [];
+    const runtime = {
+      setSessionModel: (modelId: string, meta?: { readonly [key: string]: unknown } | null) =>
+        Effect.gen(function* () {
+          modelCalls.push(meta === undefined ? { modelId } : { modelId, meta });
+          if (failure) return yield* failure;
+          return {};
+        }),
+    };
+    return { runtime, modelCalls };
+  };
+
   it.effect("calls session/set_model when the requested model differs from current", () =>
     Effect.gen(function* () {
       const { runtime, modelCalls } = makeRecordingRuntime();
@@ -114,10 +139,57 @@ describe("applyGrokAcpModelSelection", () => {
         runtime,
         currentModelId: "grok-build",
         requestedModelId: "grok-mock-alt",
-        mapError: (context) => context.cause.message,
+        mapError: (cause) => cause.message,
       });
-      expect(modelCalls).toEqual(["grok-mock-alt"]);
+      expect(modelCalls).toEqual([{ modelId: "grok-mock-alt" }]);
       expect(result).toBe("grok-mock-alt");
+    }),
+  );
+
+  it.effect("applies reasoning effort through session/set_model metadata", () =>
+    Effect.gen(function* () {
+      const { runtime, modelCalls } = makeRecordingRuntime();
+      const result = yield* applyGrokAcpModelSelection({
+        runtime,
+        currentModelId: "grok-4.6",
+        currentReasoningEffort: "high",
+        requestedModelId: "grok-4.6",
+        requestedReasoningEffort: "xhigh",
+        mapError: (cause) => cause.message,
+      });
+      expect(modelCalls).toEqual([{ modelId: "grok-4.6", meta: { reasoningEffort: "xhigh" } }]);
+      expect(result).toBe("grok-4.6");
+    }),
+  );
+
+  it.effect("does not clear reasoning when same-model selection omits effort", () =>
+    Effect.gen(function* () {
+      const { runtime, modelCalls } = makeRecordingRuntime();
+      const result = yield* applyGrokAcpModelSelection({
+        runtime,
+        currentModelId: "grok-4.6",
+        currentReasoningEffort: "high",
+        requestedModelId: "grok-4.6",
+        requestedReasoningEffort: undefined,
+        mapError: (cause) => cause.message,
+      });
+      expect(modelCalls).toEqual([]);
+      expect(result).toBe("grok-4.6");
+    }),
+  );
+
+  it.effect("drops malformed effort metadata instead of sending it", () =>
+    Effect.gen(function* () {
+      const { runtime, modelCalls } = makeRecordingRuntime();
+      yield* applyGrokAcpModelSelection({
+        runtime,
+        currentModelId: "grok-4.6",
+        currentReasoningEffort: "high",
+        requestedModelId: "grok-4.6",
+        requestedReasoningEffort: "not a token",
+        mapError: (cause) => cause.message,
+      });
+      expect(modelCalls).toEqual([{ modelId: "grok-4.6" }]);
     }),
   );
 
@@ -128,7 +200,7 @@ describe("applyGrokAcpModelSelection", () => {
         runtime,
         currentModelId: "grok-build",
         requestedModelId: "grok-build",
-        mapError: (context) => context.cause.message,
+        mapError: (cause) => cause.message,
       });
       expect(modelCalls).toEqual([]);
       expect(result).toBe("grok-build");
@@ -142,41 +214,10 @@ describe("applyGrokAcpModelSelection", () => {
         runtime,
         currentModelId: "grok-build",
         requestedModelId: undefined,
-        mapError: (context) => context.cause.message,
+        mapError: (cause) => cause.message,
       });
       expect(modelCalls).toEqual([]);
       expect(result).toBe("grok-build");
-    }),
-  );
-
-  it.effect("applies reasoning effort through session/set_mode", () =>
-    Effect.gen(function* () {
-      const { runtime, modelCalls, modeCalls } = makeRecordingRuntime();
-      const result = yield* applyGrokAcpModelSelection({
-        runtime,
-        currentModelId: "grok-4.5",
-        requestedModelId: "grok-4.5",
-        selections: [{ id: "reasoningEffort", value: "medium" }],
-        mapError: (context) => context.cause.message,
-      });
-      expect(modelCalls).toEqual([]);
-      expect(modeCalls).toEqual(["medium"]);
-      expect(result).toBe("grok-4.5");
-    }),
-  );
-
-  it.effect("skips effort when applyReasoningEffort is false", () =>
-    Effect.gen(function* () {
-      const { runtime, modeCalls } = makeRecordingRuntime();
-      yield* applyGrokAcpModelSelection({
-        runtime,
-        currentModelId: "grok-4.5",
-        requestedModelId: "grok-4.5",
-        selections: [{ id: "reasoningEffort", value: "low" }],
-        applyReasoningEffort: false,
-        mapError: (context) => context.cause.message,
-      });
-      expect(modeCalls).toEqual([]);
     }),
   );
 
@@ -189,12 +230,24 @@ describe("applyGrokAcpModelSelection", () => {
           runtime,
           currentModelId: "grok-build",
           requestedModelId: "grok-mock-alt",
-          mapError: (context) => context.cause.message,
+          mapError: (cause) => cause.message,
         }),
       );
       expect(error).toBe(failure.message);
     }),
   );
+});
+
+describe("resolveGrokReasoningEffortSelection", () => {
+  it("reads reasoningEffort and effort option ids", () => {
+    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "High" }])).toBe(
+      "high",
+    );
+    expect(resolveGrokReasoningEffortSelection([{ id: "effort", value: "low" }])).toBe("low");
+    expect(resolveGrokReasoningEffortSelection([{ id: "reasoningEffort", value: "nope" }])).toBe(
+      undefined,
+    );
+  });
 });
 
 describe("resolveGrokRequestedModeId", () => {
@@ -203,31 +256,4 @@ describe("resolveGrokRequestedModeId", () => {
     expect(resolveGrokRequestedModeId("default")).toBe("agent");
     expect(resolveGrokRequestedModeId(undefined)).toBe("agent");
   });
-});
-
-describe("applyGrokAcpSessionMode", () => {
-  it.effect("session/set_mode uses agent for Build so Grok leaves ask", () =>
-    Effect.gen(function* () {
-      const { runtime, modeCalls } = makeRecordingRuntime();
-      const modeId = yield* applyGrokAcpSessionMode({
-        runtime,
-        interactionMode: "default",
-        mapError: (cause) => cause.message,
-      });
-      expect(modeId).toBe("agent");
-      expect(modeCalls).toEqual(["agent"]);
-    }),
-  );
-
-  it.effect("session/set_mode uses agent when interactionMode is omitted", () =>
-    Effect.gen(function* () {
-      const { runtime, modeCalls } = makeRecordingRuntime();
-      yield* applyGrokAcpSessionMode({
-        runtime,
-        interactionMode: undefined,
-        mapError: (cause) => cause.message,
-      });
-      expect(modeCalls).toEqual(["agent"]);
-    }),
-  );
 });

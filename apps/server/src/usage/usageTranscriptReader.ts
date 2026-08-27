@@ -19,7 +19,6 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import {
   initialCodexScanState,
-  initialGrokScanState,
   initialKimiScanState,
   mightCarryUsage,
   parseClaudeLine,
@@ -41,12 +40,18 @@ export interface TranscriptFile {
  * Errors on individual entries are swallowed: session files rotate and get
  * removed while the walk is in flight, and a partial listing is far better than
  * failing the page.
+ *
+ * `fileName` restricts the walk to a single basename (Grok's `updates.jsonl`).
+ * Grok sessions also ship multi-megabyte `chat_history` and `events` logs that
+ * never carry usage, so the basename filter keeps a cold scan off those files.
  */
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
+  options?: { readonly fileName?: string },
 ): Promise<readonly TranscriptFile[]> {
   const found: TranscriptFile[] = [];
+  const fileName = options?.fileName;
 
   const walk = async (dir: string): Promise<void> => {
     let entries;
@@ -61,7 +66,11 @@ export async function listTranscriptFiles(
         await walk(child);
         continue;
       }
-      if (!entry.name.endsWith(".jsonl")) continue;
+      if (fileName !== undefined) {
+        if (entry.name !== fileName) continue;
+      } else if (!entry.name.endsWith(".jsonl")) {
+        continue;
+      }
       try {
         const stats = await NodeFSP.stat(child);
         if (stats.mtimeMs >= sinceMs) {
@@ -102,9 +111,9 @@ export async function readDirectoryVolumeId(path: string): Promise<string> {
  * under the same `(size, mtime)` key would silently drop that file's usage
  * until the file next changes.
  *
- * Codex and Grok carry the active model on lines that hold no usage of their
- * own (`turn_context`, `model changed`), so those still have to pass through
- * the reducer to keep model attribution correct.
+ * Codex carries the active model on `turn_context` lines that hold no usage of
+ * their own, so those still have to pass through the reducer to keep model
+ * attribution correct.
  */
 export async function readTranscriptRecords(
   filePath: string,
@@ -112,7 +121,6 @@ export async function readTranscriptRecords(
 ): Promise<readonly UsageRecord[] | null> {
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
-  const grokState = initialGrokScanState();
   // Kimi names no session on any record; the wire log's own directory is the
   // session, which is what `distinctSessions` counts.
   const kimiState = initialKimiScanState(NodePath.basename(NodePath.dirname(filePath)));
@@ -138,12 +146,8 @@ export async function readTranscriptRecords(
       }
 
       if (provider === "grok") {
-        // `model changed` carries no usage of its own but is what makes the
-        // following inference events attributable, so it must reach the
-        // reducer.
-        if (!mightCarryUsage(line, provider) && !line.includes('"model changed"')) continue;
-        const record = parseGrokLine(line, grokState);
-        if (record !== null) records.push(record);
+        if (!mightCarryUsage(line, provider)) continue;
+        for (const grokRecord of parseGrokLine(line)) records.push(grokRecord);
         continue;
       }
 
