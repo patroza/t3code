@@ -55,12 +55,11 @@ describe("today recap helpers", () => {
     expect(prompt).toContain("## 🔴 CLOSED");
     expect(prompt).toContain("## 🟠 OPEN");
     expect(prompt).toContain("Related PRs");
-    expect(prompt).toContain("Tell that history once");
+    expect(prompt).toContain("heading PR's description");
+    expect(prompt).toContain('Do not write "landed today"');
     expect(prompt).toContain("closed PR with no connection");
-    expect(prompt).toContain("🟢 landed today");
-    expect(prompt).toContain("🔴 closed");
-    expect(prompt).toContain("🟠 still open");
     expect(prompt).toContain("Do not use ### type headings");
+    expect(prompt).not.toContain("landed today`");
     expect(prompt).not.toContain("### fix");
     expect(prompt).not.toContain("### feat");
     expect(prompt).not.toContain("configurator");
