@@ -193,13 +193,15 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           .fetchRemote({ cwd, remoteName: "origin" })
           .pipe(orFail("Could not fetch origin. try again"));
 
-        // TODO: Is this correct? It doesn't look like this reads the tracking ref locally.
         /*
-          This reads the tracking ref locally, with no network involved. The two calls above
-          already proved the repository is usable and the remote reachable, so what is left
-          fails only when the branch is absent from origin. A repository broken badly enough
-          to fail the read some other way is reported as a missing branch; the trade buys us
-          a permanent rejection for the case that actually happens, a mistyped branch name.
+          Reads the local `refs/remotes/origin/*` namespace the fetch above just refreshed;
+          no network is involved.
+
+          A missing branch is permanent, but git can also fail here for reasons that are not:
+          the command timing out behind the git process semaphore, or the process failing to
+          spawn. Only a non-zero exit means git ran and rejected the ref, so only that becomes
+          a rejection. Everything else is retried, because a wrong rejection is unrecoverable
+          while a wrong retry is merely noisy.
         */
         return yield* gitWorkflowService
           .resolveRemoteTrackingCommit({
@@ -212,8 +214,18 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               branchName: startBranchName,
               commitSha: resolved.commitSha,
             })),
-          )
-          .pipe(orReject("Branch '" + startBranchName + "' does not exist on origin"));
+            Effect.mapError((cause) =>
+              cause.exitCode === undefined
+                ? new T3GatewayError({
+                    reason: "Could not read the tip of '" + startBranchName + "' on origin",
+                    cause,
+                  })
+                : new T3Rejected({
+                    reason: "Branch '" + startBranchName + "' does not exist on origin",
+                    cause,
+                  }),
+            ),
+          );
       });
 
     const crypto = yield* Crypto.Crypto;
