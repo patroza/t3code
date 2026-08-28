@@ -108,7 +108,18 @@ type GitLayerInput = {
   remoteExists?: boolean;
   resolvedRemoteSha?: string;
   resolvesBranch?: boolean;
+  remoteExistsFails?: boolean;
 };
+
+const createGitCommandError = (exitCode?: number) =>
+  GitCommandError.make({
+    command: "resolve",
+    cwd: "",
+    detail: "",
+    failureKind: "unknown",
+    operation: "",
+    exitCode,
+  });
 
 // TODO: Can't we simplify it by leveraging default values in params?
 // we can pass default arguments in JS
@@ -117,7 +128,12 @@ const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput)
 
   return Layer.mock(GitWorkflowService, {
     remoteExists: (callInput) =>
-      recordGit("remoteExists", callInput, !input ? true : !!input.remoteExists),
+      recordGit("remoteExists", callInput, !input || input.remoteExists !== false).pipe(
+        Effect.filterOrFail(
+          () => !input || !input.remoteExistsFails,
+          () => createGitCommandError(),
+        ),
+      ),
     fetchRemote: (callInput) => recordGit("fetchRemote", callInput, undefined),
     resolveRemoteTrackingCommit: (callInput) =>
       recordGit("resolveRemoteTrackingCommit", callInput, {
@@ -125,16 +141,7 @@ const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput)
         remoteRefName: "remoteRefName",
       }).pipe(
         Effect.flatMap((val) =>
-          input && input.resolvesBranch === false
-            ? GitCommandError.make({
-                command: "resolve",
-                cwd: "",
-                detail: "",
-                failureKind: "unknown",
-                operation: "",
-                exitCode: 1,
-              })
-            : Effect.succeed(val),
+          input && input.resolvesBranch === false ? createGitCommandError(1) : Effect.succeed(val),
         ),
       ),
   });
@@ -333,16 +340,67 @@ describe("T3Gateway", () => {
 
             expect(result.method).toBe("gitWorkflowService.resolveRemoteTrackingCommit");
 
-            console.log(calls);
+            const methods = calls.map((call) => call.method);
+
+            expect(methods).toEqual([
+              "getProjectShellById",
+              "remoteExists",
+              "fetchRemote",
+              "resolveRemoteTrackingCommit",
+            ]);
           }).pipe(Effect.provide(layer));
         },
       );
     });
 
     describe("operational failures", () => {
-      it.todo("fails retryably when the project lookup fails");
+      it.effect("fails retryably when the project lookup fails", () => {
+        const { layer, calls } = createT3Gateway({
+          pqsm: {
+            getProjectShellById: { failure: "no project resolving" },
+          },
+        });
 
-      it.todo("fails retryably when checking for the origin remote fails");
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+
+          expect(result.method).toBe("projectionSnapshotQuery.getProjectShellById");
+
+          const methods = calls.map((call) => call.method);
+
+          expect(methods).toEqual(["getProjectShellById"]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("fails retryably when checking for the origin remote fails", () => {
+        const { layer, calls } = createT3Gateway({
+          gwfs: {
+            remoteExistsFails: true,
+          },
+        });
+
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+
+          expect(result.method).toBe("gitWorkflowService.remoteExists");
+
+          const methods = calls.map((call) => call.method);
+
+          expect(methods).toEqual(["getProjectShellById", "remoteExists"]);
+        }).pipe(Effect.provide(layer));
+      });
 
       it.todo("fails retryably when fetching origin fails");
 
