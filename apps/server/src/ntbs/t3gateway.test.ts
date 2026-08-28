@@ -10,6 +10,8 @@ import { Crypto } from "effect/Crypto";
 import { GitCommandError, OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
+import { PlatformError, SystemError } from "effect/PlatformError";
+import { Record } from "effect/Equivalence";
 
 /**
  * Every mocked dependency records into one shared, ordered log.
@@ -37,7 +39,11 @@ const createCallLog = () => {
 
 type CallRecord = ReturnType<typeof createCallLog>["record"];
 
-const createCryptoMock = (record: CallRecord) => {
+type CryptoInput = {
+  failRandomUUIDv4?: boolean;
+};
+
+const createCryptoMock = (record: CallRecord, input?: CryptoInput) => {
   const recordCrypto = record("Crypto");
 
   return Layer.unwrap(
@@ -46,9 +52,26 @@ const createCryptoMock = (record: CallRecord) => {
 
       return Layer.mock(Crypto, {
         "~effect/platform/Crypto": "~effect/platform/Crypto",
-        randomUUIDv4: Ref.getAndUpdate(counter, (num) => num + 1).pipe(
-          Effect.flatMap((num) => recordCrypto("randomUUIDv4", undefined, "randomUUID" + num)),
-        ),
+        randomUUIDv4:
+          // recordCrypto("randomUUIDv4", undefined, )
+
+          input?.failRandomUUIDv4
+            ? recordCrypto("randomUUIDv4", undefined, "noreach").pipe(
+                Effect.andThen(
+                  new PlatformError(
+                    new SystemError({
+                      _tag: "Unknown",
+                      method: "randomUUIDv4",
+                      module: "crypto something",
+                    }),
+                  ),
+                ),
+              )
+            : Ref.getAndUpdate(counter, (num) => num + 1).pipe(
+                Effect.flatMap((num) =>
+                  recordCrypto("randomUUIDv4", undefined, "randomUUID" + num),
+                ),
+              ),
         nextDoubleUnsafe: () => 0,
         nextIntUnsafe: () => 0,
       });
@@ -107,8 +130,9 @@ const ProjectionTurnRepositoryMock = Layer.mock(ProjectionTurnRepository, {});
 type GitLayerInput = {
   remoteExists?: boolean;
   resolvedRemoteSha?: string;
-  resolvesBranch?: boolean;
+  failsBranchResolutionWith?: "retryable" | "fatal";
   remoteExistsFails?: boolean;
+  fetchRemoteFails?: boolean;
 };
 
 const createGitCommandError = (exitCode?: number) =>
@@ -134,14 +158,22 @@ const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput)
           () => createGitCommandError(),
         ),
       ),
-    fetchRemote: (callInput) => recordGit("fetchRemote", callInput, undefined),
+    fetchRemote: (callInput) =>
+      recordGit("fetchRemote", callInput, undefined).pipe(
+        Effect.filterOrFail(
+          () => !input || input.fetchRemoteFails !== true,
+          () => createGitCommandError(),
+        ),
+      ),
     resolveRemoteTrackingCommit: (callInput) =>
       recordGit("resolveRemoteTrackingCommit", callInput, {
         commitSha: input?.resolvedRemoteSha ?? "sha123",
         remoteRefName: "remoteRefName",
       }).pipe(
         Effect.flatMap((val) =>
-          input && input.resolvesBranch === false ? createGitCommandError(1) : Effect.succeed(val),
+          input && input.failsBranchResolutionWith
+            ? createGitCommandError(input.failsBranchResolutionWith === "fatal" ? 1 : undefined)
+            : Effect.succeed(val),
         ),
       ),
   });
@@ -155,7 +187,11 @@ const ProjectSetupScriptRunnerMock = Layer.mock(ProjectSetupScriptRunner, {});
  * Called per test rather than per block: each failure mode needs its own mock configuration, so
  * there is nothing worth sharing, and a log created per test beats resetting a shared one.
  */
-const createT3Gateway = (input?: { pqsm?: PSQMInput; gwfs?: GitLayerInput }) => {
+const createT3Gateway = (input?: {
+  pqsm?: PSQMInput;
+  gwfs?: GitLayerInput;
+  crypto?: CryptoInput;
+}) => {
   const { calls, record } = createCallLog();
 
   return {
@@ -168,7 +204,7 @@ const createT3Gateway = (input?: { pqsm?: PSQMInput; gwfs?: GitLayerInput }) => 
           ProjectSetupScriptRunnerMock,
           createGitWorkflowServiceMock(record, input?.gwfs),
           ProjectionTurnRepositoryMock,
-          createCryptoMock(record),
+          createCryptoMock(record, input?.crypto),
         ),
       ),
     ),
@@ -326,7 +362,7 @@ describe("T3Gateway", () => {
         "rejects a selected branch that is absent after a successful fetch without performing provisioning work",
         () => {
           const { layer, calls } = createT3Gateway({
-            gwfs: { resolvesBranch: false, remoteExists: true },
+            gwfs: { failsBranchResolutionWith: "fatal", remoteExists: true },
           });
 
           const projectId = ProjectId.make("projectId");
@@ -378,7 +414,7 @@ describe("T3Gateway", () => {
         }).pipe(Effect.provide(layer));
       });
 
-      it.effect("fails retryably when checking for the origin remote fails", () => {
+      it.effect("fails retryably when checking for the origin remote existance fails", () => {
         const { layer, calls } = createT3Gateway({
           gwfs: {
             remoteExistsFails: true,
@@ -402,14 +438,91 @@ describe("T3Gateway", () => {
         }).pipe(Effect.provide(layer));
       });
 
-      it.todo("fails retryably when fetching origin fails");
+      it.effect("fails retryably when fetching origin fails", () => {
+        const { layer, calls } = createT3Gateway({
+          gwfs: {
+            fetchRemoteFails: true,
+          },
+        });
+
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+
+          expect(result.method).toBe("gitWorkflowService.fetchRemote");
+
+          const methods = calls.map((call) => call.method);
+
+          expect(methods).toEqual(["getProjectShellById", "remoteExists", "fetchRemote"]);
+        }).pipe(Effect.provide(layer));
+      });
 
       // A git failure carrying no exit code means git never ran to completion (timeout, spawn
       // failure) rather than that the branch is missing. Rejecting it would post a wrong reply
       // and kill the request permanently.
-      it.todo("fails retryably when reading the branch tip fails without a git exit code");
+      it.effect("fails retryably when reading the branch tip fails without a git exit code", () => {
+        const { layer, calls } = createT3Gateway({
+          gwfs: {
+            failsBranchResolutionWith: "retryable",
+          },
+        });
 
-      it.todo("fails retryably when the exchange IDs cannot be minted");
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+
+          expect(result.method).toBe("gitWorkflowService.resolveRemoteTrackingCommit");
+
+          const methods = calls.map((call) => call.method);
+
+          expect(methods).toEqual([
+            "getProjectShellById",
+            "remoteExists",
+            "fetchRemote",
+            "resolveRemoteTrackingCommit",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("fails retryably when the exchange IDs cannot be minted", () => {
+        const { layer, calls } = createT3Gateway({
+          crypto: {
+            failRandomUUIDv4: true,
+          },
+        });
+
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+
+          expect(result.method).toBe("crypto.randomUUIDv4");
+
+          const methods = calls.map((call) => call.method);
+
+          expect(methods).toEqual([
+            "getProjectShellById",
+            "remoteExists",
+            "fetchRemote",
+            "resolveRemoteTrackingCommit",
+            "randomUUIDv4",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
     });
   });
 });
