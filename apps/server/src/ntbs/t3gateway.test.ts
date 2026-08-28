@@ -125,16 +125,16 @@ const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput)
         remoteRefName: "remoteRefName",
       }).pipe(
         Effect.flatMap((val) =>
-          input?.resolvesBranch
-            ? Effect.succeed(val)
-            : GitCommandError.make({
+          input && input.resolvesBranch === false
+            ? GitCommandError.make({
                 command: "resolve",
                 cwd: "",
                 detail: "",
                 failureKind: "unknown",
                 operation: "",
                 exitCode: 1,
-              }),
+              })
+            : Effect.succeed(val),
         ),
       ),
   });
