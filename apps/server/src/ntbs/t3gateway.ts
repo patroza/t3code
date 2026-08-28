@@ -129,16 +129,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           }),
       );
 
-    const orReject = (method: string, reason: string) =>
-      Effect.mapError(
-        (cause: unknown) =>
-          new FatalError({
-            reason,
-            cause,
-            method,
-          }),
-      );
-
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
     /*

@@ -7,7 +7,7 @@ import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurn
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { Crypto } from "effect/Crypto";
-import { OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
+import { GitCommandError, OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
 
@@ -104,15 +104,15 @@ const createPSQM = (record: CallRecord, input?: PSQMInput) => {
 
 const ProjectionTurnRepositoryMock = Layer.mock(ProjectionTurnRepository, {});
 
+type GitLayerInput = {
+  remoteExists?: boolean;
+  resolvedRemoteSha?: string;
+  resolvesBranch?: boolean;
+};
+
 // TODO: Can't we simplify it by leveraging default values in params?
 // we can pass default arguments in JS
-const createGitWorkflowServiceMock = (
-  record: CallRecord,
-  input?: {
-    remoteExists?: boolean;
-    resolvedRemoteSha?: string;
-  },
-) => {
+const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput) => {
   const recordGit = record("GitWorkflowService");
 
   return Layer.mock(GitWorkflowService, {
@@ -123,7 +123,20 @@ const createGitWorkflowServiceMock = (
       recordGit("resolveRemoteTrackingCommit", callInput, {
         commitSha: input?.resolvedRemoteSha ?? "sha123",
         remoteRefName: "remoteRefName",
-      }),
+      }).pipe(
+        Effect.flatMap((val) =>
+          input?.resolvesBranch
+            ? Effect.succeed(val)
+            : GitCommandError.make({
+                command: "resolve",
+                cwd: "",
+                detail: "",
+                failureKind: "unknown",
+                operation: "",
+                exitCode: 1,
+              }),
+        ),
+      ),
   });
 };
 
@@ -135,12 +148,7 @@ const ProjectSetupScriptRunnerMock = Layer.mock(ProjectSetupScriptRunner, {});
  * Called per test rather than per block: each failure mode needs its own mock configuration, so
  * there is nothing worth sharing, and a log created per test beats resetting a shared one.
  */
-const createT3Gateway = (input?: {
-  pqsm?: PSQMInput;
-  gwfs?: {
-    remoteExists?: boolean;
-  };
-}) => {
+const createT3Gateway = (input?: { pqsm?: PSQMInput; gwfs?: GitLayerInput }) => {
   const { calls, record } = createCallLog();
 
   return {
@@ -258,7 +266,7 @@ describe("T3Gateway", () => {
       });
     });
 
-    describe("rejected planning", () => {
+    describe("fatal errors", () => {
       it.effect(
         "rejects a project that does not exist without performing provisioning work",
         () => {
@@ -274,7 +282,9 @@ describe("T3Gateway", () => {
             const error = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
 
             // The tag is what the processor branches on to decide between retrying and replying.
-            expect(error._tag).toBe("T3Rejected");
+            expect(error._tag).toBe("FatalError");
+
+            expect(error.method).toBe("projectionSnapshotQuery.getProjectShellById");
 
             // Nothing after the lookup: no git, and no identifiers minted for work that cannot run.
             expect(calls).toEqual([
@@ -289,7 +299,7 @@ describe("T3Gateway", () => {
       );
 
       it.effect("rejects a project whose repository has no origin remote", () => {
-        const { calls, layer } = createT3Gateway({
+        const { layer } = createT3Gateway({
           gwfs: { remoteExists: false },
         });
 
@@ -300,12 +310,32 @@ describe("T3Gateway", () => {
 
           const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
 
-          expect(result._tag).toBe("T3Rejected");
+          expect(result._tag).toBe("FatalError");
+          expect(result.method).toBe("gitWorkflowService.remoteExists");
         }).pipe(Effect.provide(layer));
       });
 
-      it.todo(
+      it.effect(
         "rejects a selected branch that is absent after a successful fetch without performing provisioning work",
+        () => {
+          const { layer, calls } = createT3Gateway({
+            gwfs: { resolvesBranch: false, remoteExists: true },
+          });
+
+          const projectId = ProjectId.make("projectId");
+
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
+
+            const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+            expect(result._tag).toBe("FatalError");
+
+            expect(result.method).toBe("gitWorkflowService.resolveRemoteTrackingCommit");
+
+            console.log(calls);
+          }).pipe(Effect.provide(layer));
+        },
       );
     });
 
