@@ -17,7 +17,7 @@ import {
   type ThreadCreated,
 } from "./exchange.ts";
 import { makeNTBSProcessor, type NTBSProcessor, type T3Target } from "./processor.ts";
-import { T3Gateway, RecoverableError, FatalError } from "./t3gateway.ts";
+import { T3Gateway, RetryableError, FatalError } from "./t3gateway.ts";
 
 /*
 Every test in this module is about setting up the dependencies, and seeing what happens as we call `run` and `process` on the processor.
@@ -260,9 +260,10 @@ describe("NTBSProcessor", () => {
                 provisionCalls += 1;
 
                 if (provisionCalls === 1) {
-                  return yield* new RecoverableError({
+                  return yield* new RetryableError({
                     reason: "Thread provisioning temporarily failed",
                     cause: "test failure",
+                    method: "provisionThread",
                   });
                 }
               }),
@@ -309,9 +310,10 @@ describe("NTBSProcessor", () => {
                 startTurnCalls += 1;
 
                 if (startTurnCalls === 1) {
-                  return yield* new RecoverableError({
+                  return yield* new RetryableError({
                     reason: "Turn start temporarily failed",
                     cause: "test failure",
+                    method: "startTurn",
                   });
                 }
 
@@ -445,9 +447,10 @@ describe("NTBSProcessor", () => {
                 if (planCalls === 1) {
                   yield* Deferred.succeed(firstPlanStarted, undefined);
                   yield* Deferred.await(releaseFirstPlan);
-                  return yield* new RecoverableError({
+                  return yield* new RetryableError({
                     reason: "The first planning attempt failed",
                     cause: "test failure",
+                    method: "planCoordinates",
                   });
                 }
 
@@ -527,9 +530,10 @@ describe("NTBSProcessor", () => {
                 if (threadStatusCalls === 1) {
                   yield* Deferred.succeed(threadStatusStarted, undefined);
                   yield* Deferred.await(releaseThreadStatus);
-                  return yield* new RecoverableError({
+                  return yield* new RetryableError({
                     reason: "Failed after persisting the claim",
                     cause: "test failure",
+                    method: "getThreadStatus",
                   });
                 }
 
@@ -1105,9 +1109,10 @@ describe("NTBSProcessor", () => {
 
               return statusCalls === 1
                 ? Effect.fail(
-                    new RecoverableError({
+                    new RetryableError({
                       reason: "Turn status temporarily unavailable",
                       cause: "test failure",
+                      method: "getTurnStatus",
                     }),
                   ).pipe(Effect.ensuring(Deferred.succeed(firstStatusFinished, undefined)))
                 : Effect.succeed({ turn: "completed" as const, reply });
@@ -1242,9 +1247,10 @@ describe("NTBSProcessor", () => {
                 }
 
                 return Effect.fail(
-                  new RecoverableError({
+                  new RetryableError({
                     reason: "This activity event could not be processed",
                     cause: "test failure",
+                    method: "getTurnStatus",
                   }),
                 ).pipe(Effect.ensuring(Deferred.succeed(firstActivityFinished, undefined)));
               }
@@ -1673,6 +1679,7 @@ describe("NTBSProcessor", () => {
                 return yield* new FatalError({
                   reason: rejectionReason,
                   cause: rejectionCause,
+                  method: "provisionThread",
                 });
               }),
           },
@@ -1698,6 +1705,7 @@ describe("NTBSProcessor", () => {
               type: "failure" as const,
               text: rejectionReason,
               cause: rejectionCause,
+              method: "startTurn",
             };
             const replyPending = toReplyPending(claimed, failureReply);
             const expected = toReplyPosted(replyPending, replySourceUri);
@@ -1732,6 +1740,7 @@ describe("NTBSProcessor", () => {
                 return yield* new FatalError({
                   reason: rejectionReason,
                   cause: rejectionCause,
+                  method: "startTurn",
                 });
               }),
           },
