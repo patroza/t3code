@@ -17,7 +17,7 @@ import {
   type ThreadCreated,
 } from "./exchange.ts";
 import { makeNTBSProcessor, type NTBSProcessor, type T3Target } from "./processor.ts";
-import { T3Gateway, T3GatewayError, T3Rejected } from "./t3gateway.ts";
+import { T3Gateway, RecoverableError, FatalError } from "./t3gateway.ts";
 
 /*
 Every test in this module is about setting up the dependencies, and seeing what happens as we call `run` and `process` on the processor.
@@ -260,7 +260,7 @@ describe("NTBSProcessor", () => {
                 provisionCalls += 1;
 
                 if (provisionCalls === 1) {
-                  return yield* new T3GatewayError({
+                  return yield* new RecoverableError({
                     reason: "Thread provisioning temporarily failed",
                     cause: "test failure",
                   });
@@ -309,7 +309,7 @@ describe("NTBSProcessor", () => {
                 startTurnCalls += 1;
 
                 if (startTurnCalls === 1) {
-                  return yield* new T3GatewayError({
+                  return yield* new RecoverableError({
                     reason: "Turn start temporarily failed",
                     cause: "test failure",
                   });
@@ -445,7 +445,7 @@ describe("NTBSProcessor", () => {
                 if (planCalls === 1) {
                   yield* Deferred.succeed(firstPlanStarted, undefined);
                   yield* Deferred.await(releaseFirstPlan);
-                  return yield* new T3GatewayError({
+                  return yield* new RecoverableError({
                     reason: "The first planning attempt failed",
                     cause: "test failure",
                   });
@@ -527,7 +527,7 @@ describe("NTBSProcessor", () => {
                 if (threadStatusCalls === 1) {
                   yield* Deferred.succeed(threadStatusStarted, undefined);
                   yield* Deferred.await(releaseThreadStatus);
-                  return yield* new T3GatewayError({
+                  return yield* new RecoverableError({
                     reason: "Failed after persisting the claim",
                     cause: "test failure",
                   });
@@ -1105,7 +1105,7 @@ describe("NTBSProcessor", () => {
 
               return statusCalls === 1
                 ? Effect.fail(
-                    new T3GatewayError({
+                    new RecoverableError({
                       reason: "Turn status temporarily unavailable",
                       cause: "test failure",
                     }),
@@ -1242,7 +1242,7 @@ describe("NTBSProcessor", () => {
                 }
 
                 return Effect.fail(
-                  new T3GatewayError({
+                  new RecoverableError({
                     reason: "This activity event could not be processed",
                     cause: "test failure",
                   }),
@@ -1670,7 +1670,7 @@ describe("NTBSProcessor", () => {
             provisionThread: () =>
               Effect.gen(function* () {
                 provisionCalls += 1;
-                return yield* new T3Rejected({
+                return yield* new FatalError({
                   reason: rejectionReason,
                   cause: rejectionCause,
                 });
@@ -1729,7 +1729,7 @@ describe("NTBSProcessor", () => {
             startTurn: () =>
               Effect.gen(function* () {
                 startTurnCalls += 1;
-                return yield* new T3Rejected({
+                return yield* new FatalError({
                   reason: rejectionReason,
                   cause: rejectionCause,
                 });
