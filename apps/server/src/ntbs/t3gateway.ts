@@ -12,8 +12,6 @@ import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurn
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
-import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
-import { interrupt } from "effect/Cause";
 
 /*
   NTBS architecture:
@@ -36,9 +34,17 @@ import { interrupt } from "effect/Cause";
   TODO: Better description of the whole architecture.
 */
 
-export class T3GatewayError extends Data.TaggedError("T3GatewayError")<{
+export class RetryableError extends Data.TaggedError("RetryableError")<{
   reason: string;
   cause: unknown;
+  method: string;
+}> {}
+
+/** T3 will never accept this work. */
+export class FatalError extends Data.TaggedError("FatalError")<{
+  reason: string;
+  cause: unknown;
+  method: string;
 }> {}
 
 type T3GatewayRequirements =
@@ -68,12 +74,6 @@ type T3GatewayRequirements =
    */
   | Crypto.Crypto;
 
-/** T3 will never accept this work; the processor records a failure reply. */
-export class T3Rejected extends Data.TaggedError("T3Rejected")<{
-  reason: string;
-  cause: unknown;
-}> {}
-
 /** A branch on `origin` and the commit it pointed at when it was resolved. */
 interface RemoteBranchTip {
   readonly branchName: string;
@@ -91,25 +91,25 @@ export interface T3Gateway {
   readonly planCoordinates: (
     projectId: ProjectId,
     startBranchName: string,
-  ) => Effect.Effect<NTBS.WorkCoordinates, T3GatewayError | T3Rejected>;
+  ) => Effect.Effect<NTBS.WorkCoordinates, RetryableError | FatalError>;
 
   readonly getThreadStatus: (
     state: NTBS.RequestClaimed,
-  ) => Effect.Effect<NTBS.RequestClaimedContext, T3GatewayError>;
+  ) => Effect.Effect<NTBS.RequestClaimedContext, RetryableError>;
 
   /** Reentrant: worktree, thread creation and setup scripts, each skipped if already done. */
   readonly provisionThread: (
     state: NTBS.RequestClaimed,
-  ) => Effect.Effect<void, T3GatewayError | T3Rejected>;
+  ) => Effect.Effect<void, RetryableError | FatalError>;
 
   /** Reports turn progress, interpreting a finished turn into a verbatim `Reply`. */
   readonly getTurnStatus: (
     state: NTBS.ThreadCreated,
-  ) => Effect.Effect<NTBS.ThreadCreatedContext, T3GatewayError>;
+  ) => Effect.Effect<NTBS.ThreadCreatedContext, RetryableError>;
 
   readonly startTurn: (
     state: NTBS.ThreadCreated,
-  ) => Effect.Effect<void, T3GatewayError | T3Rejected>;
+  ) => Effect.Effect<void, RetryableError | FatalError>;
 
   /** Threads whose T3 state just changed; the processor reconciles each. */
   readonly threadActivity: Stream.Stream<ThreadId>;
@@ -119,21 +119,23 @@ export const T3Gateway = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
 
 const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Effect.gen(
   function* () {
-    const orFail = (reason: string) =>
+    const orFail = (method: string, reason: string) =>
       Effect.mapError(
         (cause: unknown) =>
-          new T3GatewayError({
+          new RetryableError({
             reason,
             cause,
+            method,
           }),
       );
 
-    const orReject = (reason: string) =>
+    const orReject = (method: string, reason: string) =>
       Effect.mapError(
         (cause: unknown) =>
-          new T3Rejected({
+          new FatalError({
             reason,
             cause,
+            method,
           }),
       );
 
@@ -145,13 +147,17 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     */
     const getProject = (projectId: ProjectId) =>
       projectionSnapshotQuery.getProjectShellById(projectId).pipe(
-        orFail("Could not load project " + projectId),
+        orFail(
+          "projectionSnapshotQuery.getProjectShellById",
+          "Could not load project " + projectId,
+        ),
         Effect.flatMap(
           Option.match({
             onSome: Effect.succeed,
             onNone: () =>
               Effect.fail(
-                new T3Rejected({
+                new FatalError({
+                  method: "projectionSnapshotQuery.getProjectShellById",
                   reason: "Project " + projectId + " does not exist",
                   cause: null,
                 }),
@@ -172,16 +178,20 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     const resolveRemoteBranchTip = (
       cwd: string,
       startBranchName: string,
-    ): Effect.Effect<RemoteBranchTip, T3Rejected | T3GatewayError> =>
+    ): Effect.Effect<RemoteBranchTip, FatalError | RetryableError> =>
       Effect.gen(function* () {
         // Check if origin exist. If not, T3 will never be able to accept this work.
         // The lookup failing is operational; a definitive `false` is not.
         yield* gitWorkflowService.remoteExists({ cwd, remoteName: "origin" }).pipe(
-          orFail("Could not check whether the remote 'origin' exists"),
+          orFail(
+            "gitWorkflowService.remoteExists",
+            "Could not check whether the remote 'origin' exists",
+          ),
           Effect.filterOrFail(
             (exists) => exists,
             () =>
-              new T3Rejected({
+              new FatalError({
+                method: "gitWorkflowService.remoteExists",
                 reason: "Remote 'origin' does not exist",
                 cause: null,
               }),
@@ -191,7 +201,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         // Since it exists, let's fetch the latest remote state
         yield* gitWorkflowService
           .fetchRemote({ cwd, remoteName: "origin" })
-          .pipe(orFail("Could not fetch origin. try again"));
+          .pipe(orFail("gitWorkflowService.fetchRemote", "Could not fetch origin. try again"));
 
         /*
           Reads the local `refs/remotes/origin/*` namespace the fetch above just refreshed;
@@ -216,11 +226,13 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             })),
             Effect.mapError((cause) =>
               cause.exitCode === undefined
-                ? new T3GatewayError({
+                ? new RetryableError({
+                    method: "gitWorkflowService.resolveRemoteTrackingCommit",
                     reason: "Could not read the tip of '" + startBranchName + "' on origin",
                     cause,
                   })
-                : new T3Rejected({
+                : new FatalError({
+                    method: "gitWorkflowService.resolveRemoteTrackingCommit",
                     reason: "Branch '" + startBranchName + "' does not exist on origin",
                     cause,
                   }),
@@ -229,12 +241,14 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       });
 
     const crypto = yield* Crypto.Crypto;
-    const randomUUID = crypto.randomUUIDv4.pipe(orFail("Failed creating a UUID v4"));
+    const randomUUID = crypto.randomUUIDv4.pipe(
+      orFail("crypto.randomUUIDv4", "Failed creating a UUID v4"),
+    );
 
     const planCoordinates = (
       projectId: ProjectId,
       startBranchName: string,
-    ): Effect.Effect<NTBS.WorkCoordinates, T3GatewayError | T3Rejected> =>
+    ): Effect.Effect<NTBS.WorkCoordinates, RetryableError | FatalError> =>
       Effect.gen(function* () {
         /*
           1. Resolve the target project
@@ -270,14 +284,14 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const getThreadStatus = (
       _state: NTBS.RequestClaimed,
-    ): Effect.Effect<NTBS.RequestClaimedContext, T3GatewayError> =>
+    ): Effect.Effect<NTBS.RequestClaimedContext, RetryableError> =>
       Effect.succeed({
         thread: "missing",
       });
 
     const getTurnStatus = (
       _state: NTBS.ThreadCreated,
-    ): Effect.Effect<NTBS.ThreadCreatedContext, T3GatewayError> =>
+    ): Effect.Effect<NTBS.ThreadCreatedContext, RetryableError> =>
       Effect.succeed({
         turn: "missing",
       });
@@ -288,7 +302,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const provisionThread = (
       _state: NTBS.RequestClaimed,
-    ): Effect.Effect<void, T3GatewayError | T3Rejected> => Effect.void;
+    ): Effect.Effect<void, RetryableError | FatalError> => Effect.void;
 
     return {
       startTurn,

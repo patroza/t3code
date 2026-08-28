@@ -165,7 +165,7 @@ describe("T3Gateway", () => {
     /*
       Recap. This will, in order:
       - fetch the project details for projectId
-        - if it cannot load the project due to errors, it will fail with a retryable T3GatewayError
+        - if it cannot load the project due to errors, it will fail with a recoverable error
         - it if can:
           - if the project exists: it will return it
           - if it does not: it will fail with a T3Rejected error, one that cannot be retried
