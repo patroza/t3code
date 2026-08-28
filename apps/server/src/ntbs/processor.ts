@@ -176,7 +176,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         case "provision-thread": {
           const rejection = yield* t3.provisionThread(state).pipe(
             Effect.as(null),
-            Effect.catchTag("T3Rejected", (error) => Effect.succeed(error)),
+            Effect.catchTag("FatalError", (error) => Effect.succeed(error)),
             orFail("Failed to provision the T3 thread"),
           );
 
@@ -217,7 +217,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         case "start-turn": {
           const rejection = yield* t3.startTurn(state).pipe(
             Effect.as(null),
-            Effect.catchTag("T3Rejected", (error) => Effect.succeed(error)),
+            Effect.catchTag("FatalError", (error) => Effect.succeed(error)),
             orFail("Failed to start the T3 turn"),
           );
 

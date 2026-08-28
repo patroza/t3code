@@ -272,12 +272,18 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         return coordinates;
       });
 
+    // TODO: We doing a lot of work behind the scenes just to know whether
+    // the thread exists or is missing, this screams repository query
+    // not a snapshot one
     const getThreadStatus = (
-      _state: NTBS.RequestClaimed,
+      state: NTBS.RequestClaimed,
     ): Effect.Effect<NTBS.RequestClaimedContext, RetryableError> =>
-      Effect.succeed({
-        thread: "missing",
-      });
+      projectionSnapshotQuery.getThreadDetailById(state.t3.threadId).pipe(
+        Effect.map((maybeThread) => ({
+          thread: Option.isNone(maybeThread) ? ("missing" as const) : ("present" as const),
+        })),
+        orFail("getThreadStatus", "couldn't get the thread idk"),
+      );
 
     const getTurnStatus = (
       _state: NTBS.ThreadCreated,
@@ -295,10 +301,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     ): Effect.Effect<void, RetryableError | FatalError> => Effect.void;
 
     return {
+      planCoordinates,
       startTurn,
       getTurnStatus,
       threadActivity,
-      planCoordinates,
       getThreadStatus,
       provisionThread,
     };
