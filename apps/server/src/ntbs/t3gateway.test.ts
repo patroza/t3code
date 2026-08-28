@@ -288,7 +288,21 @@ describe("T3Gateway", () => {
         },
       );
 
-      it.todo("rejects a project whose repository has no origin remote");
+      it.effect("rejects a project whose repository has no origin remote", () => {
+        const { calls, layer } = createT3Gateway({
+          gwfs: { remoteExists: false },
+        });
+
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("T3Rejected");
+        }).pipe(Effect.provide(layer));
+      });
 
       it.todo(
         "rejects a selected branch that is absent after a successful fetch without performing provisioning work",
