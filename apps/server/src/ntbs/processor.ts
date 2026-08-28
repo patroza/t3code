@@ -174,6 +174,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
       switch (decision.type) {
         case "provision-thread": {
+          // TODO: Quite sure there's low hanging fruits here
           const rejection = yield* t3.provisionThread(state).pipe(
             Effect.as(null),
             Effect.catchTag("FatalError", (error) => Effect.succeed(error)),
