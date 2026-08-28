@@ -627,7 +627,7 @@ describe("T3Gateway", () => {
         }).pipe(Effect.provide(layer));
       });
 
-      it.todo("it returns that the thread is present", () => {
+      it.effect("it returns that the thread is present", () => {
         const { layer } = createT3Gateway({
           pqsm: {
             isThreadMissing: false,
