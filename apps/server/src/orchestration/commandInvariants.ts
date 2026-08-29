@@ -12,7 +12,6 @@ import * as HashMap from "effect/HashMap";
 import {
   findProjectById,
   findThreadById,
-  isThreadDeleted,
   listThreadsByProjectId,
   type CommandReadModel,
 } from "./commandReadModel.ts";
@@ -149,12 +148,12 @@ export function requireThreadAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly threadId: ThreadId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  // A deleted thread is evicted from `threads` but its id is retained in
-  // `deletedThreadIds`, so reject re-using a live OR previously-deleted id.
-  if (
-    !findThreadById(input.readModel, input.threadId) &&
-    !isThreadDeleted(input.readModel, input.threadId)
-  ) {
+  // Deleted threads are evicted from `threads` (ids may remain in
+  // `deletedThreadIds`). A draft keeps its client-minted id across retries, so
+  // only a live row blocks creation. Projectors reset the thread's rows when
+  // the id is created again.
+  const existing = findThreadById(input.readModel, input.threadId);
+  if (existing === undefined || existing.deletedAt !== null) {
     return Effect.void;
   }
   return Effect.fail(

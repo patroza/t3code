@@ -5,7 +5,9 @@ on:
     tags:
       - "v*.*.*"
       - "!v*-nightly.*"
-
+  schedule:
+    # Off minute zero: GitHub delays scheduled runs most at the top of the hour.
+    - cron: "38 */3 * * *"
   workflow_dispatch:
     inputs:
       channel:

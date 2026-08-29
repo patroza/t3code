@@ -1,7 +1,6 @@
 import { SymbolView } from "../../components/AppSymbol";
 import { Pressable, View } from "react-native";
 
-import { useThemeColor } from "../../lib/useThemeColor";
 import {
   HOME_LIST_MODE_ICONS,
   HOME_LIST_MODE_LABELS,
@@ -20,8 +19,6 @@ function FallbackHeaderButton(props: {
   readonly icon: string;
   readonly onPress: () => void;
 }) {
-  const iconColor = useThemeColor("--color-foreground");
-
   return (
     <Pressable
       className="size-11 items-center justify-center rounded-full bg-subtle active:opacity-70"
@@ -30,7 +27,12 @@ function FallbackHeaderButton(props: {
       hitSlop={4}
       onPress={props.onPress}
     >
-      <SymbolView name={props.icon as never} size={18} tintColor={iconColor} type="monochrome" />
+      <SymbolView
+        name={props.icon as never}
+        size={18}
+        tintColorClassName="accent-foreground"
+        type="monochrome"
+      />
     </Pressable>
   );
 }
