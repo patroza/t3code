@@ -3267,7 +3267,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const onImageFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
-    addComposerImages(files);
+    void addComposerAttachments(files);
   };
 
   // ------------------------------------------------------------------

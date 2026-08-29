@@ -688,12 +688,12 @@ function AppSettingsSection() {
       {Updates.isEnabled ? (
         <View className="w-[22px] items-center">
           {busy ? (
-            <ActivityIndicator color={icon} size="small" />
+            <ActivityIndicator colorClassName="accent-icon" size="small" />
           ) : (
             <SymbolView
               name="arrow.clockwise"
               size={18}
-              tintColor={icon}
+              tintColorClassName="accent-icon"
               type="monochrome"
               weight="semibold"
             />

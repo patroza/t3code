@@ -708,7 +708,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
               ))}
             </NativeHeaderToolbar.Menu>
 
-            {props.projects.length > 0 && props.listMode !== "board" ? (
+            {props.projects.length > 0 ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>
                 <NativeHeaderToolbar.MenuAction

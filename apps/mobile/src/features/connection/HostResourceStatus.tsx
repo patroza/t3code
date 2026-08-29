@@ -5,12 +5,11 @@ import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { useHostResourceSnapshot } from "../../state/useHostResourceSnapshot";
 
 function pressureClass(pressure: ReturnType<typeof getHostResourcePressure>): string {
-  if (pressure === "critical") return "text-rose-500 dark:text-rose-400";
-  if (pressure === "warning") return "text-amber-500 dark:text-amber-400";
+  if (pressure === "critical") return "text-danger-foreground";
+  if (pressure === "warning") return "text-foreground-secondary";
   return "text-foreground-muted";
 }
 
@@ -19,7 +18,6 @@ export function HostResourceStatus(props: {
   readonly environmentLabel: string;
   readonly connected: boolean;
 }) {
-  const iconColor = useThemeColor("--color-icon-muted");
   const { data, isPending, refresh } = useHostResourceSnapshot(
     props.environmentId,
     props.connected,
@@ -51,7 +49,12 @@ export function HostResourceStatus(props: {
           refresh();
         }}
       >
-        <SymbolView name="arrow.clockwise" size={12} tintColor={iconColor} type="monochrome" />
+        <SymbolView
+          name="arrow.clockwise"
+          size={12}
+          tintColorClassName="accent-icon-muted"
+          type="monochrome"
+        />
       </Pressable>
     </View>
   );
