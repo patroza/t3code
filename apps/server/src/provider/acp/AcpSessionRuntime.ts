@@ -1,3 +1,5 @@
+import * as NodeTimersPromises from "node:timers/promises";
+
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -206,7 +208,12 @@ export class AcpSessionRuntime extends Context.Service<
     readonly processExit: Effect.Effect<number | undefined>;
     /** Stream of parsed ACP session events emitted after startup. */
     readonly getEvents: () => Stream.Stream<AcpSessionRuntimeEvent, never>;
-    /** Waits until the current event consumer has processed every queued event. */
+    /**
+     * Waits until the live JSON-RPC reader has gone idle and the event consumer
+     * has processed every queued event. `session/prompt` (and Grok's
+     * `prompt_complete`) can resolve while trailing `session/update` lines are
+     * still in the stdout pipe or parser.
+     */
     readonly drainEvents: Effect.Effect<void>;
     /** Latest mode state observed from session setup and `session/update` notifications. */
     readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
@@ -814,12 +821,29 @@ export const make = (
       ),
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents: Effect.gen(function* () {
-        const acknowledge = yield* Deferred.make<void>();
-        yield* Queue.offer(eventQueue, {
-          _tag: "EventStreamBarrier",
-          acknowledge,
+        const drainQueued = Effect.gen(function* () {
+          const acknowledge = yield* Deferred.make<void>();
+          yield* Queue.offer(eventQueue, {
+            _tag: "EventStreamBarrier",
+            acknowledge,
+          });
+          yield* Deferred.await(acknowledge);
         });
-        yield* Deferred.await(acknowledge);
+        // Pump Node I/O (stdout callbacks) and the Effect scheduler until a
+        // cycle sees an empty queue. One barrier is not enough: prompt_complete
+        // can settle before the next agent_message_chunk in the same burst.
+        const maxCycles = 16;
+        for (let cycle = 0; cycle < maxCycles; cycle += 1) {
+          yield* Effect.promise(() => NodeTimersPromises.setImmediate());
+          for (let yieldAttempt = 0; yieldAttempt < 4; yieldAttempt += 1) {
+            yield* Effect.yieldNow;
+          }
+          const queued = yield* Queue.size(eventQueue);
+          yield* drainQueued;
+          if (cycle > 0 && queued === 0) {
+            return;
+          }
+        }
       }),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
