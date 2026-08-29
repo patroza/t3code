@@ -457,9 +457,13 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       });
 
       yield* Deferred.await(turnCompleted);
-      for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
+      for (let yieldAttempt = 0; yieldAttempt < 32; yieldAttempt += 1) {
         yield* Effect.yieldNow;
       }
+      // The mock writes "mock" after prompt_complete on the same stdout
+      // burst. Under CI load the JSON-RPC reader can lag the settlement
+      // fiber; wait live so that last chunk is applied before we assert.
+      yield* Effect.sleep("50 millis").pipe(TestClock.withLive);
       const readySessions = yield* adapter.listSessions();
       const readySession = readySessions.find((session) => session.threadId === threadId);
       const turnCompletedEvent = runtimeEvents.find(
