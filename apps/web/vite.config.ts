@@ -119,6 +119,9 @@ const isolatedUnitTestFiles = [
   "src/hooks/useCopyToClipboard.test.ts",
   "src/hooks/useLocalStorage.test.ts",
   "src/hooks/useTheme.test.ts",
+  // Mocks `react` (useSyncExternalStore) like useTheme.test.ts; under
+  // isolate:false an earlier file binds real React and the mock never applies.
+  "src/hooks/useEnvironmentThemeSync.test.ts",
   "src/lib/elementContext.test.ts",
   // Mocks `@t3tools/client-runtime/state/runtime` without spreading the real
   // module; under isolate:false that incomplete mock leaks into later files

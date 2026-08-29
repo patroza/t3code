@@ -4,7 +4,6 @@ import { ActivityIndicator, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { deriveQueuedMessageControls } from "../../lib/threadActivity";
-import { useThemeColor } from "../../lib/useThemeColor";
 
 export interface ComposerQueueItem {
   readonly messageId: MessageId;
@@ -24,9 +23,6 @@ export function ComposerQueuedMessages(props: {
   readonly onSteer: (messageId: MessageId) => void;
   readonly onEdit: (messageId: MessageId, source: "local" | "server") => void;
 }) {
-  const iconMuted = useThemeColor("--color-icon-muted");
-  const accent = useThemeColor("--color-accent");
-
   if (props.items.length === 0) {
     return null;
   }
@@ -56,7 +52,7 @@ export function ComposerQueuedMessages(props: {
             <SymbolView
               name="arrow.turn.left.up"
               size={14}
-              tintColor={iconMuted}
+              tintColorClassName="accent-icon-muted"
               type="monochrome"
             />
             <View className="min-w-0 flex-1 gap-0.5">
@@ -65,7 +61,7 @@ export function ComposerQueuedMessages(props: {
               </Text>
               <View className="flex-row items-center gap-1.5">
                 {item.deliveryState === "sending" ? (
-                  <ActivityIndicator size="small" color={iconMuted} />
+                  <ActivityIndicator size="small" colorClassName="accent-icon-muted" />
                 ) : null}
                 <Text className="text-3xs font-t3-medium text-foreground-muted">{statusLabel}</Text>
               </View>
@@ -80,9 +76,7 @@ export function ComposerQueuedMessages(props: {
                 className="min-h-8 justify-center rounded-full px-2"
                 style={{ opacity: props.disabled ? 0.45 : 1 }}
               >
-                <Text className="text-xs font-t3-semibold" style={{ color: accent }}>
-                  Send now
-                </Text>
+                <Text className="text-xs font-t3-semibold text-primary">Send now</Text>
               </Pressable>
             ) : null}
             {controls.canEdit ? (
@@ -98,7 +92,7 @@ export function ComposerQueuedMessages(props: {
                 <SymbolView
                   name="square.and.pencil"
                   size={15}
-                  tintColor={accent}
+                  tintColorClassName="accent-icon"
                   type="monochrome"
                 />
               </Pressable>

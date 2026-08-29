@@ -30,7 +30,6 @@ import { SymbolView } from "../../components/AppSymbol";
 import { ThreadIdentityMark } from "../identity/ParticipantStack";
 import { relativeTime } from "../../lib/time";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { environmentServerConfigsAtom } from "../../state/server";
 import {
   isAllEnvironmentsSelected,
@@ -296,7 +295,6 @@ const BoardColumnView = memo(function BoardColumnView(props: {
 
 export function BoardScreen(props: BoardScreenProps) {
   const insets = useSafeAreaInsets();
-  const iconColor = useThemeColor("--color-icon");
   const { width: windowWidth } = useWindowDimensions();
   const columnWidth = Math.min(Math.max(windowWidth * 0.78, 260), 320);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -677,7 +675,7 @@ export function BoardScreen(props: BoardScreenProps) {
               <SymbolView
                 name="line.3.horizontal.decrease.circle"
                 size={14}
-                tintColor={iconColor}
+                tintColorClassName="accent-icon"
                 type="monochrome"
               />
               <Text

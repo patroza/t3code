@@ -22,6 +22,7 @@ const clientSettings: ClientSettings = {
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   confirmWorktreeRemoval: true,
+  confirmThreadUnpin: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   environmentIdentificationMode: "artwork",

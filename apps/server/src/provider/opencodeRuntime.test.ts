@@ -38,11 +38,21 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
   );
 
   return Effect.gen(function* () {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      async () =>
+        new Response(JSON.stringify({ healthy: true, version: "1.15.13" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      originalFetch,
+    );
     const runtime = yield* OpenCodeRuntime;
     const sessionScope = yield* Scope.make();
     const server = yield* runtime
       .startOpenCodeServerProcess({
         binaryPath: "/project/bin/opencode",
+        directory: "/project/worktree",
         cwd: "/project/worktree",
         environment: {
           PATH: "/project/bin",
@@ -54,9 +64,17 @@ it.effect("launches a local OpenCode server with the project cwd and final envir
         },
         port: 4310,
       })
-      .pipe(Effect.provideService(Scope.Scope, sessionScope));
+      .pipe(
+        Effect.provideService(Scope.Scope, sessionScope),
+        Effect.ensuring(
+          Effect.sync(() => {
+            globalThis.fetch = originalFetch;
+          }),
+        ),
+      );
 
     expect(server.url).toBe("http://127.0.0.1:4310");
+    expect(server.version).toBe("1.15.13");
     const command = spawnedCommand as {
       readonly options: {
         readonly cwd?: string;

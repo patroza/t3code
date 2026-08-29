@@ -7,7 +7,14 @@ import {
   nativeHeaderScrollEdgeEffects,
 } from "../../native/StackHeader";
 import { useCallback, useMemo, useRef } from "react";
-import { Platform, Pressable, Text as RNText, TextInput, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  Text as RNText,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -15,11 +22,16 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
+import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../../lib/mobileBranding";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
-import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
+import {
+  createNativeMailSearchToolbarItem,
+  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
+} from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
 import {
   getConnectionAwareBrandHeaderOptions,
@@ -115,10 +127,10 @@ function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): bool
 
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
-  const iconColor = useThemeColor("--color-icon");
-  const mutedColor = useThemeColor("--color-foreground-muted");
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
-  const listOrganization = usesListOrganization(props.listMode, props.threadGrouping);
+  const threadListV2Enabled = useThreadListV2Enabled();
+  const listOrganization =
+    usesListOrganization(props.listMode, props.threadGrouping) && !threadListV2Enabled;
   const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
@@ -334,8 +346,9 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     <>
       <NativeStackScreenOptions options={{ headerShown: false }} />
       <View
-        className="border-b border-header-border bg-header px-4 pb-3"
+        className="border-b border-header-border bg-header pb-3"
         style={{
+          paddingHorizontal: HOME_HORIZONTAL_INSET,
           paddingTop: Math.max(insets.top, 12),
         }}
       >
@@ -350,7 +363,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               brand={
                 <View className="flex-row items-center gap-2">
                   {/* Mirrors the desktop SidebarBrand: T3 mark + muted "Code". */}
-                  <T3Wordmark color={iconColor} height={15} />
+                  <T3Wordmark colorClassName="accent-icon" height={15} />
                   <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
                     Code
                   </RNText>
@@ -374,7 +387,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 <SymbolView
                   name={HOME_LIST_MODE_ICONS[mode] as never}
                   size={18}
-                  tintColor={iconColor}
+                  tintColorClassName={"accent-icon"}
                   type="monochrome"
                 />
               </Pressable>
@@ -397,7 +410,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                       : "line.3.horizontal.decrease.circle"
                   }
                   size={16}
-                  tintColor={iconColor}
+                  tintColorClassName={"accent-icon"}
                   type="monochrome"
                 />
               </Pressable>
@@ -408,7 +421,12 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               onPress={props.onOpenSettings}
               className="size-11 items-center justify-center rounded-full bg-subtle"
             >
-              <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
+              <SymbolView
+                name="gearshape"
+                size={18}
+                tintColorClassName={"accent-icon"}
+                type="monochrome"
+              />
             </Pressable>
           </View>
 
@@ -417,7 +435,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               <SymbolView
                 name="magnifyingglass"
                 size={17}
-                tintColor={mutedColor}
+                tintColorClassName={"accent-foreground-muted"}
                 type="monochrome"
               />
               <TextInput
@@ -438,7 +456,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                   <SymbolView
                     name="xmark.circle.fill"
                     size={17}
-                    tintColor={mutedColor}
+                    tintColorClassName={"accent-foreground-muted"}
                     type="monochrome"
                   />
                 </Pressable>
@@ -453,9 +471,16 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
-  const iconColor = useThemeColor("--color-icon");
-  const sheetBackground = useThemeColor("--color-sheet");
-  const listOrganization = usesListOrganization(props.listMode, props.threadGrouping);
+  const { width: headerWidth } = useWindowDimensions();
+  const theme = useUniwindTheme();
+  const iconColor = theme["--color-icon"];
+  const sheetBackground = theme["--color-sheet"];
+  // Thread List v2 lays the list out in fixed creation order, so the
+  // sort/group filter controls would be silently ignored — hide them and
+  // key the "customized" icon state off filters that still apply.
+  const threadListV2Enabled = useThreadListV2Enabled();
+  const listOrganization =
+    usesListOrganization(props.listMode, props.threadGrouping) && !threadListV2Enabled;
   const alternateModes = otherHomeListModes(props.listMode);
   const isBoardMode = props.listMode === "board";
   // Board columns are nested horizontal/vertical lists — not one UIKit scroll
@@ -519,13 +544,21 @@ function IosHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, props.listMode, headerTitle, useSolidBoardHeader]}
+        optionsVersion={[
+          filterMenu.items,
+          props.listMode,
+          headerTitle,
+          useSolidBoardHeader,
+          headerWidth,
+        ]}
         options={{
           // The iOS Home header owns the native title, so the connection
           // status has to swap in here — the in-flow header above (Android)
           // is not mounted on this path. The list-mode title is passed
           // through so it survives the swap.
           ...getConnectionAwareBrandHeaderOptions({
+            headerWidth,
+            trailingItemCount: alternateModes.length + 1,
             onOpenEnvironments: props.onOpenEnvironments,
             title: headerTitle,
             brand: (
@@ -576,41 +609,47 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   }),
                 ]
               : undefined,
-          // Board has no thread search — hide the bottom mail search toolbar.
-          unstable_headerToolbarItems:
-            Platform.OS === "ios" && !isBoardMode
-              ? () => [
-                  createNativeMailSearchToolbarItem({
-                    composeButtonId: "home-new-task",
-                    composeSystemImageName: "square.and.pencil",
-                    filterMenu,
-                    filterButtonId: "home-filter",
-                    filterSystemImageName: hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease",
-                    onComposePress: props.onStartNewTask,
-                    onSearchTextChange: props.onSearchQueryChange,
-                    placeholder: "Search",
-                    searchTextChangeId: "home-search-text",
-                    showsSearchDismissButton: true,
-                  }),
-                ]
-              : undefined,
-          headerSearchBarOptions:
-            Platform.OS === "ios"
-              ? undefined
+          // Board has no thread search. Mail-search toolbar is iOS 26+ only;
+          // pre-Liquid-Glass falls back to the standard nav search field.
+          // Keys are omitted (not `undefined`) on the NativeHeaderToolbar
+          // fallback so a reapply cannot clobber options that toolbar owns.
+          ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
+            ? isBoardMode
+              ? { unstable_headerToolbarItems: undefined }
               : {
-                  ref: searchBarRef,
-                  allowToolbarIntegration: true,
-                  hideNavigationBar: false,
-                  placeholder: "Search",
-                  onCancelButtonPress: () => {
-                    props.onSearchQueryChange("");
+                  unstable_headerToolbarItems: () => [
+                    createNativeMailSearchToolbarItem({
+                      composeButtonId: "home-new-task",
+                      composeSystemImageName: "square.and.pencil",
+                      filterMenu,
+                      filterButtonId: "home-filter",
+                      filterSystemImageName: hasCustomListOptions
+                        ? "line.3.horizontal.decrease.circle.fill"
+                        : "line.3.horizontal.decrease",
+                      onComposePress: props.onStartNewTask,
+                      onSearchTextChange: props.onSearchQueryChange,
+                      placeholder: "Search",
+                      searchTextChangeId: "home-search-text",
+                      showsSearchDismissButton: true,
+                    }),
+                  ],
+                }
+            : isBoardMode
+              ? {}
+              : {
+                  headerSearchBarOptions: {
+                    ref: searchBarRef,
+                    autoCapitalize: "none" as const,
+                    hideNavigationBar: false,
+                    placeholder: "Search",
+                    onCancelButtonPress: () => {
+                      props.onSearchQueryChange("");
+                    },
+                    onChangeText: (event: { nativeEvent: { text: string } }) => {
+                      props.onSearchQueryChange(event.nativeEvent.text);
+                    },
                   },
-                  onChangeText: (event: { nativeEvent: { text: string } }) => {
-                    props.onSearchQueryChange(event.nativeEvent.text);
-                  },
-                },
+                }),
         }}
       />
 
@@ -634,7 +673,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
         </NativeHeaderToolbar>
       )}
 
-      {Platform.OS === "ios" ? null : (
+      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED || isBoardMode ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter and sort threads"
@@ -669,7 +708,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
               ))}
             </NativeHeaderToolbar.Menu>
 
-            {props.projects.length > 0 && props.listMode !== "board" ? (
+            {props.projects.length > 0 ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>
                 <NativeHeaderToolbar.MenuAction

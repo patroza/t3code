@@ -262,10 +262,8 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
       );
       expect(error.message).toContain("does not exist");
 
-      // Re-creating a thread with the SAME (deleted) id is rejected: the id is
-      // retained in deletedThreadIds even though the thread body was evicted, so
-      // the "cannot be created twice" invariant still holds and the durable DB
-      // row is not silently overwritten.
+      // A draft keeps its client-minted id across retries, so recreating the
+      // same id after eviction is allowed; only a live row blocks creation.
       const recreateSameId = (threadId: ThreadId) =>
         decideOrchestrationCommand({
           command: {
@@ -287,8 +285,9 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
           readModel: afterDelete,
         });
 
-      const recreateError = yield* Effect.flip(recreateSameId(asThreadId("thread-delete-1")));
-      expect(recreateError.message).toContain("cannot be created twice");
+      const recreated = yield* recreateSameId(asThreadId("thread-delete-1"));
+      const recreatedEvents = Array.isArray(recreated) ? recreated : [recreated];
+      expect(recreatedEvents.map((event) => event.type)).toEqual(["thread.created"]);
 
       // A fresh thread with a NEW, never-used id can still be created.
       const created = yield* recreateSameId(asThreadId("thread-delete-3"));

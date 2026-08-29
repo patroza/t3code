@@ -10,8 +10,9 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 
-import { fromWireReadModel } from "./commandReadModel.ts";
+import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 import {
   findThreadById,
   listThreadsByProjectId,
@@ -205,5 +206,37 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
+  });
+
+  it("lets a draft retry re-create a thread id after its first attempt was deleted", async () => {
+    const threadId = ThreadId.make("thread-1");
+    const firstAttempt = findThreadById(readModel, threadId)!;
+    const afterRollback: CommandReadModel = {
+      ...readModel,
+      threads: HashMap.set(readModel.threads, threadId, {
+        ...firstAttempt,
+        deletedAt: now,
+        updatedAt: now,
+      }),
+    };
+    const retry: OrchestrationCommand = {
+      type: "thread.create",
+      commandId: CommandId.make("cmd-retry"),
+      threadId,
+      projectId: firstAttempt.projectId,
+      title: firstAttempt.title,
+      modelSelection: firstAttempt.modelSelection,
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      branch: null,
+      worktreePath: null,
+      createdAt: now,
+    };
+
+    await expect(
+      Effect.runPromise(
+        requireThreadAbsent({ readModel: afterRollback, command: retry, threadId }),
+      ),
+    ).resolves.toBeUndefined();
   });
 });

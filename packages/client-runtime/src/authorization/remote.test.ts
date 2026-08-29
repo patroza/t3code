@@ -7,6 +7,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { EnvironmentAuthInvalidError } from "@t3tools/contracts";
 import {
+  appendClientConnectionParams,
   bootstrapRemoteBearerSession,
   exchangeRemoteDpopAccessToken,
   fetchRemoteDpopSessionState,
@@ -206,6 +207,47 @@ describe("remote environment authorization", () => {
         method: "POST",
         body: "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=pairing-token&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_label=T3+Code+Mobile&client_device_type=mobile&client_os=iOS",
       });
+    }),
+  );
+
+  it.effect("keeps OS sentinels in telemetry but out of display metadata", () =>
+    Effect.gen(function* () {
+      const tokenResponse = () =>
+        Response.json(
+          {
+            access_token: "bearer-token",
+            issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+            token_type: "Bearer",
+            expires_in: 3600,
+            scope: "orchestration:read",
+          },
+          { status: 200 },
+        );
+      const fetch = recordedFetch(tokenResponse(), tokenResponse());
+
+      for (const os of ["unknown", "other"] as const) {
+        yield* bootstrapRemoteBearerSession({
+          httpBaseUrl: "https://remote.example.com/",
+          credential: "pairing-token",
+          clientMetadata: {
+            label: "T3 Code Web",
+            deviceType: "desktop",
+            os,
+          },
+        }).pipe(provideRemoteHttp(fetch.fetchFn));
+      }
+
+      for (const [, init] of fetch.calls) {
+        expect(String(init.body)).not.toContain("client_os=");
+      }
+
+      const websocketUrl = new URL("wss://remote.example.com/ws");
+      appendClientConnectionParams(websocketUrl, {
+        surface: "web",
+        deviceType: "desktop",
+        os: "unknown",
+      });
+      expect(websocketUrl.searchParams.get("clientOs")).toBe("unknown");
     }),
   );
 
@@ -470,10 +512,12 @@ describe("remote environment authorization", () => {
         clientMetadata: {
           surface: "mobile",
           appVersion: "1.2.3",
+          deviceType: "mobile",
           os: "Android",
           osMajorVersion: 15,
           deviceModel: "Pixel 9",
         },
+        connectionMethod: "relay",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       const parsed = new URL(url);
@@ -483,9 +527,11 @@ describe("remote environment authorization", () => {
       expect(parsed.searchParams.get("productToken")).toBeTruthy();
       expect(parsed.searchParams.get("clientSurface")).toBe("mobile");
       expect(parsed.searchParams.get("clientAppVersion")).toBe("1.2.3");
+      expect(parsed.searchParams.get("clientDeviceType")).toBe("phone");
       expect(parsed.searchParams.get("clientOs")).toBe("Android");
       expect(parsed.searchParams.get("clientOsMajorVersion")).toBe("15");
       expect(parsed.searchParams.get("clientDeviceModel")).toBe("Pixel 9");
+      expect(parsed.searchParams.get("connectionMethod")).toBe("relay");
     }),
   );
 });

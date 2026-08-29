@@ -8,7 +8,7 @@ import {
 } from "@t3tools/client-runtime/state/identity";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Platform } from "react-native";
+import { Platform, useWindowDimensions } from "react-native";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useThreadShells } from "../../state/entities";
@@ -37,6 +37,7 @@ import { useThreadListActions } from "./useThreadListActions";
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
 export function HomeRouteScreen() {
+  const { width: windowWidth } = useWindowDimensions();
   const { layout } = useAdaptiveWorkspaceLayout();
   const projects = useProjects();
   const threads = useThreadShells();
@@ -200,6 +201,7 @@ export function HomeRouteScreen() {
             shallow-merged. Title/brand stay on HomeHeader (list-mode title +
             connection-aware slot) so we do not paint the status twice. */}
         <NativeStackScreenOptions
+          optionsVersion={windowWidth}
           options={{
             headerShown: true,
           }}
