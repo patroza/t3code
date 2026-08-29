@@ -877,9 +877,9 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         }),
       );
       const adapter = yield* makeTestAdapter(wrapperPath);
-      const contentDelta = yield* Deferred.make<void>();
+      const turnCompleted = yield* Deferred.make<void>();
       const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
-        event.type === "content.delta" ? Deferred.succeed(contentDelta, undefined) : Effect.void,
+        event.type === "turn.completed" ? Deferred.succeed(turnCompleted, undefined) : Effect.void,
       ).pipe(Effect.forkChild);
 
       yield* adapter.startSession({
@@ -898,10 +898,11 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         })
         .pipe(Effect.forkChild);
 
-      yield* Deferred.await(contentDelta);
-      for (let yieldAttempt = 0; yieldAttempt < 6; yieldAttempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      // First content.delta is written before prompt_complete. Interrupting
+      // there races the fallback: under CI load the JSON-RPC reader can still
+      // be behind, promptRpcSucceeded is false, and the ensuring path drops
+      // the transcript. Wait for turn.completed — that is prompt success.
+      yield* Deferred.await(turnCompleted).pipe(Effect.timeout("2 seconds"), TestClock.withLive);
       yield* Fiber.interrupt(sendTurnFiber);
       for (let yieldAttempt = 0; yieldAttempt < 4; yieldAttempt += 1) {
         yield* Effect.yieldNow;
