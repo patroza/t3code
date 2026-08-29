@@ -679,7 +679,10 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         `runtime_root=${sh(fixture.runtimeRoot)}`,
         `runtime_parent=${sh(fixture.runtimeParent)}`,
         'rm "$runtime_root/.t3code-wsl-runtime-ready"',
-        'sh -c "sleep 30" "$runtime_root/apps/server/dist/bin.mjs" >/dev/null 2>&1 &',
+        // Keep the shell alive so argv still contains the runtime path. A
+        // last-command `sleep` is exec'd on this host and the path vanishes
+        // from /proc/cmdline, so runtime_in_use cannot see the fake backend.
+        'sh -c "while :; do sleep 1; done" "$runtime_root/apps/server/dist/bin.mjs" >/dev/null 2>&1 &',
         "active_pid=$!",
         "sleep 0.1",
         fixture.installScript(),
@@ -717,7 +720,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         'touch -d "4 minutes ago" "$runtime_parent/sha256-active"',
         'touch -d "3 minutes ago" "$runtime_parent/sha256-old"',
         'touch -d "2 minutes ago" "$runtime_parent/sha256-locked"',
-        'sh -c "sleep 30" "$runtime_parent/sha256-active/apps/server/dist/bin.mjs" >/dev/null 2>&1 &',
+        'sh -c "while :; do sleep 1; done" "$runtime_parent/sha256-active/apps/server/dist/bin.mjs" >/dev/null 2>&1 &',
         "active_pid=$!",
         "(",
         '  exec 9> "$runtime_parent/.sha256-locked.install.lock"',
