@@ -337,10 +337,10 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         request.sourceUri,
         Effect.gen(function* () {
           /*
-        1. Check whether an Exchange exists for this source URI.
-        2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
-        3. If there isn't we get the t3 coordinates, save them and advance the exchange.
-       */
+            1. Check whether an Exchange exists for this source URI.
+            2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
+            3. If there isn't we get the t3 coordinates, save them and advance the exchange.
+          */
 
           const existing = yield* repo
             .findBySourceUri(request.sourceUri)

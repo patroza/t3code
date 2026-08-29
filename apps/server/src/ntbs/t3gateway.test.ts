@@ -688,4 +688,44 @@ describe("T3Gateway", () => {
       });
     });
   });
+
+  describe("provisionThread", () => {
+    /*
+      Info: used only once in `processor.ts` in `processRequestClaimed` so when the current status of an exchange is `RequesClaimed`.
+
+      When the exchange is in that status, `getThreadStatus`, tested above, provides the actual context of thread.
+
+      We know that the NTBS system has now received the external request, and saved it along the coordinates minted via `planCoordinates`.
+
+      What we *don't* know is whether the actual T3 thread has been started or not.
+
+      Why is that?
+
+      After thread creation, threads are provisioned, what can happen is that T3 starts the thread but it is not recorded in the NTBS exchange (e.g. thread starts -> app crashes -> thread start doesn't get recorded).
+
+      So we must double check starting from a RequestClaimed Exchange that the thread did not indeed start before.
+
+      What does `provisionThread` even do anyway?
+
+      It handles worktree and thread creation as well as executing setup scripts.
+
+      (N.B. In theory we should skip setup scripts if it was already done as well).
+
+      ## How did it work in the old processor?
+
+      1. create worktree
+      2. "thread.create" in orchestrationEngineService.dispatch command
+        2.a if anything goes wrong during thread.create -> removes the worktree
+      3. run the scripts via projectScriptRunner.runForThread
+
+      Return value: provisionThread returns nothing. TODO: Is there anything important that gets retrieved there (some information)?
+
+      Quite sure the current implementation can be updated and made better than the current void into null and rejection !== null in `processor.ts` as of 6d70ff461df16d1a052ce3656131613647940028.
+
+      What does `provisionThread` depends on?
+      1. GitWorkflowService for worktree creation
+      2. OrchestrationEngineService for dispatching the command to create the thread
+      3. ProjectScriptRunner for executing the scripts in the thread/cwd
+    */
+  });
 });
