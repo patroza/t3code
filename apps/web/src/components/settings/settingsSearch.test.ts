@@ -69,6 +69,7 @@ describe("searchSettings", () => {
       "unpin-confirmation",
       "archive-confirmation",
       "delete-confirmation",
+      "worktree-remove-confirmation",
     ]);
   });
 
