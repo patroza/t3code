@@ -1,23 +1,29 @@
 import { describe, it, expect } from "@effect/vitest";
-import { t3GatewayLive, T3Gateway, RetryableError } from "./t3gateway.ts";
+import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
 import { Effect, Layer, Option, Ref } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
-import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
+import {
+  ProjectSetupScriptOperationError,
+  ProjectSetupScriptRunner,
+} from "../project/ProjectSetupScriptRunner.ts";
 import { Crypto } from "effect/Crypto";
 import {
   GitCommandError,
+  MessageId,
   OrchestrationProjectShell,
   OrchestrationThread,
   ProjectId,
   ProviderInstanceId,
+  ThreadId,
+  VcsCreateWorktreeResult,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
 import { PlatformError, SystemError } from "effect/PlatformError";
-import { makeRequestClaimed } from "./exchange.ts";
+import { makeRequestClaimed, type Request, type WorkCoordinates } from "./exchange.ts";
 
 /**
  * Every mocked dependency records into one shared, ordered log.
@@ -32,7 +38,7 @@ type Call = { service: string; method: string; input: unknown };
 const createCallLog = () => {
   const calls: Array<Call> = [];
 
-  const record =
+  const recordResult =
     (service: string) =>
     <A>(method: string, input: unknown, value: A) =>
       Effect.sync(() => {
@@ -40,8 +46,13 @@ const createCallLog = () => {
         return value;
       });
 
-  return { calls, record };
+  const record = (service: string) => (method: string, input: unknown) =>
+    Effect.sync(() => calls.push({ service, method, input }));
+
+  return { calls, recordResult, record };
 };
+
+type CallRecordResult = ReturnType<typeof createCallLog>["recordResult"];
 
 type CallRecord = ReturnType<typeof createCallLog>["record"];
 
@@ -49,8 +60,8 @@ type CryptoInput = {
   failRandomUUIDv4?: boolean;
 };
 
-const createCryptoMock = (record: CallRecord, input?: CryptoInput) => {
-  const recordCrypto = record("Crypto");
+const createCryptoMock = (recordResult: CallRecordResult, input?: CryptoInput) => {
+  const recordCrypto = recordResult("Crypto");
 
   return Layer.unwrap(
     Effect.gen(function* () {
@@ -85,7 +96,42 @@ const createCryptoMock = (record: CallRecord, input?: CryptoInput) => {
   );
 };
 
-const OrchestrationEngineServiceMock = Layer.mock(OrchestrationEngineService, {});
+const createGitCommandError = (exitCode?: number) =>
+  GitCommandError.make({
+    command: "resolve",
+    cwd: "",
+    detail: "",
+    failureKind: "unknown",
+    operation: "",
+    exitCode,
+  });
+
+type OrchestrationEngineInput = {
+  dispatchFails?: boolean;
+};
+
+// TODO: We need to make sure and analyze what happens when it is dispatched
+// Old processor treated it as a synchronous event, but that might be a lie
+const createOrchestrationEngineServiceMock = (
+  recordResult: CallRecordResult,
+  callRecord: CallRecord,
+  input?: OrchestrationEngineInput,
+) => {
+  const record = recordResult("OrchestrationEngineService");
+
+  const call = callRecord("OrchestrationEngineService");
+
+  return Layer.mock(OrchestrationEngineService, {
+    dispatch: (_command) =>
+      call("dispatch", _command).pipe(
+        Effect.andThen(() =>
+          input?.dispatchFails
+            ? Effect.fail(toPersistenceSqlError("some operation")("some cause"))
+            : Effect.succeed({ sequence: 0 }),
+        ),
+      ),
+  });
+};
 
 type PSQMInput = {
   getProjectShellById?:
@@ -98,7 +144,7 @@ type PSQMInput = {
   isGetThreadDetailByIdError?: boolean;
 };
 
-const createPSQM = (record: CallRecord, input?: PSQMInput) => {
+const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
   const recordPSQM = record("ProjectionSnapshotQuery");
 
   const isProjectMissing = input?.getProjectShellById && "missing" in input.getProjectShellById;
@@ -185,29 +231,39 @@ const createPSQM = (record: CallRecord, input?: PSQMInput) => {
 const ProjectionTurnRepositoryMock = Layer.mock(ProjectionTurnRepository, {});
 
 type GitLayerInput = {
-  remoteExists?: boolean;
-  resolvedRemoteSha?: string;
+  createWorkreeFails?: boolean;
   failsBranchResolutionWith?: "retryable" | "fatal";
-  remoteExistsFails?: boolean;
   fetchRemoteFails?: boolean;
+  remoteExists?: boolean;
+  remoteExistsFails?: boolean;
+  resolvedRemoteSha?: string;
+  removeWorkTreeFails?: boolean;
 };
-
-const createGitCommandError = (exitCode?: number) =>
-  GitCommandError.make({
-    command: "resolve",
-    cwd: "",
-    detail: "",
-    failureKind: "unknown",
-    operation: "",
-    exitCode,
-  });
 
 // TODO: Can't we simplify it by leveraging default values in params?
 // we can pass default arguments in JS
-const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput) => {
-  const recordGit = record("GitWorkflowService");
+const createGitWorkflowServiceMock = (
+  recordResult: CallRecordResult,
+  callRecord: CallRecord,
+  input?: GitLayerInput,
+) => {
+  const recordGit = recordResult("GitWorkflowService");
+
+  const record = callRecord("GitWorkflowService");
 
   return Layer.mock(GitWorkflowService, {
+    createWorktree: (callInput) =>
+      record("createWorktree", callInput).pipe(
+        Effect.andThen(() =>
+          input?.createWorkreeFails
+            ? Effect.fail(createGitCommandError())
+            : Effect.succeed(
+                VcsCreateWorktreeResult.make({
+                  worktree: { path: callInput.path || "path", refName: callInput.refName },
+                }),
+              ),
+        ),
+      ),
     remoteExists: (callInput) =>
       recordGit("remoteExists", callInput, !input || input.remoteExists !== false).pipe(
         Effect.filterOrFail(
@@ -222,6 +278,13 @@ const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput)
           () => createGitCommandError(),
         ),
       ),
+    removeWorktree: (callInput) =>
+      record("removeWorktree", callInput).pipe(
+        Effect.andThen(() =>
+          input?.removeWorkTreeFails ? Effect.fail(createGitCommandError()) : Effect.void,
+        ),
+      ),
+
     resolveRemoteTrackingCommit: (callInput) =>
       recordGit("resolveRemoteTrackingCommit", callInput, {
         commitSha: input?.resolvedRemoteSha ?? "sha123",
@@ -236,7 +299,37 @@ const createGitWorkflowServiceMock = (record: CallRecord, input?: GitLayerInput)
   });
 };
 
-const ProjectSetupScriptRunnerMock = Layer.mock(ProjectSetupScriptRunner, {});
+type ProjectSetupScriptRunnerInput = {
+  runForThreadFails?: boolean;
+};
+
+const ProjectSetupScriptRunnerMock = (
+  recordResult: CallRecordResult,
+  callRecord: CallRecord,
+  input?: ProjectSetupScriptRunnerInput,
+) => {
+  const record = recordResult("ProjestSetupScriptRunnerMock");
+  const call = callRecord("ProjectSetupScriptRunnerMock");
+
+  return Layer.mock(ProjectSetupScriptRunner, {
+    runForThread: (callInput) =>
+      call("runForThread", input).pipe(
+        Effect.andThen(() =>
+          input?.runForThreadFails
+            ? Effect.fail(
+                ProjectSetupScriptOperationError.make({
+                  _tag: "ProjectSetupScriptOperationError",
+                  cause: "somecause",
+                  operation: "openTerminal",
+                  threadId: callInput.threadId,
+                  worktreePath: callInput.worktreePath,
+                }),
+              )
+            : Effect.succeed({ status: "no-script" }),
+        ),
+      ),
+  });
+};
 
 /**
  * Builds a gateway plus the log of everything its dependencies were asked to do.
@@ -248,20 +341,22 @@ const createT3Gateway = (input?: {
   pqsm?: PSQMInput;
   gwfs?: GitLayerInput;
   crypto?: CryptoInput;
+  orchestrationEngine?: OrchestrationEngineInput;
+  projectSetupScriptRunner?: ProjectSetupScriptRunnerInput;
 }) => {
-  const { calls, record } = createCallLog();
+  const { calls, recordResult, record } = createCallLog();
 
   return {
     calls,
     layer: t3GatewayLive.pipe(
       Layer.provide(
         Layer.mergeAll(
-          OrchestrationEngineServiceMock,
-          createPSQM(record, input?.pqsm),
-          ProjectSetupScriptRunnerMock,
-          createGitWorkflowServiceMock(record, input?.gwfs),
+          createOrchestrationEngineServiceMock(recordResult, record),
+          createPSQM(recordResult, input?.pqsm),
+          ProjectSetupScriptRunnerMock(recordResult, record),
+          createGitWorkflowServiceMock(recordResult, record, input?.gwfs),
           ProjectionTurnRepositoryMock,
-          createCryptoMock(record, input?.crypto),
+          createCryptoMock(recordResult, input?.crypto),
         ),
       ),
     ),
@@ -295,9 +390,7 @@ describe("T3Gateway", () => {
     describe("successful planning", () => {
       it.effect("pins the selected branch to the commit fetched from origin", () => {
         /*
-          Declared once and threaded through the project mock, so the assertions below prove the
-          cwd git receives is the workspace the project lookup returned, rather than two literals
-          that happen to agree.
+          Declared once and threaded through the project mock, so the assertions below prove the cwd git receives is the workspace the project lookup returned, rather than two literals that happen to agree.
         */
         const workspaceRoot = "/workspaces/project-under-test";
         const projectId = ProjectId.make("test-1");
@@ -723,9 +816,46 @@ describe("T3Gateway", () => {
       Quite sure the current implementation can be updated and made better than the current void into null and rejection !== null in `processor.ts` as of 6d70ff461df16d1a052ce3656131613647940028.
 
       What does `provisionThread` depends on?
-      1. GitWorkflowService for worktree creation
+      1. GitWorkflowService for worktree creation (and deletion)
       2. OrchestrationEngineService for dispatching the command to create the thread
       3. ProjectScriptRunner for executing the scripts in the thread/cwd
     */
+    describe("happy case", () => {
+      // TODO: Note I'm saying we merely triggering it
+      // because I'm not sure whether the dispatch waits on anything
+      // in fact I think it doesn't
+      it.effect("triggers the provision", () => {
+        const { calls, layer } = createT3Gateway();
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const projectId = ProjectId.make("projectId");
+
+          const request: Request = {
+            attachments: [],
+            snapshot: "come on, do something",
+            sourceUri: "test://source-uri",
+          };
+
+          const coordinates: WorkCoordinates = {
+            projectId: projectId,
+            startBranchName: "startBranchName",
+            startCommitSha: "startCommitSha",
+            threadId: ThreadId.make("threadId"),
+            userMessageId: MessageId.make("userMessageId"),
+            worktreeBranchName: "worktreeBranchName",
+          };
+
+          const requestClaimed = makeRequestClaimed(request, coordinates);
+
+          const result = yield* t3Gateway.provisionThread(requestClaimed);
+
+          expect(calls.map((call) => call.method)).toEqual(["createWorktree"]);
+        }).pipe(Effect.provide(layer));
+      });
+    });
+
+    describe("failures", () => {});
   });
 });

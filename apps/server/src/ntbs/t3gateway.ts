@@ -296,9 +296,16 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const threadActivity = Stream.never;
 
+    // TODO: Continue from here
+    // There are important gaps in our understanding of the whole workspaceRoot/cwd thing
     const provisionThread = (
       _state: NTBS.RequestClaimed,
     ): Effect.Effect<void, RetryableError | FatalError> => Effect.void;
+    // Effect.gen(function* () {
+    //   yield* gitWorkflowService.createWorktree({
+    //     cwd: state.t3.
+    //   });
+    // });
 
     return {
       planCoordinates,
