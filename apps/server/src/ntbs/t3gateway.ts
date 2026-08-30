@@ -3,15 +3,25 @@ The T3 gateway module exposes the interface that the NTBS processor uses to comm
 with T3, similar to how adapter models the interaction with the external platform.
  */
 
-import { MessageId, type ProjectId, ThreadId } from "@t3tools/contracts";
+import * as NodePath from "node:path";
+import {
+  CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  MessageId,
+  OrchestrationCommand,
+  type ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, Effect, Layer, Option, Stream } from "effect";
+import { Context, Crypto, Data, DateTime, Effect, Layer, Option, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { ServerConfig } from "../config.ts";
+import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
 
 /*
   NTBS architecture:
@@ -72,13 +82,26 @@ type T3GatewayRequirements =
   /*
     Generates unique identifiers for the new thread, message, commands, and worktree branch.
    */
-  | Crypto.Crypto;
+  | Crypto.Crypto
+  | ServerConfig;
 
 /** A branch on `origin` and the commit it pointed at when it was resolved. */
 interface RemoteBranchTip {
   readonly branchName: string;
   readonly commitSha: string;
 }
+
+/** Derives the worktree checkout path. Copied from GitVcsDriverCore.createWorktree. */
+const deriveWorktreePath = (input: {
+  readonly worktreesDir: string;
+  readonly workspaceRoot: string;
+  readonly worktreeBranchName: string;
+}): string =>
+  NodePath.join(
+    input.worktreesDir,
+    NodePath.basename(input.workspaceRoot),
+    input.worktreeBranchName.replace(/\//g, "-"),
+  );
 
 export interface T3Gateway {
   /**
@@ -130,6 +153,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       );
 
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+
+    const serverConfig = yield* ServerConfig;
+
+    const orchestrationEngine = yield* OrchestrationEngineService;
 
     /*
       The lookup failing is operational; the project being absent is not.
@@ -235,6 +262,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       orFail("crypto.randomUUIDv4", "Failed creating a UUID v4"),
     );
 
+    const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
+
+    const projectScriptRunner = yield* ProjectSetupScriptRunner;
+
     const planCoordinates = (
       projectId: ProjectId,
       startBranchName: string,
@@ -273,8 +304,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       });
 
     // TODO: We doing a lot of work behind the scenes just to know whether
-    // the thread exists or is missing, this screams repository query
-    // not a snapshot one
+    // the thread exists or is missing, this screams sql query or something
+    // not a snapshot query
     const getThreadStatus = (
       state: NTBS.RequestClaimed,
     ): Effect.Effect<NTBS.RequestClaimedContext, RetryableError> =>
@@ -296,16 +327,110 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const threadActivity = Stream.never;
 
-    // TODO: Continue from here
-    // There are important gaps in our understanding of the whole workspaceRoot/cwd thing
+    /**
+     * Creates the actual thread in T3 with the recorded claimed request.
+     *
+     */
     const provisionThread = (
-      _state: NTBS.RequestClaimed,
-    ): Effect.Effect<void, RetryableError | FatalError> => Effect.void;
-    // Effect.gen(function* () {
-    //   yield* gitWorkflowService.createWorktree({
-    //     cwd: state.t3.
-    //   });
-    // });
+      state: NTBS.RequestClaimed,
+    ): Effect.Effect<void, RetryableError | FatalError> =>
+      Effect.gen(function* () {
+        /*
+         * In order we need to:
+         * 1. get the actual project details, where is the workspace root path located at?
+         * 2. get the worktrees path location. T3 does not create worktrees inside the project workspace, because a checkout nested inside the user's project repository directory would pollute it (untracked noise in `git status`, IDE/watcher/grep pickup, accidental commits) and worktrees are T3-owned disposable state, so they live inside T3's home where they can be wiped without touching the user's code (which may even be a bare repo with no working tree to nest into at all).
+         * 3. Derive the worktree path: where are we going to put the files we're going to work with?
+         * 4. Create the actual worktree
+         * 5. Dispatch T3 thread creation
+         * 6. Run the scripts for that project
+         */
+        // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
+
+        /*
+        TODO:, we may have to change few things around from the current implementation. `provisionThread` should be implemented as a resumable checklist, not as a transaction.
+
+        Every attempt re-derives its *facts* from live state, the project's `workspaceRoot`, and the worktree path computed from the pinned branch name, then walks tree steps, each one "check, then do", so a retry after any interruption skips whatever already happened.
+
+        **Worktree**. If the directory exists, reuse it. If only the branch survives from a crashed attempt, recreate the checkout from that branch instead of re-branching from the start commit. Otherwise create it fresh from the pinned commit.
+
+        **Thread**. Create it, treating "already exists" as success, a redelivery could otherwise race the projection.
+
+        **Setup scripts**. Run them, but only log failures: a broken install script must not hold the user's reply hostage.
+
+        On a retryable failure, cleanup nothing. The half-finished work is owned by the exchange record and is exactly what the next reconcile pass resumes from.
+
+        On a fatal failure, the one moment ownership truly ends, remove the worktree best-effort, and let only the cheap branch ref leak.
+        */
+        const project = yield* getProject(state.t3.projectId);
+        const { workspaceRoot } = project;
+        const { worktreesDir } = serverConfig;
+
+        const worktreePath = deriveWorktreePath({
+          workspaceRoot,
+          worktreesDir,
+          worktreeBranchName: state.t3.worktreeBranchName,
+        });
+
+        yield* gitWorkflowService
+          .createWorktree({
+            cwd: workspaceRoot,
+            path: worktreePath,
+            refName: state.t3.worktreeBranchName,
+          }) // TODO: We need to check how should we actually handle errors here
+          .pipe(orFail("createWorktree", "createWorktree failed for some reason"));
+
+        const commandId = CommandId.make(yield* randomUUID);
+        const createdAt = yield* getNow;
+
+        const modelSelection =
+          project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+
+        yield* orchestrationEngine
+          .dispatch(
+            OrchestrationCommand.make({
+              type: "thread.create",
+              branch: state.t3.worktreeBranchName,
+              worktreePath: worktreePath,
+              threadId: state.t3.threadId,
+              title: "some title",
+              modelSelection: modelSelection,
+              commandId,
+              createdAt,
+              projectId: project.id,
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            }),
+          )
+          .pipe(
+            /**
+             * Removes the work
+             */
+            Effect.onError(
+              () =>
+                gitWorkflowService
+                  .removeWorktree({
+                    cwd: workspaceRoot,
+                    path: worktreePath,
+                  })
+                  .pipe(Effect.orElseSucceed(() => {})), // TODO: This is all very sus
+            ),
+          )
+          .pipe(orFail("orchestrationEngine.dispatch", "failed to dispatch "));
+
+        yield* projectScriptRunner
+          .runForThread({
+            threadId: state.t3.threadId,
+            projectId: project.id,
+            projectCwd: project.workspaceRoot,
+            worktreePath,
+          })
+          .pipe(
+            orFail(
+              "projectScriptRunner.runForThread",
+              "Failed to run scripts while provisioning thread",
+            ),
+          );
+      });
 
     return {
       planCoordinates,
