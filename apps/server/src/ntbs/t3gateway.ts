@@ -375,7 +375,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           .createWorktree({
             cwd: workspaceRoot,
             path: worktreePath,
-            refName: state.t3.worktreeBranchName,
+            // Branch the minted worktree branch off the commit pinned at claim. Otherwise it will attempt to checkout an already existing branch
+            refName: state.t3.startCommitSha,
+            newRefName: state.t3.worktreeBranchName,
+            baseRefName: state.t3.startBranchName,
           }) // TODO: We need to check how should we actually handle errors here
           .pipe(orFail("createWorktree", "createWorktree failed for some reason"));
 
