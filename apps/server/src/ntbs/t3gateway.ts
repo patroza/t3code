@@ -13,7 +13,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, DateTime, Effect, Layer, Option, Stream } from "effect";
+import { Context, Crypto, Data, DateTime, Effect, FileSystem, Layer, Option, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -83,13 +83,25 @@ type T3GatewayRequirements =
     Generates unique identifiers for the new thread, message, commands, and worktree branch.
    */
   | Crypto.Crypto
-  | ServerConfig;
+  | ServerConfig
+  /*
+    Probes and clears leftover worktree directories during reentrant provisioning.
+  */
+  | FileSystem.FileSystem;
 
 /** A branch on `origin` and the commit it pointed at when it was resolved. */
 interface RemoteBranchTip {
   readonly branchName: string;
   readonly commitSha: string;
 }
+
+/*
+  Git refuses `worktree add` at a path whose directory is gone but is still listed
+  in `.git/worktrees`. Healing needs `git worktree prune`, which the git driver
+  does not expose yet, so this state is terminal for the exchange.
+*/
+const isStaleWorktreeRegistration = (cause: { readonly detail: string }): boolean =>
+  /missing but (?:already registered|locked)/i.test(cause.detail);
 
 /** Derives the worktree checkout path. Copied from GitVcsDriverCore.createWorktree. */
 const deriveWorktreePath = (input: {
@@ -257,6 +269,111 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           );
       });
 
+    const fileSystem = yield* FileSystem.FileSystem;
+
+    /**
+     * Guarantees `worktreePath` is a registered checkout of `worktreeBranchName`,
+     * adopting whatever an interrupted attempt left behind: an intact checkout is
+     * reused, debris at the path is destroyed, a surviving branch is checked out
+     * instead of re-created, and only then is anything created fresh from the
+     * commit pinned at claim.
+     */
+    const ensureWorktree = (input: {
+      readonly workspaceRoot: string;
+      readonly worktreePath: string;
+      readonly worktreeBranchName: string;
+      readonly startCommitSha: string;
+      readonly startBranchName: string;
+    }): Effect.Effect<void, RetryableError | FatalError> =>
+      Effect.gen(function* () {
+        const pathExists = yield* fileSystem
+          .exists(input.worktreePath)
+          .pipe(orFail("fileSystem.exists", "Could not inspect the worktree path"));
+
+        if (pathExists) {
+          // Ask git, not the filesystem: the step is only done when the
+          // directory is a checkout of the minted branch.
+          const status = yield* gitWorkflowService
+            .localStatus({ cwd: input.worktreePath })
+            .pipe(
+              orFail("gitWorkflowService.localStatus", "Could not inspect the existing worktree"),
+            );
+
+          if (status.isRepo && status.refName === input.worktreeBranchName) {
+            return;
+          }
+
+          /*
+            The path is namespaced by this exchange's minted branch, so whatever
+            else sits here is our own debris (partial checkout, junk). Plain
+            directory removal is the fallback for content git does not recognize
+            as a worktree.
+          */
+          yield* gitWorkflowService
+            .removeWorktree({ cwd: input.workspaceRoot, path: input.worktreePath, force: true })
+            .pipe(
+              Effect.catch(() => fileSystem.remove(input.worktreePath, { recursive: true })),
+              orFail(
+                "gitWorkflowService.removeWorktree",
+                "Could not clear the leftover worktree path",
+              ),
+            );
+        }
+
+        const branchExists = yield* gitWorkflowService
+          .listRefs({
+            cwd: input.workspaceRoot,
+            query: input.worktreeBranchName,
+            refKind: "local",
+          })
+          .pipe(
+            Effect.map((result) =>
+              result.refs.some((ref) => ref.name === input.worktreeBranchName),
+            ),
+            orFail(
+              "gitWorkflowService.listRefs",
+              "Could not check whether the worktree branch already exists",
+            ),
+          );
+
+        yield* gitWorkflowService
+          .createWorktree(
+            branchExists
+              ? {
+                  // A previous attempt created the branch; check it out instead of re-branching.
+                  cwd: input.workspaceRoot,
+                  path: input.worktreePath,
+                  refName: input.worktreeBranchName,
+                  deferDependencyInstall: true,
+                }
+              : {
+                  // First real attempt: branch off the commit pinned at claim.
+                  cwd: input.workspaceRoot,
+                  path: input.worktreePath,
+                  refName: input.startCommitSha,
+                  newRefName: input.worktreeBranchName,
+                  baseRefName: input.startBranchName,
+                  deferDependencyInstall: true,
+                },
+          )
+          .pipe(
+            Effect.mapError((cause) =>
+              isStaleWorktreeRegistration(cause)
+                ? new FatalError({
+                    method: "gitWorkflowService.createWorktree",
+                    reason:
+                      "The worktree path is still registered to a deleted checkout and needs `git worktree prune`",
+                    cause,
+                  })
+                : new RetryableError({
+                    method: "gitWorkflowService.createWorktree",
+                    reason: "Could not create the worktree at " + input.worktreePath,
+                    cause,
+                  }),
+            ),
+          );
+      });
+
     const crypto = yield* Crypto.Crypto;
     const randomUUID = crypto.randomUUIDv4.pipe(
       orFail("crypto.randomUUIDv4", "Failed creating a UUID v4"),
@@ -371,16 +488,13 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           worktreeBranchName: state.t3.worktreeBranchName,
         });
 
-        yield* gitWorkflowService
-          .createWorktree({
-            cwd: workspaceRoot,
-            path: worktreePath,
-            // Branch the minted worktree branch off the commit pinned at claim. Otherwise it will attempt to checkout an already existing branch
-            refName: state.t3.startCommitSha,
-            newRefName: state.t3.worktreeBranchName,
-            baseRefName: state.t3.startBranchName,
-          }) // TODO: We need to check how should we actually handle errors here
-          .pipe(orFail("createWorktree", "createWorktree failed for some reason"));
+        yield* ensureWorktree({
+          workspaceRoot,
+          worktreePath,
+          worktreeBranchName: state.t3.worktreeBranchName,
+          startCommitSha: state.t3.startCommitSha,
+          startBranchName: state.t3.startBranchName,
+        });
 
         const commandId = CommandId.make(yield* randomUUID);
         const createdAt = yield* getNow;
