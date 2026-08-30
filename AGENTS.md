@@ -241,6 +241,7 @@ hooks and the shim on `prepare`.
   The gate’s `vp run test` then actually exercises it.
 - Backend / contracts / runtime behavior changes **must** land with focused tests for the changed
   behavior; the gate’s `vp run test` runs them.
+- Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
 
 Pre-commit: husky runs `pnpm lint-staged` — `vp fmt` on all staged files plus `vp lint --fix` on
 staged code files. Typecheck and unit tests stay in the full ship gate (ready / publish). If the

@@ -338,16 +338,16 @@ type ThreadStatusInput = Pick<
   lastVisitedAt?: string | undefined;
 };
 
-export interface ThreadJumpHintVisibilityController {
-  sync: (shouldShow: boolean) => void;
-  dispose: () => void;
-}
-
 export function resolveSidebarStageBadgeLabel(input: {
   primaryServerVersion: string | null | undefined;
   fallbackStageLabel: string;
 }): string {
   return resolveServerBackedAppStageLabel(input);
+}
+
+export interface ThreadJumpHintVisibilityController {
+  sync: (shouldShow: boolean) => void;
+  dispose: () => void;
 }
 
 export function createThreadJumpHintVisibilityController(input: {

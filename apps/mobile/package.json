@@ -4,9 +4,10 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
-    "dev": "expo start --clear",
-    "dev:client": "APP_VARIANT=development expo start --dev-client --scheme t3code-dev --clear --lan",
-    "dev:client:preview": "eas env:exec preview 'EXPO_NO_DOTENV=1 APP_VARIANT=preview expo start --dev-client --scheme t3code-preview --clear --lan'",
+    "dev": "expo start",
+    "dev:client": "APP_VARIANT=development expo start --dev-client --scheme t3code-dev --lan",
+    "dev:client:reset": "APP_VARIANT=development expo start --dev-client --scheme t3code-dev --clear --lan",
+    "dev:client:preview": "eas env:exec preview 'EXPO_NO_DOTENV=1 APP_VARIANT=preview expo start --dev-client --scheme t3code-preview --lan'",
     "start": "expo start",
     "start:dev": "APP_VARIANT=development expo start",
     "start:preview": "APP_VARIANT=preview expo start",
@@ -122,7 +123,7 @@
     "react-native-worklets": "0.10.1",
     "shiki": "4.2.0",
     "tailwind-merge": "^3.5.0",
-    "uniwind": "^1.6.2"
+    "uniwind": "1.11.0"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
