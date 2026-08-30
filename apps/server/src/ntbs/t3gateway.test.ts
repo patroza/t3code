@@ -24,6 +24,8 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
 import { PlatformError, SystemError } from "effect/PlatformError";
 import { makeRequestClaimed, type Request, type WorkCoordinates } from "./exchange.ts";
+import { ServerConfig } from "../config.ts";
+import { LogLevel } from "effect/Config";
 
 /**
  * Every mocked dependency records into one shared, ordered log.
@@ -331,6 +333,54 @@ const ProjectSetupScriptRunnerMock = (
   });
 };
 
+const serverConfigMock = Layer.mock(ServerConfig, {
+  anonymousIdPath: "anonymousIdPath",
+  attachmentsDir: "attachmentsDir",
+  autoBootstrapProjectFromCwd: false,
+  baseDir: "baseDir",
+  cwd: "cwd",
+  dbPath: "dbPath",
+  desktopBootstrapToken: "desktopBootstrapToken",
+  devAllowedOrigins: [],
+  devUrl: undefined,
+  environmentIdPath: "environmentIdPath",
+  host: "host",
+  keybindingsConfigPath: "keybindingsConfigPath",
+  logLevel: LogLevel.make("All"),
+  logWebSocketEvents: false,
+  logsDir: "logsDir",
+  mode: "desktop",
+  noBrowser: false,
+  otlpExportIntervalMs: 0,
+  otlpMetricsUrl: undefined,
+  otlpServiceName: "otlpServiceName",
+  otlpTracesUrl: "otlpTracesUrl",
+  port: 8000,
+  providerEventLogPath: "providerEventLogPath",
+  providerLogsDir: "providerLogsDir",
+  providerStatusCacheDir: "providerStatusCacheDir",
+  secretsDir: "secretsDir",
+  serverLogPath: "serverLogPath",
+  serverRuntimeStatePath: "serverRuntimeStatePath",
+  serverTracePath: "serverTracePath",
+  settingsPath: "settingsPath",
+  startupPresentation: "headless",
+  stateDir: "stateDir",
+  staticDir: "staticDir",
+  tailscaleServeEnabled: false,
+  tailscaleServePort: 8001,
+  terminalLogsDir: "terminalLogsDir",
+  traceBatchWindowMs: 0,
+  traceMaxBytes: 1024,
+  traceMaxFiles: 80,
+  traceMinLevel: LogLevel.make("All"),
+  traceTimingEnabled: false,
+  worktreesDir: "/worktreesDir",
+  desktopTelemetryControlFd: 8002,
+  desktopTelemetryFd: 8003,
+  resourceMonitorPath: "resourceMonitorPath",
+});
+
 /**
  * Builds a gateway plus the log of everything its dependencies were asked to do.
  *
@@ -357,6 +407,7 @@ const createT3Gateway = (input?: {
           createGitWorkflowServiceMock(recordResult, record, input?.gwfs),
           ProjectionTurnRepositoryMock,
           createCryptoMock(recordResult, input?.crypto),
+          serverConfigMock,
         ),
       ),
     ),
@@ -816,9 +867,10 @@ describe("T3Gateway", () => {
       Quite sure the current implementation can be updated and made better than the current void into null and rejection !== null in `processor.ts` as of 6d70ff461df16d1a052ce3656131613647940028.
 
       What does `provisionThread` depends on?
-      1. GitWorkflowService for worktree creation (and deletion)
-      2. OrchestrationEngineService for dispatching the command to create the thread
-      3. ProjectScriptRunner for executing the scripts in the thread/cwd
+      1. ServerConfig to know the worktrees location
+      2. GitWorkflowService for worktree creation (and deletion)
+      3. OrchestrationEngineService for dispatching the command to create the thread
+      4. ProjectScriptRunner for executing the scripts in the thread/cwd
     */
     describe("happy case", () => {
       // TODO: Note I'm saying we merely triggering it
