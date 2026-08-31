@@ -271,6 +271,50 @@ describe("unfinalizedPriorAssistantForCatchUp", () => {
       }),
     ).toBeNull();
   });
+
+  it("still recovers the prior T3 answer when the queued turn already has assistants", () => {
+    const messages = [
+      msg("u1", "user", "what's happened here?", "t1"),
+      msg(
+        "a1",
+        "assistant",
+        "Those five stay on PickListe because print-ack never flips Gedruckt. Orders 21307727–709 are the warehouse copies.",
+        "t1",
+      ),
+      msg("u2", "user", "do adversarial reviews of PR 2278", "t2"),
+      msg("a2", "assistant", "I'll run adversarial reviews of PR 2278.", "t2"),
+    ];
+    const prior = unfinalizedPriorAssistantForCatchUp({
+      messages,
+      currentTurnId: "t2",
+      lastFinalizedAssistantId: null,
+    });
+    expect(prior?.id).toBe("a1");
+    expect(prior?.text).toContain("Gedruckt");
+  });
+
+  it("reposts a grown prior answer after a premature short-status finalize", () => {
+    const status =
+      "Those five are still on PickListe with Gedruckt at 0. I'll check how that tab is derived.";
+    const full = [
+      status,
+      "",
+      "Print-ack never flips Gedruckt, so the tab keeps showing 0. Warehouse copies for 21307727, 21307693, 21307681, 21307732, and 21307709 already printed. Honeycomb shows the label jobs completed; the UI query still reads the unacked pick rows.",
+    ].join("\n");
+    const messages = [
+      msg("u1", "user", "what's happened here?", "t1"),
+      msg("a1", "assistant", full, "t1"),
+      msg("u2", "user", "do adversarial reviews of PR 2278", "t2"),
+    ];
+    const prior = unfinalizedPriorAssistantForCatchUp({
+      messages,
+      currentTurnId: "t2",
+      lastFinalizedAssistantId: "a1",
+      lastFinalizedText: status,
+    });
+    expect(prior?.id).toBe("a1");
+    expect(prior?.text).toContain("Honeycomb shows the label jobs completed");
+  });
 });
 
 describe("retainUnfinalizedStreamText", () => {

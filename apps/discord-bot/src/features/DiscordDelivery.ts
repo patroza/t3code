@@ -286,10 +286,11 @@ export function assistantMessagesForDelivery(input: {
 /**
  * Prior-turn assistant Discord still owes a final for.
  *
- * Queue drain can advance `latestTurn` to the parked follow-up before the
- * previous answer is Discord-finalized. {@link assistantMessagesForDelivery}
- * returns [] in that window on purpose (must not stream the prior body under a
- * new Working tip). Callers catch-up-finalize this bubble as its own final.
+ * Queue drain can advance `latestTurn` to the parked follow-up before Discord
+ * posted the previous T3 answer (or after a premature short-status finalize).
+ * {@link assistantMessagesForDelivery} hides that body on purpose (must not
+ * stream it under the next Working tip). Callers catch-up-finalize it as its
+ * own Discord final even when the next turn already has assistants.
  */
 export function unfinalizedPriorAssistantForCatchUp(input: {
   readonly messages: ReadonlyArray<{
