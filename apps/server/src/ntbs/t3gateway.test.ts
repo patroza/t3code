@@ -14,7 +14,7 @@ import {
   GitCommandError,
   MessageId,
   OrchestrationProjectShell,
-  OrchestrationThread,
+  OrchestrationThreadShell,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -144,7 +144,7 @@ type PSQMInput = {
     | { failure: unknown }
     | { missing: true };
   isThreadMissing?: boolean;
-  isGetThreadDetailByIdError?: boolean;
+  isGetThreadShellByIdError?: boolean;
 };
 
 const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
@@ -179,32 +179,29 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
               ),
         ),
       ),
-    getThreadDetailById: (threadId) =>
+    getThreadShellById: (threadId) =>
       recordPSQM(
-        "getThreadDetailById",
+        "getThreadShellById",
         threadId,
         input?.isThreadMissing
-          ? Option.none<OrchestrationThread>()
-          : Option.some<OrchestrationThread>({
-              activities: [],
+          ? Option.none<OrchestrationThreadShell>()
+          : Option.some<OrchestrationThreadShell>({
               archivedAt: null,
               branch: "some-branch",
-              checkpoints: [],
               createdAt: new Date().toISOString(),
-              deletedAt: null,
+              hasActionableProposedPlan: false,
+              hasPendingApprovals: false,
+              hasPendingUserInput: false,
               id: threadId,
               interactionMode: "default",
               latestTurn: null,
-              messages: [],
+              latestUserMessageAt: null,
               modelSelection: {
                 instanceId: ProviderInstanceId.make("instanceId"),
                 model: "custom",
                 options: [],
               },
               projectId: ProjectId.make("projectId"),
-              pendingTurnStart: null,
-              proposedPlans: [],
-              queuedMessages: [],
               runtimeMode: "auto",
               session: {
                 threadId,
@@ -224,7 +221,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
             }),
       ).pipe(
         Effect.filterOrFail(
-          () => !input || input.isGetThreadDetailByIdError !== true,
+          () => !input || input.isGetThreadShellByIdError !== true,
           () => toPersistenceSqlError("some sql error")("somecause"),
         ),
       ),
@@ -455,9 +452,9 @@ const createT3Gateway = (input?: {
     layer: t3GatewayLive.pipe(
       Layer.provide(
         Layer.mergeAll(
-          createOrchestrationEngineServiceMock(recordResult, record),
+          createOrchestrationEngineServiceMock(recordResult, record, input?.orchestrationEngine),
           createPSQM(recordResult, input?.pqsm),
-          ProjectSetupScriptRunnerMock(recordResult, record),
+          ProjectSetupScriptRunnerMock(recordResult, record, input?.projectSetupScriptRunner),
           createGitWorkflowServiceMock(recordResult, record, input?.gwfs),
           ProjectionTurnRepositoryMock,
           createCryptoMock(recordResult, input?.crypto),
@@ -861,7 +858,7 @@ describe("T3Gateway", () => {
       it.effect("cannot get the thread", () => {
         const { layer } = createT3Gateway({
           pqsm: {
-            isGetThreadDetailByIdError: true,
+            isGetThreadShellByIdError: true,
           },
         });
         return Effect.gen(function* () {
@@ -928,10 +925,11 @@ describe("T3Gateway", () => {
       4. ProjectScriptRunner for executing the scripts in the thread/cwd
     */
     describe("happy case", () => {
-      // TODO: Note I'm saying we merely triggering it
-      // because I'm not sure whether the dispatch waits on anything
-      // in fact I think it doesn't
-      it.effect("triggers the provision", () => {
+      /*
+        Pristine first attempt: `createWorktree` takes the fresh-create arm, dispatch
+        succeeds so the stale-observation recovery never fires, scripts run last.
+      */
+      it.effect("provisions worktree, thread, and scripts in order from a clean slate", () => {
         const { calls, layer } = createT3Gateway();
 
         return Effect.gen(function* () {
@@ -965,6 +963,50 @@ describe("T3Gateway", () => {
             "createWorktree",
             "randomUUIDv4",
             "dispatch",
+            "runForThread",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        A failed dispatch is not trusted at face value: the "thread is missing" observation
+        that led us here can be stale (crash after a committed create, projection lag), so the
+        gateway re-checks and adopts the existing thread. Note the scripts still run — skipping
+        them when provisioning already completed is an open TODO.
+      */
+      it.effect("succeeds when dispatch fails because the thread already exists", () => {
+        const { calls, layer } = createT3Gateway({
+          orchestrationEngine: { dispatchFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const request: Request = {
+            attachments: [],
+            snapshot: "come on, do something",
+            sourceUri: "test://source-uri",
+          };
+
+          const coordinates: WorkCoordinates = {
+            projectId: ProjectId.make("projectId"),
+            startBranchName: "startBranchName",
+            startCommitSha: "startCommitSha",
+            threadId: ThreadId.make("threadId"),
+            userMessageId: MessageId.make("userMessageId"),
+            worktreeBranchName: "worktreeBranchName",
+          };
+
+          yield* t3Gateway.provisionThread(makeRequestClaimed(request, coordinates));
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "listRefs",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "getThreadShellById",
             "runForThread",
           ]);
         }).pipe(Effect.provide(layer));
