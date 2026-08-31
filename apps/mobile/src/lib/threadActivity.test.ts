@@ -759,7 +759,7 @@ describe("buildThreadFeed", () => {
     const expandedIds = expanded.map((entry) => entry.id);
     expect(expandedIds).toContain("turn-fold:turn-1");
     expect(expandedIds.some((id) => id.startsWith("assistant-status"))).toBe(true);
-    expect(expandedIds).toContain("tool-1");
+    expect(expandedIds).toContain("work-toggle:work-group:tool-1");
     expect(expandedIds).toContain("assistant-final-misstamped");
     expect(expandedIds).toContain("user-2");
     expect(expandedIds).toContain("assistant-next-final");

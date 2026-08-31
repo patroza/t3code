@@ -151,7 +151,7 @@ describe("pickComposerImages", () => {
       pickComposerImages({ existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }),
     ).resolves.toEqual({
       images: [],
-      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`,
+      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`,
     });
     expect(launchImageLibraryAsync).not.toHaveBeenCalled();
   });
