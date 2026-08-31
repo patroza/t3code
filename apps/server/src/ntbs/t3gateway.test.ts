@@ -119,7 +119,7 @@ const createOrchestrationEngineServiceMock = (
   callRecord: CallRecord,
   input?: OrchestrationEngineInput,
 ) => {
-  const record = recordResult("OrchestrationEngineService");
+  const _record = recordResult("OrchestrationEngineService");
 
   const call = callRecord("OrchestrationEngineService");
 
@@ -306,11 +306,11 @@ type ProjectSetupScriptRunnerInput = {
 };
 
 const ProjectSetupScriptRunnerMock = (
-  recordResult: CallRecordResult,
+  _recordResult: CallRecordResult,
   callRecord: CallRecord,
   input?: ProjectSetupScriptRunnerInput,
 ) => {
-  const record = recordResult("ProjestSetupScriptRunnerMock");
+  // const record = recordResult("ProjestSetupScriptRunnerMock");
   const call = callRecord("ProjectSetupScriptRunnerMock");
 
   return Layer.mock(ProjectSetupScriptRunner, {
@@ -901,7 +901,7 @@ describe("T3Gateway", () => {
 
           const requestClaimed = makeRequestClaimed(request, coordinates);
 
-          const result = yield* t3Gateway.provisionThread(requestClaimed);
+          yield* t3Gateway.provisionThread(requestClaimed);
 
           expect(calls.map((call) => call.method)).toEqual(["createWorktree"]);
         }).pipe(Effect.provide(layer));
