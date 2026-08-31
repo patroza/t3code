@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@effect/vitest";
 import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
-import { Effect, Layer, Option, Ref } from "effect";
+import { Effect, Layer, Option, Ref, FileSystem } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -19,6 +19,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   VcsCreateWorktreeResult,
+  VcsListRefsResult,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
@@ -240,6 +241,7 @@ type GitLayerInput = {
   remoteExistsFails?: boolean;
   resolvedRemoteSha?: string;
   removeWorkTreeFails?: boolean;
+  worktreeBranchExists?: boolean;
 };
 
 // TODO: Can't we simplify it by leveraging default values in params?
@@ -279,6 +281,27 @@ const createGitWorkflowServiceMock = (
           () => !input || input.fetchRemoteFails !== true,
           () => createGitCommandError(),
         ),
+      ),
+    listRefs: (callInput) =>
+      recordGit(
+        "listRefs",
+        callInput,
+        VcsListRefsResult.make({
+          refs: input?.worktreeBranchExists
+            ? [
+                {
+                  name: callInput.query ?? "worktreeBranchName",
+                  current: false,
+                  isDefault: false,
+                  worktreePath: null,
+                },
+              ]
+            : [],
+          isRepo: true,
+          hasPrimaryRemote: true,
+          nextCursor: null,
+          totalCount: input?.worktreeBranchExists ? 1 : 0,
+        }),
       ),
     removeWorktree: (callInput) =>
       record("removeWorktree", callInput).pipe(
@@ -381,6 +404,36 @@ const serverConfigMock = Layer.mock(ServerConfig, {
   resourceMonitorPath: "resourceMonitorPath",
 });
 
+type FileSystemInput = {
+  worktreePathExists?: boolean;
+  existsFails?: boolean;
+  removeFails?: boolean;
+};
+
+const createFileSystemMock = (recordResult: CallRecordResult, input?: FileSystemInput) => {
+  const recordFs = recordResult("FileSystem");
+
+  const fail = (method: string) =>
+    new PlatformError(new SystemError({ _tag: "Unknown", method, module: "FileSystem" }));
+
+  return FileSystem.layerNoop({
+    exists: (path) =>
+      recordFs("exists", path, input?.worktreePathExists === true).pipe(
+        Effect.filterOrFail(
+          () => !input || input.existsFails !== true,
+          () => fail("exists"),
+        ),
+      ),
+    remove: (path, options) =>
+      recordFs("remove", { path, options }, undefined).pipe(
+        Effect.filterOrFail(
+          () => !input || input.removeFails !== true,
+          () => fail("remove"),
+        ),
+      ),
+  });
+};
+
 /**
  * Builds a gateway plus the log of everything its dependencies were asked to do.
  *
@@ -393,6 +446,7 @@ const createT3Gateway = (input?: {
   crypto?: CryptoInput;
   orchestrationEngine?: OrchestrationEngineInput;
   projectSetupScriptRunner?: ProjectSetupScriptRunnerInput;
+  fileSystem?: FileSystemInput;
 }) => {
   const { calls, recordResult, record } = createCallLog();
 
@@ -408,6 +462,7 @@ const createT3Gateway = (input?: {
           ProjectionTurnRepositoryMock,
           createCryptoMock(recordResult, input?.crypto),
           serverConfigMock,
+          createFileSystemMock(recordResult, input?.fileSystem),
         ),
       ),
     ),
@@ -903,11 +958,19 @@ describe("T3Gateway", () => {
 
           yield* t3Gateway.provisionThread(requestClaimed);
 
-          expect(calls.map((call) => call.method)).toEqual(["createWorktree"]);
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "listRefs",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "runForThread",
+          ]);
         }).pipe(Effect.provide(layer));
       });
     });
 
-    describe("failures", () => {});
+    describe.todo("failures", () => {});
   });
 });
