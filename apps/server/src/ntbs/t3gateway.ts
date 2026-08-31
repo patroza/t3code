@@ -478,15 +478,15 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
 
         /*
-        TODO:, we may have to change few things around from the current implementation. `provisionThread` should be implemented as a resumable checklist, not as a transaction.
+        `provisionThread` is a resumable checklist, not a transaction.
 
-        Every attempt re-derives its *facts* from live state, the project's `workspaceRoot`, and the worktree path computed from the pinned branch name, then walks tree steps, each one "check, then do", so a retry after any interruption skips whatever already happened.
+        Every attempt re-derives its *facts* from live state, the project's `workspaceRoot`, and the worktree path computed from the pinned branch name, then walks three steps, each one "check, then do", so a retry after any interruption skips whatever already happened.
 
         **Worktree**. If the directory exists, reuse it. If only the branch survives from a crashed attempt, recreate the checkout from that branch instead of re-branching from the start commit. Otherwise create it fresh from the pinned commit.
 
-        **Thread**. Create it, treating "already exists" as success, a redelivery could otherwise race the projection.
+        **Thread**. Create it. An "already exists" race (redelivery) fails this pass, but the next reconcile pass sees the thread present and moves on.
 
-        **Setup scripts**. Run them, but only log failures: a broken install script must not hold the user's reply hostage.
+        **Setup scripts**. Failures are fatal, like any other provisioning error: we don't pretend the workspace works when it doesn't.
 
         On a retryable failure, cleanup nothing. The half-finished work is owned by the exchange record and is exactly what the next reconcile pass resumes from.
 
