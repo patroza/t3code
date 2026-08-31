@@ -484,7 +484,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
         **Worktree**. If the directory exists, reuse it. If only the branch survives from a crashed attempt, recreate the checkout from that branch instead of re-branching from the start commit. Otherwise create it fresh from the pinned commit.
 
-        **Thread**. Create it. An "already exists" race (redelivery) fails this pass, but the next reconcile pass sees the thread present and moves on.
+        **Thread**. Create it. If the dispatch fails but the thread turns out to exist, a stale observation raced us and the step is already done.
 
         **Setup scripts**. Failures are fatal, like any other provisioning error: we don't pretend the workspace works when it doesn't.
 
@@ -535,9 +535,29 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               }),
             )
             .pipe(
-              orFail("retryable")(
-                "orchestrationEngine.dispatch",
-                "Could not dispatch thread.create for thread " + state.t3.threadId,
+              Effect.asVoid,
+              /*
+                Our "thread is missing" observation can be stale (crash after a
+                committed create, projection lag). If the thread turns out to
+                exist, this step is already done: swallow the failure and carry on.
+              */
+              Effect.catch((cause) =>
+                projectionSnapshotQuery.getThreadShellById(state.t3.threadId).pipe(
+                  Effect.map(Option.isSome),
+                  Effect.orElseSucceed(() => false),
+                  Effect.flatMap((threadExists) =>
+                    threadExists
+                      ? Effect.void
+                      : Effect.fail(
+                          new RetryableError({
+                            method: "orchestrationEngine.dispatch",
+                            reason:
+                              "Could not dispatch thread.create for thread " + state.t3.threadId,
+                            cause,
+                          }),
+                        ),
+                  ),
+                ),
               ),
             );
 
