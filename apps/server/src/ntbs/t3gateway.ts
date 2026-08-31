@@ -168,6 +168,11 @@ export interface T3Gateway {
     state: NTBS.ThreadCreated,
   ) => Effect.Effect<NTBS.ThreadCreatedContext, RetryableError>;
 
+  /**
+   * Safety here is borrowed from the orchestration engine, not proven locally: dispatch returns only after the events and the projected turn rows commit in one SQL transaction, so a successful dispatch is immediately visible to `getTurnStatus` and a crash leaves both or neither.
+   * That property is what makes observe-before-act sufficient against double starts, because a duplicate `thread.turn.start` would not fail — the decider queues it or starts a second turn.
+   * If the engine ever projected asynchronously, this module would silently start duplicate turns and no test in this package would notice; the engine's own atomicity tests (OrchestrationEngine.test.ts, "rolls back all events for a multi-event command when projection fails mid-dispatch") are what pin it.
+   */
   readonly startTurn: (
     state: NTBS.ThreadCreated,
   ) => Effect.Effect<void, RetryableError | FatalError>;
