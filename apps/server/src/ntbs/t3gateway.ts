@@ -488,65 +488,61 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           worktreeBranchName: state.t3.worktreeBranchName,
         });
 
-        yield* ensureWorktree({
-          workspaceRoot,
-          worktreePath,
-          worktreeBranchName: state.t3.worktreeBranchName,
-          startCommitSha: state.t3.startCommitSha,
-          startBranchName: state.t3.startBranchName,
-        });
-
-        const commandId = CommandId.make(yield* randomUUID);
-        const createdAt = yield* getNow;
-
-        const modelSelection =
-          project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
-
-        yield* orchestrationEngine
-          .dispatch(
-            OrchestrationCommand.make({
-              type: "thread.create",
-              branch: state.t3.worktreeBranchName,
-              worktreePath: worktreePath,
-              threadId: state.t3.threadId,
-              title: "some title",
-              modelSelection: modelSelection,
-              commandId,
-              createdAt,
-              projectId: project.id,
-              runtimeMode: "full-access",
-              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            }),
-          )
-          .pipe(
-            /**
-             * Removes the work
-             */
-            Effect.onError(
-              () =>
-                gitWorkflowService
-                  .removeWorktree({
-                    cwd: workspaceRoot,
-                    path: worktreePath,
-                  })
-                  .pipe(Effect.orElseSucceed(() => {})), // TODO: This is all very sus
-            ),
-          )
-          .pipe(orFail("orchestrationEngine.dispatch", "failed to dispatch "));
-
-        yield* projectScriptRunner
-          .runForThread({
-            threadId: state.t3.threadId,
-            projectId: project.id,
-            projectCwd: project.workspaceRoot,
+        yield* Effect.gen(function* () {
+          yield* ensureWorktree({
+            workspaceRoot,
             worktreePath,
-          })
-          .pipe(
-            orFail(
-              "projectScriptRunner.runForThread",
-              "Failed to run scripts while provisioning thread",
-            ),
-          );
+            worktreeBranchName: state.t3.worktreeBranchName,
+            startCommitSha: state.t3.startCommitSha,
+            startBranchName: state.t3.startBranchName,
+          });
+
+          const commandId = CommandId.make(yield* randomUUID);
+          const createdAt = yield* getNow;
+
+          const modelSelection =
+            project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+
+          yield* orchestrationEngine
+            .dispatch(
+              OrchestrationCommand.make({
+                type: "thread.create",
+                branch: state.t3.worktreeBranchName,
+                worktreePath: worktreePath,
+                threadId: state.t3.threadId,
+                title: "some title",
+                modelSelection: modelSelection,
+                commandId,
+                createdAt,
+                projectId: project.id,
+                runtimeMode: "full-access",
+                interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              }),
+            )
+            .pipe(orFail("orchestrationEngine.dispatch", "failed to dispatch "));
+
+          yield* projectScriptRunner
+            .runForThread({
+              threadId: state.t3.threadId,
+              projectId: project.id,
+              projectCwd: project.workspaceRoot,
+              worktreePath,
+            })
+            .pipe(
+              orFail(
+                "projectScriptRunner.runForThread",
+                "Failed to run scripts while provisioning thread",
+              ),
+            );
+        }).pipe(
+          Effect.tapError((error) =>
+            error._tag === "FatalError"
+              ? gitWorkflowService
+                  .removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: true })
+                  .pipe(Effect.ignore)
+              : Effect.void,
+          ),
+        );
       });
 
     return {
