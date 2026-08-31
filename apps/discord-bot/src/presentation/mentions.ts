@@ -31,6 +31,24 @@ export function resolveDiscordFollowUpDelivery(
   return flags.followUpDelivery ?? "queue";
 }
 
+/**
+ * Whether a continue-mention should post/adopt a fresh `_Working.._` tip.
+ *
+ * Parked mid-turn follow-ups must not. Adopting a new Working freezes the live
+ * tip and bumps the delivery epoch, so the in-flight answer is never posted
+ * (queued follow-up final lands; prior final is stuck as frozen progress).
+ * `--steer` still posts a new tip under the new mention.
+ */
+export function shouldPostWorkingAckForContinue(input: {
+  readonly presentationMode?: "full" | "final-only" | undefined;
+  readonly turnAlreadyRunning: boolean;
+  readonly followUpDelivery: DiscordFollowUpDelivery;
+}): boolean {
+  if (input.presentationMode === "final-only") return false;
+  if (input.turnAlreadyRunning && input.followUpDelivery === "queue") return false;
+  return true;
+}
+
 export type ParsedMentionIntent =
   | { readonly kind: "interrupt" }
   | { readonly kind: "help" }

@@ -100,7 +100,9 @@ import {
   decideAssistantDelivery,
   decideHeartbeat,
   initialDeliveryEpochState,
+  retainUnfinalizedStreamText,
   shouldRecreateTip,
+  unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
 } from "./DiscordDelivery.ts";
 import { upsertThreadInfoPin } from "./ThreadInfoPin.ts";
@@ -5075,6 +5077,54 @@ export const runBridge = (
             lastFinalizedAssistantId: lastFinalizedForDelivery,
             lastFinalizedText: lastFinalizedTextForDelivery,
           });
+          // Queue drain can make latestTurn the parked follow-up before Discord
+          // finalized the prior answer. Do not stream that body under a new
+          // Working tip — post it as its own final first.
+          if (deliveryAssistants.length === 0 && prior.finalizedTurnId === null) {
+            const priorCatchUp = unfinalizedPriorAssistantForCatchUp({
+              messages: threadMessagesForDelivery,
+              currentTurnId: activeTurnId,
+              lastFinalizedAssistantId: lastFinalizedForDelivery,
+              lastFinalizedText: lastFinalizedTextForDelivery,
+            });
+            const hasUnfinalizedTip =
+              allStreamIds(prior).length > 0 || prior.lastAssistantText.trim() !== "";
+            if (priorCatchUp !== null && hasUnfinalizedTip) {
+              yield* Effect.logInfo(
+                "Catch-up finalizing prior turn before queued follow-up delivery",
+                {
+                  t3ThreadId: input.t3ThreadId,
+                  priorTurnId: priorCatchUp.turnId,
+                  priorAssistantId: priorCatchUp.id,
+                  nextTurnId: activeTurnId,
+                  textLen: priorCatchUp.text.length,
+                },
+              );
+              yield* postOrEditAssistant({
+                turnId: priorCatchUp.turnId,
+                t3MessageId: priorCatchUp.id,
+                text: priorCatchUp.text,
+                streaming: false,
+                images: [],
+                worktreePath: thread.worktreePath,
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError("Failed to catch-up finalize prior turn", {
+                    t3ThreadId: input.t3ThreadId,
+                    priorTurnId: priorCatchUp.turnId,
+                    priorAssistantId: priorCatchUp.id,
+                    cause: formatAlertCause(cause, 300),
+                  }),
+                ),
+                Effect.asVoid,
+              );
+            }
+          }
+          const afterCatchUp = yield* Ref.get(stateRef);
+          const lastFinalizedAfterCatchUp =
+            afterCatchUp.delivery.lastFinalizedAssistantId ?? lastFinalizedForDelivery;
+          const lastFinalizedTextAfterCatchUp =
+            afterCatchUp.delivery.lastFinalizedText ?? lastFinalizedTextForDelivery;
           const deliveryAssistantIds = new Set(deliveryAssistants.map((entry) => entry.id));
           const turnAssistants = thread.messages.filter(
             (message) => message.role === "assistant" && deliveryAssistantIds.has(message.id),
@@ -5090,10 +5140,10 @@ export const runBridge = (
 
           const decision = decideAssistantDelivery({
             state: {
-              ...prior.delivery,
+              ...afterCatchUp.delivery,
               // Keep durable finalize memory from the link store in sync.
-              lastFinalizedAssistantId: lastFinalizedForDelivery,
-              lastFinalizedText: lastFinalizedTextForDelivery,
+              lastFinalizedAssistantId: lastFinalizedAfterCatchUp,
+              lastFinalizedText: lastFinalizedTextAfterCatchUp,
             },
             turnId: activeTurnId,
             turnInProgress: turnInProgressNow,
@@ -5141,12 +5191,11 @@ export const runBridge = (
               delivery: decision.state,
               adoptedInitialSnapshot: true,
               seededWorkingAckPending: decision.state.phase === "awaiting",
-              lastAssistantText:
-                decision.state.phase === "streaming"
-                  ? decision.state.streamText
-                  : decision.state.phase === "awaiting"
-                    ? ""
-                    : current.lastAssistantText,
+              lastAssistantText: retainUnfinalizedStreamText({
+                phase: decision.state.phase,
+                streamText: decision.state.streamText,
+                priorLastAssistantText: current.lastAssistantText,
+              }),
               finalizedTurnId:
                 decision.state.phase === "awaiting" || reopenedAfterPrematureFinal
                   ? null

@@ -283,6 +283,78 @@ export function assistantMessagesForDelivery(input: {
   });
 }
 
+/**
+ * Prior-turn assistant Discord still owes a final for.
+ *
+ * Queue drain can advance `latestTurn` to the parked follow-up before the
+ * previous answer is Discord-finalized. {@link assistantMessagesForDelivery}
+ * returns [] in that window on purpose (must not stream the prior body under a
+ * new Working tip). Callers catch-up-finalize this bubble as its own final.
+ */
+export function unfinalizedPriorAssistantForCatchUp(input: {
+  readonly messages: ReadonlyArray<{
+    readonly id: string;
+    readonly role: string;
+    readonly turnId: string | null;
+    readonly text: string;
+  }>;
+  readonly currentTurnId: string | null;
+  readonly lastFinalizedAssistantId: string | null;
+  readonly lastFinalizedText?: string | null;
+}): {
+  readonly id: string;
+  readonly text: string;
+  readonly turnId: string | null;
+} | null {
+  const { messages, currentTurnId } = input;
+  const lastFinalizedText = input.lastFinalizedText ?? null;
+  let prior: {
+    readonly id: string;
+    readonly text: string;
+    readonly turnId: string | null;
+  } | null = null;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    if (currentTurnId !== null && message.turnId === currentTurnId) continue;
+    const text = message.text.trimEnd();
+    if (text === "" || (/^_Working/i.test(text) && text.length < 40)) continue;
+    prior = { id: message.id, text: message.text, turnId: message.turnId };
+  }
+  if (prior === null) return null;
+
+  const remaining = excludeFinalizedAssistants({
+    messages,
+    assistants: [prior],
+    lastFinalizedAssistantId: input.lastFinalizedAssistantId,
+    lastFinalizedText,
+  });
+  return remaining[0] ?? null;
+}
+
+/**
+ * Keep a substantial unfinalized stream body when the epoch enters awaiting
+ * (fresh Working / next turn with no assistants yet). Wiping it here used to
+ * drop the prior answer on queue drain before the next turn streamed.
+ */
+export function retainUnfinalizedStreamText(input: {
+  readonly phase: DeliveryPhase;
+  readonly streamText: string;
+  readonly priorLastAssistantText: string;
+}): string {
+  if (input.phase === "streaming" && input.streamText.trim() !== "") {
+    return input.streamText;
+  }
+  const prior = input.priorLastAssistantText.trim();
+  const awaitingOrEmptyStream =
+    input.phase === "awaiting" || (input.phase === "streaming" && input.streamText.trim() === "");
+  if (awaitingOrEmptyStream && prior !== "" && !(/^_Working/i.test(prior) && prior.length < 40)) {
+    return input.priorLastAssistantText;
+  }
+  if (input.phase === "awaiting") return "";
+  if (input.phase === "streaming") return input.streamText;
+  return input.priorLastAssistantText;
+}
+
 export function deliveryTextFromAssistants(
   assistants: ReadonlyArray<{ readonly text: string }>,
   mode: "progress" | "answer",

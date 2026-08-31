@@ -9,7 +9,9 @@ import {
   excludeFinalizedAssistants,
   initialDeliveryEpochState,
   isGrownFinalizedText,
+  retainUnfinalizedStreamText,
   shouldRecreateTip,
+  unfinalizedPriorAssistantForCatchUp,
   type DeliveryEpochState,
 } from "./DiscordDelivery.ts";
 
@@ -207,6 +209,100 @@ describe("assistantMessagesForDelivery", () => {
       lastFinalizedAssistantId: "assistant:ancient-not-in-retained-tip:segment:3",
     });
     expect(assistants.map((a) => a.id)).toEqual(["a1"]);
+  });
+});
+
+describe("unfinalizedPriorAssistantForCatchUp", () => {
+  it("recovers the prior turn answer when queue drain advanced latestTurn", () => {
+    // Empasa: parked follow-up started turn 2 before Discord finalized turn 1.
+    const messages = [
+      msg("u1", "user", "why did the shard manager not recover", "t1"),
+      msg(
+        "a1",
+        "assistant",
+        "Shard-lock recovery is still a bug in this Effect version; later ones auto-recover.",
+        "t1",
+      ),
+      msg("u2", "user", "so everything has recovered now, labels are printing?", "t2"),
+    ];
+    const prior = unfinalizedPriorAssistantForCatchUp({
+      messages,
+      currentTurnId: "t2",
+      lastFinalizedAssistantId: null,
+    });
+    expect(prior?.id).toBe("a1");
+    expect(prior?.turnId).toBe("t1");
+    expect(
+      assistantMessagesForDelivery({
+        messages,
+        turnId: "t2",
+        turnInProgress: true,
+        hasLatestTurn: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not replay a prior answer Discord already finalized", () => {
+    const messages = [
+      msg("u1", "user", "first", "t1"),
+      msg("a1", "assistant", "first answer already posted to Discord", "t1"),
+      msg("u2", "user", "second", "t2"),
+    ];
+    expect(
+      unfinalizedPriorAssistantForCatchUp({
+        messages,
+        currentTurnId: "t2",
+        lastFinalizedAssistantId: "a1",
+        lastFinalizedText: "first answer already posted to Discord",
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores the in-progress turn's own assistants", () => {
+    const messages = [
+      msg("u1", "user", "first", "t1"),
+      msg("a1", "assistant", "I'll trace the shard-lock unhealthy path.", "t1"),
+    ];
+    expect(
+      unfinalizedPriorAssistantForCatchUp({
+        messages,
+        currentTurnId: "t1",
+        lastFinalizedAssistantId: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("retainUnfinalizedStreamText", () => {
+  it("keeps the prior stream body when a new epoch enters awaiting", () => {
+    expect(
+      retainUnfinalizedStreamText({
+        phase: "awaiting",
+        streamText: "",
+        priorLastAssistantText:
+          "Shard-lock recovery is still a bug in this Effect version; later ones auto-recover.",
+      }),
+    ).toBe("Shard-lock recovery is still a bug in this Effect version; later ones auto-recover.");
+  });
+
+  it("does not keep a Working placeholder", () => {
+    expect(
+      retainUnfinalizedStreamText({
+        phase: "awaiting",
+        streamText: "",
+        priorLastAssistantText: "_Working.._",
+      }),
+    ).toBe("");
+  });
+
+  it("uses live stream text while streaming", () => {
+    expect(
+      retainUnfinalizedStreamText({
+        phase: "streaming",
+        streamText: "Yes. Printing is live.",
+        priorLastAssistantText: "I'll trace the shard-lock unhealthy path.",
+      }),
+    ).toBe("Yes. Printing is live.");
   });
 });
 
