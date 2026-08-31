@@ -100,11 +100,11 @@ const createCryptoMock = (recordResult: CallRecordResult, input?: CryptoInput) =
   );
 };
 
-const createGitCommandError = (exitCode?: number) =>
+const createGitCommandError = (exitCode?: number, detail = "") =>
   GitCommandError.make({
     command: "resolve",
     cwd: "",
-    detail: "",
+    detail,
     failureKind: "unknown",
     operation: "",
     exitCode,
@@ -232,7 +232,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
 const ProjectionTurnRepositoryMock = Layer.mock(ProjectionTurnRepository, {});
 
 type GitLayerInput = {
-  createWorkreeFails?: boolean;
+  createWorkreeFails?: boolean | { detail: string };
   failsBranchResolutionWith?: "retryable" | "fatal";
   fetchRemoteFails?: boolean;
   remoteExists?: boolean;
@@ -259,7 +259,14 @@ const createGitWorkflowServiceMock = (
       record("createWorktree", callInput).pipe(
         Effect.andThen(() =>
           input?.createWorkreeFails
-            ? Effect.fail(createGitCommandError())
+            ? Effect.fail(
+                createGitCommandError(
+                  undefined,
+                  typeof input.createWorkreeFails === "object"
+                    ? input.createWorkreeFails.detail
+                    : "",
+                ),
+              )
             : Effect.succeed(
                 VcsCreateWorktreeResult.make({
                   worktree: { path: callInput.path || "path", refName: callInput.refName },
@@ -1161,6 +1168,60 @@ describe("T3Gateway", () => {
             "dispatch",
             "runForThread",
             "removeWorktree",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        A worktree path that is still registered to a deleted checkout needs manual `git worktree prune`, so retrying would fail forever.
+      */
+      it.effect(
+        "fails fatally when the worktree path is a stale registration, removing the worktree",
+        () => {
+          const { calls, layer } = createT3Gateway({
+            gwfs: {
+              createWorkreeFails: { detail: "'/worktreesDir/x' is missing but already registered" },
+            },
+          });
+
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
+
+            const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+
+            expect(result._tag).toBe("FatalError");
+            expect(result.method).toBe("gitWorkflowService.createWorktree");
+
+            expect(calls.map((call) => call.method)).toEqual([
+              "getProjectShellById",
+              "exists",
+              "listRefs",
+              "createWorktree",
+              "removeWorktree",
+            ]);
+          }).pipe(Effect.provide(layer));
+        },
+      );
+
+      it.effect("fails retryably when worktree creation fails for any other reason", () => {
+        const { calls, layer } = createT3Gateway({
+          gwfs: { createWorkreeFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("gitWorkflowService.createWorktree");
+
+          // Retryable, so the failed creation attempt is not cleaned up.
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "listRefs",
+            "createWorktree",
           ]);
         }).pipe(Effect.provide(layer));
       });
