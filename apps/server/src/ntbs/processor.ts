@@ -16,6 +16,10 @@ It exposes two public APIs:
 1. `process` takes an incoming message and starts the work for it.
 2. `run` subscribes to T3 activity and resumes the exchanges a previous run left unfinished.
 
+TODO: `run` should also own an internal sweeper: a periodic pass that re-drives every non-terminal exchange, the same thing startup recovery does but on an interval.
+Thread activity is the primary wake signal, but it is a fire-and-forget ping: one missed event leaves an exchange stuck until the next restart.
+Sweeping is cheap and safe because the cycle observes before acting: re-driving an exchange whose context has not moved just answers "wait" and stops.
+
 Both drive an exchange through the same cycle, repeated until it reaches a terminal state:
 
 load the stored state
@@ -136,6 +140,12 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const persist = <State extends NTBS.Exchange>(state: State) =>
       repo.upsert(state).pipe(orFail("Failed to persist the exchange state"), Effect.as(state));
 
+    /**
+     * Serializes concurrent work on the same sourceUri, protecting the check-then-act claim in `process` (findBySourceUri -> plan -> persist).
+     * The lock is in-process memory: single-writer is an assumption on the deployment, not something the code or the database enforces.
+     * Two processors on the same database would each pass the "no exchange yet" check, both claim, and the upsert would silently overwrite the first claim instead of failing.
+     * TODO: If we ever run more than one processor, this needs remote locking or a claim that can lose (e.g. a unique insert on sourceUri that rejects the second claimer).
+     */
     const exchangeLocks = new Map<string, ExchangeLock>();
 
     const withExchangeLock = <A, E, R>(sourceUri: string, effect: Effect.Effect<A, E, R>) =>
@@ -223,8 +233,10 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           );
 
           if (rejection !== null) {
-            const next = yield* persist(NTBS.toReplyPending(state, createReplyFailure(rejection)));
-            return transitionedTo(next);
+            const replyPending = yield* persist(
+              NTBS.toReplyPending(state, createReplyFailure(rejection)),
+            );
+            return transitionedTo(replyPending);
           }
 
           return unchanged;

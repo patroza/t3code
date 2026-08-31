@@ -1755,4 +1755,37 @@ describe("T3Gateway", () => {
       });
     });
   });
+
+  describe("startTurn", () => {
+    /*
+    What is `startTurn` used for?
+
+    It has a single call site, `processThreadCreated`. From a business-logic perspective the following has happened:
+    1. A user on an external platform has sent a message that has been processed and recorded.
+    2. A threadId, userMessageId and branch names have been minted for this incoming message.
+    3. A `RequestClaimed` is saved to the exchange repository. We now have a durable record of the incoming request and the t3 coordinates of the work associated to it.
+    4. A git worktree is created, the branch is checked out, the scripts of the project have been run. a `ThreadCreated` is recorded to the `Exchange` repository.
+    5. Now that we have a thread, we want to start the turn, but only if there is no turn already for this very thread and userMessageId. `getTurnStatus` does exactly that: given the `ThreadCreated` it retrieves the related information to determine whether a previous run may have already started a turn that has never been recorded, or never completed.
+    6. We now know that we're safe to start the turn.
+
+    So, what do we do in `startTurn`?
+
+    Essentially one thing: dispatch `thread.turn.start` command to the orchestration engine, sending the captured request snapshot as the first user message, under the minted userMessageId, with the stored attachments. That `userMessageId` becomes the turn's `pendingMessageId`, which is exactly the identity `getTurnStatus` matches on.
+
+    Note what `startTurn` does not:
+    - It does **not** start a turn in the "physical" sense of waiting for a synchronous confirmation that the turn has effectively started in some harness. It merely returns once the command is dispatched and durably accepted; the provider adopting the turn and running it happens asynchronously after. Even a start failure after this point does not surface at `startTurn` level. It will be catched after, during a `getTurnStatus` run.
+    - Needless to say, it doesn't wait for a turn completion either, as it doesn't even wait for it to start.
+
+    Why is "dispatched and durably accepted" enough? Because the engine appends the events and writes the projected turn rows in one SQL transaction, and only then returns.
+    `getTurnStatus` reads the very rows that transaction writes, so a crash anywhere leaves both the events and the turn row, or neither: there is no window where a turn started but cannot be seen by the next cycle.
+    This matters because a duplicate dispatch would not fail: the decider queues it while our turn is pending or active, or starts a second turn if it already completed.
+    So the protection against double starts is never sending one, not recovering from a rejection.
+
+    A successful `startTurn` transitions nothing: the processor returns "unchanged" and the exchange stays `ThreadCreated` until `getTurnStatus` observes a settled turn.
+
+    TODO: Consider listening to t3 events to confirm the turn has started maybe?
+
+    As `startTurn` is an action both error classifications apply. We may get both Retryable as well as Fatal errors.
+    */
+  });
 });
