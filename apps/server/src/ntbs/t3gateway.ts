@@ -45,13 +45,25 @@ import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.t
   TODO: Better description of the whole architecture.
 */
 
+/**
+ * A classification, not a scheduling request: it states the step is safe to retry, not that anything will retry it.
+ * A failed retryable step leaves the exchange state untouched, so the exchange simply remains non-terminal, and whatever re-drives non-terminal exchanges re-runs the cycle from persisted state.
+ */
 export class RetryableError extends Data.TaggedError("RetryableError")<{
   reason: string;
   cause: unknown;
   method: string;
 }> {}
 
-/** T3 will never accept this work. */
+/**
+ * T3 will never accept this work.
+ *
+ * The mirror classification: retrying is pointless, so the exchange must progress to a terminal state instead of staying open.
+ *
+ * Actions (`planCoordinates`, `provisionThread`, `startTurn`) fail with `FatalError` when T3 rejects the work, and the processor converts that into a reply-pending failure.
+ * Reads (`getThreadStatus`, `getTurnStatus`) never carry `FatalError`: an unrecoverable fact they observe goes into the context, and the decider drives the same terminal transition.
+ * Both roads end at the same place: a failure reply to the user.
+ */
 export class FatalError extends Data.TaggedError("FatalError")<{
   reason: string;
   cause: unknown;
@@ -129,6 +141,9 @@ export interface T3Gateway {
     startBranchName: string,
   ) => Effect.Effect<NTBS.WorkCoordinates, RetryableError | FatalError>;
 
+  /**
+   * A missing thread is a normal answer here, it is what triggers provisioning; only at ThreadCreated does the same observation become an anomaly.
+   */
   readonly getThreadStatus: (
     state: NTBS.RequestClaimed,
   ) => Effect.Effect<NTBS.RequestClaimedContext, RetryableError>;
@@ -138,7 +153,17 @@ export interface T3Gateway {
     state: NTBS.RequestClaimed,
   ) => Effect.Effect<void, RetryableError | FatalError>;
 
-  /** Reports turn progress, interpreting a finished turn into a verbatim `Reply`. */
+  /** Reports turn progress, interpreting a finished turn into a `Reply`: the agent's verbatim response when it produced one, a synthesized failure or cancellation note otherwise.
+   *
+   * The question it answers isn't really "does this thread have a turn?" but "did **our** message start a turn?". This is an important distinction because user messages to the same thread in T3 can come from different sources and interfaces. We want to know about the turn that should start stemming from a user in the external platform with a specific userMessageId.
+   *
+   * This is the invariant that makes recovery safe.
+   *
+   * It's a pure read, errors are Retryable only. Every lookup failure means "ask again later", nothing it learns can reject the exchange.
+   *
+   * Unrecoverable edge cases like "turn completed but thread not found" map to "completed" turns whose reply is a failure.
+   *
+   */
   readonly getTurnStatus: (
     state: NTBS.ThreadCreated,
   ) => Effect.Effect<NTBS.ThreadCreatedContext, RetryableError>;
