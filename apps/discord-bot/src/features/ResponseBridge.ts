@@ -5077,48 +5077,45 @@ export const runBridge = (
             lastFinalizedAssistantId: lastFinalizedForDelivery,
             lastFinalizedText: lastFinalizedTextForDelivery,
           });
-          // Queue drain can make latestTurn the parked follow-up before Discord
-          // finalized the prior answer. Do not stream that body under a new
-          // Working tip — post it as its own final first.
-          if (deliveryAssistants.length === 0 && prior.finalizedTurnId === null) {
-            const priorCatchUp = unfinalizedPriorAssistantForCatchUp({
-              messages: threadMessagesForDelivery,
-              currentTurnId: activeTurnId,
-              lastFinalizedAssistantId: lastFinalizedForDelivery,
-              lastFinalizedText: lastFinalizedTextForDelivery,
-            });
-            const hasUnfinalizedTip =
-              allStreamIds(prior).length > 0 || prior.lastAssistantText.trim() !== "";
-            if (priorCatchUp !== null && hasUnfinalizedTip) {
-              yield* Effect.logInfo(
-                "Catch-up finalizing prior turn before queued follow-up delivery",
-                {
+          // Queue drain auto-starts the parked follow-up (correct). Discord must
+          // still post the prior T3 answer as its own final first — even if the
+          // next turn already has assistants or the premature-status finalize
+          // already deleted the Working tip.
+          const priorCatchUp = unfinalizedPriorAssistantForCatchUp({
+            messages: threadMessagesForDelivery,
+            currentTurnId: activeTurnId,
+            lastFinalizedAssistantId: lastFinalizedForDelivery,
+            lastFinalizedText: lastFinalizedTextForDelivery,
+          });
+          if (priorCatchUp !== null) {
+            yield* Effect.logInfo(
+              "Catch-up finalizing prior turn before queued follow-up delivery",
+              {
+                t3ThreadId: input.t3ThreadId,
+                priorTurnId: priorCatchUp.turnId,
+                priorAssistantId: priorCatchUp.id,
+                nextTurnId: activeTurnId,
+                textLen: priorCatchUp.text.length,
+              },
+            );
+            yield* postOrEditAssistant({
+              turnId: priorCatchUp.turnId,
+              t3MessageId: priorCatchUp.id,
+              text: priorCatchUp.text,
+              streaming: false,
+              images: [],
+              worktreePath: thread.worktreePath,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logError("Failed to catch-up finalize prior turn", {
                   t3ThreadId: input.t3ThreadId,
                   priorTurnId: priorCatchUp.turnId,
                   priorAssistantId: priorCatchUp.id,
-                  nextTurnId: activeTurnId,
-                  textLen: priorCatchUp.text.length,
-                },
-              );
-              yield* postOrEditAssistant({
-                turnId: priorCatchUp.turnId,
-                t3MessageId: priorCatchUp.id,
-                text: priorCatchUp.text,
-                streaming: false,
-                images: [],
-                worktreePath: thread.worktreePath,
-              }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logError("Failed to catch-up finalize prior turn", {
-                    t3ThreadId: input.t3ThreadId,
-                    priorTurnId: priorCatchUp.turnId,
-                    priorAssistantId: priorCatchUp.id,
-                    cause: formatAlertCause(cause, 300),
-                  }),
-                ),
-                Effect.asVoid,
-              );
-            }
+                  cause: formatAlertCause(cause, 300),
+                }),
+              ),
+              Effect.asVoid,
+            );
           }
           const afterCatchUp = yield* Ref.get(stateRef);
           const lastFinalizedAfterCatchUp =
