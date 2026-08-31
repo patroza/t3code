@@ -13,7 +13,18 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import type * as NTBS from "./exchange.ts";
-import { Context, Crypto, Data, DateTime, Effect, FileSystem, Layer, Option, Stream } from "effect";
+import {
+  Context,
+  Crypto,
+  Data,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Result,
+  Stream,
+} from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
@@ -619,7 +630,18 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           );
       });
 
-    const threadActivity = Stream.never;
+    /*
+      This pings on every thread event — token deltas, message streams, all of it, for all threads in the system, not just NTBS ones.
+      The processor's lookup makes that correct but it's a per-event exchange-repository hit while any turn is streaming.
+      If that ever shows up in profiles, the fix is a narrower filter (turn/session lifecycle event types) — the generous filter is the right starting point, not necessarily the endpoint.
+    */
+    const threadActivity = orchestrationEngine.streamDomainEvents.pipe(
+      Stream.filterMap((event) =>
+        event.aggregateKind === "thread"
+          ? Result.succeed(event.aggregateId as ThreadId) // safe to cast as filtered the aggregate
+          : Result.failVoid,
+      ),
+    );
 
     /**
      * Creates the actual thread in T3 with the recorded claimed request.

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@effect/vitest";
 import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
-import { Effect, Layer, Option, Ref, FileSystem } from "effect";
+import { Effect, Layer, Option, Ref, FileSystem, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -14,8 +14,10 @@ import {
 } from "../project/ProjectSetupScriptRunner.ts";
 import { Crypto } from "effect/Crypto";
 import {
+  EventId,
   GitCommandError,
   MessageId,
+  type OrchestrationEvent,
   OrchestrationProjectShell,
   OrchestrationThread,
   OrchestrationThreadShell,
@@ -124,6 +126,8 @@ const createGitCommandError = (exitCode?: number, detail = "") =>
 type OrchestrationEngineInput = {
   /** `"invariant"` fails with the decider's rejection; `true` with an operational persistence error. */
   dispatchFails?: boolean | "invariant";
+  /** Emitted through `streamDomainEvents` as a finite stream, unlike the live infinite PubSub one. */
+  domainEvents?: ReadonlyArray<OrchestrationEvent>;
 };
 
 // TODO: We need to make sure and analyze what happens when it is dispatched
@@ -153,6 +157,7 @@ const createOrchestrationEngineServiceMock = (
             : Effect.succeed({ sequence: 0 }),
         ),
       ),
+    streamDomainEvents: Stream.fromIterable(input?.domainEvents ?? []),
   });
 };
 
@@ -1864,6 +1869,83 @@ describe("T3Gateway", () => {
 
         expect(result._tag).toBe("RetryableError");
         expect(result.method).toBe("orchestrationEngine.dispatch");
+      }).pipe(Effect.provide(layer));
+    });
+  });
+
+  describe("threadActivity", () => {
+    /*
+    `threadActivity` represents the last and final piece of the `t3Gateway`.
+
+    It is the only `T3Gateway` service not returning an effect. Instead it exposes a `Stream` to which the processor has to subscribe.
+
+    And the NTBS processor does exactly that. When the `run` Effect of the NTBS processor is yielded it subscribes to thread activity.
+
+    `subscribeToThreadActivity` does `Stream.runForEach(t3.threadActivity, (threadId) => ...does something with the thread id).
+
+    The important takeaway seems to be the fact that it merely seems to signal that something has happened/changed for some `threadId`. It is then up to the processor to lookup whether that threadId is of interest to the processor or not.
+
+    What does `threadActivity` does in practice then and how does it work? Apparently, it should just subscribe to the main t3 event emitter, filter events for those that related to thread changes and merely stream the threadId of those events. There is no "who's listening" gap here: a `Stream` is a lazy description, and nobody subscribes until someone runs it. `OrchestrationEngineService` exposes `streamDomainEvents`, a `Stream.fromPubSub` that creates a fresh subscription each time it is run, so `threadActivity` is just that stream piped through a filter mapping events to their threadId. The subscription to the engine's PubSub is established exactly when the processor's Stream.runForEach starts, with no separate "start listening" step for `T3Gateway` to perform.
+
+    The filter should be generous: emit the threadId of any event whose payload carries one, rather than betting on which specific event types signal a turn settling. The trade off is redundant pings, and we accept it because a ping is answered by observe-before-act, so a redundant ping costs one listByThreadId, while a missed ping strands an exchange until restart.
+
+    A ping never arrives "too early". When the engine dispatches a command, everything happens inside one SQL transaction: events appended, projection rows written, receipt stored. Only after that transaction commits does the engine publish the event to the PubSub feeding this stream. So by the time the processor receives a ping for a thread, the database already contains whatever that event changed: when the ping wakes the processor and it calls getTurnStatus, the turn row it queries is guaranteed to reflect the event that caused the ping. There is no window where we get pinged "turn completed", read the projection, and still see the turn as running. Without this ordering we would need retry-until-visible logic; with it, ping then read is safe as-is.
+
+    But a ping can fail to arrive at all. The PubSub only delivers to subscribers that exist at publish time. If an event fires while nobody is subscribed — the classic case being server startup, before the processor has forked its Stream.runForEach — that ping is simply gone. Nothing replays it. The design accepts that because missed pings are covered elsewhere: startup recovery re-drives every non-terminal exchange when the processor boots, and the planned sweeper periodically re-drives non-terminal exchanges. The ping is an optimization for latency — react immediately instead of waiting for the next sweep — not the mechanism correctness depends on. Pings we do get are always safe to act on immediately; pings we don't get are someone else's job to compensate for.
+    */
+
+    const threadId = ThreadId.make("activity-thread");
+    const projectId = ProjectId.make("activity-project");
+
+    const baseEventFields = {
+      sequence: 0,
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+    } as const;
+
+    const threadEvent: OrchestrationEvent = {
+      ...baseEventFields,
+      type: "thread.session-set",
+      eventId: EventId.make("thread-event"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      payload: {
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: null,
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    };
+
+    const projectEvent: OrchestrationEvent = {
+      ...baseEventFields,
+      type: "project.deleted",
+      eventId: EventId.make("project-event"),
+      aggregateKind: "project",
+      aggregateId: projectId,
+      payload: { projectId, deletedAt: "2026-01-01T00:00:00.000Z" },
+    };
+
+    it.effect("emits the threadId of thread events and drops project events", () => {
+      const { layer } = createT3Gateway({
+        orchestrationEngine: { domainEvents: [projectEvent, threadEvent] },
+      });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const emitted = yield* Stream.runCollect(t3Gateway.threadActivity);
+
+        expect(emitted).toEqual([threadId]);
       }).pipe(Effect.provide(layer));
     });
   });
