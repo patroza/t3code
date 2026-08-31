@@ -193,17 +193,17 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           break;
       }
 
-      const next = yield* persist(NTBS.toThreadCreated(state));
-      yield* adapter.acknowledge(next).pipe(
+      const threadCreated = yield* persist(NTBS.toThreadCreated(state));
+      yield* adapter.acknowledge(threadCreated).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Failed to post the NTBS acknowledgement", {
-            sourceUri: next.sourceUri,
-            threadId: next.t3.threadId,
+            sourceUri: threadCreated.sourceUri,
+            threadId: threadCreated.t3.threadId,
             cause,
           }),
         ),
       );
-      return transitionedTo(next);
+      return transitionedTo(threadCreated);
     });
 
     const processThreadCreated = Effect.fn("NTBSProcessor.processThreadCreated")(function* (
