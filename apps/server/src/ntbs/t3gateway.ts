@@ -419,6 +419,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const projectScriptRunner = yield* ProjectSetupScriptRunner;
 
+    const projectionTurnRepository = yield* ProjectionTurnRepository;
+
     const planCoordinates = (
       projectId: ProjectId,
       startBranchName: string,
@@ -473,10 +475,97 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       );
 
     const getTurnStatus = (
-      _state: NTBS.ThreadCreated,
+      state: NTBS.ThreadCreated,
     ): Effect.Effect<NTBS.ThreadCreatedContext, RetryableError> =>
-      Effect.succeed({
-        turn: "missing",
+      Effect.gen(function* () {
+        const turns = yield* projectionTurnRepository
+          .listByThreadId({ threadId: state.t3.threadId })
+          .pipe(
+            orFail("retryable")(
+              "projectionTurnRepository.listByThreadId",
+              "Could not load the turns of thread " + state.t3.threadId,
+            ),
+          );
+
+        /*
+          `.find` is safe: a userMessageId labels at most one turn. It is minted once per request,
+          and a turn start is only repeated by recovery when no turn exists for it yet.
+        */
+        const turn = turns.find((turn) => turn.pendingMessageId === state.t3.userMessageId);
+
+        if (turn === undefined) {
+          return { turn: "missing" } as const;
+        }
+
+        if (turn.state === "pending" || turn.state === "running") {
+          return { turn: "active" } as const;
+        }
+
+        // Only a settled turn needs the thread detail: the reply text lives in its messages.
+        const maybeThread = yield* projectionSnapshotQuery
+          .getThreadDetailById(state.t3.threadId)
+          .pipe(
+            orFail("retryable")(
+              "projectionSnapshotQuery.getThreadDetailById",
+              "Could not load thread " + state.t3.threadId,
+            ),
+          );
+
+        if (Option.isNone(maybeThread)) {
+          // The turn settled but its thread is gone. An observed fact, not a lookup error: retrying cannot bring the thread back, so it becomes a failure reply.
+          return {
+            turn: "completed",
+            reply: {
+              type: "failure",
+              text: "T3 finished, but its thread could no longer be found.",
+              cause: null,
+            },
+          } as const;
+        }
+
+        const thread = maybeThread.value;
+
+        switch (turn.state) {
+          case "completed": {
+            const assistantMessage =
+              turn.assistantMessageId === null
+                ? undefined
+                : thread.messages.find((message) => message.id === turn.assistantMessageId);
+            const text = assistantMessage?.text.trim() ?? "";
+
+            return {
+              turn: "completed",
+              reply:
+                text.length > 0
+                  ? ({ type: "answer", text } as const)
+                  : ({
+                      type: "failure",
+                      text: "T3 completed without producing a response.",
+                      cause: null,
+                    } as const),
+            } as const;
+          }
+
+          case "error":
+            return {
+              turn: "completed",
+              reply: {
+                type: "failure",
+                text: thread.session?.lastError ?? "T3 failed while processing this request.",
+                cause: null,
+              },
+            } as const;
+
+          case "interrupted":
+            return {
+              turn: "completed",
+              reply: {
+                type: "cancellation",
+                text: "T3 stopped processing this request.",
+                cause: null,
+              },
+            } as const;
+        }
       });
 
     const startTurn = (_state: NTBS.ThreadCreated) => Effect.void;
