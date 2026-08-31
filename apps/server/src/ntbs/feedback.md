@@ -1,6 +1,3 @@
-2. No reentrancy checks. There's no fs.exists(worktreePath) skip and no branch-exists fallback, so any retry after a partial run hits "path already exists" / "branch already exists", which you map to RetryableError → infinite retry loop. This is the checklist part of the design; it's currently a straight-line transaction.
-3. The rollback we agreed to drop is back (Effect.onError → removeWorktree, lines 408-416). It fires on retryable dispatch failures too, throwing away the checkout the next pass would have reused. Delete only on fatal abandonment.
-4. Setup-script failure is RetryableError (lines 420-432). We said log-and-continue — and as written the error is worse than useless: thread.create already succeeded, so the next reconcile pass sees the thread present and never calls provisionThread again. The scripts won't re-run; the error just wastes a pass. Swallow with a logWarning like the old processor did.
 5. deferDependencyInstall: true is missing. Without it the post-checkout hook installs dependencies inside createWorktree, then your setup scripts install again.
 
 # 2

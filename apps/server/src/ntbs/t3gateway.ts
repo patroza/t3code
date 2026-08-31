@@ -20,6 +20,7 @@ import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurn
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { ServerConfig } from "../config.ts";
 import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
 
@@ -154,15 +155,17 @@ export const T3Gateway = Context.Service<T3Gateway>("t3code/ntbs/t3Gateway");
 
 const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Effect.gen(
   function* () {
-    const orFail = (method: string, reason: string) =>
-      Effect.mapError(
-        (cause: unknown) =>
-          new RetryableError({
-            reason,
-            cause,
-            method,
-          }),
-      );
+    const orFail =
+      <S extends "retryable" | "fatal">(severity: S) =>
+      (method: string, reason: string) =>
+        Effect.mapError(
+          (cause: unknown) =>
+            (severity === "fatal"
+              ? new FatalError({ reason, cause, method })
+              : new RetryableError({ reason, cause, method })) as S extends "fatal"
+              ? FatalError
+              : RetryableError,
+        );
 
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
@@ -176,7 +179,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     */
     const getProject = (projectId: ProjectId) =>
       projectionSnapshotQuery.getProjectShellById(projectId).pipe(
-        orFail(
+        orFail("retryable")(
           "projectionSnapshotQuery.getProjectShellById",
           "Could not load project " + projectId,
         ),
@@ -212,7 +215,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         // Check if origin exist. If not, T3 will never be able to accept this work.
         // The lookup failing is operational; a definitive `false` is not.
         yield* gitWorkflowService.remoteExists({ cwd, remoteName: "origin" }).pipe(
-          orFail(
+          orFail("retryable")(
             "gitWorkflowService.remoteExists",
             "Could not check whether the remote 'origin' exists",
           ),
@@ -230,7 +233,12 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         // Since it exists, let's fetch the latest remote state
         yield* gitWorkflowService
           .fetchRemote({ cwd, remoteName: "origin" })
-          .pipe(orFail("gitWorkflowService.fetchRemote", "Could not fetch origin. try again"));
+          .pipe(
+            orFail("retryable")(
+              "gitWorkflowService.fetchRemote",
+              "Could not fetch origin. try again",
+            ),
+          );
 
         /*
           Reads the local `refs/remotes/origin/*` namespace the fetch above just refreshed;
@@ -288,7 +296,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       Effect.gen(function* () {
         const pathExists = yield* fileSystem
           .exists(input.worktreePath)
-          .pipe(orFail("fileSystem.exists", "Could not inspect the worktree path"));
+          .pipe(orFail("retryable")("fileSystem.exists", "Could not inspect the worktree path"));
 
         if (pathExists) {
           // Ask git, not the filesystem: the step is only done when the
@@ -296,7 +304,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           const status = yield* gitWorkflowService
             .localStatus({ cwd: input.worktreePath })
             .pipe(
-              orFail("gitWorkflowService.localStatus", "Could not inspect the existing worktree"),
+              orFail("retryable")(
+                "gitWorkflowService.localStatus",
+                "Could not inspect the existing worktree",
+              ),
             );
 
           if (status.isRepo && status.refName === input.worktreeBranchName) {
@@ -313,7 +324,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             .removeWorktree({ cwd: input.workspaceRoot, path: input.worktreePath, force: true })
             .pipe(
               Effect.catch(() => fileSystem.remove(input.worktreePath, { recursive: true })),
-              orFail(
+              orFail("retryable")(
                 "gitWorkflowService.removeWorktree",
                 "Could not clear the leftover worktree path",
               ),
@@ -330,7 +341,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             Effect.map((result) =>
               result.refs.some((ref) => ref.name === input.worktreeBranchName),
             ),
-            orFail(
+            orFail("retryable")(
               "gitWorkflowService.listRefs",
               "Could not check whether the worktree branch already exists",
             ),
@@ -376,7 +387,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     const crypto = yield* Crypto.Crypto;
     const randomUUID = crypto.randomUUIDv4.pipe(
-      orFail("crypto.randomUUIDv4", "Failed creating a UUID v4"),
+      orFail("retryable")("crypto.randomUUIDv4", "Failed creating a UUID v4"),
     );
 
     const getNow = DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -430,7 +441,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         Effect.map((maybeThread) => ({
           thread: Option.isNone(maybeThread) ? ("missing" as const) : ("present" as const),
         })),
-        orFail("getThreadStatus", "couldn't get the thread idk"),
+        orFail("retryable")(
+          "projectionSnapshotQuery.getThreadDetailById",
+          "Could not check whether thread " + state.t3.threadId + " exists",
+        ),
       );
 
     const getTurnStatus = (
@@ -510,7 +524,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                 branch: state.t3.worktreeBranchName,
                 worktreePath: worktreePath,
                 threadId: state.t3.threadId,
-                title: "some title",
+                // T3 generates the real title after the first turn starts.
+                title: DEFAULT_THREAD_TITLE,
                 modelSelection: modelSelection,
                 commandId,
                 createdAt,
@@ -519,8 +534,17 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                 interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
               }),
             )
-            .pipe(orFail("orchestrationEngine.dispatch", "failed to dispatch "));
+            .pipe(
+              orFail("retryable")(
+                "orchestrationEngine.dispatch",
+                "Could not dispatch thread.create for thread " + state.t3.threadId,
+              ),
+            );
 
+          /*
+            Script failures are thread-provisioning errors: fatal.
+            We don't pretend stuff is working if it's not.
+          */
           yield* projectScriptRunner
             .runForThread({
               threadId: state.t3.threadId,
@@ -529,7 +553,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               worktreePath,
             })
             .pipe(
-              orFail(
+              orFail("fatal")(
                 "projectScriptRunner.runForThread",
                 "Failed to run scripts while provisioning thread",
               ),
