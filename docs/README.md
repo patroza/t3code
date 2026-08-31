@@ -31,6 +31,7 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); fork branch model and agent rul
 - [Glossary](./internals/glossary.md)
 - [Scripts](./internals/scripts.md)
 - [Connection runtime](./internals/connection-runtime.md)
+- [Voice input](./internals/voice-input.md)
 - [Providers](./internals/providers.md)
 - [Remote environments](./internals/remote.md)
 - [Server updates](./internals/server-updates.md)
