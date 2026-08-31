@@ -3,7 +3,10 @@ import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
 import { Effect, Layer, Option, Ref, FileSystem } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
+import {
+  ProjectionTurnRepository,
+  type ProjectionTurn,
+} from "../persistence/Services/ProjectionTurns.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import {
   ProjectSetupScriptOperationError,
@@ -14,10 +17,12 @@ import {
   GitCommandError,
   MessageId,
   OrchestrationProjectShell,
+  OrchestrationThread,
   OrchestrationThreadShell,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   VcsCreateWorktreeResult,
   VcsListRefsResult,
   VcsStatusLocalResult,
@@ -25,7 +30,12 @@ import {
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
 import { PlatformError, SystemError } from "effect/PlatformError";
-import { makeRequestClaimed, type Request, type WorkCoordinates } from "./exchange.ts";
+import {
+  makeRequestClaimed,
+  toThreadCreated,
+  type Request,
+  type WorkCoordinates,
+} from "./exchange.ts";
 import { ServerConfig } from "../config.ts";
 import { LogLevel } from "effect/Config";
 
@@ -146,6 +156,11 @@ type PSQMInput = {
     | { missing: true };
   isThreadMissing?: boolean;
   isGetThreadShellByIdError?: boolean;
+  isThreadDetailMissing?: boolean;
+  isGetThreadDetailByIdError?: boolean;
+  /** Rendered as assistant messages on the thread detail. */
+  threadMessages?: ReadonlyArray<{ id: MessageId; text: string }>;
+  sessionLastError?: string;
 };
 
 const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
@@ -226,10 +241,87 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
           () => toPersistenceSqlError("some sql error")("somecause"),
         ),
       ),
+    getThreadDetailById: (threadId) =>
+      recordPSQM(
+        "getThreadDetailById",
+        threadId,
+        input?.isThreadDetailMissing
+          ? Option.none<OrchestrationThread>()
+          : Option.some<OrchestrationThread>({
+              id: threadId,
+              projectId: ProjectId.make("projectId"),
+              title: "some title",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("instanceId"),
+                model: "custom",
+                options: [],
+              },
+              runtimeMode: "auto",
+              interactionMode: "default",
+              branch: "some-branch",
+              worktreePath: null,
+              latestTurn: null,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              archivedAt: null,
+              settledOverride: null,
+              settledAt: null,
+              deletedAt: null,
+              messages: (input?.threadMessages ?? []).map((message) => ({
+                id: message.id,
+                role: "assistant" as const,
+                text: message.text,
+                turnId: null,
+                streaming: false,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              })),
+              queuedMessages: [],
+              pendingTurnStart: null,
+              proposedPlans: [],
+              activities: [],
+              checkpoints: [],
+              session: {
+                threadId,
+                status: "ready",
+                providerName: null,
+                activeTurnId: null,
+                lastError: input?.sessionLastError ?? null,
+                runtimeMode: "auto",
+                updatedAt: new Date().toISOString(),
+                providerInstanceId: ProviderInstanceId.make("providerInstanceId"),
+              },
+            }),
+      ).pipe(
+        Effect.filterOrFail(
+          () => !input || input.isGetThreadDetailByIdError !== true,
+          () => toPersistenceSqlError("some sql error")("somecause"),
+        ),
+      ),
   });
 };
 
-const ProjectionTurnRepositoryMock = Layer.mock(ProjectionTurnRepository, {});
+type ProjectionTurnRepositoryInput = {
+  turns?: ReadonlyArray<ProjectionTurn>;
+  listByThreadIdFails?: boolean;
+};
+
+const createProjectionTurnRepositoryMock = (
+  recordResult: CallRecordResult,
+  input?: ProjectionTurnRepositoryInput,
+) => {
+  const record = recordResult("ProjectionTurnRepository");
+
+  return Layer.mock(ProjectionTurnRepository, {
+    listByThreadId: (callInput) =>
+      record("listByThreadId", callInput, input?.turns ?? []).pipe(
+        Effect.filterOrFail(
+          () => !input || input.listByThreadIdFails !== true,
+          () => toPersistenceSqlError("some sql error")("somecause"),
+        ),
+      ),
+  });
+};
 
 type GitLayerInput = {
   createWorkreeFails?: boolean | { detail: string };
@@ -466,6 +558,7 @@ const createT3Gateway = (input?: {
   orchestrationEngine?: OrchestrationEngineInput;
   projectSetupScriptRunner?: ProjectSetupScriptRunnerInput;
   fileSystem?: FileSystemInput;
+  turnRepository?: ProjectionTurnRepositoryInput;
 }) => {
   const { calls, recordResult, record } = createCallLog();
 
@@ -478,7 +571,7 @@ const createT3Gateway = (input?: {
           createPSQM(recordResult, input?.pqsm),
           ProjectSetupScriptRunnerMock(recordResult, record, input?.projectSetupScriptRunner),
           createGitWorkflowServiceMock(recordResult, record, input?.gwfs),
-          ProjectionTurnRepositoryMock,
+          createProjectionTurnRepositoryMock(recordResult, input?.turnRepository),
           createCryptoMock(recordResult, input?.crypto),
           serverConfigMock,
           createFileSystemMock(recordResult, input?.fileSystem),
@@ -1269,40 +1362,397 @@ describe("T3Gateway", () => {
       Note that the answer is not binary: `ThreadCreatedContext` reports the turn as "missing", "active" or "completed" (carrying the reply), and `fromThreadCreated` maps those to `start-turn`, `wait` and `record-reply-pending` respectively.
 
       And thus, here, we verify the behavior of `getTurnStatus` on T3Gateway service.
-
-      TODO: `getTurnStatus` is currently a stub that always answers { turn: "missing" }, so this suite stays empty until the real lookup lands — a test written now would only pin the placeholder.
     */
 
-    it.todo("answers { turn: 'missing' } when the thread has no turns at all");
-    it.todo(
+    const threadCreated = toThreadCreated(
+      makeRequestClaimed(
+        {
+          attachments: [],
+          snapshot: "getTurnStatus - snapshot",
+          sourceUri: "test://get-turn-status",
+        },
+        {
+          projectId: ProjectId.make("projectId"),
+          startBranchName: "startBranchName",
+          startCommitSha: "startCommitSha",
+          threadId: ThreadId.make("threadId"),
+          userMessageId: MessageId.make("userMessageId"),
+          worktreeBranchName: "worktreeBranchName",
+        },
+      ),
+    );
+
+    /**
+     * A projected turn on the exchange's thread. Defaults describe the turn our own message
+     * started; tests override `pendingMessageId` to plant other messages' turns, and `state` /
+     * `assistantMessageId` to shape the outcome.
+     */
+    const makeProjectionTurn = (input?: Partial<ProjectionTurn>): ProjectionTurn => ({
+      threadId: threadCreated.t3.threadId,
+      turnId: TurnId.make("turnId"),
+      pendingMessageId: threadCreated.t3.userMessageId,
+      sourceProposedPlanThreadId: null,
+      sourceProposedPlanId: null,
+      assistantMessageId: null,
+      state: "pending",
+      requestedAt: new Date().toISOString(),
+      startedAt: null,
+      completedAt: null,
+      checkpointTurnCount: null,
+      checkpointRef: null,
+      checkpointStatus: null,
+      checkpointFiles: [],
+      ...input,
+    });
+
+    it.effect("answers { turn: 'missing' } when the thread has no turns at all", () => {
+      const { calls, layer } = createT3Gateway({ turnRepository: { turns: [] } });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+        expect(result).toEqual({ turn: "missing" });
+
+        // The lookup is scoped to the exchange's own thread, and a missing turn needs nothing else.
+        expect(calls).toEqual([
+          {
+            service: "ProjectionTurnRepository",
+            method: "listByThreadId",
+            input: { threadId: threadCreated.t3.threadId },
+          },
+        ]);
+      }).pipe(Effect.provide(layer));
+    });
+    /*
+      Turns started by other messages (another platform, the web UI) are not ours: "does this
+      thread have a turn?" is the wrong question, "did our message start one?" is the right one.
+    */
+    it.effect(
       "answers { turn: 'missing' } when the thread has turns but none whose pendingMessageId matches the exchange's userMessageId",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: {
+            turns: [
+              makeProjectionTurn({ pendingMessageId: MessageId.make("someone-else") }),
+              makeProjectionTurn({ pendingMessageId: null, state: "completed" }),
+            ],
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({ turn: "missing" });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo("answers { turn: 'active' } when the matching turn is pending");
-    it.todo("answers { turn: 'active' } when the matching turn is running");
-    it.todo(
+    it.effect("answers { turn: 'active' } when the matching turn is pending", () => {
+      const { layer } = createT3Gateway({
+        turnRepository: { turns: [makeProjectionTurn({ state: "pending" })] },
+      });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+        expect(result).toEqual({ turn: "active" });
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("answers { turn: 'active' } when the matching turn is running", () => {
+      const { layer } = createT3Gateway({
+        turnRepository: { turns: [makeProjectionTurn({ state: "running" })] },
+      });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+        expect(result).toEqual({ turn: "active" });
+      }).pipe(Effect.provide(layer));
+    });
+    it.effect(
       "answers a completed turn with an answer reply carrying the assistant message text verbatim",
+      () => {
+        const assistantMessageId = MessageId.make("assistantMessageId");
+
+        const { layer } = createT3Gateway({
+          turnRepository: {
+            turns: [makeProjectionTurn({ state: "completed", assistantMessageId })],
+          },
+          pqsm: {
+            threadMessages: [{ id: assistantMessageId, text: "the agent's answer" }],
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: { type: "answer", text: "the agent's answer" },
+          });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo(
+
+    it.effect(
       "picks our turn's reply when the thread holds several turns from other messages alongside ours",
+      () => {
+        const assistantMessageId = MessageId.make("ourAssistantMessageId");
+        const foreignAssistantMessageId = MessageId.make("foreignAssistantMessageId");
+
+        const { layer } = createT3Gateway({
+          turnRepository: {
+            turns: [
+              // A completed foreign turn before ours: picking "the first completed turn" would grab this one.
+              makeProjectionTurn({
+                pendingMessageId: MessageId.make("someone-else"),
+                state: "completed",
+                assistantMessageId: foreignAssistantMessageId,
+              }),
+              makeProjectionTurn({ state: "completed", assistantMessageId }),
+              makeProjectionTurn({ pendingMessageId: null, state: "running" }),
+            ],
+          },
+          pqsm: {
+            threadMessages: [
+              { id: foreignAssistantMessageId, text: "someone else's answer" },
+              { id: assistantMessageId, text: "our answer" },
+            ],
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: { type: "answer", text: "our answer" },
+          });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo(
+    it.effect(
       "answers a completed turn with a failure reply when the turn has no assistantMessageId",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: {
+            turns: [makeProjectionTurn({ state: "completed", assistantMessageId: null })],
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: {
+              type: "failure",
+              text: "T3 completed without producing a response.",
+              cause: null,
+            },
+          });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo(
+
+    it.effect(
       "answers a completed turn with a failure reply when the assistant message is missing or has empty text",
+      () => {
+        const assistantMessageId = MessageId.make("assistantMessageId");
+
+        const turns = [makeProjectionTurn({ state: "completed", assistantMessageId })];
+
+        // The turn names an assistant message the thread does not contain.
+        const missingMessage = createT3Gateway({
+          turnRepository: { turns },
+          pqsm: { threadMessages: [] },
+        });
+
+        // The message exists but holds nothing worth posting.
+        const emptyText = createT3Gateway({
+          turnRepository: { turns },
+          pqsm: { threadMessages: [{ id: assistantMessageId, text: "  \n  " }] },
+        });
+
+        const expected = {
+          turn: "completed",
+          reply: {
+            type: "failure",
+            text: "T3 completed without producing a response.",
+            cause: null,
+          },
+        };
+
+        const getTurnStatus = Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+          return yield* t3Gateway.getTurnStatus(threadCreated);
+        });
+
+        return Effect.gen(function* () {
+          expect(yield* getTurnStatus.pipe(Effect.provide(missingMessage.layer))).toEqual(expected);
+          expect(yield* getTurnStatus.pipe(Effect.provide(emptyText.layer))).toEqual(expected);
+        });
+      },
     );
-    it.todo(
+    it.effect(
       "answers a completed turn with a failure reply carrying session.lastError when the turn errored",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [makeProjectionTurn({ state: "error" })] },
+          pqsm: { sessionLastError: "provider exploded" },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: { type: "failure", text: "provider exploded", cause: null },
+          });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo(
+
+    it.effect(
       "answers a completed turn with a generic failure reply when the turn errored without a recorded lastError",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [makeProjectionTurn({ state: "error" })] },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: {
+              type: "failure",
+              text: "T3 failed while processing this request.",
+              cause: null,
+            },
+          });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo("answers a completed turn with a cancellation reply when the turn was interrupted");
-    it.todo(
+    it.effect(
+      "answers a completed turn with a cancellation reply when the turn was interrupted",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [makeProjectionTurn({ state: "interrupted" })] },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: {
+              type: "cancellation",
+              text: "T3 stopped processing this request.",
+              cause: null,
+            },
+          });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
+    /*
+      An observed fact, not a lookup error: retrying cannot bring the thread back, so the exchange must progress to a failure reply instead of staying open forever.
+    */
+    it.effect(
       "answers a completed turn with a failure reply when the turn settled but the thread is gone",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [makeProjectionTurn({ state: "completed" })] },
+          pqsm: { isThreadDetailMissing: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: {
+              type: "failure",
+              text: "T3 finished, but its thread could no longer be found.",
+              cause: null,
+            },
+          });
+        }).pipe(Effect.provide(layer));
+      },
     );
-    it.todo("fails with RetryableError when listing the thread's turns fails");
-    it.todo("fails with RetryableError when the thread detail fetch fails transiently");
-    it.todo("performs no thread detail lookup when the turn is missing or active");
+    it.effect("fails with RetryableError when listing the thread's turns fails", () => {
+      const { layer } = createT3Gateway({ turnRepository: { listByThreadIdFails: true } });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.getTurnStatus(threadCreated).pipe(Effect.flip);
+
+        expect(result._tag).toBe("RetryableError");
+        expect(result.method).toBe("projectionTurnRepository.listByThreadId");
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("fails with RetryableError when the thread detail fetch fails transiently", () => {
+      const { layer } = createT3Gateway({
+        turnRepository: { turns: [makeProjectionTurn({ state: "completed" })] },
+        pqsm: { isGetThreadDetailByIdError: true },
+      });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.getTurnStatus(threadCreated).pipe(Effect.flip);
+
+        expect(result._tag).toBe("RetryableError");
+        expect(result.method).toBe("projectionSnapshotQuery.getThreadDetailById");
+      }).pipe(Effect.provide(layer));
+    });
+
+    /*
+      The detail fetch exists only to read a settled reply; running it earlier would add a failure mode to arms that need nothing from it.
+    */
+    it.effect("performs no thread detail lookup when the turn is missing or active", () => {
+      const missing = createT3Gateway({ turnRepository: { turns: [] } });
+      const active = createT3Gateway({
+        turnRepository: { turns: [makeProjectionTurn({ state: "running" })] },
+      });
+
+      const getTurnStatus = Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+        return yield* t3Gateway.getTurnStatus(threadCreated);
+      });
+
+      return Effect.gen(function* () {
+        yield* getTurnStatus.pipe(Effect.provide(missing.layer));
+        yield* getTurnStatus.pipe(Effect.provide(active.layer));
+
+        expect(missing.calls.map((call) => call.method)).toEqual(["listByThreadId"]);
+        expect(active.calls.map((call) => call.method)).toEqual(["listByThreadId"]);
+      });
+    });
   });
 });
