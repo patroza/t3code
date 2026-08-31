@@ -44,6 +44,7 @@ export function FloatingWorkingControl(props: {
   readonly colorScheme: "light" | "dark";
   readonly startedAt: string | null;
   readonly showScrollToEnd: boolean;
+  readonly hasUnreadActivity?: boolean;
   readonly onScrollToEnd: () => void;
 }) {
   const separationProgress = useSharedValue(props.showScrollToEnd ? 1 : 0);
@@ -101,7 +102,11 @@ export function FloatingWorkingControl(props: {
             style={arrowTransformStyle}
           >
             <Animated.View style={arrowContentStyle}>
-              <ScrollToEndButton disabled={!props.showScrollToEnd} onPress={props.onScrollToEnd} />
+              <ScrollToEndButton
+                disabled={!props.showScrollToEnd}
+                hasUnreadActivity={props.hasUnreadActivity}
+                onPress={props.onScrollToEnd}
+              />
             </Animated.View>
           </AnimatedGlassView>
         </UniwindGlassContainer>
@@ -122,7 +127,9 @@ export function FloatingWorkingControl(props: {
             style={[arrowTransformStyle, arrowContentStyle]}
           >
             <ControlPill
-              accessibilityLabel="Scroll to end"
+              accessibilityLabel={
+                props.hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"
+              }
               activateOnPressIn
               className="h-11 w-11 border border-border bg-card shadow-md shadow-black/10"
               disabled={!props.showScrollToEnd}
@@ -138,11 +145,16 @@ export function FloatingWorkingControl(props: {
           isInteractive
           className="h-11 w-11 items-center justify-center overflow-hidden rounded-full"
         >
-          <ScrollToEndButton onPress={props.onScrollToEnd} />
+          <ScrollToEndButton
+            hasUnreadActivity={props.hasUnreadActivity}
+            onPress={props.onScrollToEnd}
+          />
         </UniwindGlassView>
       ) : (
         <ControlPill
-          accessibilityLabel="Scroll to end"
+          accessibilityLabel={
+            props.hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"
+          }
           activateOnPressIn
           className="h-11 w-11 border border-border bg-card shadow-md shadow-black/10"
           icon={{ ios: "chevron.down", android: "keyboard_arrow_down" }}
@@ -194,10 +206,14 @@ function formatWorkingDuration(startedAt: string, nowMs: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
-function ScrollToEndButton(props: { readonly disabled?: boolean; readonly onPress: () => void }) {
+function ScrollToEndButton(props: {
+  readonly disabled?: boolean;
+  readonly hasUnreadActivity?: boolean;
+  readonly onPress: () => void;
+}) {
   return (
     <ControlPill
-      accessibilityLabel="Scroll to end"
+      accessibilityLabel={props.hasUnreadActivity ? "New activity. Scroll to end" : "Scroll to end"}
       activateOnPressIn
       className="h-11 w-11 bg-transparent"
       disabled={props.disabled}

@@ -767,6 +767,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 colorScheme={isDarkMode ? "dark" : "light"}
                 startedAt={floatingWorkingStartedAt}
                 showScrollToEnd={showScrollToEndButton}
+                hasUnreadActivity={hasUnreadActivity}
                 onScrollToEnd={handleScrollToEnd}
               />
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>

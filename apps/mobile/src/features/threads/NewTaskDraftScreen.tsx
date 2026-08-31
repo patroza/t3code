@@ -824,7 +824,14 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     const draft = getComposerDraftSnapshot(draftKey);
-    const modelSelection = draft.modelSelection ?? flow.selectedModel;
+    // Snapshot read keeps just-typed selector state; the availability gate
+    // still applies so a stored selection on a disabled provider falls back
+    // to the flow's resolved model.
+    const modelSelection =
+      resolveSelectableModelSelection(
+        selectedEnvironmentServerConfig,
+        draft.modelSelection ?? null,
+      ) ?? flow.selectedModel;
     const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
     const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const selectedWorktreePath =
