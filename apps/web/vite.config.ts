@@ -94,6 +94,9 @@ const isolatedUnitTestFiles = [
   "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/chat/draftHeroTransition.test.ts",
   "src/components/files/projectFilesQueryState.test.ts",
+  // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
+  // upstream and fail under isolate:false when real React is already bound.
+  "src/components/files/projectFilesQueryState.test.tsx",
   // Mocks `~/browserFaviconStore`; under `isolate: false` an earlier file in
   // the same worker can bind the real module first, and the mock then never
   // applies — the icon falls back to the browser mockup and the stored-favicon

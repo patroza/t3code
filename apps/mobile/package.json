@@ -47,7 +47,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@callstack/liquid-glass": "^0.7.1",
     "@clerk/expo": "catalog:",
     "@effect/atom-react": "catalog:",
     "@expo-google-fonts/dm-sans": "^0.4.2",
@@ -57,6 +56,7 @@
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",
     "@pierre/diffs": "catalog:",
+    "@react-native-ai/apple": "0.12.0",
     "@react-native-menu/menu": "^2.0.0",
     "@react-navigation/elements": "2.9.26",
     "@react-navigation/native": "7.3.4",
@@ -77,6 +77,7 @@
     "effect": "catalog:",
     "expo": "~57.0.18",
     "expo-asset": "~57.0.15",
+    "expo-audio": "~57.0.4",
     "expo-auth-session": "~57.0.10",
     "expo-blur": "~57.0.2",
     "expo-build-properties": "~57.0.15",
@@ -145,7 +146,8 @@
     "autolinking": {
       "buildFromSource": [
         "react-native-screens",
-        "@react-native-menu/menu"
+        "@react-native-menu/menu",
+        "expo-audio"
       ]
     }
   },
