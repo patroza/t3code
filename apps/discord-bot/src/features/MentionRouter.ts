@@ -109,6 +109,7 @@ import {
   projectTopicFromParentLookup,
   normalizeWorkspacePath,
   resolveDiscordFollowUpDelivery,
+  shouldPostWorkingAckForContinue,
   type ProjectTopicLookup,
 } from "../presentation/mentions.ts";
 import {
@@ -1203,6 +1204,7 @@ const make = (botConfig: DiscordBotConfig) =>
             });
           }
           const turnAlreadyRunning = hasInterruptibleTurn(currentThread);
+          const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags);
           const liveBridge = yield* getLiveDiscordBridge(
             input.discordThreadId,
             existing.t3ThreadId,
@@ -1236,35 +1238,37 @@ const make = (botConfig: DiscordBotConfig) =>
             reuseLiveBridge,
           });
 
-          // Always post a fresh Working.. tip for interactive continues — including mid-turn
-          // steers while a live bridge is already streaming. Skipping the ack (old
-          // reuseLiveBridge path) left Discord editing the *previous* Working+Stop above
-          // the human message with no visible response to the new mention.
-          // Live bridge adopts this id: freezes/clears old tip, streams under the new one.
-          const workingAckMessageId =
-            input.presentationMode === "final-only"
-              ? null
-              : yield* rest
-                  .createMessage(input.discordThreadId, {
-                    ...workingMessageFields("_Working.._", existing.t3ThreadId),
-                  })
-                  .pipe(
-                    Effect.map((msg) => msg.id as string),
-                    Effect.tap((messageId) =>
-                      Effect.logInfo("Posted Working.. ack", {
-                        messageId,
-                        midTurnSteer: reuseLiveBridge,
-                      }),
-                    ),
-                    Effect.result,
-                    Effect.flatMap((result) => {
-                      if (Result.isSuccess(result)) return Effect.succeed(result.success);
-                      return Effect.logError("Failed to post Working.. ack").pipe(
-                        Effect.andThen(Effect.logError(result.failure)),
-                        Effect.as(null),
-                      );
+          // Interactive continues post a fresh Working.. tip, including mid-turn
+          // steers (live bridge adopts it: freezes the old tip, streams under the new
+          // one). Parked follow-ups must not — adopting would freeze the in-flight
+          // answer and the queued turn's final would replace it.
+          const workingAckMessageId = shouldPostWorkingAckForContinue({
+            presentationMode: input.presentationMode,
+            turnAlreadyRunning,
+            followUpDelivery,
+          })
+            ? yield* rest
+                .createMessage(input.discordThreadId, {
+                  ...workingMessageFields("_Working.._", existing.t3ThreadId),
+                })
+                .pipe(
+                  Effect.map((msg) => msg.id as string),
+                  Effect.tap((messageId) =>
+                    Effect.logInfo("Posted Working.. ack", {
+                      messageId,
+                      midTurnSteer: reuseLiveBridge,
                     }),
-                  );
+                  ),
+                  Effect.result,
+                  Effect.flatMap((result) => {
+                    if (Result.isSuccess(result)) return Effect.succeed(result.success);
+                    return Effect.logError("Failed to post Working.. ack").pipe(
+                      Effect.andThen(Effect.logError(result.failure)),
+                      Effect.as(null),
+                    );
+                  }),
+                )
+            : null;
           const pendingDiscordUserMessageId = newMessageId();
 
           // Ensure bridge (reuses live fiber for same thread; only restarts when needed).
@@ -1350,7 +1354,6 @@ const make = (botConfig: DiscordBotConfig) =>
           // Server parks busy-thread follow-ups. Default Discord policy is **queue**
           // (badge with 📥; delete user message to remove; /omegent steernow to flush).
           // `--steer` / `/omegent steer` inject immediately after startTurn.
-          const followUpDelivery = resolveDiscordFollowUpDelivery(input.flags);
           const t3MessageId = MessageId.make(startedTurn.messageId);
           if (followUpDelivery === "steer" && turnAlreadyRunning) {
             const steered = yield* t3
