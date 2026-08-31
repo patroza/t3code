@@ -1272,5 +1272,37 @@ describe("T3Gateway", () => {
 
       TODO: `getTurnStatus` is currently a stub that always answers { turn: "missing" }, so this suite stays empty until the real lookup lands — a test written now would only pin the placeholder.
     */
+
+    it.todo("answers { turn: 'missing' } when the thread has no turns at all");
+    it.todo(
+      "answers { turn: 'missing' } when the thread has turns but none whose pendingMessageId matches the exchange's userMessageId",
+    );
+    it.todo("answers { turn: 'active' } when the matching turn is pending");
+    it.todo("answers { turn: 'active' } when the matching turn is running");
+    it.todo(
+      "answers a completed turn with an answer reply carrying the assistant message text verbatim",
+    );
+    it.todo(
+      "picks our turn's reply when the thread holds several turns from other messages alongside ours",
+    );
+    it.todo(
+      "answers a completed turn with a failure reply when the turn has no assistantMessageId",
+    );
+    it.todo(
+      "answers a completed turn with a failure reply when the assistant message is missing or has empty text",
+    );
+    it.todo(
+      "answers a completed turn with a failure reply carrying session.lastError when the turn errored",
+    );
+    it.todo(
+      "answers a completed turn with a generic failure reply when the turn errored without a recorded lastError",
+    );
+    it.todo("answers a completed turn with a cancellation reply when the turn was interrupted");
+    it.todo(
+      "answers a completed turn with a failure reply when the turn settled but the thread is gone",
+    );
+    it.todo("fails with RetryableError when listing the thread's turns fails");
+    it.todo("fails with RetryableError when the thread detail fetch fails transiently");
+    it.todo("performs no thread detail lookup when the turn is missing or active");
   });
 });
