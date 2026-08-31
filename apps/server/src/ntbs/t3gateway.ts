@@ -437,12 +437,12 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     const getThreadStatus = (
       state: NTBS.RequestClaimed,
     ): Effect.Effect<NTBS.RequestClaimedContext, RetryableError> =>
-      projectionSnapshotQuery.getThreadDetailById(state.t3.threadId).pipe(
+      projectionSnapshotQuery.getThreadShellById(state.t3.threadId).pipe(
         Effect.map((maybeThread) => ({
           thread: Option.isNone(maybeThread) ? ("missing" as const) : ("present" as const),
         })),
         orFail("retryable")(
-          "projectionSnapshotQuery.getThreadDetailById",
+          "projectionSnapshotQuery.getThreadShellById",
           "Could not check whether thread " + state.t3.threadId + " exists",
         ),
       );
