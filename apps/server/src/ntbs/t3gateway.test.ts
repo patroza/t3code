@@ -1248,4 +1248,29 @@ describe("T3Gateway", () => {
       });
     });
   });
+
+  describe("getTurnStatus", () => {
+    /*
+      What is `getTurnStatus` used for?
+
+      In `processor.ts` it has one single caller, the `processThreadCreated` function.
+
+      By now, we have an Exchange stored as being in the `ThreadCreated` state:
+      - we have successfully minted a thread id, a user message id and a new branch name
+      - we have used those to create a new worktree whose path derives from the workspace basename and the branch name, and which is associated to that specific thread and external platform request
+      - we have stored this information
+
+      And now?
+
+      Operationally only one thing is needed: starting the turn and having the agent do its thing and come up with some response to the original user.
+
+      But what if a turn was started and then some failure/crash caused the turn start not to be recorded by the system? It would make no sense to re-start the turn, or the operation could fail. Thus, the first thing we want to do when processing a `ThreadCreated` exchange is to verify whether it already started a turn and verify its status.
+
+      Note that the answer is not binary: `ThreadCreatedContext` reports the turn as "missing", "active" or "completed" (carrying the reply), and `fromThreadCreated` maps those to `start-turn`, `wait` and `record-reply-pending` respectively.
+
+      And thus, here, we verify the behavior of `getTurnStatus` on T3Gateway service.
+
+      TODO: `getTurnStatus` is currently a stub that always answers { turn: "missing" }, so this suite stays empty until the real lookup lands — a test written now would only pin the placeholder.
+    */
+  });
 });

@@ -591,11 +591,11 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     return {
       planCoordinates,
+      getThreadStatus,
+      provisionThread,
       startTurn,
       getTurnStatus,
       threadActivity,
-      getThreadStatus,
-      provisionThread,
     };
   },
 );
