@@ -20,6 +20,7 @@ import {
   ThreadId,
   VcsCreateWorktreeResult,
   VcsListRefsResult,
+  VcsStatusLocalResult,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
@@ -239,6 +240,7 @@ type GitLayerInput = {
   resolvedRemoteSha?: string;
   removeWorkTreeFails?: boolean;
   worktreeBranchExists?: boolean;
+  localStatus?: { isRepo?: boolean; refName?: string };
 };
 
 // TODO: Can't we simplify it by leveraging default values in params?
@@ -278,6 +280,19 @@ const createGitWorkflowServiceMock = (
           () => !input || input.fetchRemoteFails !== true,
           () => createGitCommandError(),
         ),
+      ),
+    localStatus: (callInput) =>
+      recordGit(
+        "localStatus",
+        callInput,
+        VcsStatusLocalResult.make({
+          isRepo: input?.localStatus?.isRepo ?? false,
+          hasPrimaryRemote: true,
+          isDefaultRef: false,
+          refName: input?.localStatus?.refName ?? null,
+          hasWorkingTreeChanges: false,
+          workingTree: { files: [], insertions: 0, deletions: 0 },
+        }),
       ),
     listRefs: (callInput) =>
       recordGit(
@@ -577,7 +592,6 @@ describe("T3Gateway", () => {
 
             const error = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
 
-            // The tag is what the processor branches on to decide between retrying and replying.
             expect(error._tag).toBe("FatalError");
 
             expect(error.method).toBe("projectionSnapshotQuery.getProjectShellById");
@@ -715,9 +729,9 @@ describe("T3Gateway", () => {
         }).pipe(Effect.provide(layer));
       });
 
-      // A git failure carrying no exit code means git never ran to completion (timeout, spawn
-      // failure) rather than that the branch is missing. Rejecting it would post a wrong reply
-      // and kill the request permanently.
+      /*
+        A git failure carrying no exit code means git never ran to completion (timeout, spawn failure) rather than that the branch is missing.
+      */
       it.effect("fails retryably when reading the branch tip fails without a git exit code", () => {
         const { layer, calls } = createT3Gateway({
           gwfs: {
@@ -783,7 +797,7 @@ describe("T3Gateway", () => {
     /**
      * What does getThreadStatus does?
      *
-     * Looks like it returns _a_ turn from a list of turns that belong to the same thread.
+     * It reports whether the T3 thread for the exchange exists ("present") or not ("missing").
      *
      * It runs only once in the processor, for Exchanges that are in the
      * `RequestClaimed` status, in the `processRequesClaimed` effect.
@@ -924,35 +938,32 @@ describe("T3Gateway", () => {
       3. OrchestrationEngineService for dispatching the command to create the thread
       4. ProjectScriptRunner for executing the scripts in the thread/cwd
     */
+    const request: Request = {
+      attachments: [],
+      snapshot: "come on, do something",
+      sourceUri: "test://source-uri",
+    };
+
+    const coordinates: WorkCoordinates = {
+      projectId: ProjectId.make("projectId"),
+      startBranchName: "startBranchName",
+      startCommitSha: "startCommitSha",
+      threadId: ThreadId.make("threadId"),
+      userMessageId: MessageId.make("userMessageId"),
+      worktreeBranchName: "worktreeBranchName",
+    };
+
+    const requestClaimed = makeRequestClaimed(request, coordinates);
+
     describe("happy case", () => {
       /*
-        Pristine first attempt: `createWorktree` takes the fresh-create arm, dispatch
-        succeeds so the stale-observation recovery never fires, scripts run last.
+        Pristine first attempt: `createWorktree` takes the fresh-create arm, dispatch succeeds so the stale-observation recovery never fires, scripts run last.
       */
       it.effect("provisions worktree, thread, and scripts in order from a clean slate", () => {
         const { calls, layer } = createT3Gateway();
 
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
-
-          const projectId = ProjectId.make("projectId");
-
-          const request: Request = {
-            attachments: [],
-            snapshot: "come on, do something",
-            sourceUri: "test://source-uri",
-          };
-
-          const coordinates: WorkCoordinates = {
-            projectId: projectId,
-            startBranchName: "startBranchName",
-            startCommitSha: "startCommitSha",
-            threadId: ThreadId.make("threadId"),
-            userMessageId: MessageId.make("userMessageId"),
-            worktreeBranchName: "worktreeBranchName",
-          };
-
-          const requestClaimed = makeRequestClaimed(request, coordinates);
 
           yield* t3Gateway.provisionThread(requestClaimed);
 
@@ -965,14 +976,19 @@ describe("T3Gateway", () => {
             "dispatch",
             "runForThread",
           ]);
+
+          // Fresh-create arm, off the commit pinned at claim.
+          expect(calls.find((call) => call.method === "createWorktree")?.input).toMatchObject({
+            refName: coordinates.startCommitSha,
+            newRefName: coordinates.worktreeBranchName,
+            baseRefName: coordinates.startBranchName,
+          });
         }).pipe(Effect.provide(layer));
       });
 
       /*
-        A failed dispatch is not trusted at face value: the "thread is missing" observation
-        that led us here can be stale (crash after a committed create, projection lag), so the
-        gateway re-checks and adopts the existing thread. Note the scripts still run — skipping
-        them when provisioning already completed is an open TODO.
+        A failed dispatch is not trusted at face value: the "thread is missing" observation that led us here can be stale (crash after a committed create, projection lag), so the gateway re-checks and adopts the existing thread.
+        Note the scripts still run — skipping them when provisioning already completed is an open TODO.
       */
       it.effect("succeeds when dispatch fails because the thread already exists", () => {
         const { calls, layer } = createT3Gateway({
@@ -982,22 +998,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const request: Request = {
-            attachments: [],
-            snapshot: "come on, do something",
-            sourceUri: "test://source-uri",
-          };
-
-          const coordinates: WorkCoordinates = {
-            projectId: ProjectId.make("projectId"),
-            startBranchName: "startBranchName",
-            startCommitSha: "startCommitSha",
-            threadId: ThreadId.make("threadId"),
-            userMessageId: MessageId.make("userMessageId"),
-            worktreeBranchName: "worktreeBranchName",
-          };
-
-          yield* t3Gateway.provisionThread(makeRequestClaimed(request, coordinates));
+          yield* t3Gateway.provisionThread(requestClaimed);
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
@@ -1011,8 +1012,179 @@ describe("T3Gateway", () => {
           ]);
         }).pipe(Effect.provide(layer));
       });
+
+      /*
+        Resume: the path already holds a checkout of the minted branch, so git is asked, agrees, and no worktree work happens at all.
+      */
+      it.effect("reuses an intact worktree left by an interrupted attempt", () => {
+        const { calls, layer } = createT3Gateway({
+          fileSystem: { worktreePathExists: true },
+          gwfs: { localStatus: { isRepo: true, refName: coordinates.worktreeBranchName } },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          yield* t3Gateway.provisionThread(requestClaimed);
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "localStatus",
+            "randomUUIDv4",
+            "dispatch",
+            "runForThread",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        Resume: something occupies the path but git does not recognize it as a checkout of the minted branch, so it is destroyed and provisioning restarts from the pinned commit.
+      */
+      it.effect("destroys debris at the worktree path and creates fresh", () => {
+        const { calls, layer } = createT3Gateway({
+          fileSystem: { worktreePathExists: true },
+          gwfs: { localStatus: { isRepo: false } },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          yield* t3Gateway.provisionThread(requestClaimed);
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "localStatus",
+            "removeWorktree",
+            "listRefs",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "runForThread",
+          ]);
+
+          // Fresh-create arm: branch off the pinned commit, not a checkout of a survivor.
+          expect(calls.find((call) => call.method === "createWorktree")?.input).toMatchObject({
+            refName: coordinates.startCommitSha,
+            newRefName: coordinates.worktreeBranchName,
+          });
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        Resume: a crashed attempt created the branch but not the checkout, so the branch is checked out instead of re-branching from the start commit.
+      */
+      it.effect(
+        "checks out a branch surviving from a crashed attempt instead of re-creating it",
+        () => {
+          const { calls, layer } = createT3Gateway({
+            gwfs: { worktreeBranchExists: true },
+          });
+
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
+
+            yield* t3Gateway.provisionThread(requestClaimed);
+
+            expect(calls.map((call) => call.method)).toEqual([
+              "getProjectShellById",
+              "exists",
+              "listRefs",
+              "createWorktree",
+              "randomUUIDv4",
+              "dispatch",
+              "runForThread",
+            ]);
+
+            // Checkout arm: the surviving branch itself, no new branch minted.
+            const createInput = calls.find((call) => call.method === "createWorktree")?.input;
+            expect(createInput).toMatchObject({ refName: coordinates.worktreeBranchName });
+            expect(createInput).not.toHaveProperty("newRefName");
+          }).pipe(Effect.provide(layer));
+        },
+      );
     });
 
-    describe.todo("failures", () => {});
+    describe("failures", () => {
+      it.effect("fails retryably when dispatch fails and the thread is genuinely missing", () => {
+        const { calls, layer } = createT3Gateway({
+          orchestrationEngine: { dispatchFails: true },
+          pqsm: { isThreadMissing: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("orchestrationEngine.dispatch");
+
+          /*
+            A retryable failure cleans up nothing: no removeWorktree, no scripts.
+          */
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "listRefs",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "getThreadShellById",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        The one moment ownership truly ends: a fatal error removes the worktree.
+      */
+      it.effect("fails fatally when setup scripts fail, removing the worktree", () => {
+        const { calls, layer } = createT3Gateway({
+          projectSetupScriptRunner: { runForThreadFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+
+          expect(result._tag).toBe("FatalError");
+          expect(result.method).toBe("projectScriptRunner.runForThread");
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "exists",
+            "listRefs",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "runForThread",
+            "removeWorktree",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        Cleanup is best-effort: a worktree that also refuses to be removed must not mask the script failure.
+      */
+      it.effect("still reports the script failure when the cleanup itself fails", () => {
+        const { calls, layer } = createT3Gateway({
+          projectSetupScriptRunner: { runForThreadFails: true },
+          gwfs: { removeWorkTreeFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+
+          expect(result._tag).toBe("FatalError");
+          expect(result.method).toBe("projectScriptRunner.runForThread");
+
+          expect(calls.map((call) => call.method)).toContain("removeWorktree");
+        }).pipe(Effect.provide(layer));
+      });
+    });
   });
 });
