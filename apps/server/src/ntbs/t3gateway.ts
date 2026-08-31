@@ -573,7 +573,51 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         }
       });
 
-    const startTurn = (_state: NTBS.ThreadCreated) => Effect.void;
+    const startTurn = (
+      state: NTBS.ThreadCreated,
+    ): Effect.Effect<void, RetryableError | FatalError> =>
+      Effect.gen(function* () {
+        const commandId = CommandId.make(yield* randomUUID);
+        const createdAt = yield* getNow;
+
+        yield* orchestrationEngine
+          .dispatch(
+            OrchestrationCommand.make({
+              type: "thread.turn.start",
+              commandId,
+              threadId: state.t3.threadId,
+              message: {
+                messageId: state.t3.userMessageId,
+                role: "user",
+                text: state.snapshot,
+                attachments: state.attachments,
+              },
+              runtimeMode: "full-access",
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              createdAt,
+            }),
+          )
+          .pipe(
+            /*
+              Verdict vs accident. An invariant error is the decider rejecting the command against current state (thread deleted, queue full): deterministic, retrying re-asks a question already answered, so it is fatal and becomes a failure reply.
+              Everything else is infrastructure failing before any verdict; the transaction rolled back, nothing committed, and asking again later is meaningful.
+              Judgment call: "queue full" is an invariant that time can heal (the queue drains when the active turn completes), but a full queue on an NTBS-owned thread means something else is hammering it, and a visible failure beats silently retrying into it.
+            */
+            Effect.mapError((cause) =>
+              cause._tag === "OrchestrationCommandInvariantError"
+                ? new FatalError({
+                    method: "orchestrationEngine.dispatch",
+                    reason: "T3 rejected the turn start for thread " + state.t3.threadId,
+                    cause,
+                  })
+                : new RetryableError({
+                    method: "orchestrationEngine.dispatch",
+                    reason: "Could not dispatch thread.turn.start for thread " + state.t3.threadId,
+                    cause,
+                  }),
+            ),
+          );
+      });
 
     const threadActivity = Stream.never;
 
@@ -712,8 +756,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       planCoordinates,
       getThreadStatus,
       provisionThread,
-      startTurn,
       getTurnStatus,
+      startTurn,
       threadActivity,
     };
   },
