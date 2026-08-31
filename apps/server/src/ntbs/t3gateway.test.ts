@@ -29,6 +29,7 @@ import {
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
+import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
 import { PlatformError, SystemError } from "effect/PlatformError";
 import {
   makeRequestClaimed,
@@ -121,7 +122,8 @@ const createGitCommandError = (exitCode?: number, detail = "") =>
   });
 
 type OrchestrationEngineInput = {
-  dispatchFails?: boolean;
+  /** `"invariant"` fails with the decider's rejection; `true` with an operational persistence error. */
+  dispatchFails?: boolean | "invariant";
 };
 
 // TODO: We need to make sure and analyze what happens when it is dispatched
@@ -140,7 +142,14 @@ const createOrchestrationEngineServiceMock = (
       call("dispatch", _command).pipe(
         Effect.andThen(() =>
           input?.dispatchFails
-            ? Effect.fail(toPersistenceSqlError("some operation")("some cause"))
+            ? Effect.fail(
+                input.dispatchFails === "invariant"
+                  ? new OrchestrationCommandInvariantError({
+                      commandType: _command.type,
+                      detail: "rejected by the decider",
+                    })
+                  : toPersistenceSqlError("some operation")("some cause"),
+              )
             : Effect.succeed({ sequence: 0 }),
         ),
       ),
@@ -1787,5 +1796,75 @@ describe("T3Gateway", () => {
 
     As `startTurn` is an action both error classifications apply. We may get both Retryable as well as Fatal errors.
     */
+
+    const threadCreated = toThreadCreated(
+      makeRequestClaimed(
+        {
+          attachments: [],
+          snapshot: "please fix the flaky login test",
+          sourceUri: "test://start-turn",
+        },
+        {
+          projectId: ProjectId.make("projectId"),
+          startBranchName: "startBranchName",
+          startCommitSha: "startCommitSha",
+          threadId: ThreadId.make("threadId"),
+          userMessageId: MessageId.make("userMessageId"),
+          worktreeBranchName: "worktreeBranchName",
+        },
+      ),
+    );
+
+    /*
+      Only the identity relationships are asserted, not the full command payload: the userMessageId linkage is what makes the turn findable by `getTurnStatus`, and minting a fresh id here instead would deadlock every exchange without any error surfacing.
+    */
+    it.effect(
+      "dispatches the turn start for our thread carrying the snapshot under the exchange's userMessageId",
+      () => {
+        const { calls, layer } = createT3Gateway();
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          yield* t3Gateway.startTurn(threadCreated);
+
+          const dispatch = calls.find((call) => call.method === "dispatch");
+          expect(dispatch?.input).toMatchObject({
+            threadId: threadCreated.t3.threadId,
+            message: {
+              messageId: threadCreated.t3.userMessageId,
+              text: threadCreated.snapshot,
+              attachments: threadCreated.attachments,
+            },
+          });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
+    it.effect("fails with FatalError when the decider rejects the turn start", () => {
+      const { layer } = createT3Gateway({ orchestrationEngine: { dispatchFails: "invariant" } });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.startTurn(threadCreated).pipe(Effect.flip);
+
+        expect(result._tag).toBe("FatalError");
+        expect(result.method).toBe("orchestrationEngine.dispatch");
+      }).pipe(Effect.provide(layer));
+    });
+
+    it.effect("fails with RetryableError when the dispatch fails operationally", () => {
+      const { layer } = createT3Gateway({ orchestrationEngine: { dispatchFails: true } });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const result = yield* t3Gateway.startTurn(threadCreated).pipe(Effect.flip);
+
+        expect(result._tag).toBe("RetryableError");
+        expect(result.method).toBe("orchestrationEngine.dispatch");
+      }).pipe(Effect.provide(layer));
+    });
   });
 });
