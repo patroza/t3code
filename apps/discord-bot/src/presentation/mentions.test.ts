@@ -10,6 +10,7 @@ import {
   projectTopicFromParentLookup,
   readChannelTopic,
   resolveDiscordFollowUpDelivery,
+  shouldPostWorkingAckForContinue,
 } from "./mentions.ts";
 import {
   chunkDiscordContent,
@@ -137,6 +138,42 @@ describe("resolveDiscordFollowUpDelivery", () => {
     expect(resolveDiscordFollowUpDelivery({})).toBe("queue");
     expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "steer" })).toBe("steer");
     expect(resolveDiscordFollowUpDelivery({ followUpDelivery: "queue" })).toBe("queue");
+  });
+});
+
+describe("shouldPostWorkingAckForContinue", () => {
+  it("does not post Working for a parked mid-turn follow-up", () => {
+    expect(
+      shouldPostWorkingAckForContinue({
+        turnAlreadyRunning: true,
+        followUpDelivery: "queue",
+      }),
+    ).toBe(false);
+  });
+
+  it("posts Working for a mid-turn steer and for idle continues", () => {
+    expect(
+      shouldPostWorkingAckForContinue({
+        turnAlreadyRunning: true,
+        followUpDelivery: "steer",
+      }),
+    ).toBe(true);
+    expect(
+      shouldPostWorkingAckForContinue({
+        turnAlreadyRunning: false,
+        followUpDelivery: "queue",
+      }),
+    ).toBe(true);
+  });
+
+  it("never posts Working in final-only presentation", () => {
+    expect(
+      shouldPostWorkingAckForContinue({
+        presentationMode: "final-only",
+        turnAlreadyRunning: false,
+        followUpDelivery: "steer",
+      }),
+    ).toBe(false);
   });
 });
 
