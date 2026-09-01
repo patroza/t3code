@@ -52,8 +52,6 @@ import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.t
 
   4. NTBS Processor
   The orchestrator between 1, 2, 3 and 4.
-
-  TODO: Better description of the whole architecture.
 */
 
 /**
@@ -107,6 +105,9 @@ type T3GatewayRequirements =
     Generates unique identifiers for the new thread, message, commands, and worktree branch.
    */
   | Crypto.Crypto
+  /*
+    Needed to know where the worktrees directory is at.
+  */
   | ServerConfig
   /*
     Probes and clears leftover worktree directories during reentrant provisioning.
@@ -474,9 +475,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         return coordinates;
       });
 
-    // TODO: We doing a lot of work behind the scenes just to know whether
-    // the thread exists or is missing, this screams sql query or something
-    // not a snapshot query
+    /* TODO: We doing a lot of work behind the scenes just to know whether the thread exists or is missing, this screams sql query or something not a snapshot query
+     */
     const getThreadStatus = (
       state: NTBS.RequestClaimed,
     ): Effect.Effect<NTBS.RequestClaimedContext, RetryableError> =>
