@@ -57,7 +57,13 @@ describe("searchSettings", () => {
     expect(
       searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
     ).toEqual([]);
-    expect(searchSettings("work").map((item) => item.id)).toEqual(["worktree-remove-confirmation"]);
+    expect(searchSettings("work").map((item) => item.id)).toEqual([
+      "worktree-remove-confirmation",
+      "network-access",
+      "environment-identification",
+      "new-threads",
+      "start-from-origin",
+    ]);
     expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
     expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
     const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");
