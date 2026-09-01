@@ -1,10 +1,16 @@
+import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Queue, Stream } from "effect";
 import { ExchangeRepository, inMemoryExchangeRepository } from "./ExchangeRepository.ts";
-import { makeNTBSProcessor, type NTBSProcessor } from "./processor.ts";
+import { makeNTBSProcessor, type NTBSProcessor, type T3Target } from "./processor.ts";
 import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { T3Gateway } from "./t3gateway.ts";
 import { NTBSAdapter } from "./adapter.ts";
-import type { WorkCoordinates } from "./exchange.ts";
+import {
+  makeRequestClaimed,
+  toThreadCreated,
+  type Request,
+  type WorkCoordinates,
+} from "./exchange.ts";
 
 /**
  * The test configuration of the services.
@@ -39,6 +45,12 @@ type ProcessorTestContext = {
   readonly pingActivity: (threadId: ThreadId) => Effect.Effect<void>;
 };
 
+const request: Request = {
+  sourceUri: "test://request/1",
+  snapshot: "Please fix the bug",
+  attachments: [],
+};
+
 const defaultProjectId = ProjectId.make("defaultProjectId");
 const defaultThreadId = ThreadId.make("defaultThreadId");
 const defaultUserMessageId = MessageId.make("defaultUserMessageId");
@@ -50,6 +62,11 @@ const defaultWorkCoordinates: WorkCoordinates = {
   threadId: defaultThreadId,
   userMessageId: defaultUserMessageId,
   worktreeBranchName: "ntbs/defaultThreadId",
+};
+
+const target: T3Target = {
+  projectId: defaultProjectId,
+  startBranchName: "fork/dev",
 };
 
 const postedReplyUri = "test://reply/1";
@@ -148,3 +165,30 @@ const withProcessor = <A, E>(
       });
     }).pipe(Effect.provide(layer));
   });
+
+describe("NTBSProcessor", () => {
+  /*
+    Harness smoke test: the happy-path defaults drive a fresh request to ThreadCreated with a started turn, and the shared log shows the full cross-service pipeline in order.
+  */
+  it.effect("claims a fresh request and starts its turn on the default behaviors", () =>
+    withProcessor({}, ({ processor, repository, calls }) =>
+      Effect.gen(function* () {
+        yield* processor.process(request, target);
+
+        expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+          "T3Gateway.planCoordinates",
+          "T3Gateway.getThreadStatus",
+          "T3Gateway.provisionThread",
+          "NTBSAdapter.acknowledge",
+          "T3Gateway.getTurnStatus",
+          "T3Gateway.startTurn",
+        ]);
+
+        // Still ThreadCreated: a successful startTurn transitions nothing, the exchange only moves when getTurnStatus observes a settled turn.
+        const expected = toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates));
+
+        expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
+      }),
+    ),
+  );
+});
