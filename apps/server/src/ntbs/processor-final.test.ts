@@ -1,17 +1,23 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
-import { ExchangeRepository, inMemoryExchangeRepository } from "./ExchangeRepository.ts";
+import {
+  ExchangeRepository,
+  ExchangeRepositoryError,
+  inMemoryExchangeRepository,
+} from "./ExchangeRepository.ts";
 import { makeNTBSProcessor, type NTBSProcessor, type T3Target } from "./processor.ts";
 import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { RetryableError, T3Gateway } from "./t3gateway.ts";
-import { AdapterError, NTBSAdapter } from "./adapter.ts";
+import { FatalError, RetryableError, T3Gateway } from "./t3gateway.ts";
+import { AdapterError, NTBSAdapter, ReplyRejected } from "./adapter.ts";
 import {
   makeRequestClaimed,
   toReplyPending,
   toReplyPosted,
   toThreadCreated,
+  toUndeliverable,
   type Exchange,
   type Request,
+  type ThreadCreatedContext,
   type WorkCoordinates,
 } from "./exchange.ts";
 
@@ -50,7 +56,10 @@ type ProcessorTestContext = {
    * Polls the repository until the exchange at `sourceUri` carries `tag`.
    * A Deferred signalled from inside a mock fires before the processor persists the transition, so anything that asserts on stored state after a mock call must wait on the store itself.
    */
-  readonly awaitStoredTag: (sourceUri: string, tag: Exchange["tag"]) => Effect.Effect<Exchange>;
+  readonly awaitStoredTag: (
+    sourceUri: string,
+    tag: Exchange["tag"],
+  ) => Effect.Effect<Exchange, ExchangeRepositoryError>;
 };
 
 const request: Request = {
@@ -1036,6 +1045,403 @@ describe("NTBSProcessor", () => {
             toReplyPosted(toReplyPending(threadCreated, reply), postedReplyUri),
           );
 
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    The happy path end to end: a fresh request whose thread already exists and whose turn completes immediately reaches ReplyPosted inside a single `process` call.
+    The log shows provisioning skipped for the present thread, and the reply posted with the ReplyPending state the completed turn produced.
+  */
+  it.effect("posts a completed T3 reply", () => {
+    const reply = { type: "answer" as const, text: "The bug is fixed." };
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getThreadStatus: () => Effect.succeed({ thread: "present" }),
+          getTurnStatus: () => Effect.succeed({ turn: "completed", reply }),
+        },
+      },
+      ({ processor, repository, calls }) =>
+        Effect.gen(function* () {
+          yield* processor.process(request, target);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          const replyPending = toReplyPending(
+            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
+            reply,
+          );
+          expect(calls.at(-1)?.args).toEqual([replyPending]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(replyPending, postedReplyUri),
+          );
+        }),
+    );
+  });
+
+  /*
+    Reply discovery guards against double posting.
+    When the platform already shows the reply (a previous run posted it but crashed before persisting), the exchange is recorded as posted at the discovered URI and `postReply` is never called.
+  */
+  it.effect("records a reply already found on the platform without posting it again", () => {
+    const reply = { type: "answer" as const, text: "Already delivered" };
+    const discoveredReplyUri = "test://reply/already-posted";
+
+    return withProcessor(
+      {
+        adapter: {
+          findPostedReply: () => Effect.succeed(discoveredReplyUri),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const replyPending = toReplyPending(
+            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
+            reply,
+          );
+          yield* repository.upsert(replyPending);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+          ]);
+          expect(calls[0]?.args).toEqual([replyPending]);
+          expect(posted).toEqual(toReplyPosted(replyPending, discoveredReplyUri));
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    `ReplyRejected` is the platform saying the reply can never land (the originating discussion is gone, say).
+    Unlike an AdapterError, which leaves the exchange pending for a retry, a rejection is terminal: the exchange becomes Undeliverable with the platform's cause.
+  */
+  it.effect("records a definitively rejected reply as undeliverable", () => {
+    const reply = { type: "answer" as const, text: "Reply that cannot be delivered" };
+    const rejectionCause = { message: "The originating discussion was deleted" };
+
+    return withProcessor(
+      {
+        adapter: {
+          postReply: () => new ReplyRejected({ cause: rejectionCause }),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const replyPending = toReplyPending(
+            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
+            reply,
+          );
+          yield* repository.upsert(replyPending);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const undeliverable = yield* awaitStoredTag(request.sourceUri, "undeliverable");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(undeliverable).toEqual(toUndeliverable(replyPending, rejectionCause));
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    A `FatalError` from a T3 action means T3 will never accept the work, so retrying is pointless.
+    The processor skips straight from the claim to a failure reply: no thread is created, so no acknowledgement and no turn; the user gets told why instead.
+  */
+  it.effect("delivers a failure reply when T3 rejects thread provisioning", () => {
+    const rejection = {
+      reason: "T3 cannot provision this request",
+      cause: { message: "The selected project no longer exists" },
+    };
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          provisionThread: () => new FatalError({ ...rejection, method: "provisionThread" }),
+        },
+      },
+      ({ processor, repository, calls }) =>
+        Effect.gen(function* () {
+          yield* processor.process(request, target);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "T3Gateway.provisionThread",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          const replyPending = toReplyPending(makeRequestClaimed(request, defaultWorkCoordinates), {
+            type: "failure",
+            text: rejection.reason,
+            cause: rejection.cause,
+          });
+          expect(calls.at(-1)?.args).toEqual([replyPending]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(replyPending, postedReplyUri),
+          );
+        }),
+    );
+  });
+
+  /*
+    Recovery from ReplyPending, the one non-terminal state the other recovery tests never start from.
+    A transient posting failure leaves the exchange pending; the next run repeats discovery and posting, and the second attempt lands.
+  */
+  it.effect("retries a transient reply-posting failure during later recovery", () => {
+    const firstPostAttempted = Deferred.makeUnsafe<void>();
+    const reply = { type: "answer" as const, text: "Reply after a transient posting failure" };
+    let postAttempts = 0;
+
+    return withProcessor(
+      {
+        adapter: {
+          postReply: () =>
+            Effect.gen(function* () {
+              postAttempts += 1;
+              if (postAttempts === 1) {
+                yield* Deferred.succeed(firstPostAttempted, undefined);
+                return yield* new AdapterError({
+                  reason: "Reply posting temporarily failed",
+                  cause: "test failure",
+                });
+              }
+              return postedReplyUri;
+            }),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const replyPending = toReplyPending(
+            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
+            reply,
+          );
+          yield* repository.upsert(replyPending);
+
+          const firstRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(firstPostAttempted);
+          yield* Effect.yieldNow;
+          yield* Fiber.interrupt(firstRun);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(replyPending);
+
+          const secondRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri));
+
+          yield* Fiber.interrupt(secondRun);
+        }),
+    );
+  });
+
+  /*
+    Startup recovery is per exchange: one exchange failing must not stop the others from being recovered.
+    Both exchanges are pending; discovery fails for the first and the second still gets posted, while the first stays pending for a later attempt.
+    The repository does not promise a recovery order, so the log is checked per source rather than as one ordered list.
+  */
+  it.effect("continues startup recovery after one exchange fails", () => {
+    const reply = {
+      type: "answer" as const,
+      text: "Reply recovered after another exchange failed",
+    };
+
+    return withProcessor(
+      {
+        adapter: {
+          findPostedReply: (state) =>
+            state.sourceUri === request.sourceUri
+              ? new AdapterError({
+                  reason: "Recovery failed for this exchange",
+                  cause: "test failure",
+                })
+              : Effect.succeed(null),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const failingPending = toReplyPending(
+            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
+            reply,
+          );
+          const recoverablePending = toReplyPending(
+            toThreadCreated(makeRequestClaimed(secondRequest, secondWorkCoordinates)),
+            reply,
+          );
+          yield* repository.upsert(failingPending);
+          yield* repository.upsert(recoverablePending);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const posted = yield* awaitStoredTag(secondRequest.sourceUri, "reply-posted");
+          yield* Effect.yieldNow;
+
+          const callsFor = (sourceUri: string) =>
+            calls
+              .filter((call) => (call.args[0] as Exchange).sourceUri === sourceUri)
+              .map((call) => `${call.service}.${call.method}`);
+          expect(callsFor(request.sourceUri)).toEqual(["NTBSAdapter.findPostedReply"]);
+          expect(callsFor(secondRequest.sourceUri)).toEqual([
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(failingPending);
+          expect(posted).toEqual(toReplyPosted(recoverablePending, postedReplyUri));
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    The activity subscription outlives a failing event.
+    The first ping's status read fails with a RetryableError; the exchange is left as it was, and the next ping is still handled and carries it to ReplyPosted.
+  */
+  it.effect("continues processing thread activity after one event fails", () => {
+    const reply = { type: "answer" as const, text: "Reply from the later activity event" };
+    let statusReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () =>
+            Effect.sync(() => (statusReads += 1)).pipe(
+              Effect.flatMap((read) => {
+                switch (read) {
+                  // Startup recovery.
+                  case 1:
+                    return Effect.succeed({
+                      turn: "active" as const,
+                    } as ThreadCreatedContext);
+                  // First ping.
+                  case 2:
+                    return new RetryableError({
+                      reason: "This activity event could not be processed",
+                      cause: "test failure",
+                      method: "getTurnStatus",
+                    }) as RetryableError;
+                  // Second ping.
+                  default:
+                    return Effect.succeed({
+                      turn: "completed" as const,
+                      reply,
+                    } satisfies ThreadCreatedContext);
+                }
+              }),
+            ),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const threadCreated = toThreadCreated(
+            makeRequestClaimed(request, defaultWorkCoordinates),
+          );
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+
+          yield* pingActivity(defaultThreadId);
+          yield* pingActivity(defaultThreadId);
+          const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(posted).toEqual(
+            toReplyPosted(toReplyPending(threadCreated, reply), postedReplyUri),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    `run` subscribes to thread activity before startup recovery, so a slow recovery does not delay live events.
+    Recovery is held open on the first exchange's status read while a ping for a second exchange is delivered; the second reaches ReplyPosted with recovery still blocked.
+  */
+  it.effect("subscribes to thread activity before startup recovery finishes", () => {
+    const recoveryStarted = Deferred.makeUnsafe<void>();
+    const releaseRecovery = Deferred.makeUnsafe<void>();
+    const reply = {
+      type: "answer" as const,
+      text: "Reply posted while startup recovery is blocked",
+    };
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: (state) =>
+            state.sourceUri === request.sourceUri
+              ? Effect.gen(function* () {
+                  yield* Deferred.succeed(recoveryStarted, undefined);
+                  yield* Deferred.await(releaseRecovery);
+                  return { turn: "active" as const };
+                })
+              : Effect.succeed({ turn: "completed" as const, reply }),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const recovering = toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates));
+          yield* repository.upsert(recovering);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(recoveryStarted);
+
+          // Stored only now, so recovery could not have picked it up: the ping is its only way forward.
+          const activeDuringRecovery = toThreadCreated(
+            makeRequestClaimed(secondRequest, secondWorkCoordinates),
+          );
+          yield* repository.upsert(activeDuringRecovery);
+          yield* pingActivity(secondThreadId);
+          const posted = yield* awaitStoredTag(secondRequest.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(calls[0]?.args).toEqual([recovering]);
+          expect(calls[1]?.args).toEqual([activeDuringRecovery]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(recovering);
+          expect(posted).toEqual(
+            toReplyPosted(toReplyPending(activeDuringRecovery, reply), postedReplyUri),
+          );
+
+          yield* Deferred.succeed(releaseRecovery, undefined);
           yield* Fiber.interrupt(run);
         }),
     );
