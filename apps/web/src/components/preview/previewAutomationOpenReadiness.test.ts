@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_PREVIEW_AUTOMATION_VIEWPORT,
+  isPreviewAutomationPresentationReady,
   previewAutomationDefaultViewport,
   previewAutomationOpenNeedsOverlay,
   shouldOpenPreviewMiniPlayer,
@@ -59,6 +60,12 @@ describe("preview automation open readiness", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it("does not report a requested preview as ready until its surface is visible", () => {
+    expect(isPreviewAutomationPresentationReady(true, false, true)).toBe(false);
+    expect(isPreviewAutomationPresentationReady(true, true, true)).toBe(true);
+    expect(isPreviewAutomationPresentationReady(true, false, false)).toBe(true);
   });
 
   it("gives newly-created automation tabs a stable desktop viewport", () => {

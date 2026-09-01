@@ -36,6 +36,14 @@ export function previewAutomationOpenNeedsOverlay(
   return input.url !== undefined || snapshot.navStatus._tag !== "Idle";
 }
 
+export function isPreviewAutomationPresentationReady(
+  automationAvailable: boolean,
+  surfaceVisible: boolean,
+  requireVisible: boolean,
+): boolean {
+  return automationAvailable && (!requireVisible || surfaceVisible);
+}
+
 /**
  * Whether a freshly opened automation tab still needs a viewport applied.
  *

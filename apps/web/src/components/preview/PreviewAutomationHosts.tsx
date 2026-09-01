@@ -60,6 +60,7 @@ import {
   PreviewAutomationViewportTimeoutError,
 } from "./previewAutomationErrors";
 import {
+  isPreviewAutomationPresentationReady,
   previewAutomationDefaultViewport,
   previewAutomationOpenNeedsOverlay,
   shouldOpenPreviewMiniPlayer,
@@ -81,6 +82,7 @@ const waitForDesktopOverlay = async (
   runtimeTabId: string,
   operation: PreviewAutomationRequest["operation"],
   timeoutMs: number,
+  requireVisible: boolean,
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
@@ -90,7 +92,11 @@ const waitForDesktopOverlay = async (
     });
     if (state.desktopByTabId[tabId] && previewBridge && isPreviewWebviewRendering(runtimeTabId)) {
       const status = await previewBridge.automation.status(runtimeTabId);
-      if (status.available) return;
+      const surfaceVisible =
+        useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible ?? false;
+      if (isPreviewAutomationPresentationReady(status.available, surfaceVisible, requireVisible)) {
+        return;
+      }
     }
     await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
   }
@@ -358,7 +364,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           tabId,
           bridgeAvailable: Boolean(previewBridge),
         };
-        const requireReadyTab = async () => {
+        const requireReadyTab = async (requireVisible = false) => {
           const bridge = previewBridge;
           const readyTabId = tabId;
           if (!bridge || !readyTabId) {
@@ -374,6 +380,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             runtimeTabId,
             request.operation,
             request.timeoutMs,
+            requireVisible,
           );
           return {
             bridge,
@@ -464,7 +471,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               usePreviewMiniPlayerStore.getState().open(threadRef, activeTabId);
             }
             if (activeSnapshot && previewAutomationOpenNeedsOverlay(input, activeSnapshot)) {
-              await requireReadyTab();
+              await requireReadyTab(shouldPresentPreview);
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               await previewBridge.navigate(activeTabId, resolvedInputUrl);
