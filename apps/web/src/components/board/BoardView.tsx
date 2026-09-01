@@ -172,7 +172,6 @@ function BoardContent() {
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const serverConfigs = useServerConfigs();
   const {
@@ -411,7 +410,7 @@ function BoardContent() {
         isThreadSettledForDisplay(thread, {
           serverConfigs,
           now,
-          autoSettleAfterDays,
+          autoSettleAfterDays: null,
           changeRequestState,
         })
       ) {
@@ -427,7 +426,7 @@ function BoardContent() {
     }
     previousSettledThreadKeys.current = keys;
     return keys;
-  }, [autoSettleAfterDays, filteredThreads, getThreadGitContext, nowMinute, serverConfigs]);
+  }, [filteredThreads, getThreadGitContext, nowMinute, serverConfigs]);
   // The context-menu handler reads these through refs: depending on the live
   // identities would hand every BoardCard a fresh callback prop on each
   // git-status or shell event and defeat the cards' memoization.

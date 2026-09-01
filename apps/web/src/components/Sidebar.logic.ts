@@ -1,9 +1,6 @@
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import {
-  effectiveSettled,
-  type ChangeRequestStateLike,
-} from "@t3tools/client-runtime/state/thread-settled";
+type ChangeRequestStateLike = "open" | "closed" | "merged";
 import {
   groupThreadsByRecency,
   shouldShowRecencySectionHeaders,
@@ -460,7 +457,10 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
  * auto-settling them would strand rows in a tail with no working affordances.
  */
 export function isThreadSettledForDisplay(
-  thread: Parameters<typeof effectiveSettled>[0] & { readonly environmentId: string },
+  thread: {
+    readonly environmentId: string;
+    readonly settledOverride: "settled" | "active" | null;
+  },
   input: {
     serverConfigs: {
       get(environmentId: string):
@@ -479,14 +479,7 @@ export function isThreadSettledForDisplay(
   const supportsSettlement =
     input.serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
     true;
-  return (
-    supportsSettlement &&
-    effectiveSettled(thread, {
-      now: input.now,
-      autoSettleAfterDays: input.autoSettleAfterDays,
-      changeRequest: input.changeRequestState === null ? null : { state: input.changeRequestState },
-    })
-  );
+  return supportsSettlement && thread.settledOverride === "settled";
 }
 
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
@@ -1101,11 +1094,8 @@ type SettledTimestampInput = Pick<
   "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
 >;
 
-/** The timestamp a settled row sorts and labels by: settledAt when stamped
-    (explicit settles), otherwise last activity — the same candidates
-    threadLastActivityAt feeds the auto-settle window (user message plus all
-    latestTurn stamps), so a thread whose last activity was a turn completion
-    doesn't sort by an older message time. updatedAt is the final net. */
+/** The timestamp a settled row sorts and labels by: settledAt when stamped,
+    otherwise the latest message or turn stamp. updatedAt is the final net. */
 export function resolveSettledTimestamp(thread: SettledTimestampInput): string | null {
   const settledAt = firstValidTimestamp(thread.settledAt);
   if (settledAt !== null) return settledAt;

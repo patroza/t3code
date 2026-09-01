@@ -145,7 +145,7 @@ const PENDING_USER_INPUT_ACTIVITY_KINDS = [
   "provider.user-input.respond.failed",
 ] as const;
 
-// A full refresh loads all thread history, so skip events that cannot change the summary.
+// A refresh reads each persisted summary source, so skip events that cannot change the result.
 function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
   if (event.type === "thread.message-sent") {
     return event.payload.role === "user";
@@ -1102,21 +1102,34 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.message-sent": {
+          if (event.payload.streaming) {
+            const attachments =
+              event.payload.attachments !== undefined
+                ? yield* materializeAttachmentsForProjection({
+                    attachments: event.payload.attachments,
+                  })
+                : undefined;
+            yield* projectionThreadMessageRepository.appendStreaming({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+              role: event.payload.role,
+              text: event.payload.text,
+              ...(attachments !== undefined ? { attachments: [...attachments] } : {}),
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+
           const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId: event.payload.messageId,
           });
           const previousMessage = Option.getOrUndefined(existingMessage);
           const nextText = Option.match(existingMessage, {
             onNone: () => event.payload.text,
-            onSome: (message) => {
-              if (event.payload.streaming) {
-                return `${message.text}${event.payload.text}`;
-              }
-              if (event.payload.text.length === 0) {
-                return message.text;
-              }
-              return event.payload.text;
-            },
+            onSome: (message) =>
+              event.payload.text.length === 0 ? message.text : event.payload.text,
           });
           const nextAttachments =
             event.payload.attachments !== undefined
@@ -1131,7 +1144,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
-            isStreaming: event.payload.streaming,
+            isStreaming: false,
             ...(event.payload.source !== undefined
               ? { source: event.payload.source }
               : previousMessage?.source !== undefined

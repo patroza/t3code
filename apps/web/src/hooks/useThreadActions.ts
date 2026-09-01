@@ -10,7 +10,11 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { runArchiveWithWorktreeCleanup } from "@t3tools/client-runtime/state/worktreeCleanup";
-import { canSettle, canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  canSnooze,
+  hasQueuedTurnStart,
+  threadWokeAt,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -669,10 +673,18 @@ export function useThreadActions() {
         );
       }
       const resolved = resolveThreadTarget(target);
-      // Settle may only target what effectiveSettled could classify as
-      // settled: not starting/running sessions, not threads waiting on
-      // approvals or user input. Anything else would hide live work.
-      if (resolved && !canSettle(resolved.thread, { now: new Date().toISOString() })) {
+      // Settle may only target what the partition could classify as settled:
+      // not starting/running sessions, not threads waiting on approvals or
+      // user input, not a queued turn start. Anything else would hide live work.
+      const settleNow = new Date().toISOString();
+      if (
+        resolved &&
+        (resolved.thread.hasPendingApprovals ||
+          resolved.thread.hasPendingUserInput ||
+          resolved.thread.session?.status === "starting" ||
+          resolved.thread.session?.status === "running" ||
+          hasQueuedTurnStart(resolved.thread, { now: settleNow }))
+      ) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSettleBlockedError({

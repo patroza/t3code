@@ -5115,7 +5115,6 @@ export default function LegacySidebar() {
   const handleNewThread = useNewThreadHandler();
   const { archiveThread, deleteThread, settleThread, unsettleThread } = useThreadActions();
   const serverConfigs = useServerConfigs();
-  const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const nowMinute = useNowMinute();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
@@ -5606,7 +5605,7 @@ export default function LegacySidebar() {
         isThreadSettledForDisplay(thread, {
           serverConfigs,
           now,
-          autoSettleAfterDays,
+          autoSettleAfterDays: null,
           changeRequestState: changeRequestStateByKey.get(threadKey) ?? null,
         })
       ) {
@@ -5614,7 +5613,7 @@ export default function LegacySidebar() {
       }
     }
     return keys;
-  }, [autoSettleAfterDays, changeRequestStateByKey, nowMinute, serverConfigs, visibleThreads]);
+  }, [changeRequestStateByKey, nowMinute, serverConfigs, visibleThreads]);
   const selectedProjectFilterKey =
     storedProjectFilter !== null &&
     sortedProjects.some((project) => project.projectKey === storedProjectFilter)

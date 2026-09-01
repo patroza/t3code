@@ -7,9 +7,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentId, SidebarProjectGroupingMode } from "@t3tools/contracts";
-import { resolveThreadChangeRequest } from "@t3tools/shared/sourceControl";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -55,7 +53,6 @@ import { useBoardVcsStatuses, type BoardVcsTarget } from "./useBoardVcsStatuses"
 
 const SETTLED_INITIAL_COUNT = 10;
 const SETTLED_PAGE_COUNT = 25;
-const AUTO_SETTLE_AFTER_DAYS = 3;
 
 export interface BoardScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
@@ -472,18 +469,10 @@ export function BoardScreen(props: BoardScreenProps) {
 
   const previousSettledRef = useRef<ReadonlySet<string>>(new Set());
   const settledThreadKeys = useMemo(() => {
-    const now = `${nowMinute}:00.000Z`;
     const keys = new Set<string>();
     for (const thread of filteredThreads) {
       if (!settlementEnvironmentIds.has(thread.environmentId)) continue;
-      const changeRequest = resolveThreadChangeRequest(thread.branch, getGitStatus(thread));
-      if (
-        effectiveSettled(thread, {
-          now,
-          autoSettleAfterDays: AUTO_SETTLE_AFTER_DAYS,
-          changeRequest,
-        })
-      ) {
+      if (thread.settledOverride === "settled") {
         keys.add(scopedThreadKey(thread.environmentId, thread.id));
       }
     }
@@ -493,7 +482,7 @@ export function BoardScreen(props: BoardScreenProps) {
     }
     previousSettledRef.current = keys;
     return keys;
-  }, [filteredThreads, getGitStatus, nowMinute, settlementEnvironmentIds]);
+  }, [filteredThreads, settlementEnvironmentIds]);
 
   const workingWorktreeKeys = useMemo(() => {
     const keys = new Set<string>();
