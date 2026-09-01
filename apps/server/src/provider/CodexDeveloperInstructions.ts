@@ -6,6 +6,8 @@ const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
 
+Codex Code Mode may defer MCP tools instead of listing them as top-level tools. If \`preview_status\` is not listed directly, inspect the code-mode tool runner's \`ALL_TOOLS\` catalog for \`mcp__t3_code__preview_*\` and invoke the matching deferred tool there. Do this before deciding the T3 preview tools are absent; do not use MCP resource-listing tools to discover callable tools.
+
 For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
 
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
