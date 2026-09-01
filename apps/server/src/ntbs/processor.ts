@@ -16,8 +16,8 @@ It exposes two public APIs:
 1. `process` takes an incoming message and starts the work for it.
 2. `run` subscribes to T3 activity and resumes the exchanges a previous run left unfinished.
 
-TODO: `run` should also own an internal sweeper: a periodic pass that re-drives every non-terminal exchange, the same thing startup recovery does but on an interval.
-Thread activity is the primary wake signal, but it is a fire-and-forget ping: one missed event leaves an exchange stuck until the next restart.
+`run` also owns an internal sweeper: a periodic pass that re-drives every non-terminal exchange, the same thing startup recovery does but on an interval.
+Thread activity is the primary wake signal, but it is a fire-and-forget ping: without the sweeper one missed event would leave an exchange stuck until the next restart.
 Sweeping is cheap and safe because the cycle observes before acting: re-driving an exchange whose context has not moved just answers "wait" and stops.
 
 Both drive an exchange through the same cycle, repeated until it reaches a terminal state:
@@ -53,6 +53,8 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
   cause: unknown;
 }> {}
 
+const SWEEP_INTERVAL = "1 minute";
+
 export interface NTBSProcessor {
   /**
    * Handles a request coming from an external platform.
@@ -70,7 +72,7 @@ export interface NTBSProcessor {
 
   /**
    * The main loop of the processor.
-   * Subscribes to T3 activity, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange only moves when its T3 thread does.
+   * Subscribes to T3 activity, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange moves when its T3 thread does, with a periodic sweep re-driving every non-terminal exchange as the backstop for missed activity pings.
    *
    * Never returns. It has no error channel: a failure on one exchange is logged and the next event is still processed.
    */
@@ -420,11 +422,23 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       ),
     );
 
+    /*
+      The sweeper: the same pass as startup recovery, repeated on an interval for the whole life of `run`.
+      Thread activity is the primary wake signal but it is fire-and-forget: a ping missed while the process is up would otherwise strand its exchange until the next restart.
+      Redundant sweeps are safe and cheap because the cycle observes before acting: an exchange whose context has not moved answers "wait" and stops.
+      The interval is a judgment call, low enough that a stranded exchange recovers within a tolerable wait for whoever asked, high enough that the periodic query stays negligible.
+      Delay first: `run` has just swept via startup recovery, so an immediate first pass would be pure noise.
+    */
+    const sweepNonTerminalExchanges = resumeNonTerminalExchanges.pipe(
+      Effect.delay(SWEEP_INTERVAL),
+      Effect.forever,
+    );
+
     const run = Effect.scoped(
       Effect.gen(function* () {
         yield* subscribeToThreadActivity.pipe(Effect.forkScoped({ startImmediately: true }));
         yield* resumeNonTerminalExchanges;
-        return yield* Effect.never;
+        return yield* sweepNonTerminalExchanges;
       }),
     );
 
