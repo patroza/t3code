@@ -113,6 +113,10 @@ type ExchangeLock = {
  * Builds a processor for the adapter found in the context.
  *
  * Build one per platform, each with its own adapter provided.
+ *
+ * TODO: Consider collapsing to a single runtime processor with one routing adapter that reads the platform from the sourceUri scheme (jira://, discord://) and delegates to the platform adapter.
+ * The current one-per-platform design has an unenforced assumption: `findNonTerminalExchanges` returns every stored exchange with no platform filter, so processors sharing a repository would re-drive each other's exchanges through the wrong adapter during recovery and sweeps.
+ * A single processor also means one lock map, one activity subscription, one sweeper, and retires `makeNTBSProcessorTag`.
  */
 export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcessorRequirements> =
   Effect.gen(function* () {

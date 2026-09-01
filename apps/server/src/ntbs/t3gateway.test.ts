@@ -66,7 +66,8 @@ const createCallLog = () => {
   const record = (service: string) => (method: string, input: unknown) =>
     Effect.sync(() => calls.push({ service, method, input }));
 
-  return { calls, recordResult, record };
+  // Widened so the mock wrappers stay the only writers: tests can read the log, not push into it.
+  return { calls: calls as ReadonlyArray<Call>, recordResult, record };
 };
 
 type CallRecordResult = ReturnType<typeof createCallLog>["recordResult"];
