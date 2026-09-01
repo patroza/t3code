@@ -1611,7 +1611,7 @@ describe("isThreadSettledForDisplay", () => {
     ).toBe(true);
   });
 
-  it("auto-settles on merged/closed PR when the server supports settlement", () => {
+  it("does not client-auto-settle a merged or closed PR; the server stamps settledOverride", () => {
     const serverConfigs = {
       get(_environmentId: string) {
         return {
@@ -1637,7 +1637,7 @@ describe("isThreadSettledForDisplay", () => {
         autoSettleAfterDays: null,
         changeRequestState: "merged",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isThreadSettledForDisplay(activeThread, {
         serverConfigs,
@@ -1645,7 +1645,7 @@ describe("isThreadSettledForDisplay", () => {
         autoSettleAfterDays: null,
         changeRequestState: "closed",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isThreadSettledForDisplay(activeThread, {
         serverConfigs,

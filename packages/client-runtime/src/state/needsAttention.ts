@@ -5,7 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 
-import { effectiveSettled, effectiveSnoozed } from "./threadSettled.ts";
+import { effectiveSnoozed } from "./threadSettled.ts";
 import { getThreadSortTimestamp } from "./threadSort.ts";
 
 /** Status labels aligned with web `resolveThreadStatusPill` / board derivation. */
@@ -152,7 +152,7 @@ export interface NeedsAttentionEntry<TThread extends NeedsAttentionThreadInput, 
  * attention-first sort. Shared by web classic sidebar and mobile home list.
  *
  * Callers must pass `now` (ISO) so this stays pure and free of wall-clock
- * construction — same contract as {@link effectiveSettled}.
+ * construction — same contract as server-stamped `settledOverride`.
  */
 export function buildNeedsAttentionEntries<
   TThread extends NeedsAttentionThreadInput,
@@ -174,7 +174,6 @@ export function buildNeedsAttentionEntries<
   readonly hasUnseenCompletion?: (thread: TThread) => boolean;
 }): ReadonlyArray<NeedsAttentionEntry<TThread, TProject>> {
   const now = input.now;
-  const autoSettleAfterDays = input.autoSettleAfterDays ?? 3;
   const entries: NeedsAttentionEntry<TThread, TProject>[] = [];
 
   for (const thread of input.threads) {
@@ -187,14 +186,7 @@ export function buildNeedsAttentionEntries<
     }
 
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
-    if (
-      supportsSettlement &&
-      effectiveSettled(thread, {
-        now,
-        autoSettleAfterDays,
-        changeRequest: null,
-      })
-    ) {
+    if (supportsSettlement && thread.settledOverride === "settled") {
       continue;
     }
 

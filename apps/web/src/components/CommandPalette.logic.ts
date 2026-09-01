@@ -10,8 +10,11 @@ import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
 import { sortThreads } from "../lib/threadSort";
+import { normalizeSearchText } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
+
+export { normalizeSearchText } from "../lib/utils";
 
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
@@ -171,10 +174,6 @@ export function filterBrowseEntries(input: {
   return { filteredEntries, highlightedEntry, exactEntry };
 }
 
-export function normalizeSearchText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
 export function buildProjectActionItems(input: {
   projects: ReadonlyArray<Project>;
   valuePrefix: string;
@@ -308,9 +307,16 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   });
 }
 
-function rankSearchFieldMatch(field: string, normalizedQuery: string): number {
+function rankSearchFieldMatch(
+  field: string,
+  normalizedQuery: string,
+  queryTokens: ReadonlyArray<string>,
+): number {
   const normalizedField = normalizeSearchText(field);
-  if (normalizedField.length === 0 || !normalizedField.includes(normalizedQuery)) {
+  if (
+    normalizedField.length === 0 ||
+    !queryTokens.every((token) => normalizedField.includes(token))
+  ) {
     return Number.NEGATIVE_INFINITY;
   }
   if (normalizedField === normalizedQuery) {
@@ -319,12 +325,16 @@ function rankSearchFieldMatch(field: string, normalizedQuery: string): number {
   if (normalizedField.startsWith(normalizedQuery)) {
     return 2;
   }
-  return 1;
+  if (normalizedField.includes(normalizedQuery)) {
+    return 1;
+  }
+  return 0;
 }
 
 function rankCommandPaletteItemMatch(
   item: CommandPaletteActionItem | CommandPaletteSubmenuItem,
   normalizedQuery: string,
+  queryTokens: ReadonlyArray<string>,
 ): number {
   const terms = item.searchTerms.filter((term) => term.length > 0);
   if (terms.length === 0) {
@@ -332,7 +342,7 @@ function rankCommandPaletteItemMatch(
   }
 
   for (const [index, field] of terms.entries()) {
-    const fieldRank = rankSearchFieldMatch(field, normalizedQuery);
+    const fieldRank = rankSearchFieldMatch(field, normalizedQuery, queryTokens);
     if (fieldRank !== Number.NEGATIVE_INFINITY) {
       return 1_000 - index * 100 + fieldRank;
     }
@@ -346,6 +356,7 @@ export function filterCommandPaletteGroups(input: {
   query: string;
   isInSubmenu: boolean;
   projectSearchItems: ReadonlyArray<CommandPaletteActionItem>;
+  settingsSearchItems?: ReadonlyArray<CommandPaletteActionItem>;
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
 }): CommandPaletteGroup[] {
   const isActionsFilter = input.query.startsWith(">");
@@ -358,6 +369,7 @@ export function filterCommandPaletteGroups(input: {
     }
     return [...input.activeGroups];
   }
+  const queryTokens = normalizedQuery.split(" ");
 
   let baseGroups = [...input.activeGroups];
   if (isActionsFilter) {
@@ -375,6 +387,13 @@ export function filterCommandPaletteGroups(input: {
         items: input.projectSearchItems,
       });
     }
+    if (input.settingsSearchItems && input.settingsSearchItems.length > 0) {
+      searchableGroups.push({
+        value: "settings-search",
+        label: "Settings",
+        items: input.settingsSearchItems,
+      });
+    }
     if (input.threadSearchItems.length > 0) {
       searchableGroups.push({
         value: "threads-search",
@@ -387,14 +406,14 @@ export function filterCommandPaletteGroups(input: {
   return searchableGroups.flatMap((group) => {
     const items = Arr.filterMap(group.items, (item, index) => {
       const haystack = normalizeSearchText(item.searchTerms.join(" "));
-      if (!haystack.includes(normalizedQuery)) {
+      if (!queryTokens.every((token) => haystack.includes(token))) {
         return Result.failVoid;
       }
 
       return Result.succeed({
         item,
         index,
-        rank: rankCommandPaletteItemMatch(item, normalizedQuery),
+        rank: rankCommandPaletteItemMatch(item, normalizedQuery, queryTokens),
       });
     })
       .toSorted((left, right) => right.rank - left.rank || left.index - right.index)

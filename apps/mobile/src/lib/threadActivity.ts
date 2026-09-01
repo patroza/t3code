@@ -21,6 +21,7 @@ import {
 } from "@t3tools/shared/steerTimeline";
 import { deriveResolvedUserInputTranscripts } from "@t3tools/shared/userInputTranscript";
 import {
+  isWorktreeSetupActivity,
   normalizeCompactToolLabel,
   omitSupersededLifecycleMarkers,
   summarizeToolGroup,
@@ -413,6 +414,7 @@ function deriveWorkLogEntries(
   );
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
+    if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
     // Terminal bypassed updates pass: Codex children's only terminal signal.
@@ -1711,10 +1713,8 @@ function appendToolGroupRows(
     ),
     hasFailure: activities.findLast((activity) => activity.toolLike)?.status === "failure",
     live,
-    shimmer:
-      isWorking &&
-      latestActivity.lifecycleStatus === "inProgress" &&
-      latestActivity.turnId === unsettledTurnId,
+    // Match the live label until the turn or contiguous tool run settles.
+    shimmer: live,
   });
   if (!expanded) {
     return;
