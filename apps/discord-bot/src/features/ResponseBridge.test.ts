@@ -9,6 +9,7 @@ import {
   isDeliveryBehindOrchestration,
   isStreamTipDisplacedByForeignMessage,
   isStreamTipDisplacedByRecentMessages,
+  shouldHopWorkingTipOnHumanDisplacement,
   isDiscordContentMessageType,
   pickLatestContentMessageId,
   deliveryFailureBackoffSeconds,
@@ -582,11 +583,17 @@ describe("isStreamTipDisplacedByForeignMessage / content message types", () => {
   });
 });
 
+describe("Working tip hop policy", () => {
+  it("does not hop Working below human chat", () => {
+    expect(shouldHopWorkingTipOnHumanDisplacement()).toBe(false);
+  });
+});
+
 describe("isStreamTipDisplacedByRecentMessages", () => {
   const bot = "bot-1";
   const owned = ["working-tip", "tasks-msg", "info-pin"];
 
-  it("does not hop when Working is still the channel tip", () => {
+  it("is not displaced when Working is still the channel tip", () => {
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [{ id: "working-tip", type: 0, author: { id: bot } }],
@@ -597,7 +604,7 @@ describe("isStreamTipDisplacedByRecentMessages", () => {
     ).toBe(false);
   });
 
-  it("does not hop when latest is Tasks with no human after Working", () => {
+  it("is not displaced when latest is Tasks with no human after Working", () => {
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [
@@ -611,8 +618,9 @@ describe("isStreamTipDisplacedByRecentMessages", () => {
     ).toBe(false);
   });
 
-  it("hops when humans sat between Working and a later Tasks post", () => {
+  it("detects humans between Working and a later Tasks post", () => {
     // Working → human chat → channel rename → Tasks. Latest-only missed this.
+    // Displacement is detected; stream/heartbeat must not hop (see hop policy).
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [
@@ -629,7 +637,7 @@ describe("isStreamTipDisplacedByRecentMessages", () => {
     ).toBe(true);
   });
 
-  it("hops when a human is the latest content message", () => {
+  it("detects a newer human content message", () => {
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [
@@ -643,7 +651,7 @@ describe("isStreamTipDisplacedByRecentMessages", () => {
     ).toBe(true);
   });
 
-  it("does not hop for channel rename + Tasks after Working", () => {
+  it("is not displaced by channel rename + Tasks after Working", () => {
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [
@@ -658,7 +666,7 @@ describe("isStreamTipDisplacedByRecentMessages", () => {
     ).toBe(false);
   });
 
-  it("does not hop when humans are older than Working", () => {
+  it("is not displaced when humans are older than Working", () => {
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [
