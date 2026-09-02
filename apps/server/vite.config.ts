@@ -91,6 +91,7 @@ export default mergeConfig(
             testTimeout: serverTestTimeout,
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
+              "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
@@ -105,6 +106,10 @@ export default mergeConfig(
             hookTimeout: serverTestTimeout,
             testTimeout: serverTestTimeout,
             include: [
+              // Mocks `node:fs/promises`.open so a path swap during open is
+              // visible. Under isolate:false the real module is already bound
+              // and the descriptor is not rejected.
+              "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               // Mocks `node:os`.homedir so `t3 app` resolves ~/.t3 into the
               // fixture tree. Under isolate:false an earlier file binds the
