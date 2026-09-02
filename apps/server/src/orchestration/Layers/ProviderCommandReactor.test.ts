@@ -915,6 +915,80 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("recovers a live shell turn when the adapter binding looks idle after prompt_complete", async () => {
+    const modelSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-recovery",
+    };
+    const threadId = ThreadId.make("thread-1");
+    const harness = await createHarness({
+      deferReactorStart: true,
+      threadModelSelection: modelSelection,
+      providerBindings: [
+        {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          adapterKey: "codex",
+          runtimeMode: "full-access",
+          status: "running",
+          resumeCursor: { threadId: "provider-thread-resume" },
+          runtimePayload: {
+            cwd: "/tmp/persisted-recovery-cwd",
+            modelSelection,
+            interactionMode: "plan",
+            activeTurnId: null,
+          },
+          lastSeenAt: "2026-01-01T00:00:01.000Z",
+        },
+      ],
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-live-shell-after-prompt-complete"),
+        threadId,
+        message: {
+          messageId: asMessageId("live-shell-user-message"),
+          role: "user",
+          text: "keep going after the server restart",
+          attachments: [],
+        },
+        modelSelection,
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("server:live-shell-before-restart"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: asTurnId("orchestration-turn-still-live"),
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:00.500Z",
+        },
+        createdAt: "2026-01-01T00:00:00.500Z",
+      }),
+    );
+
+    await harness.startReactor();
+    await harness.drain();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+    });
+  });
+
   it("sends desktop turns with identity-map commit attribution", async () => {
     const harness = await createHarness({
       identityPeople: [

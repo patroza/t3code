@@ -6,6 +6,7 @@ import {
   readPersistedProviderCwd,
   readPersistedProviderInteractionMode,
   readPersistedProviderModelSelection,
+  readLiveShellRestartRecoveryCandidate,
   readProviderRestartRecoveryCandidate,
 } from "./ProviderRestartRecovery.ts";
 
@@ -52,6 +53,28 @@ describe("ProviderRestartRecovery", () => {
       shutdownAt: "2026-07-22T00:00:00.000Z",
       source: "legacy-active-turn",
     });
+  });
+
+  it("recovers a live orchestration turn when the adapter binding looks idle", () => {
+    expect(
+      readLiveShellRestartRecoveryCandidate({
+        sessionStatus: "running",
+        activeTurnId: TurnId.make("turn-still-working"),
+        lastSeenAt: "2026-07-22T00:00:00.000Z",
+      }),
+    ).toEqual({
+      version: 1,
+      interruptedProviderTurnId: TurnId.make("turn-still-working"),
+      shutdownAt: "2026-07-22T00:00:00.000Z",
+      source: "legacy-active-turn",
+    });
+    expect(
+      readLiveShellRestartRecoveryCandidate({
+        sessionStatus: "ready",
+        activeTurnId: TurnId.make("turn-still-working"),
+        lastSeenAt: "2026-07-22T00:00:00.000Z",
+      }),
+    ).toBeUndefined();
   });
 
   it("does not recover idle, stopped, or malformed legacy rows", () => {
