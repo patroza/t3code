@@ -92,6 +92,7 @@ export default mergeConfig(
             include: ["integration/**/*.test.ts", "scripts/**/*.test.ts", "src/**/*.test.ts"],
             exclude: [
               "src/bootstrap.test.ts",
+              "src/cli/app.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
             ],
@@ -105,6 +106,11 @@ export default mergeConfig(
             testTimeout: serverTestTimeout,
             include: [
               "src/bootstrap.test.ts",
+              // Mocks `node:os`.homedir so `t3 app` resolves ~/.t3 into the
+              // fixture tree. Under isolate:false an earlier file binds the
+              // real os module and the mock never applies — the CLI then
+              // connects to the live Linux desktop socket.
+              "src/cli/app.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
             ],
