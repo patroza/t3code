@@ -61,6 +61,7 @@ describe("searchSettings", () => {
       "worktree-remove-confirmation",
       "network-access",
       "environment-identification",
+      "continue-threads-after-server-update",
       "new-threads",
       "start-from-origin",
     ]);
