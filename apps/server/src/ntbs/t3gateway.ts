@@ -509,7 +509,55 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         */
         const turn = turns.find((turn) => turn.pendingMessageId === state.t3.userMessageId);
 
+        // The thread detail holds both the thread's messages and its session.
+        const loadThreadDetail = projectionSnapshotQuery
+          .getThreadDetailById(state.t3.threadId)
+          .pipe(
+            orFail("retryable")(
+              "projectionSnapshotQuery.getThreadDetailById",
+              "Could not load thread " + state.t3.threadId,
+            ),
+          );
+
         if (turn === undefined) {
+          /*
+            No turn for our message. Two cases:
+            1. we never dispatched the turn start -> missing, start it
+            2. the provider failed before starting -> T3 keeps our message and marks the session
+               as errored, but never links a turn to our message -> failure reply
+
+            Note: Loading the whole thread detail is expensive. That is fine for the one-minute sweep, but this arm also runs on every activity ping between our turn-start and T3 marking the session as running, and any streaming thread in the system pings during that window. TODO: We should review and find cheaper strategies.
+          */
+          const maybeThread = yield* loadThreadDetail;
+          if (Option.isNone(maybeThread)) {
+            // The thread existed when we reached ThreadCreated, so it was deleted since.
+            // Retrying cannot bring it back: report the failure.
+            return {
+              turn: "completed",
+              reply: {
+                type: "failure",
+                text: "T3's thread could no longer be found.",
+                cause: null,
+              },
+            } as const;
+          }
+
+          const thread = maybeThread.value;
+          const hasOurMessage = thread.messages.some(
+            (message) => message.role === "user" && message.id === state.t3.userMessageId,
+          );
+
+          if (hasOurMessage && thread.session?.status === "error") {
+            return {
+              turn: "completed",
+              reply: {
+                type: "failure",
+                text: thread.session.lastError ?? "T3 failed while processing this request.",
+                cause: null,
+              },
+            } as const;
+          }
+
           return { turn: "missing" } as const;
         }
 
@@ -518,14 +566,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         }
 
         // Only a settled turn needs the thread detail: the reply text lives in its messages.
-        const maybeThread = yield* projectionSnapshotQuery
-          .getThreadDetailById(state.t3.threadId)
-          .pipe(
-            orFail("retryable")(
-              "projectionSnapshotQuery.getThreadDetailById",
-              "Could not load thread " + state.t3.threadId,
-            ),
-          );
+        const maybeThread = yield* loadThreadDetail;
 
         if (Option.isNone(maybeThread)) {
           // The turn settled but its thread is gone. An observed fact, not a lookup error: retrying cannot bring the thread back, so it becomes a failure reply.

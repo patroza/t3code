@@ -19,6 +19,7 @@ import {
   MessageId,
   type OrchestrationEvent,
   OrchestrationProjectShell,
+  type OrchestrationSessionStatus,
   OrchestrationThread,
   OrchestrationThreadShell,
   ProjectId,
@@ -173,8 +174,9 @@ type PSQMInput = {
   isGetThreadShellByIdError?: boolean;
   isThreadDetailMissing?: boolean;
   isGetThreadDetailByIdError?: boolean;
-  /** Rendered as assistant messages on the thread detail. */
-  threadMessages?: ReadonlyArray<{ id: MessageId; text: string }>;
+  /** Rendered as messages on the thread detail; assistant unless a role is given. */
+  threadMessages?: ReadonlyArray<{ id: MessageId; text: string; role?: "user" | "assistant" }>;
+  sessionStatus?: OrchestrationSessionStatus;
   sessionLastError?: string;
 };
 
@@ -284,7 +286,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
               deletedAt: null,
               messages: (input?.threadMessages ?? []).map((message) => ({
                 id: message.id,
-                role: "assistant" as const,
+                role: message.role ?? ("assistant" as const),
                 text: message.text,
                 turnId: null,
                 streaming: false,
@@ -298,7 +300,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
               checkpoints: [],
               session: {
                 threadId,
-                status: "ready",
+                status: input?.sessionStatus ?? "ready",
                 providerName: null,
                 activeTurnId: null,
                 lastError: input?.sessionLastError ?? null,
@@ -1430,12 +1432,17 @@ describe("T3Gateway", () => {
 
         expect(result).toEqual({ turn: "missing" });
 
-        // The lookup is scoped to the exchange's own thread, and a missing turn needs nothing else.
+        // Both lookups are scoped to the exchange's own thread.
         expect(calls).toEqual([
           {
             service: "ProjectionTurnRepository",
             method: "listByThreadId",
             input: { threadId: threadCreated.t3.threadId },
+          },
+          {
+            service: "ProjectionSnapshotQuery",
+            method: "getThreadDetailById",
+            input: threadCreated.t3.threadId,
           },
         ]);
       }).pipe(Effect.provide(layer));
@@ -1718,6 +1725,88 @@ describe("T3Gateway", () => {
         }).pipe(Effect.provide(layer));
       },
     );
+    /*
+      When the provider fails to start a turn, T3 keeps two facts:
+      1. our message on the thread is stored
+      2. the session is marked as errored
+
+      The current test verifies that if conditions 1 and 2 are met, but there is no turn retrieved from T3, then we're in an error state.
+    */
+    it.effect(
+      "answers a completed turn with a failure reply when no turn adopted our message and the session errored",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [] },
+          pqsm: {
+            threadMessages: [
+              { id: threadCreated.t3.userMessageId, text: "snapshot", role: "user" },
+            ],
+            sessionStatus: "error",
+            sessionLastError: "codex: command not found",
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: { type: "failure", text: "codex: command not found", cause: null },
+          });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
+    /*
+      The previous case checked whether we had both a session error and a message recorded. If we did, we concluded that there was an error provider-side.
+
+      Here, we test the same situation, but without the user message recorded. As T3 saves the message _before_ starting the turn and the turn is not here, we never dispatched the turn start, so it is safe to do it now.
+    */
+    it.effect(
+      "answers { turn: 'missing' } when the session errored but our message never reached the thread",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [] },
+          pqsm: { sessionStatus: "error", sessionLastError: "codex: command not found" },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({ turn: "missing" });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
+    /*
+      In ThreadCreated the thread existed. No turn and no thread means it was deleted since, and
+      no retry can bring it back.
+    */
+    it.effect(
+      "answers a failure reply when no turn adopted our message and the thread is gone",
+      () => {
+        const { layer } = createT3Gateway({
+          turnRepository: { turns: [] },
+          pqsm: { isThreadDetailMissing: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.getTurnStatus(threadCreated);
+
+          expect(result).toEqual({
+            turn: "completed",
+            reply: { type: "failure", text: "T3's thread could no longer be found.", cause: null },
+          });
+        }).pipe(Effect.provide(layer));
+      },
+    );
+
     it.effect("fails with RetryableError when listing the thread's turns fails", () => {
       const { layer } = createT3Gateway({ turnRepository: { listByThreadIdFails: true } });
 
@@ -1750,24 +1839,17 @@ describe("T3Gateway", () => {
     /*
       The detail fetch exists only to read a settled reply; running it earlier would add a failure mode to arms that need nothing from it.
     */
-    it.effect("performs no thread detail lookup when the turn is missing or active", () => {
-      const missing = createT3Gateway({ turnRepository: { turns: [] } });
+    it.effect("performs no thread detail lookup when the turn is active", () => {
       const active = createT3Gateway({
         turnRepository: { turns: [makeProjectionTurn({ state: "running" })] },
       });
 
-      const getTurnStatus = Effect.gen(function* () {
-        const t3Gateway = yield* T3Gateway;
-        return yield* t3Gateway.getTurnStatus(threadCreated);
-      });
-
       return Effect.gen(function* () {
-        yield* getTurnStatus.pipe(Effect.provide(missing.layer));
-        yield* getTurnStatus.pipe(Effect.provide(active.layer));
+        const t3Gateway = yield* T3Gateway;
+        yield* t3Gateway.getTurnStatus(threadCreated);
 
-        expect(missing.calls.map((call) => call.method)).toEqual(["listByThreadId"]);
         expect(active.calls.map((call) => call.method)).toEqual(["listByThreadId"]);
-      });
+      }).pipe(Effect.provide(active.layer));
     });
   });
 
