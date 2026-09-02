@@ -2,18 +2,9 @@
 
 The exchange model, ports, processor, and T3 gateway are implemented under `apps/server/src/ntbs/`. This file tracks only what is still open. Findings referenced by id are in `review-01-09.md`.
 
-## Rejected requests (before a claim exists)
+## Request accepted before planning
 
-**Decided 2026-09-02.** `planCoordinates` can fail permanently (branch not on `origin`, project missing, no `origin` remote). There is no exchange to store that on, because `ExchangeBase` needs the coordinates that just failed. Today the user hears nothing while the platform redelivers and each redelivery re-fetches.
-
-The adapter owns the reply for a rejected request. No exchange is ever recorded.
-
-- [ ] Split `NTBSProcessorError` so `process` returns a typed `RequestRejected` (permanent, carries the user-facing reason) distinct from transient failures. Only the rejected variant triggers a reply; a transient failure still surfaces as a webhook error so the platform redelivers.
-- [ ] The inbound adapter code renders `RequestRejected` to the platform and acks the webhook.
-- [ ] Fix the port doc comment in `t3gateway.ts` ("converts that into a reply-pending failure").
-- [ ] Accepted for now: a crash between posting the rejection and acking the webhook posts it twice, and rejected requests leave no NTBS trail.
-
-Future direction: a second, adapter-owned store keyed by the platform's inbound message id (inbound id → outcome). Gives the adapter redelivery dedup and an audit trail for rejected requests without touching the exchange model. It must never mirror exchange state.
+- [ ] Implement `ntbs-request-accepted.md`. Absorbs review items M1 and M4.
 
 ## Bound every retry (H1, M2, M3)
 
@@ -33,9 +24,7 @@ Provisioning today is worktree → `thread.create` with the final path → fire-
 
 ## Other review items
 
-- [ ] M1: `process` returns once the claim is persisted; a failing advance after the claim is logged and left to `run`.
 - [ ] H5: narrow `threadActivity` to session/turn lifecycle events; `Effect.timeout` on every adapter and gateway call.
-- [ ] M4: type reply `cause` as a JSON-safe schema before the SQL repository lands.
 - [ ] L3: worktree branch uses the full thread UUID with a non-temporary prefix so T3 does not rename it.
 
 ## Tests
