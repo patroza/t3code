@@ -366,6 +366,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     })();
     if (lifecycle === undefined) return;
 
+    const payload =
+      binding.runtimePayload !== null &&
+      typeof binding.runtimePayload === "object" &&
+      !Array.isArray(binding.runtimePayload)
+        ? (binding.runtimePayload as Record<string, unknown>)
+        : undefined;
+    // stopAll already persisted recovery intent. A following Grok/ACP
+    // turn.completed (cancelled) or session.exited must not delete it.
+    const preserveShutdownRecoveryMarker =
+      payload?.lastRuntimeEvent === "provider.stopAll" &&
+      readProviderRestartRecoveryMarker(binding.runtimePayload) !== undefined;
+
     yield* directory.upsert({
       threadId: event.threadId,
       provider: binding.provider,
@@ -374,7 +386,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       status: lifecycle.status,
       runtimePayload: {
         ...(lifecycle.activeTurnId !== undefined ? { activeTurnId: lifecycle.activeTurnId } : {}),
-        ...(lifecycle.restartRecovery !== undefined
+        ...(lifecycle.restartRecovery !== undefined && !preserveShutdownRecoveryMarker
           ? { restartRecovery: lifecycle.restartRecovery }
           : {}),
         lastRuntimeEvent: event.type,

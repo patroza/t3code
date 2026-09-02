@@ -73,7 +73,10 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
-import { readProviderRestartRecoveryMarker } from "../ProviderRestartRecovery.ts";
+import {
+  makeProviderRestartRecoveryMarker,
+  readProviderRestartRecoveryMarker,
+} from "../ProviderRestartRecovery.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
@@ -657,6 +660,92 @@ it.effect("graceful shutdown recovers live bindings missing from adapter listSes
     const marker = readProviderRestartRecoveryMarker(orphan?.runtimePayload);
     assert.equal(marker?.interruptedProviderTurnId, asTurnId("provider-turn-orphan"));
 
+    NodeFS.rmSync(tempDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps restart recovery markers when session.exited arrives after stopAll", () =>
+  Effect.gen(function* () {
+    const tempDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3-provider-recovery-exited-"),
+    );
+    const dbPath = NodePath.join(tempDir, "runtime.sqlite");
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(persistenceLayer),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const codex = makeFakeCodexAdapter();
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(
+        Layer.succeed(
+          ProviderAdapterRegistry.ProviderAdapterRegistry,
+          makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
+        ),
+      ),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(serverConfigTestLayer),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+    const scope = yield* Scope.make();
+    const services = yield* Layer.build(
+      Layer.mergeAll(providerLayer, runtimeRepositoryLayer, directoryLayer),
+    ).pipe(Scope.provide(scope));
+    const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+    const threadId = asThreadId("thread-exited-after-marker");
+    yield* provider.startSession(threadId, {
+      provider: CODEX_DRIVER,
+      providerInstanceId: codexInstanceId,
+      threadId,
+      runtimeMode: "full-access",
+    });
+    const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory.pipe(
+      Effect.provide(services),
+    );
+    const marker = makeProviderRestartRecoveryMarker({
+      interruptedProviderTurnId: asTurnId("provider-turn-exited"),
+      shutdownAt: "2026-01-01T00:00:02.000Z",
+    });
+    yield* directory.upsert({
+      threadId,
+      provider: CODEX_DRIVER,
+      providerInstanceId: codexInstanceId,
+      status: "stopped",
+      resumeCursor: { threadId: "provider-exited" },
+      runtimePayload: {
+        restartRecovery: marker,
+        lastRuntimeEvent: "provider.stopAll",
+        lastRuntimeEventAt: "2026-01-01T00:00:02.000Z",
+      },
+    });
+
+    codex.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited"),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:03.000Z",
+      threadId,
+    });
+    yield* advanceTestClock(50);
+
+    const rows = yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      return yield* repository.list();
+    }).pipe(Effect.provide(runtimeRepositoryLayer));
+    const persisted = rows.find((row) => row.threadId === threadId);
+    assert.equal(
+      readProviderRestartRecoveryMarker(persisted?.runtimePayload)?.interruptedProviderTurnId,
+      asTurnId("provider-turn-exited"),
+    );
+
+    yield* Scope.close(scope, Exit.void);
     NodeFS.rmSync(tempDir, { recursive: true, force: true });
   }).pipe(Effect.provide(NodeServices.layer)),
 );
