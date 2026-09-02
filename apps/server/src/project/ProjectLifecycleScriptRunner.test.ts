@@ -98,6 +98,7 @@ const makeProjectionSnapshotQueryLayer = (
     getThreadDetailSnapshot: () => Effect.die("unused"),
     searchThreads: () => Effect.succeed({ matches: [] }),
     getThreadLifecycleById: () => Effect.die("unused"),
+    getEventReplayStats: () => Effect.die("unused"),
   });
 
 const makeProcessRunnerLayer = (run: ProcessRunner.ProcessRunner["Service"]["run"]) =>

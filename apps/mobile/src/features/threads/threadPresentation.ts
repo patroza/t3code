@@ -1,11 +1,6 @@
 import type { StatusTone } from "../../components/StatusPill";
 import { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
-export function threadSortValue(thread: EnvironmentThreadShell): number {
-  const candidate = Date.parse(thread.updatedAt ?? thread.createdAt);
-  return Number.isNaN(candidate) ? 0 : candidate;
-}
-
 /**
  * The timestamp a settled row labels by: the settle stamp when the server
  * recorded one (explicit settles), otherwise last activity. Mirrors the
@@ -38,12 +33,6 @@ export interface ThreadStatusPresentation extends StatusTone {
   /** Whether the indicator represents in-flight activity. */
   readonly pulse: boolean;
 }
-
-/** Neutral icon colors for threads with no actionable status. */
-export const THREAD_STATUS_NEUTRAL_ICON = {
-  iconColor: "#8e8e93",
-  iconBackground: "rgba(142,142,147,0.22)",
-} as const;
 
 /**
  * Resolves the user-facing status of a thread, in priority order. Returns
