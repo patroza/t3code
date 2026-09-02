@@ -12,6 +12,7 @@
 import {
   NonNegativeInt,
   ThreadId,
+  TurnId,
   ProviderCompactSessionInput,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -70,6 +71,10 @@ import {
   readPersistedProviderCwd,
   readPersistedProviderModelSelection,
 } from "../ProviderRestartRecovery.ts";
+import {
+  readRuntimePayload,
+  SERVER_UPDATE_CONTINUATION_KEY,
+} from "../providerSessionContinuation.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 
 /**
@@ -1369,6 +1374,74 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       ),
     ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
+
+    // Same payload key as in-app #9167. Startup reconcileProviderSessions
+    // continues marked threads after this process is replaced (systemd
+    // restart, deploy). Crash/hard-kill never reaches stopAll, so those
+    // still settle as interrupted.
+    const persistedBindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
+    const bindingByThreadId = new Map(
+      persistedBindings.map((binding) => [binding.threadId, binding] as const),
+    );
+    const continuationByThreadId = new Map<ThreadId, TurnId>();
+    const considerContinuation = (
+      threadId: ThreadId,
+      turnId: TurnId | null | undefined,
+      resumeCursor: unknown,
+    ) => {
+      if (turnId === null || turnId === undefined) return;
+      if (resumeCursor === null || resumeCursor === undefined) return;
+      if (continuationByThreadId.has(threadId)) return;
+      continuationByThreadId.set(threadId, turnId);
+    };
+
+    for (const session of activeSessions) {
+      const working = session.status === "connecting" || session.status === "running";
+      if (!working) continue;
+      const binding = bindingByThreadId.get(session.threadId);
+      considerContinuation(
+        session.threadId,
+        session.activeTurnId ?? readPersistedProviderActiveTurnId(binding?.runtimePayload),
+        binding?.resumeCursor ?? session.resumeCursor,
+      );
+    }
+    for (const binding of persistedBindings) {
+      if (binding.status !== "starting" && binding.status !== "running") continue;
+      considerContinuation(
+        binding.threadId,
+        readPersistedProviderActiveTurnId(binding.runtimePayload),
+        binding.resumeCursor,
+      );
+    }
+
+    yield* Effect.forEach(
+      [...continuationByThreadId.entries()],
+      ([threadId, turnId]) =>
+        Effect.gen(function* () {
+          const binding = bindingByThreadId.get(threadId);
+          if (binding === undefined) return;
+          yield* directory.upsert({
+            ...binding,
+            runtimePayload: {
+              ...readRuntimePayload(binding.runtimePayload),
+              [SERVER_UPDATE_CONTINUATION_KEY]: turnId,
+            },
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to mark provider session for restart continuation", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      { discard: true },
+    );
+    if (continuationByThreadId.size > 0) {
+      yield* Effect.logInfo("marked provider sessions to continue after graceful restart", {
+        continuationCount: continuationByThreadId.size,
+      });
+    }
 
     yield* Effect.forEach(activeSessions, (session) =>
       upsertSessionBinding(session, session.threadId, {

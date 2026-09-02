@@ -2205,7 +2205,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("continue-threads-after-server-update")}
-          description="Automatically resume active threads after a server update restarts the environment."
+          description="Automatically resume active threads after an in-app server update. Graceful service restarts and deploys always resume working threads."
           resetAction={
             settings.continueThreadsAfterServerUpdate !==
             DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate ? (

@@ -556,6 +556,21 @@ it.effect("graceful shutdown interrupts working sessions before stopAll", () =>
     assert.equal(byThreadId.get(connectingThreadId)?.status, "stopped");
     assert.equal(byThreadId.get(readyThreadId)?.status, "stopped");
     assert.equal(byThreadId.get(stoppedThreadId)?.status, "stopped");
+    const runningPayload = byThreadId.get(runningThreadId)?.runtimePayload as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    assert.equal(runningPayload?.continueAfterServerUpdate, "provider-turn-running");
+    const readyPayload = byThreadId.get(readyThreadId)?.runtimePayload as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    assert.equal(readyPayload?.continueAfterServerUpdate, undefined);
+    const stoppedPayload = byThreadId.get(stoppedThreadId)?.runtimePayload as
+      | Record<string, unknown>
+      | null
+      | undefined;
+    assert.equal(stoppedPayload?.continueAfterServerUpdate, undefined);
     // Working sessions must receive cooperative interrupt before hard stopAll.
     assert.isTrue(codex.interruptTurn.mock.calls.length >= 2);
     assert.deepEqual(codex.interruptTurn.mock.calls[0]?.[0], runningThreadId);
@@ -634,6 +649,8 @@ it.effect("graceful shutdown stops live bindings missing from adapter listSessio
     const orphan = rows.find((row) => row.threadId === orphanThreadId);
     assert.isDefined(orphan);
     assert.equal(orphan?.status, "stopped");
+    const orphanPayload = orphan?.runtimePayload as Record<string, unknown> | null | undefined;
+    assert.equal(orphanPayload?.continueAfterServerUpdate, "provider-turn-orphan");
 
     NodeFS.rmSync(tempDir, { recursive: true, force: true });
   }).pipe(Effect.provide(NodeServices.layer)),

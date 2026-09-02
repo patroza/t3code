@@ -7,7 +7,6 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  TurnId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
@@ -44,6 +43,13 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
+import {
+  hasServerUpdateContinuationMarker,
+  readRuntimePayload,
+  readServerUpdateContinuationTurnId,
+  SERVER_UPDATE_CONTINUATION_KEY,
+  SERVER_UPDATE_CONTINUATION_PROMPT,
+} from "./provider/providerSessionContinuation.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import * as OrphanSessionRecovery from "./orchestration/Services/OrphanSessionRecovery.ts";
 import { forkParked } from "./serverActivation.ts";
@@ -341,8 +347,6 @@ export function interruptSessionAfterServerRestart(
 
 const ORPHANED_PROVIDER_SESSION_ERROR =
   "Provider session did not survive a server restart. Send a new message to continue.";
-const SERVER_UPDATE_CONTINUATION_KEY = "continueAfterServerUpdate";
-const SERVER_UPDATE_CONTINUATION_PROMPT = "Continue where you left off.";
 
 class ProviderSessionContinuationError extends Schema.TaggedErrorClass<ProviderSessionContinuationError>()(
   "ProviderSessionContinuationError",
@@ -366,34 +370,7 @@ export class ServerUpdateThreadContinuationError extends Schema.TaggedErrorClass
   }
 }
 
-function hasServerUpdateContinuationMarker(
-  runtimePayload: unknown,
-): runtimePayload is Record<string, unknown> {
-  return (
-    runtimePayload !== null &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload) &&
-    SERVER_UPDATE_CONTINUATION_KEY in runtimePayload
-  );
-}
-
-function readRuntimePayload(runtimePayload: unknown): Record<string, unknown> {
-  return runtimePayload !== null &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload)
-    ? (runtimePayload as Record<string, unknown>)
-    : {};
-}
-
 const isServerUpdateThreadContinuationError = Schema.is(ServerUpdateThreadContinuationError);
-
-function readServerUpdateContinuationTurnId(runtimePayload: unknown): TurnId | null {
-  if (!hasServerUpdateContinuationMarker(runtimePayload)) {
-    return null;
-  }
-  const value = runtimePayload[SERVER_UPDATE_CONTINUATION_KEY];
-  return typeof value === "string" && value.length > 0 ? TurnId.make(value) : null;
-}
 
 const toServerUpdateThreadContinuationError = (cause: unknown) =>
   isServerUpdateThreadContinuationError(cause)
