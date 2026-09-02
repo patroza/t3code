@@ -19,6 +19,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { ProviderSessionDirectoryPersistenceError } from "./provider/Errors.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
+import { makeProviderRestartRecoveryMarker } from "./provider/ProviderRestartRecovery.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -433,6 +434,49 @@ it.effect("retries continuation preparation before settling a persistent failure
           ["starting", "starting", "error"],
         ),
       ),
+    ),
+  );
+});
+
+it.effect("does not settle Tim Smart restart-recovery markers as update orphans", () => {
+  const recovering = makeThread("thread-restart-recovery", "running", TurnId.make("turn-live"));
+  const dispatched: OrchestrationCommand[] = [];
+  const upserts: ProviderSessionDirectory.ProviderRuntimeBinding[] = [];
+  const marker = makeProviderRestartRecoveryMarker({
+    interruptedProviderTurnId: TurnId.make("turn-live"),
+    shutdownAt: updatedAt,
+  });
+
+  return runReconciliation({
+    threads: [recovering],
+    directory: {
+      getBinding: (candidate) =>
+        Effect.succeed(
+          Option.some({
+            threadId: candidate,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId,
+            status: "stopped" as const,
+            resumeCursor: { cursor: candidate },
+            runtimePayload: {
+              activeTurnId: null,
+              restartRecovery: marker,
+            },
+          }),
+        ),
+      upsert: (binding) => Effect.sync(() => upserts.push(binding)),
+      getProvider: () => Effect.die("unused"),
+      listThreadIds: () => Effect.die("unused"),
+      listBindings: () => Effect.die("unused"),
+    },
+    dispatch: (command) =>
+      Effect.sync(() => dispatched.push(command)).pipe(Effect.as({ sequence: dispatched.length })),
+  }).pipe(
+    Effect.tap(() =>
+      Effect.sync(() => {
+        assert.deepStrictEqual(dispatched, []);
+        assert.deepStrictEqual(upserts, []);
+      }),
     ),
   );
 });
