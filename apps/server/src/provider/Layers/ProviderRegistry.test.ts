@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as Clock from "effect/Clock";
 import * as TestClock from "effect/testing/TestClock";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import {
@@ -2019,10 +2020,16 @@ it.layer(
           });
 
           // Poll until the injected process boundary observes the new
-          // executable. This verifies the public settings-to-probe behavior
-          // without depending on timestamps assigned by TestClock.
+          // executable. TestClock unblocks Effect fibers; the real spawner
+          // ENOENT is wall-clock I/O, so also sleep on the live Clock. A
+          // TestClock-only loop finished under CI load before the second probe
+          // spawned.
+          const liveSleep = (duration: `${number} millis`) =>
+            Effect.sleep(duration).pipe(
+              Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+            );
           const refreshed = yield* Effect.gen(function* () {
-            for (let attempts = 0; attempts < 60; attempts += 1) {
+            for (let attempts = 0; attempts < 80; attempts += 1) {
               const providers = yield* registry.getProviders;
               const codex = providers.find((provider) => provider.instanceId === "codex");
               if (
@@ -2034,6 +2041,7 @@ it.layer(
               }
               yield* TestClock.adjust("50 millis");
               yield* Effect.yieldNow;
+              yield* liveSleep("15 millis");
             }
             return yield* registry.getProviders;
           });

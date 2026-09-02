@@ -361,11 +361,14 @@ export type DiscordChannelMessageForTipScan = {
  *
  * Walks `recentMessagesNewestFirst` until the live tip. Bot side posts after the tip
  * (Tasks, stream chunks, finals, external-input echoes) and Discord system messages
- * (title renames, pins) are skipped — they must NOT hop Working. A human *between*
- * Working and a later Tasks post **does** displace, even when Tasks is the channel tip.
+ * (title renames, pins) are skipped. A human *between* Working and a later Tasks
+ * post **is** displaced, even when Tasks is the channel tip.
  *
- * Working → human chat → Tasks used to miss this: latest-only treated Tasks as
- * "still ours" and left Working + Stop stuck above the humans.
+ * Displacement is **not** a hop. {@link shouldHopWorkingTipOnHumanDisplacement} is
+ * false: stream/heartbeat keep editing the original tip. Working relocates only
+ * when a new command posts its own ack (`shouldPostWorkingAckForContinue`: idle
+ * turn or `--steer` / `/agent steer`). Finalize creates a new message and deletes
+ * in-progress tips — that is not a hop.
  */
 export function isStreamTipDisplacedByRecentMessages(input: {
   readonly recentMessagesNewestFirst: ReadonlyArray<DiscordChannelMessageForTipScan>;
@@ -429,6 +432,23 @@ export function isStreamTipDisplacedByForeignMessage(input: {
     ownedMessageIds: input.ownedMessageIds,
     botUserId: "__self_bot__",
   });
+}
+
+/**
+ * Whether stream/heartbeat should delete `_Working.._` and re-post it below later
+ * human messages.
+ *
+ * Always false. Casual thread chat and parked (queued) follow-ups must leave the
+ * in-progress message in place — hopping jumps Stop + progress through the
+ * conversation. Relocation is only a new-command Working ack (idle turn or
+ * `--steer` / `/agent steer` via `shouldPostWorkingAckForContinue`). `/agent
+ * steernow` injects the queue without a new tip.
+ *
+ * The final turn answer is never an in-place edit of Working: finalize always
+ * creates a new message, then deletes the in-progress tips.
+ */
+export function shouldHopWorkingTipOnHumanDisplacement(): boolean {
+  return false;
 }
 
 export function shouldPublishAssistantUpdate(input: {
@@ -2266,8 +2286,10 @@ export function planStreamTipFreezeOnDisplacement(input: {
  * Move a displaced Working tip: create the replacement first, then delete the old
  * message(s). Create-before-delete so Discord never sits without a Working bubble.
  *
- * The new tip owns the full current stream (break prefix cleared) — this is a move,
- * not a freeze with a suffix post.
+ * Stream/heartbeat no longer call this ({@link shouldHopWorkingTipOnHumanDisplacement}
+ * is false). A steered/new-command Working ack uses
+ * {@link nextBridgeStateAfterAdoptWorkingAck} instead. Finalize creates a new
+ * message and deletes in-progress tips separately.
  */
 export function nextStateAfterMovingWorkingTip(input: {
   readonly priorDiscordMessageIds: ReadonlyArray<string>;
@@ -2628,39 +2650,6 @@ export const runBridge = (
       mode,
       activeStreamTips: streamSeed.discordMessageIds.length,
     });
-
-    /**
-     * Recent channel messages (newest first). Limit > 1 so a burst of title
-     * renames or a Tasks side-post cannot hide a human sitting under Working.
-     */
-    const recentChannelMessages = rest
-      .listMessages(input.discordChannelId, { limit: 15 })
-      .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<DiscordChannelMessageForTipScan>));
-
-    /** True when a human (or other non-bot-owned) *content* message is newer than the tip. */
-    const isStreamTipDisplaced = (streamTipId: string | null) =>
-      Effect.gen(function* () {
-        if (streamTipId === null || streamTipId.trim() === "") return false;
-        const recent = yield* recentChannelMessages;
-        const state = yield* Ref.get(stateRef);
-        const link = yield* links
-          .getByDiscordThreadId(input.discordChannelId)
-          .pipe(Effect.catchCause(() => Effect.succeed(null)));
-        return isStreamTipDisplacedByRecentMessages({
-          recentMessagesNewestFirst: recent,
-          streamTipId,
-          botUserId,
-          // Tasks + info pin + stream tips are bot side-channels; never freeze Working under them.
-          ownedMessageIds: discordBridgeOwnedMessageIds({
-            discordMessageIds: state.discordMessageIds,
-            staleStreamMessageIds: state.staleStreamMessageIds,
-            finalDiscordMessageIds: state.finalDiscordMessageIds,
-            taskDiscordMessageId: state.taskDiscordMessageId ?? link?.taskDiscordMessageId,
-            infoDiscordMessageId: link?.infoDiscordMessageId,
-            streamDiscordMessageIds: link?.streamDiscordMessageIds ?? [],
-          }),
-        });
-      });
 
     const deleteMessages = (ids: ReadonlyArray<string>) =>
       Effect.gen(function* () {
@@ -3363,7 +3352,8 @@ export const runBridge = (
 
           // Multi-step agents open a new assistant id per bubble while the turn runs.
           // Keep the same Discord tip(s) and edit them — never delete/recreate mid-turn
-          // while we still own the channel tip.
+          // because humans chatted (shouldHopWorkingTipOnHumanDisplacement is false).
+          // Working relocates only when a new command posts its own ack (steer / idle).
           // Working.. ack (if seeded) is already in discordMessageIds.
           // On a new delivery, only keep the newest tip slot (the Working ack) so we never
           // try to edit prior-turn message ids (Discord 10008 Unknown Message).
@@ -3382,24 +3372,6 @@ export const runBridge = (
           const fullDisplayText = streamDisplayText(text);
           const previousFullDisplayText = streamDisplayText(lastText);
 
-          // Humans under Working: move the live tip (create replacement first, then
-          // delete the old message). Bot-owned side posts (Tasks / approvals / info pin)
-          // must NOT hop Working.
-          let displacedTipIdsToDelete: ReadonlyArray<string> = [];
-          if (discordMessageIds.length > 0) {
-            const tipId = discordMessageIds[discordMessageIds.length - 1] ?? null;
-            if (tipId !== null && (yield* isStreamTipDisplaced(tipId))) {
-              displacedTipIdsToDelete = [...discordMessageIds];
-              yield* Effect.logInfo("Discord stream tip lost channel-tip ownership; moving below", {
-                t3ThreadId: input.t3ThreadId,
-                assistantId: t3MessageId,
-                oldDiscordMessageIds: displacedTipIdsToDelete,
-              });
-              discordMessageIds = [];
-              streamBreakPrefix = "";
-            }
-          }
-
           // Discord cannot render GFM pipe tables — rewrite complete tables to bullets.
           const tipDisplayText = rewriteMarkdownTablesForDiscord(
             activeStreamTipText(fullDisplayText, streamBreakPrefix),
@@ -3408,8 +3380,8 @@ export const runBridge = (
             activeStreamTipText(previousFullDisplayText, streamBreakPrefix),
           );
 
-          // After a move, always keep a Working tip for liveness even when the model is
-          // only running tools (no new prose yet).
+          // Always keep a Working tip for liveness even when the model is only running
+          // tools (no new prose yet).
           const desiredChunks =
             tipDisplayText.trim() === ""
               ? ([""] as string[])
@@ -3443,7 +3415,7 @@ export const runBridge = (
               const stopButtonVisibilityChanged = previousIsLastChunk !== isLastChunk;
 
               if (contentChanged || isLastChunk || stopButtonVisibilityChanged) {
-                // Tip ownership is checked at the start of the update; here we only edit.
+                // Edit the original tip in place even if humans posted below it.
                 // After bot restart, durable tip ids may point at deleted messages — recreate.
                 const fields = isLastChunk
                   ? workingMessageFields(content, input.t3ThreadId)
@@ -3498,21 +3470,6 @@ export const runBridge = (
             const extra = discordMessageIds.slice(desiredChunks.length);
             staleStreamMessageIds = uniqueDiscordMessageIds([...staleStreamMessageIds, ...extra]);
             discordMessageIds = discordMessageIds.slice(0, desiredChunks.length);
-          }
-
-          if (displacedTipIdsToDelete.length > 0) {
-            const moved = nextStateAfterMovingWorkingTip({
-              priorDiscordMessageIds: displacedTipIdsToDelete,
-              priorStaleStreamMessageIds: staleStreamMessageIds,
-              newTipIds: discordMessageIds,
-            });
-            yield* deleteMessages(moved.oldIdsToDelete).pipe(
-              Effect.catchCause(Effect.logWarning),
-              Effect.asVoid,
-            );
-            discordMessageIds = [...moved.discordMessageIds];
-            staleStreamMessageIds = [...moved.staleStreamMessageIds];
-            streamBreakPrefix = moved.streamBreakPrefix;
           }
 
           yield* Ref.update(stateRef, (current) => ({
@@ -4808,54 +4765,9 @@ export const runBridge = (
             return;
           }
 
-          // Humans under Working: create the replacement first, then delete the old
-          // message so the original Working bubble actually moves below the humans.
-          if (tipId !== null && (yield* isStreamTipDisplaced(tipId))) {
-            const displacedTipId = tipId;
-            const tipDisplay = rewriteMarkdownTablesForDiscord(streamDisplayText(hb.tipBody));
-            const chunks =
-              tipDisplay.trim() === ""
-                ? ([""] as string[])
-                : chunkDiscordContent(tipDisplay, STREAM_CHUNK_LIMIT);
-            const tipChunk = chunks.at(-1) ?? "";
-            const hopContent = formatInProgressChunk(
-              tipChunk,
-              true,
-              DISCORD_LIMIT,
-              workingDots,
-              toolCallCount,
-            );
-            const created = yield* rest.createMessage(input.discordChannelId, {
-              ...workingMessageFields(hopContent, input.t3ThreadId),
-            });
-            const moved = nextStateAfterMovingWorkingTip({
-              priorDiscordMessageIds: [displacedTipId],
-              priorStaleStreamMessageIds: state.staleStreamMessageIds,
-              newTipIds: [
-                ...state.discordMessageIds.filter((id) => id !== displacedTipId),
-                created.id,
-              ],
-            });
-            yield* deleteMessages(moved.oldIdsToDelete).pipe(
-              Effect.catchCause(Effect.logWarning),
-              Effect.asVoid,
-            );
-            yield* Ref.update(stateRef, (current) => ({
-              ...current,
-              discordMessageIds: [...moved.discordMessageIds],
-              staleStreamMessageIds: [...moved.staleStreamMessageIds],
-              streamBreakPrefix: moved.streamBreakPrefix,
-            }));
-            const afterHop = yield* Ref.get(stateRef);
-            yield* persistStreamMessageIds(allStreamIds(afterHop));
-            yield* Effect.logInfo("Heartbeat hopped Working tip below human replies", {
-              t3ThreadId: input.t3ThreadId,
-              deletedDiscordMessageId: displacedTipId,
-              messageId: created.id,
-              toolCallCount,
-            });
-            return;
-          }
+          // Keep editing the original Working tip in place. Human chat must not hop it
+          // (shouldHopWorkingTipOnHumanDisplacement). A steered/new-command ack posts
+          // its own tip via adoptWorkingAckMessageId.
 
           // Epoch FSM: awaiting → dots only; streaming → current epoch streamText only.
           // Same GFM→bullets rewrite as the primary stream path.
