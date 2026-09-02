@@ -354,7 +354,16 @@ export type DiscordChannelMessageForTipScan = {
   readonly id: string;
   readonly type?: number | null;
   readonly author?: { readonly id?: string | null } | null;
+  readonly content?: string | null;
 };
+
+/**
+ * Cross-surface command echoed into Discord (`💭 from **user@desktop**:` …).
+ * These are new commands, not bot side-posts (Tasks / pins / Working).
+ */
+export function isDiscordEchoedCommandContent(text: string): boolean {
+  return text.trim().startsWith("💭 from **");
+}
 
 /**
  * Whether a human (or other non-bot-owned) *content* message sits newer than the Working tip.
@@ -364,11 +373,9 @@ export type DiscordChannelMessageForTipScan = {
  * (title renames, pins) are skipped. A human *between* Working and a later Tasks
  * post **is** displaced, even when Tasks is the channel tip.
  *
- * Displacement is **not** a hop. {@link shouldHopWorkingTipOnHumanDisplacement} is
- * false: stream/heartbeat keep editing the original tip. Working relocates only
- * when a new command posts its own ack (`shouldPostWorkingAckForContinue`: idle
- * turn or `--steer` / `/agent steer`). Finalize creates a new message and deletes
- * in-progress tips — that is not a hop.
+ * Casual-chat displacement does **not** hop Working. Hop only when an echoed
+ * command sits newer than the tip ({@link isStreamTipDisplacedByEchoedCommand})
+ * or a Discord `--steer` / idle turn posts a new Working ack.
  */
 export function isStreamTipDisplacedByRecentMessages(input: {
   readonly recentMessagesNewestFirst: ReadonlyArray<DiscordChannelMessageForTipScan>;
@@ -435,20 +442,43 @@ export function isStreamTipDisplacedByForeignMessage(input: {
 }
 
 /**
- * Whether stream/heartbeat should delete `_Working.._` and re-post it below later
- * human messages.
+ * Whether an echoed T3/GitHub command sits newer than the live Working tip.
  *
- * Always false. Casual thread chat and parked (queued) follow-ups must leave the
- * in-progress message in place — hopping jumps Stop + progress through the
- * conversation. Relocation is only a new-command Working ack (idle turn or
- * `--steer` / `/agent steer` via `shouldPostWorkingAckForContinue`). `/agent
- * steernow` injects the queue without a new tip.
- *
- * The final turn answer is never an in-place edit of Working: finalize always
- * creates a new message, then deletes the in-progress tips.
+ * Echoes are bot-authored, so {@link isStreamTipDisplacedByRecentMessages} skips
+ * them. Casual Discord chat must not hop Working; a desktop/web/mobile (or
+ * GitHub) command echoed into the thread should.
  */
-export function shouldHopWorkingTipOnHumanDisplacement(): boolean {
+export function isStreamTipDisplacedByEchoedCommand(input: {
+  readonly recentMessagesNewestFirst: ReadonlyArray<DiscordChannelMessageForTipScan>;
+  readonly streamTipId: string | null;
+}): boolean {
+  const tip = input.streamTipId?.trim() ?? "";
+  if (tip === "") return false;
+  for (const message of input.recentMessagesNewestFirst) {
+    if (!isDiscordContentMessageType(message.type)) continue;
+    const id = message.id.trim();
+    if (id === "") continue;
+    if (id === tip) return false;
+    if (isDiscordEchoedCommandContent(message.content ?? "")) return true;
+  }
   return false;
+}
+
+export type WorkingTipDisplacementCause = "casual-chat" | "echoed-command";
+
+/**
+ * Whether stream/heartbeat should delete `_Working.._` and re-post it below a
+ * later channel message.
+ *
+ * Casual thread chat and parked (queued) follow-ups leave the in-progress
+ * message in place. An echoed cross-surface command (desktop/web/mobile/GitHub)
+ * hops Working under that command. Discord `--steer` / idle turns post a new
+ * Working ack instead ({@link shouldPostWorkingAckForContinue}).
+ *
+ * Finalize always creates a new message, then deletes in-progress tips.
+ */
+export function shouldHopWorkingTipOnDisplacement(cause: WorkingTipDisplacementCause): boolean {
+  return cause === "echoed-command";
 }
 
 export function shouldPublishAssistantUpdate(input: {
@@ -2286,10 +2316,9 @@ export function planStreamTipFreezeOnDisplacement(input: {
  * Move a displaced Working tip: create the replacement first, then delete the old
  * message(s). Create-before-delete so Discord never sits without a Working bubble.
  *
- * Stream/heartbeat no longer call this ({@link shouldHopWorkingTipOnHumanDisplacement}
- * is false). A steered/new-command Working ack uses
- * {@link nextBridgeStateAfterAdoptWorkingAck} instead. Finalize creates a new
- * message and deletes in-progress tips separately.
+ * Used when an echoed cross-surface command lands below Working. A Discord
+ * `--steer` / idle Working ack uses {@link nextBridgeStateAfterAdoptWorkingAck}
+ * instead. Finalize creates a new message and deletes in-progress tips separately.
  */
 export function nextStateAfterMovingWorkingTip(input: {
   readonly priorDiscordMessageIds: ReadonlyArray<string>;
@@ -3352,8 +3381,8 @@ export const runBridge = (
 
           // Multi-step agents open a new assistant id per bubble while the turn runs.
           // Keep the same Discord tip(s) and edit them — never delete/recreate mid-turn
-          // because humans chatted (shouldHopWorkingTipOnHumanDisplacement is false).
-          // Working relocates only when a new command posts its own ack (steer / idle).
+          // because humans chatted. Working hops below an echoed command, or relocates
+          // when a Discord `--steer` / idle turn posts a new Working ack.
           // Working.. ack (if seeded) is already in discordMessageIds.
           // On a new delivery, only keep the newest tip slot (the Working ack) so we never
           // try to edit prior-turn message ids (Discord 10008 Unknown Message).
@@ -4710,6 +4739,74 @@ export const runBridge = (
       });
     });
 
+    /**
+     * Re-post the live Working tip at the channel end (create first, then delete
+     * the old one). Used when an echoed desktop/web/mobile/GitHub command landed
+     * below Working.
+     */
+    const hopWorkingTipToChannelEnd = (reason: string) =>
+      Effect.gen(function* () {
+        const state = yield* Ref.get(stateRef);
+        const tipId = state.discordMessageIds.at(-1) ?? null;
+        if (tipId === null) return;
+        const latest = yield* Ref.get(latestThreadRef);
+        const turnRunning = latest !== null && isTurnInProgress(latest);
+        const hb = decideHeartbeat({
+          state: state.delivery,
+          turnInProgress: turnRunning,
+          hasOpenTip: true,
+        });
+        if (hb._tag === "noop") return;
+
+        const toolCallCount = currentTurnToolCallCount(latest);
+        const tipDisplay = rewriteMarkdownTablesForDiscord(streamDisplayText(hb.tipBody));
+        const chunks =
+          tipDisplay.trim() === ""
+            ? ([""] as string[])
+            : chunkDiscordContent(tipDisplay, STREAM_CHUNK_LIMIT);
+        const tipChunk = chunks.at(-1) ?? "";
+        const hopContent = formatInProgressChunk(tipChunk, true, DISCORD_LIMIT, 2, toolCallCount);
+        const created = yield* rest.createMessage(input.discordChannelId, {
+          ...workingMessageFields(hopContent, input.t3ThreadId),
+        });
+        const moved = nextStateAfterMovingWorkingTip({
+          priorDiscordMessageIds: [tipId],
+          priorStaleStreamMessageIds: state.staleStreamMessageIds,
+          newTipIds: [...state.discordMessageIds.filter((id) => id !== tipId), created.id],
+        });
+        yield* deleteMessages(moved.oldIdsToDelete).pipe(
+          Effect.catchCause(Effect.logWarning),
+          Effect.asVoid,
+        );
+        yield* Ref.update(stateRef, (current) => ({
+          ...current,
+          discordMessageIds: [...moved.discordMessageIds],
+          staleStreamMessageIds: [...moved.staleStreamMessageIds],
+          streamBreakPrefix: moved.streamBreakPrefix,
+        }));
+        const afterHop = yield* Ref.get(stateRef);
+        yield* persistStreamMessageIds(allStreamIds(afterHop));
+        yield* Effect.logInfo("Hopped Working tip below echoed command", {
+          t3ThreadId: input.t3ThreadId,
+          reason,
+          deletedDiscordMessageId: tipId,
+          messageId: created.id,
+          toolCallCount,
+        });
+      });
+
+    const workingTipIsAboveEchoedCommand = (streamTipId: string | null) =>
+      Effect.gen(function* () {
+        if (streamTipId === null || streamTipId.trim() === "") return false;
+        const recent = yield* rest
+          .listMessages(input.discordChannelId, { limit: 15 })
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<DiscordChannelMessageForTipScan>));
+        return isStreamTipDisplacedByEchoedCommand({
+          recentMessagesNewestFirst: recent,
+          streamTipId,
+        });
+      });
+
     const updateWorkingHeartbeat = Effect.fn("ResponseBridge.updateWorkingHeartbeat")(function* (
       workingDots: WorkingDotCount,
     ) {
@@ -4765,9 +4862,15 @@ export const runBridge = (
             return;
           }
 
-          // Keep editing the original Working tip in place. Human chat must not hop it
-          // (shouldHopWorkingTipOnHumanDisplacement). A steered/new-command ack posts
-          // its own tip via adoptWorkingAckMessageId.
+          // Echoed desktop/web/mobile/GitHub command below Working: hop the live tip
+          // under that command. Casual thread chat must not hop.
+          if (
+            shouldHopWorkingTipOnDisplacement("echoed-command") &&
+            (yield* workingTipIsAboveEchoedCommand(tipId))
+          ) {
+            yield* hopWorkingTipToChannelEnd("heartbeat-echoed-command");
+            return;
+          }
 
           // Epoch FSM: awaiting → dots only; streaming → current epoch streamText only.
           // Same GFM→bullets rewrite as the primary stream path.
@@ -5292,6 +5395,11 @@ export const runBridge = (
               Effect.catchCause(Effect.logError),
               Effect.asVoid,
             );
+            if (shouldHopWorkingTipOnDisplacement("echoed-command")) {
+              yield* streamWriteLock
+                .withPermit(hopWorkingTipToChannelEnd("external-user-echo"))
+                .pipe(Effect.catchCause(Effect.logWarning), Effect.asVoid);
+            }
           }
 
           const pending = derivePendingInteractions(thread.activities);

@@ -9,7 +9,9 @@ import {
   isDeliveryBehindOrchestration,
   isStreamTipDisplacedByForeignMessage,
   isStreamTipDisplacedByRecentMessages,
-  shouldHopWorkingTipOnHumanDisplacement,
+  isStreamTipDisplacedByEchoedCommand,
+  isDiscordEchoedCommandContent,
+  shouldHopWorkingTipOnDisplacement,
   isDiscordContentMessageType,
   pickLatestContentMessageId,
   deliveryFailureBackoffSeconds,
@@ -584,8 +586,67 @@ describe("isStreamTipDisplacedByForeignMessage / content message types", () => {
 });
 
 describe("Working tip hop policy", () => {
-  it("does not hop Working below human chat", () => {
-    expect(shouldHopWorkingTipOnHumanDisplacement()).toBe(false);
+  it("does not hop Working below casual human chat", () => {
+    expect(shouldHopWorkingTipOnDisplacement("casual-chat")).toBe(false);
+  });
+
+  it("hops Working below an echoed desktop/web/mobile command", () => {
+    expect(shouldHopWorkingTipOnDisplacement("echoed-command")).toBe(true);
+  });
+});
+
+describe("isDiscordEchoedCommandContent", () => {
+  it("matches the 💭 from **user@desktop** echo prefix", () => {
+    expect(
+      isDiscordEchoedCommandContent(
+        "💭 from **patroza@desktop**:\nmake CUPSFake its own distinct service",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match Tasks or Working bodies", () => {
+    expect(isDiscordEchoedCommandContent("**Tasks 1/3**\n- [ ] wire CUPS")).toBe(false);
+    expect(isDiscordEchoedCommandContent("_Working.._")).toBe(false);
+  });
+});
+
+describe("isStreamTipDisplacedByEchoedCommand", () => {
+  const echo = "💭 from **patroza@desktop**:\nmake CUPSFake its own distinct service";
+
+  it("hops when an echo sits newer than Working", () => {
+    expect(
+      isStreamTipDisplacedByEchoedCommand({
+        recentMessagesNewestFirst: [
+          { id: "echo-1", type: 0, author: { id: "bot-1" }, content: echo },
+          { id: "working-tip", type: 0, author: { id: "bot-1" }, content: "_Working.._" },
+        ],
+        streamTipId: "working-tip",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not hop for casual human chat below Working", () => {
+    expect(
+      isStreamTipDisplacedByEchoedCommand({
+        recentMessagesNewestFirst: [
+          { id: "human-1", type: 0, author: { id: "user-a" }, content: "side discussion" },
+          { id: "working-tip", type: 0, author: { id: "bot-1" }, content: "_Working.._" },
+        ],
+        streamTipId: "working-tip",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hop when Working is still the channel tip", () => {
+    expect(
+      isStreamTipDisplacedByEchoedCommand({
+        recentMessagesNewestFirst: [
+          { id: "working-tip", type: 0, author: { id: "bot-1" }, content: "_Working.._" },
+          { id: "echo-1", type: 0, author: { id: "bot-1" }, content: echo },
+        ],
+        streamTipId: "working-tip",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -620,7 +681,7 @@ describe("isStreamTipDisplacedByRecentMessages", () => {
 
   it("detects humans between Working and a later Tasks post", () => {
     // Working → human chat → channel rename → Tasks. Latest-only missed this.
-    // Displacement is detected; stream/heartbeat must not hop (see hop policy).
+    // Human displacement is detected; hop still requires an echoed command.
     expect(
       isStreamTipDisplacedByRecentMessages({
         recentMessagesNewestFirst: [
