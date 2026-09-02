@@ -72,10 +72,10 @@ layer("smart migration namespace repair", (it) => {
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream.slice(-4), [
-        { migration_id: 40, name: "ProjectionProjectFaviconPath" },
         { migration_id: 41, name: "AuthSessionClientConnection" },
         { migration_id: 42, name: "ProjectionThreadLinkedPullRequest" },
         { migration_id: 43, name: "ProjectionThreadsUnsettledAt" },
+        { migration_id: 44, name: "ClearAutomaticProjectModelDefaults" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
