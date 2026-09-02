@@ -2119,7 +2119,7 @@ describe("deriveMessagesTimelineRows", () => {
       "steer-user",
       "working-indicator-row",
       "active-assistant::after::steer-user",
-      "work-live:post-steer-work",
+      "live-activity-row",
     ]);
 
     clearSteerTimelineBoundaryStore();

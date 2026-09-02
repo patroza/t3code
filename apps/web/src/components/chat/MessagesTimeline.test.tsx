@@ -28,6 +28,7 @@ vi.mock("@legendapp/list/react", async () => {
             layout?: boolean;
           };
         };
+    maintainVisibleContentPosition?: unknown;
     ref?: Ref<LegendListRef>;
   }) => {
     return (
@@ -35,6 +36,11 @@ vi.mock("@legendapp/list/react", async () => {
         data-testid={legendListTestId}
         data-extra-data-matches-rows={props.extraData === props.data}
         data-anchor-index={props.anchoredEndSpace?.anchorIndex}
+        data-maintain-visible-content-position={
+          props.maintainVisibleContentPosition
+            ? typeof props.maintainVisibleContentPosition
+            : undefined
+        }
         data-maintain-scroll-at-end={props.maintainScrollAtEnd ? "enabled" : undefined}
         data-maintain-scroll-at-end-animated={
           typeof props.maintainScrollAtEnd === "object"
