@@ -12,6 +12,7 @@
 import {
   NonNegativeInt,
   ThreadId,
+  TurnId,
   ProviderCompactSessionInput,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -66,13 +67,14 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import {
-  makeProviderRestartRecoveryMarker,
   readPersistedProviderActiveTurnId,
   readPersistedProviderCwd,
   readPersistedProviderModelSelection,
-  readProviderRestartRecoveryMarker,
-  type ProviderRestartRecoveryMarker,
 } from "../ProviderRestartRecovery.ts";
+import {
+  readRuntimePayload,
+  SERVER_UPDATE_CONTINUATION_KEY,
+} from "../providerSessionContinuation.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 
 /**
@@ -83,17 +85,16 @@ import * as ServerSettings from "../../serverSettings.ts";
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
   /**
-   * After writing restartRecovery markers, wait this long after cooperative
-   * `interruptTurn` on in-flight sessions before hard `adapter.stopAll()`.
-   * Gives providers time to cancel tools / flush before process teardown.
-   * Default `30 seconds` — well under ops' ~150s main-pid SIGTERM reap window
-   * (interrupt grace + stopAll grace must fit inside that).
+   * Wait this long after cooperative `interruptTurn` on in-flight sessions
+   * before hard `adapter.stopAll()`. Gives providers time to cancel tools /
+   * flush before process teardown. Default `30 seconds` — well under ops'
+   * ~150s main-pid SIGTERM reap window (interrupt grace + stopAll grace must
+   * fit inside that).
    */
   readonly shutdownInterruptGracePeriod?: Duration.Input;
   /**
    * Maximum time the server gives all provider adapters, collectively, to
-   * stop during process shutdown (after the interrupt grace). Recovery intent
-   * is persisted before either clock starts. Default `1 minute`.
+   * stop during process shutdown (after the interrupt grace). Default `1 minute`.
    */
   readonly shutdownGracePeriod?: Duration.Input;
   /**
@@ -167,7 +168,6 @@ function toRuntimePayloadFromSession(
     readonly interactionMode?: unknown;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
-    readonly restartRecovery?: unknown;
   },
 ): Record<string, unknown> {
   return {
@@ -181,7 +181,6 @@ function toRuntimePayloadFromSession(
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
       : {}),
-    ...(extra?.restartRecovery !== undefined ? { restartRecovery: extra.restartRecovery } : {}),
   };
 }
 
@@ -343,20 +342,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ) {
             return undefined;
           }
-          return { status: "running" as const, activeTurnId: null, restartRecovery: null };
+          return { status: "running" as const, activeTurnId: null };
         case "session.exited":
-          return { status: "stopped" as const, activeTurnId: null, restartRecovery: null };
+          return { status: "stopped" as const, activeTurnId: null };
         case "session.state.changed":
           switch (event.payload.state) {
             case "starting":
               return { status: "starting" as const };
             case "error":
-              return { status: "error" as const, activeTurnId: null, restartRecovery: null };
+              return { status: "error" as const, activeTurnId: null };
             case "stopped":
-              return { status: "stopped" as const, activeTurnId: null, restartRecovery: null };
+              return { status: "stopped" as const, activeTurnId: null };
             case "ready":
             case "waiting":
-              return { status: "running" as const, activeTurnId: null, restartRecovery: null };
+              return { status: "running" as const, activeTurnId: null };
             case "running":
               return { status: "running" as const };
           }
@@ -366,18 +365,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     })();
     if (lifecycle === undefined) return;
 
-    const payload =
-      binding.runtimePayload !== null &&
-      typeof binding.runtimePayload === "object" &&
-      !Array.isArray(binding.runtimePayload)
-        ? (binding.runtimePayload as Record<string, unknown>)
-        : undefined;
-    // stopAll already persisted recovery intent. A following Grok/ACP
-    // turn.completed (cancelled) or session.exited must not delete it.
-    const preserveShutdownRecoveryMarker =
-      payload?.lastRuntimeEvent === "provider.stopAll" &&
-      readProviderRestartRecoveryMarker(binding.runtimePayload) !== undefined;
-
     yield* directory.upsert({
       threadId: event.threadId,
       provider: binding.provider,
@@ -386,9 +373,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       status: lifecycle.status,
       runtimePayload: {
         ...(lifecycle.activeTurnId !== undefined ? { activeTurnId: lifecycle.activeTurnId } : {}),
-        ...(lifecycle.restartRecovery !== undefined && !preserveShutdownRecoveryMarker
-          ? { restartRecovery: lifecycle.restartRecovery }
-          : {}),
         lastRuntimeEvent: event.type,
         lastRuntimeEventAt: event.createdAt,
       },
@@ -421,7 +405,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly interactionMode?: unknown;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
-      readonly restartRecovery?: unknown;
     },
   ) =>
     Effect.gen(function* () {
@@ -975,14 +958,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ? { interactionMode: input.interactionMode }
             : {}),
           activeTurnId: turn.turnId,
-          // Arm recovery while the turn is live, rather than waiting for a
-          // process-shutdown finalizer. Supervisors and desktop updaters can
-          // still exhaust their graceful-stop budget or crash after TERM; the
-          // next process must already have durable intent to resume the turn.
-          restartRecovery: makeProviderRestartRecoveryMarker({
-            interruptedProviderTurnId: turn.turnId,
-            shutdownAt: turnStartedAt,
-          }),
           lastRuntimeEvent: "provider.sendTurn",
           lastRuntimeEventAt: turnStartedAt,
         },
@@ -1192,7 +1167,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
-            restartRecovery: null,
           },
         });
         yield* analytics.record("provider.session.stopped", {
@@ -1389,12 +1363,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
     const lastRuntimeEventAt = yield* nowIso;
-    // Durable recovery intent for the next boot. Must not depend solely on
-    // in-memory adapter.listSessions(): during SIGTERM teardown adapters can
-    // already be empty while SQLite still has starting/running bindings. The
-    // final "stopped" write also clears activeTurnId, so without a marker the
-    // next process cannot recover interrupted turns.
-    const recoveryByThreadId = new Map<ThreadId, ProviderRestartRecoveryMarker>();
 
     const activeSessions = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
       adapter.listSessions().pipe(
@@ -1407,101 +1375,84 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ),
     ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
 
-    for (const session of activeSessions) {
-      // Adapter-level "ready" is idle — only connecting/running need continuation.
-      const wasWorking = session.status === "connecting" || session.status === "running";
-      if (wasWorking) {
-        recoveryByThreadId.set(
-          session.threadId,
-          makeProviderRestartRecoveryMarker({
-            interruptedProviderTurnId: session.activeTurnId,
-            shutdownAt: lastRuntimeEventAt,
-          }),
-        );
-      }
-    }
-
-    const adapterThreadIds = new Set(activeSessions.map((session) => session.threadId));
+    // Same payload key as in-app #9167. Startup reconcileProviderSessions
+    // continues marked threads after this process is replaced (systemd
+    // restart, deploy). Crash/hard-kill never reaches stopAll, so those
+    // still settle as interrupted.
     const persistedBindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
+    const bindingByThreadId = new Map(
+      persistedBindings.map((binding) => [binding.threadId, binding] as const),
+    );
+    const continuationByThreadId = new Map<ThreadId, TurnId>();
+    const considerContinuation = (
+      threadId: ThreadId,
+      turnId: TurnId | null | undefined,
+      resumeCursor: unknown,
+    ) => {
+      if (turnId === null || turnId === undefined) return;
+      if (resumeCursor === null || resumeCursor === undefined) return;
+      if (continuationByThreadId.has(threadId)) return;
+      continuationByThreadId.set(threadId, turnId);
+    };
+
+    for (const session of activeSessions) {
+      const working = session.status === "connecting" || session.status === "running";
+      if (!working) continue;
+      const binding = bindingByThreadId.get(session.threadId);
+      considerContinuation(
+        session.threadId,
+        session.activeTurnId ?? readPersistedProviderActiveTurnId(binding?.runtimePayload),
+        binding?.resumeCursor ?? session.resumeCursor,
+      );
+    }
     for (const binding of persistedBindings) {
-      // Persistence maps ready→running, so require an active turn id to avoid
-      // marking idle ready sessions as recovery candidates.
-      if (binding.status !== "starting" && binding.status !== "running") {
-        continue;
-      }
-      if (recoveryByThreadId.has(binding.threadId) || adapterThreadIds.has(binding.threadId)) {
-        continue;
-      }
-      const activeTurnId = readPersistedProviderActiveTurnId(binding.runtimePayload);
-      if (activeTurnId === undefined) {
-        continue;
-      }
-      recoveryByThreadId.set(
+      if (binding.status !== "starting" && binding.status !== "running") continue;
+      considerContinuation(
         binding.threadId,
-        makeProviderRestartRecoveryMarker({
-          interruptedProviderTurnId: activeTurnId,
-          shutdownAt: lastRuntimeEventAt,
-        }),
+        readPersistedProviderActiveTurnId(binding.runtimePayload),
+        binding.resumeCursor,
       );
     }
 
-    yield* Effect.forEach(activeSessions, (session) => {
-      const marker = recoveryByThreadId.get(session.threadId);
-      return upsertSessionBinding(session, session.threadId, {
-        lastRuntimeEvent: "provider.stopAll",
-        lastRuntimeEventAt,
-        // Omit (undefined) for idle sessions so we do not clobber a marker that
-        // was recorded from a persisted live binding for the same thread.
-        ...(marker !== undefined ? { restartRecovery: marker } : {}),
-      });
-    }).pipe(Effect.asVoid);
-
-    // Persist markers only for bindings that never appeared in adapter.listSessions
-    // (adapter path already wrote via upsertSessionBinding and must keep its
-    // resumeCursor / payload fields intact).
     yield* Effect.forEach(
-      persistedBindings.filter(
-        (binding) =>
-          recoveryByThreadId.has(binding.threadId) && !adapterThreadIds.has(binding.threadId),
-      ),
-      (binding) =>
+      [...continuationByThreadId.entries()],
+      ([threadId, turnId]) =>
         Effect.gen(function* () {
-          const providerInstanceId = dieOnMissingBindingInstanceId(
-            "ProviderService.stopAll",
-            binding,
-          );
-          const marker = recoveryByThreadId.get(binding.threadId);
-          if (marker === undefined) {
-            return;
-          }
+          const binding = bindingByThreadId.get(threadId);
+          if (binding === undefined) return;
           yield* directory.upsert({
-            threadId: binding.threadId,
-            provider: binding.provider,
-            providerInstanceId,
-            ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-            ...(binding.resumeCursor !== undefined ? { resumeCursor: binding.resumeCursor } : {}),
-            status: binding.status ?? "running",
+            ...binding,
             runtimePayload: {
-              restartRecovery: marker,
-              lastRuntimeEvent: "provider.stopAll",
-              lastRuntimeEventAt,
+              ...readRuntimePayload(binding.runtimePayload),
+              [SERVER_UPDATE_CONTINUATION_KEY]: turnId,
             },
           });
-        }),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to mark provider session for restart continuation", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
       { discard: true },
     );
-
-    if (recoveryByThreadId.size > 0) {
-      yield* Effect.logInfo("persisted provider restart recovery markers before stopAll", {
-        recoveryCount: recoveryByThreadId.size,
-        adapterSessionCount: activeSessions.length,
+    if (continuationByThreadId.size > 0) {
+      yield* Effect.logInfo("marked provider sessions to continue after graceful restart", {
+        continuationCount: continuationByThreadId.size,
       });
     }
 
+    yield* Effect.forEach(activeSessions, (session) =>
+      upsertSessionBinding(session, session.threadId, {
+        lastRuntimeEvent: "provider.stopAll",
+        lastRuntimeEventAt,
+      }),
+    ).pipe(Effect.asVoid);
+
     // Cooperative interrupt before hard session teardown so running provider
-    // turns receive cancel (tools stop, agents can settle) while markers are
-    // already durable. Sequence under ops SIGTERM reap (~150s):
-    //   markers (fast) → interrupt → interruptGrace (~30s) → stopAll (~60s).
+    // turns receive cancel (tools stop, agents can settle). Sequence under ops
+    // SIGTERM reap (~150s): interrupt → interruptGrace (~30s) → stopAll (~60s).
     const workingSessions = activeSessions.filter(
       (session) => session.status === "connecting" || session.status === "running",
     );
@@ -1558,7 +1509,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* Effect.logWarning("provider shutdown grace period elapsed", {
         timeout: String(stopAllGrace),
         sessionCount: activeSessions.length,
-        recoveryCount: recoveryByThreadId.size,
       });
     } else {
       yield* Effect.forEach(
@@ -1579,11 +1529,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "ProviderService.stopAll",
           binding,
         );
-        // Prefer the marker recorded at the start of this stopAll; fall back to
-        // anything already durable (partial prior shutdown / race).
-        const marker =
-          recoveryByThreadId.get(binding.threadId) ??
-          readProviderRestartRecoveryMarker(binding.runtimePayload);
         return yield* directory.upsert({
           threadId: binding.threadId,
           provider: binding.provider,
@@ -1593,9 +1538,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             activeTurnId: null,
             lastRuntimeEvent: "provider.stopAll",
             lastRuntimeEventAt: yield* nowIso,
-            // Explicitly re-write so merge cannot leave us marker-less after we
-            // clear activeTurnId (legacy recovery requires starting/running + id).
-            restartRecovery: marker ?? null,
           },
         });
       }),

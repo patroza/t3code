@@ -15,12 +15,13 @@ update the server, and the version difference remains visible in Connections.
 
 ## Before You Update
 
-Updating restarts the server, so the connection will disappear briefly. **Settings** → **General**
-has a **Continue threads after server updates** preference. It is off by default. When enabled, the
-update buttons automatically resume supported provider threads after the replacement server is
-ready. Providers with native promptless continuation use it; other providers receive a short
-instruction to continue where they left off. Terminal commands and other running work may still be
-interrupted during the update.
+Updating restarts the server, so the connection will disappear briefly. A graceful server restart
+(including a deploy that stops and starts the service) resumes supported provider threads that were
+actively working. **Settings** → **General** has a **Continue threads after server updates**
+preference. It is off by default. When enabled, the in-app update buttons also resume those threads
+after the replacement server is ready. Providers with native promptless continuation use it; other
+providers receive a short instruction to continue where they left off. Terminal commands and other
+running work may still be interrupted during the update. A crash or forced kill does not resume.
 
 The update does not remove saved threads, settings, or project files.
 

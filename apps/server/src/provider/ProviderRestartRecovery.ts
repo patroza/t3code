@@ -1,97 +1,12 @@
-import {
-  IsoDateTime,
-  ModelSelection,
-  ProviderInteractionMode,
-  TurnId,
-  type ProviderSessionRuntimeStatus,
-} from "@t3tools/contracts";
+import { ModelSelection, ProviderInteractionMode, TurnId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-export const PROVIDER_RESTART_RECOVERY_PAYLOAD_KEY = "restartRecovery";
-
-export const ProviderRestartRecoveryMarker = Schema.Struct({
-  version: Schema.Literal(1),
-  interruptedProviderTurnId: Schema.NullOr(TurnId),
-  shutdownAt: IsoDateTime,
-});
-export type ProviderRestartRecoveryMarker = typeof ProviderRestartRecoveryMarker.Type;
-
-export interface ProviderRestartRecoveryCandidate extends ProviderRestartRecoveryMarker {
-  readonly source: "marker" | "legacy-active-turn";
-}
-
-const isProviderRestartRecoveryMarker = Schema.is(ProviderRestartRecoveryMarker);
 const isModelSelection = Schema.is(ModelSelection);
 const isProviderInteractionMode = Schema.is(ProviderInteractionMode);
 const isTurnId = Schema.is(TurnId);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-export function makeProviderRestartRecoveryMarker(input: {
-  readonly interruptedProviderTurnId: TurnId | null | undefined;
-  readonly shutdownAt: string;
-}): ProviderRestartRecoveryMarker {
-  return {
-    version: 1,
-    interruptedProviderTurnId: input.interruptedProviderTurnId ?? null,
-    shutdownAt: IsoDateTime.make(input.shutdownAt),
-  };
-}
-
-export function readProviderRestartRecoveryMarker(
-  runtimePayload: unknown,
-): ProviderRestartRecoveryMarker | undefined {
-  if (!isRecord(runtimePayload)) return undefined;
-  const marker = runtimePayload[PROVIDER_RESTART_RECOVERY_PAYLOAD_KEY];
-  return isProviderRestartRecoveryMarker(marker) ? marker : undefined;
-}
-
-export function readProviderRestartRecoveryCandidate(input: {
-  readonly runtimePayload: unknown;
-  readonly status: ProviderSessionRuntimeStatus | undefined;
-  readonly lastSeenAt: string;
-}): ProviderRestartRecoveryCandidate | undefined {
-  const marker = readProviderRestartRecoveryMarker(input.runtimePayload);
-  if (marker !== undefined) {
-    return { ...marker, source: "marker" };
-  }
-  if (input.status !== "starting" && input.status !== "running") {
-    return undefined;
-  }
-  if (!isRecord(input.runtimePayload)) return undefined;
-  const activeTurnId = input.runtimePayload.activeTurnId;
-  if (!isTurnId(activeTurnId)) return undefined;
-  return {
-    version: 1,
-    interruptedProviderTurnId: activeTurnId,
-    shutdownAt: IsoDateTime.make(input.lastSeenAt),
-    source: "legacy-active-turn",
-  };
-}
-
-/**
- * Grok (and other ACP adapters) map idle-between-prompts to session
- * `ready`, which persistence stores as a running binding with no
- * `activeTurnId`. The orchestration shell still claims the T3 turn.
- * Recover from that live shell instead of orphan-settling.
- */
-export function readLiveShellRestartRecoveryCandidate(input: {
-  readonly sessionStatus: string | undefined | null;
-  readonly activeTurnId: unknown;
-  readonly lastSeenAt: string;
-}): ProviderRestartRecoveryCandidate | undefined {
-  if (input.sessionStatus !== "starting" && input.sessionStatus !== "running") {
-    return undefined;
-  }
-  if (!isTurnId(input.activeTurnId)) return undefined;
-  return {
-    version: 1,
-    interruptedProviderTurnId: input.activeTurnId,
-    shutdownAt: IsoDateTime.make(input.lastSeenAt),
-    source: "legacy-active-turn",
-  };
 }
 
 export function readPersistedProviderCwd(runtimePayload: unknown): string | undefined {

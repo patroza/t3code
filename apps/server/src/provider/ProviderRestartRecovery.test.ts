@@ -2,95 +2,37 @@ import { ModelSelection, ProviderInstanceId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  makeProviderRestartRecoveryMarker,
+  readPersistedProviderActiveTurnId,
   readPersistedProviderCwd,
   readPersistedProviderInteractionMode,
   readPersistedProviderModelSelection,
-  readLiveShellRestartRecoveryCandidate,
-  readProviderRestartRecoveryCandidate,
 } from "./ProviderRestartRecovery.ts";
 
 describe("ProviderRestartRecovery", () => {
-  it("reads typed recovery metadata and persisted restart settings", () => {
+  it("reads persisted session fields from the runtime payload", () => {
     const modelSelection: ModelSelection = {
       instanceId: ProviderInstanceId.make("codex-work"),
       model: "gpt-5.4",
       options: [{ id: "reasoningEffort", value: "high" }],
     };
-    const marker = makeProviderRestartRecoveryMarker({
-      interruptedProviderTurnId: TurnId.make("turn-interrupted"),
-      shutdownAt: "2026-07-22T00:00:00.000Z",
-    });
     const runtimePayload = {
       cwd: " /tmp/project ",
       modelSelection,
       interactionMode: "plan",
-      restartRecovery: marker,
+      activeTurnId: TurnId.make("turn-live"),
     };
 
-    expect(
-      readProviderRestartRecoveryCandidate({
-        runtimePayload,
-        status: "stopped",
-        lastSeenAt: "2026-07-22T00:00:01.000Z",
-      }),
-    ).toEqual({ ...marker, source: "marker" });
     expect(readPersistedProviderCwd(runtimePayload)).toBe("/tmp/project");
     expect(readPersistedProviderModelSelection(runtimePayload)).toEqual(modelSelection);
     expect(readPersistedProviderInteractionMode(runtimePayload)).toBe("plan");
+    expect(readPersistedProviderActiveTurnId(runtimePayload)).toBe(TurnId.make("turn-live"));
   });
 
-  it("recognizes crash-style legacy running rows with an active turn", () => {
-    expect(
-      readProviderRestartRecoveryCandidate({
-        runtimePayload: { activeTurnId: TurnId.make("turn-before-crash") },
-        status: "running",
-        lastSeenAt: "2026-07-22T00:00:00.000Z",
-      }),
-    ).toEqual({
-      version: 1,
-      interruptedProviderTurnId: TurnId.make("turn-before-crash"),
-      shutdownAt: "2026-07-22T00:00:00.000Z",
-      source: "legacy-active-turn",
-    });
-  });
-
-  it("recovers a live orchestration turn when the adapter binding looks idle", () => {
-    expect(
-      readLiveShellRestartRecoveryCandidate({
-        sessionStatus: "running",
-        activeTurnId: TurnId.make("turn-still-working"),
-        lastSeenAt: "2026-07-22T00:00:00.000Z",
-      }),
-    ).toEqual({
-      version: 1,
-      interruptedProviderTurnId: TurnId.make("turn-still-working"),
-      shutdownAt: "2026-07-22T00:00:00.000Z",
-      source: "legacy-active-turn",
-    });
-    expect(
-      readLiveShellRestartRecoveryCandidate({
-        sessionStatus: "ready",
-        activeTurnId: TurnId.make("turn-still-working"),
-        lastSeenAt: "2026-07-22T00:00:00.000Z",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not recover idle, stopped, or malformed legacy rows", () => {
-    expect(
-      readProviderRestartRecoveryCandidate({
-        runtimePayload: { activeTurnId: TurnId.make("turn-ready") },
-        status: "stopped",
-        lastSeenAt: "2026-07-22T00:00:00.000Z",
-      }),
-    ).toBeUndefined();
-    expect(
-      readProviderRestartRecoveryCandidate({
-        runtimePayload: { activeTurnId: null },
-        status: "running",
-        lastSeenAt: "2026-07-22T00:00:00.000Z",
-      }),
-    ).toBeUndefined();
+  it("ignores missing or malformed payload fields", () => {
+    expect(readPersistedProviderCwd(null)).toBeUndefined();
+    expect(readPersistedProviderCwd({ cwd: "   " })).toBeUndefined();
+    expect(readPersistedProviderModelSelection({})).toBeUndefined();
+    expect(readPersistedProviderInteractionMode({ interactionMode: "nope" })).toBeUndefined();
+    expect(readPersistedProviderActiveTurnId({ activeTurnId: null })).toBeUndefined();
   });
 });
