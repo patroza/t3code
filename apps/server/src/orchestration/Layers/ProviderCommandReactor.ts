@@ -2003,23 +2003,17 @@ const make = Effect.gen(function* () {
         createdAt,
       });
 
-      const replacementResult = yield* providerService
-        .sendTurn({
-          threadId: thread.id,
-          input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
-          attachments: [],
-          modelSelection,
-          interactionMode,
-        })
-        .pipe(Effect.interruptible, Effect.timeoutOption(STARTUP_RECOVERY_PROVIDER_TIMEOUT));
-      if (Option.isNone(replacementResult)) {
-        return yield* new ProviderAdapterRequestError({
-          provider: binding.provider,
-          method: "provider.turn.restart-recovery",
-          detail: `Provider recovery sendTurn timed out after ${Duration.format(STARTUP_RECOVERY_PROVIDER_TIMEOUT)} during restart recovery.`,
-        });
-      }
-      const replacement = replacementResult.value;
+      // startSession stays bounded so a hung spawn cannot pin recovery.
+      // sendTurn is the live continuation: Grok's prompt RPC is the whole
+      // turn, so a 45s cap always fails after we claim ACP sessions.
+      // This fiber is already parked past HTTP readiness.
+      const replacement = yield* providerService.sendTurn({
+        threadId: thread.id,
+        input: RESTART_RECOVERY_CONTINUATION_INSTRUCTION,
+        attachments: [],
+        modelSelection,
+        interactionMode,
+      });
 
       // ProviderService clears this in the accepted sendTurn transaction. The
       // explicit write keeps the reconciliation invariant local and obvious.
