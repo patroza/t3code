@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@effect/vitest";
 import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
-import { Effect, Layer, Option, Ref, FileSystem, Stream } from "effect";
+import { DateTime, Effect, Layer, Option, Ref, FileSystem, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -35,9 +35,11 @@ import { toPersistenceSqlError } from "../persistence/Errors.ts";
 import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
 import { PlatformError, SystemError } from "effect/PlatformError";
 import {
-  makeRequestClaimed,
+  makeRequestAccepted,
   toThreadCreated,
+  toWorkPlanned,
   type Request,
+  type T3Target,
   type WorkCoordinates,
 } from "./exchange.ts";
 import { ServerConfig } from "../config.ts";
@@ -200,8 +202,8 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
                       id: projectId,
                       workspaceRoot: "root",
                       title: "project-title",
-                      createdAt: new Date().toUTCString(),
-                      updatedAt: new Date().toUTCString(),
+                      createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+                      updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
                       defaultModelSelection: null,
                       scripts: [],
                       ...(input?.getProjectShellById &&
@@ -221,7 +223,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
           : Option.some<OrchestrationThreadShell>({
               archivedAt: null,
               branch: "some-branch",
-              createdAt: new Date().toISOString(),
+              createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
               hasActionableProposedPlan: false,
               hasPendingApprovals: false,
               hasPendingUserInput: false,
@@ -243,13 +245,13 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
                 providerName: null,
                 runtimeMode: "auto",
                 status: "ready",
-                updatedAt: new Date().toISOString(),
+                updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
                 providerInstanceId: ProviderInstanceId.make("providerInstanceId"),
               },
               settledAt: null,
               settledOverride: "active",
               title: "some title",
-              updatedAt: new Date().toISOString(),
+              updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
               worktreePath: null,
             }),
       ).pipe(
@@ -278,8 +280,8 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
               branch: "some-branch",
               worktreePath: null,
               latestTurn: null,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
+              createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+              updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
               archivedAt: null,
               settledOverride: null,
               settledAt: null,
@@ -290,8 +292,8 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
                 text: message.text,
                 turnId: null,
                 streaming: false,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
+                createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+                updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
               })),
               queuedMessages: [],
               pendingTurnStart: null,
@@ -305,7 +307,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
                 activeTurnId: null,
                 lastError: input?.sessionLastError ?? null,
                 runtimeMode: "auto",
-                updatedAt: new Date().toISOString(),
+                updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
                 providerInstanceId: ProviderInstanceId.make("providerInstanceId"),
               },
             }),
@@ -939,12 +941,15 @@ describe("T3Gateway", () => {
 
           const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
 
-          const state = makeRequestClaimed(
-            {
-              attachments: [],
-              snapshot: "happy cases - missing thread - snapshot",
-              sourceUri: "test://happy-cases-missing-thread-1",
-            },
+          const state = toWorkPlanned(
+            makeRequestAccepted(
+              {
+                attachments: [],
+                snapshot: "happy cases - missing thread - snapshot",
+                sourceUri: "test://happy-cases-missing-thread-1",
+              },
+              { projectId, startBranchName: "main" },
+            ),
             coordinates,
           );
 
@@ -967,12 +972,15 @@ describe("T3Gateway", () => {
 
           const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
 
-          const state = makeRequestClaimed(
-            {
-              attachments: [],
-              snapshot: "happy cases - missing thread - snapshot",
-              sourceUri: "test://happy-cases-missing-thread-1",
-            },
+          const state = toWorkPlanned(
+            makeRequestAccepted(
+              {
+                attachments: [],
+                snapshot: "happy cases - missing thread - snapshot",
+                sourceUri: "test://happy-cases-missing-thread-1",
+              },
+              { projectId, startBranchName: "main" },
+            ),
             coordinates,
           );
 
@@ -999,12 +1007,15 @@ describe("T3Gateway", () => {
 
           const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
 
-          const state = makeRequestClaimed(
-            {
-              attachments: [],
-              snapshot: "happy cases - missing thread - snapshot",
-              sourceUri: "test://happy-cases-missing-thread-1",
-            },
+          const state = toWorkPlanned(
+            makeRequestAccepted(
+              {
+                attachments: [],
+                snapshot: "happy cases - missing thread - snapshot",
+                sourceUri: "test://happy-cases-missing-thread-1",
+              },
+              { projectId, startBranchName: "main" },
+            ),
             coordinates,
           );
 
@@ -1070,7 +1081,12 @@ describe("T3Gateway", () => {
       worktreeBranchName: "worktreeBranchName",
     };
 
-    const requestClaimed = makeRequestClaimed(request, coordinates);
+    const target: T3Target = {
+      projectId: coordinates.projectId,
+      startBranchName: coordinates.startBranchName,
+    };
+
+    const workPlanned = toWorkPlanned(makeRequestAccepted(request, target), coordinates);
 
     describe("happy case", () => {
       /*
@@ -1082,7 +1098,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          yield* t3Gateway.provisionThread(requestClaimed);
+          yield* t3Gateway.provisionThread(workPlanned);
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
@@ -1115,7 +1131,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          yield* t3Gateway.provisionThread(requestClaimed);
+          yield* t3Gateway.provisionThread(workPlanned);
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
@@ -1142,7 +1158,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          yield* t3Gateway.provisionThread(requestClaimed);
+          yield* t3Gateway.provisionThread(workPlanned);
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
@@ -1167,7 +1183,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          yield* t3Gateway.provisionThread(requestClaimed);
+          yield* t3Gateway.provisionThread(workPlanned);
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
@@ -1202,7 +1218,7 @@ describe("T3Gateway", () => {
           return Effect.gen(function* () {
             const t3Gateway = yield* T3Gateway;
 
-            yield* t3Gateway.provisionThread(requestClaimed);
+            yield* t3Gateway.provisionThread(workPlanned);
 
             expect(calls.map((call) => call.method)).toEqual([
               "getProjectShellById",
@@ -1233,7 +1249,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
           expect(result._tag).toBe("RetryableError");
           expect(result.method).toBe("orchestrationEngine.dispatch");
@@ -1264,7 +1280,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
           expect(result._tag).toBe("FatalError");
           expect(result.method).toBe("projectScriptRunner.runForThread");
@@ -1297,7 +1313,7 @@ describe("T3Gateway", () => {
           return Effect.gen(function* () {
             const t3Gateway = yield* T3Gateway;
 
-            const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+            const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
             expect(result._tag).toBe("FatalError");
             expect(result.method).toBe("gitWorkflowService.createWorktree");
@@ -1321,7 +1337,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
           expect(result._tag).toBe("RetryableError");
           expect(result.method).toBe("gitWorkflowService.createWorktree");
@@ -1348,7 +1364,7 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const result = yield* t3Gateway.provisionThread(requestClaimed).pipe(Effect.flip);
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
           expect(result._tag).toBe("FatalError");
           expect(result.method).toBe("projectScriptRunner.runForThread");
@@ -1382,12 +1398,15 @@ describe("T3Gateway", () => {
     */
 
     const threadCreated = toThreadCreated(
-      makeRequestClaimed(
-        {
-          attachments: [],
-          snapshot: "getTurnStatus - snapshot",
-          sourceUri: "test://get-turn-status",
-        },
+      toWorkPlanned(
+        makeRequestAccepted(
+          {
+            attachments: [],
+            snapshot: "getTurnStatus - snapshot",
+            sourceUri: "test://get-turn-status",
+          },
+          { projectId: ProjectId.make("projectId"), startBranchName: "startBranchName" },
+        ),
         {
           projectId: ProjectId.make("projectId"),
           startBranchName: "startBranchName",
@@ -1398,6 +1417,18 @@ describe("T3Gateway", () => {
         },
       ),
     );
+
+    /** The coordinates every reply out of our turn carries. */
+    const turn = {
+      threadId: threadCreated.t3.threadId,
+      userMessageId: threadCreated.t3.userMessageId,
+      turnId: TurnId.make("turnId"),
+    };
+
+    const settled = { type: "settled", ...turn } as const;
+
+    // A failure observed before any turn adopted our message.
+    const settledWithoutTurn = { type: "settled", ...turn, turnId: null } as const;
 
     /**
      * A projected turn on the exchange's thread. Defaults describe the turn our own message
@@ -1412,7 +1443,7 @@ describe("T3Gateway", () => {
       sourceProposedPlanId: null,
       assistantMessageId: null,
       state: "pending",
-      requestedAt: new Date().toISOString(),
+      requestedAt: DateTime.formatIso(DateTime.nowUnsafe()),
       startedAt: null,
       completedAt: null,
       checkpointTurnCount: null,
@@ -1520,7 +1551,7 @@ describe("T3Gateway", () => {
 
           expect(result).toEqual({
             turn: "completed",
-            reply: { type: "answer", text: "the agent's answer" },
+            reply: { type: "answer", text: "the agent's answer", ...turn },
           });
         }).pipe(Effect.provide(layer));
       },
@@ -1560,7 +1591,7 @@ describe("T3Gateway", () => {
 
           expect(result).toEqual({
             turn: "completed",
-            reply: { type: "answer", text: "our answer" },
+            reply: { type: "answer", text: "our answer", ...turn },
           });
         }).pipe(Effect.provide(layer));
       },
@@ -1584,7 +1615,7 @@ describe("T3Gateway", () => {
             reply: {
               type: "failure",
               text: "T3 completed without producing a response.",
-              cause: null,
+              cause: settled,
             },
           });
         }).pipe(Effect.provide(layer));
@@ -1615,7 +1646,7 @@ describe("T3Gateway", () => {
           reply: {
             type: "failure",
             text: "T3 completed without producing a response.",
-            cause: null,
+            cause: settled,
           },
         };
 
@@ -1645,7 +1676,7 @@ describe("T3Gateway", () => {
 
           expect(result).toEqual({
             turn: "completed",
-            reply: { type: "failure", text: "provider exploded", cause: null },
+            reply: { type: "failure", text: "provider exploded", cause: settled },
           });
         }).pipe(Effect.provide(layer));
       },
@@ -1668,7 +1699,7 @@ describe("T3Gateway", () => {
             reply: {
               type: "failure",
               text: "T3 failed while processing this request.",
-              cause: null,
+              cause: settled,
             },
           });
         }).pipe(Effect.provide(layer));
@@ -1691,7 +1722,7 @@ describe("T3Gateway", () => {
             reply: {
               type: "cancellation",
               text: "T3 stopped processing this request.",
-              cause: null,
+              ...turn,
             },
           });
         }).pipe(Effect.provide(layer));
@@ -1719,7 +1750,7 @@ describe("T3Gateway", () => {
             reply: {
               type: "failure",
               text: "T3 finished, but its thread could no longer be found.",
-              cause: null,
+              cause: settled,
             },
           });
         }).pipe(Effect.provide(layer));
@@ -1753,7 +1784,11 @@ describe("T3Gateway", () => {
 
           expect(result).toEqual({
             turn: "completed",
-            reply: { type: "failure", text: "codex: command not found", cause: null },
+            reply: {
+              type: "failure",
+              text: "codex: command not found",
+              cause: settledWithoutTurn,
+            },
           });
         }).pipe(Effect.provide(layer));
       },
@@ -1801,7 +1836,11 @@ describe("T3Gateway", () => {
 
           expect(result).toEqual({
             turn: "completed",
-            reply: { type: "failure", text: "T3's thread could no longer be found.", cause: null },
+            reply: {
+              type: "failure",
+              text: "T3's thread could no longer be found.",
+              cause: settledWithoutTurn,
+            },
           });
         }).pipe(Effect.provide(layer));
       },
@@ -1886,12 +1925,15 @@ describe("T3Gateway", () => {
     */
 
     const threadCreated = toThreadCreated(
-      makeRequestClaimed(
-        {
-          attachments: [],
-          snapshot: "please fix the flaky login test",
-          sourceUri: "test://start-turn",
-        },
+      toWorkPlanned(
+        makeRequestAccepted(
+          {
+            attachments: [],
+            snapshot: "please fix the flaky login test",
+            sourceUri: "test://start-turn",
+          },
+          { projectId: ProjectId.make("projectId"), startBranchName: "startBranchName" },
+        ),
         {
           projectId: ProjectId.make("projectId"),
           startBranchName: "startBranchName",

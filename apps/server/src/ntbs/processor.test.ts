@@ -1,23 +1,26 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import {
   ExchangeRepository,
   ExchangeRepositoryError,
   inMemoryExchangeRepository,
 } from "./ExchangeRepository.ts";
-import { makeNTBSProcessor, type NTBSProcessor, type T3Target } from "./processor.ts";
-import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { makeNTBSProcessor, type NTBSProcessor } from "./processor.ts";
+import { MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { FatalError, RetryableError, T3Gateway } from "./t3gateway.ts";
 import { AdapterError, NTBSAdapter, ReplyRejected } from "./adapter.ts";
 import {
-  makeRequestClaimed,
+  makeRequestAccepted,
+  toRejected,
   toReplyPending,
   toReplyPosted,
   toThreadCreated,
   toUndeliverable,
+  toWorkPlanned,
   type Exchange,
   type Request,
-  type ThreadCreatedContext,
+  type T3Target,
   type WorkCoordinates,
 } from "./exchange.ts";
 
@@ -72,6 +75,11 @@ const defaultProjectId = ProjectId.make("defaultProjectId");
 const defaultThreadId = ThreadId.make("defaultThreadId");
 const defaultUserMessageId = MessageId.make("defaultUserMessageId");
 
+const target: T3Target = {
+  projectId: defaultProjectId,
+  startBranchName: "fork/dev",
+};
+
 const defaultWorkCoordinates: WorkCoordinates = {
   projectId: defaultProjectId,
   startBranchName: "fork/dev",
@@ -96,12 +104,26 @@ const secondWorkCoordinates: WorkCoordinates = {
   worktreeBranchName: "ntbs/secondThreadId",
 };
 
-const target: T3Target = {
-  projectId: defaultProjectId,
-  startBranchName: "fork/dev",
-};
-
 const postedReplyUri = "test://reply/1";
+
+/** The states the default request walks through, for asserting on stored records. */
+const accepted = makeRequestAccepted(request, target);
+const planned = toWorkPlanned(accepted, defaultWorkCoordinates);
+const threadCreated = toThreadCreated(planned);
+
+const secondThreadCreated = toThreadCreated(
+  toWorkPlanned(makeRequestAccepted(secondRequest, target), secondWorkCoordinates),
+);
+
+/** An answer out of the turn our message started on the given coordinates. */
+const answer = (text: string, coordinates: WorkCoordinates = defaultWorkCoordinates) =>
+  ({
+    type: "answer",
+    text,
+    threadId: coordinates.threadId,
+    userMessageId: coordinates.userMessageId,
+    turnId: TurnId.make(`turn-${coordinates.threadId}`),
+  }) as const;
 
 /**
  * Happy-path defaults:
@@ -212,7 +234,7 @@ describe("NTBSProcessor", () => {
   /*
     Harness smoke test: the happy-path defaults drive a fresh request to ThreadCreated with a started turn, and the shared log shows the full cross-service pipeline in order.
   */
-  it.effect("claims a fresh request and starts its turn on the default behaviors", () =>
+  it.effect("records a fresh request and starts its turn on the default behaviors", () =>
     withProcessor({}, ({ processor, repository, calls }) =>
       Effect.gen(function* () {
         yield* processor.process(request, target);
@@ -227,15 +249,13 @@ describe("NTBSProcessor", () => {
         ]);
 
         // Still ThreadCreated: a successful startTurn transitions nothing, the exchange only moves when getTurnStatus observes a settled turn.
-        const expected = toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates));
-
-        expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
+        expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
       }),
     ),
   );
 
   /*
-    `process` is idempotent per sourceUri: a redelivery finds the claimed exchange and returns without touching T3 or the adapter.
+    `process` is idempotent per sourceUri: a redelivery finds the recorded exchange and returns without touching T3 or the adapter.
     The smoke test above pins the exact pipeline, so here we check the log length twice: once after the first delivery to prove it actually did the work, once after the second to prove it added nothing — the log is append-only, so an unchanged length means zero service calls.
   */
   it.effect("starts a new request and ignores its sequential redelivery", () =>
@@ -250,10 +270,8 @@ describe("NTBSProcessor", () => {
 
         expect(calls.length).toBe(6);
 
-        // And the stored exchange is still the one the first delivery claimed.
-        const expected = toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates));
-
-        expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
+        // And the stored exchange is still the one the first delivery produced.
+        expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
       }),
     ),
   );
@@ -286,9 +304,7 @@ describe("NTBSProcessor", () => {
             "T3Gateway.startTurn",
           ]);
 
-          const expected = toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates));
-
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expected);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
         }),
     ),
   );
@@ -318,9 +334,6 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, pingActivity }) =>
         Effect.gen(function* () {
-          const threadCreated = toThreadCreated(
-            makeRequestClaimed(request, defaultWorkCoordinates),
-          );
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -348,9 +361,121 @@ describe("NTBSProcessor", () => {
   });
 
   /*
-    A transient provisioning failure leaves the exchange at RequestClaimed and surfaces as a `process` failure.
-    Startup recovery then picks the claim up where it stopped: it re-checks the thread, provisions it, and carries on to the turn.
-    Planning is not repeated, the coordinates were already persisted with the claim.
+    T3 refusing the target for good (a branch that is not on origin, say) is found out at planning, before anything from T3 exists.
+    The request was already recorded, so the rejection becomes a failure reply like any other and is posted; the stored record never carries T3 coordinates.
+  */
+  it.effect("posts a failure reply when T3 rejects the request at planning", () => {
+    const rejection = new FatalError({
+      reason: "Branch 'nope' does not exist on origin",
+      cause: null,
+      method: "gitWorkflowService.resolveRemoteTrackingCommit",
+    });
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          planCoordinates: () => rejection,
+        },
+      },
+      ({ processor, repository, calls }) =>
+        Effect.gen(function* () {
+          yield* processor.process(request, target);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          const replyPending = toRejected(accepted, rejection);
+          expect(replyPending.reply).toEqual({
+            type: "failure",
+            text: rejection.reason,
+            cause: {
+              type: "rejected",
+              method: rejection.method,
+              state: { tag: "request-accepted" },
+            },
+          });
+          expect(calls.at(-1)?.args).toEqual([replyPending]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(replyPending, postedReplyUri),
+          );
+        }),
+    );
+  });
+
+  /*
+    A transient planning failure happens after the request was recorded, so the record survives it: the delivery dies, the exchange stays RequestAccepted.
+    A redelivery finds the record and plans nothing. The sweeper then re-plans from the record and drives the exchange on to its turn.
+  */
+  it.effect(
+    "keeps an accepted request whose planning failed and re-plans it on the next sweep",
+    () => {
+      const turnStarted = Deferred.makeUnsafe<void>();
+      let planCalls = 0;
+
+      return withProcessor(
+        {
+          t3Gateway: {
+            planCoordinates: () =>
+              Effect.gen(function* () {
+                planCalls += 1;
+                if (planCalls === 1) {
+                  return yield* new RetryableError({
+                    reason: "Could not fetch origin",
+                    cause: "test failure",
+                    method: "planCoordinates",
+                  });
+                }
+                return defaultWorkCoordinates;
+              }),
+            startTurn: () => Deferred.succeed(turnStarted, undefined),
+          },
+        },
+        ({ processor, repository, calls }) =>
+          Effect.gen(function* () {
+            // Started first so that the sweep, not startup recovery, is what re-plans.
+            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Effect.yieldNow;
+
+            const exit = yield* Effect.exit(processor.process(request, target));
+            expect(exit._tag).toBe("Failure");
+
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+              "T3Gateway.planCoordinates",
+            ]);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
+
+            // Redelivery after acceptance does no planning.
+            yield* processor.process(request, target);
+            expect(calls.length).toBe(1);
+
+            yield* TestClock.adjust("1 minute");
+            yield* Deferred.await(turnStarted);
+
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+              "T3Gateway.planCoordinates",
+              // The sweep resumes from the record.
+              "T3Gateway.planCoordinates",
+              "T3Gateway.getThreadStatus",
+              "T3Gateway.provisionThread",
+              "NTBSAdapter.acknowledge",
+              "T3Gateway.getTurnStatus",
+              "T3Gateway.startTurn",
+            ]);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+            yield* Fiber.interrupt(run);
+          }),
+      );
+    },
+  );
+
+  /*
+    A transient provisioning failure leaves the exchange at WorkPlanned; the delivery dies, the record survives.
+    Startup recovery then picks the exchange up where it stopped: it re-checks the thread, provisions it, and carries on to the turn.
+    Planning is not repeated, the coordinates were already persisted.
   */
   it.effect("retries a transient provisioning failure during later recovery", () => {
     const turnStarted = Deferred.makeUnsafe<void>();
@@ -383,9 +508,7 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getThreadStatus",
             "T3Gateway.provisionThread",
           ]);
-
-          const claimed = makeRequestClaimed(request, defaultWorkCoordinates);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(claimed);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(planned);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(turnStarted);
@@ -394,16 +517,14 @@ describe("NTBSProcessor", () => {
             "T3Gateway.planCoordinates",
             "T3Gateway.getThreadStatus",
             "T3Gateway.provisionThread",
-            // Recovery resumes from the persisted claim.
+            // Recovery resumes from the persisted plan.
             "T3Gateway.getThreadStatus",
             "T3Gateway.provisionThread",
             "NTBSAdapter.acknowledge",
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(claimed),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           yield* Fiber.interrupt(run);
         }),
@@ -411,7 +532,7 @@ describe("NTBSProcessor", () => {
   });
 
   /*
-    A transient turn-start failure happens after ThreadCreated was persisted, so the exchange stays there and `process` fails.
+    A transient turn-start failure happens after ThreadCreated was persisted, so the exchange stays there and the delivery dies.
     Recovery resumes from ThreadCreated: the thread is neither re-checked nor re-provisioned, and the acknowledgement is not repeated. Only the turn is retried.
   */
   it.effect("retries a transient turn-start failure during later recovery", () => {
@@ -448,10 +569,6 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-
-          const threadCreated = toThreadCreated(
-            makeRequestClaimed(request, defaultWorkCoordinates),
-          );
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -477,8 +594,8 @@ describe("NTBSProcessor", () => {
 
   /*
     Deliveries of the same sourceUri are serialized behind a per-source lock.
-    The first delivery is held inside planCoordinates, before anything is persisted, so a naive second delivery would also find nothing stored and plan again.
-    Instead it waits: no second planCoordinates while the first is blocked, and once released the log shows a single pipeline, the second delivery having found the claim and returned.
+    The first delivery is held inside planCoordinates with the request already recorded, so a naive second delivery would find the record and return while the first is still working on it.
+    Instead it waits: no calls from it while the first is blocked, and once released the log shows a single pipeline, the second delivery having found the record and returned.
   */
   it.effect("serializes concurrent deliveries of the same request", () => {
     const firstPlanStarted = Deferred.makeUnsafe<void>();
@@ -514,7 +631,7 @@ describe("NTBSProcessor", () => {
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toBeNull();
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
 
           yield* Deferred.succeed(releaseFirstPlan, undefined);
           yield* Fiber.join(first);
@@ -528,21 +645,19 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
         }),
     );
   });
 
   /*
     The lock serializes, it does not couple outcomes.
-    When the first delivery fails inside planCoordinates, nothing was persisted, so the queued delivery finds an empty repository and claims the request itself.
-    The log shows two plans, the failed one and the successful one, followed by a single pipeline.
+    When the first delivery fails inside planCoordinates, the request was already recorded, so the queued delivery finds the record and returns without planning again; recovery, not the redelivery, finishes the pipeline.
   */
-  it.effect("lets a queued delivery claim after the first fails before persistence", () => {
+  it.effect("ignores a queued redelivery of an accepted request whose planning failed", () => {
     const firstPlanStarted = Deferred.makeUnsafe<void>();
     const releaseFirstPlan = Deferred.makeUnsafe<void>();
+    const turnStarted = Deferred.makeUnsafe<void>();
     let planCalls = 0;
 
     return withProcessor(
@@ -562,6 +677,7 @@ describe("NTBSProcessor", () => {
               }
               return defaultWorkCoordinates;
             }),
+          startTurn: () => Deferred.succeed(turnStarted, undefined),
         },
       },
       ({ processor, repository, calls }) =>
@@ -580,15 +696,24 @@ describe("NTBSProcessor", () => {
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toBeNull();
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
 
           yield* Deferred.succeed(releaseFirstPlan, undefined);
           expect((yield* Fiber.await(first))._tag).toBe("Failure");
           yield* Fiber.join(second);
 
+          // The redelivery found the record and added nothing to the log.
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
-            // The queued delivery plans again because the failed one persisted nothing.
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(turnStarted);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            // Recovery plans again from the record.
             "T3Gateway.planCoordinates",
             "T3Gateway.getThreadStatus",
             "T3Gateway.provisionThread",
@@ -596,18 +721,18 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* Fiber.interrupt(run);
         }),
     );
   });
 
   /*
-    The mirror of the previous test: the first delivery fails *after* persisting the claim, inside getThreadStatus.
-    The queued redelivery then finds the claim and returns without touching any service, and it is recovery, not the redelivery, that eventually finishes the pipeline.
+    The same, one step later: the first delivery fails inside getThreadStatus, after the plan was persisted.
+    The queued redelivery finds the plan and returns without touching any service, and it is recovery, not the redelivery, that eventually finishes the pipeline.
   */
-  it.effect("retains a failed claim for later recovery and ignores its queued redelivery", () => {
+  it.effect("retains a persisted plan for later recovery and ignores its queued redelivery", () => {
     const threadStatusStarted = Deferred.makeUnsafe<void>();
     const releaseThreadStatus = Deferred.makeUnsafe<void>();
     const turnStarted = Deferred.makeUnsafe<void>();
@@ -623,7 +748,7 @@ describe("NTBSProcessor", () => {
                 yield* Deferred.succeed(threadStatusStarted, undefined);
                 yield* Deferred.await(releaseThreadStatus);
                 return yield* new RetryableError({
-                  reason: "Failed after persisting the claim",
+                  reason: "Failed after persisting the plan",
                   cause: "test failure",
                   method: "getThreadStatus",
                 });
@@ -640,8 +765,7 @@ describe("NTBSProcessor", () => {
             .pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(threadStatusStarted);
 
-          const claimed = makeRequestClaimed(request, defaultWorkCoordinates);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(claimed);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(planned);
 
           const second = yield* processor
             .process(request, target)
@@ -658,12 +782,12 @@ describe("NTBSProcessor", () => {
           expect((yield* Fiber.await(first))._tag).toBe("Failure");
           yield* Fiber.join(second);
 
-          // The redelivery found the claim and added nothing to the log.
+          // The redelivery found the plan and added nothing to the log.
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
             "T3Gateway.getThreadStatus",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(claimed);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(planned);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(turnStarted);
@@ -671,16 +795,14 @@ describe("NTBSProcessor", () => {
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
             "T3Gateway.getThreadStatus",
-            // Recovery resumes from the persisted claim.
+            // Recovery resumes from the persisted plan.
             "T3Gateway.getThreadStatus",
             "T3Gateway.provisionThread",
             "NTBSAdapter.acknowledge",
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(claimed),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           yield* Fiber.interrupt(run);
         }),
@@ -689,23 +811,19 @@ describe("NTBSProcessor", () => {
 
   /*
     Interruption must release the source lock like any other exit, otherwise one cancelled delivery would wedge its sourceUri forever.
-    The first delivery is interrupted while holding the lock inside planCoordinates; the queued one then acquires it, plans again and runs the pipeline.
+    The first delivery is interrupted while holding the lock inside planCoordinates; the queued one then acquires it, finds the record the first one left, and returns.
   */
   it.effect("releases the source lock when its holder is interrupted", () => {
     const firstPlanStarted = Deferred.makeUnsafe<void>();
     const keepFirstPlanBlocked = Deferred.makeUnsafe<void>();
-    let planCalls = 0;
 
     return withProcessor(
       {
         t3Gateway: {
           planCoordinates: () =>
             Effect.gen(function* () {
-              planCalls += 1;
-              if (planCalls === 1) {
-                yield* Deferred.succeed(firstPlanStarted, undefined);
-                yield* Deferred.await(keepFirstPlanBlocked);
-              }
+              yield* Deferred.succeed(firstPlanStarted, undefined);
+              yield* Deferred.await(keepFirstPlanBlocked);
               return defaultWorkCoordinates;
             }),
         },
@@ -726,24 +844,16 @@ describe("NTBSProcessor", () => {
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toBeNull();
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
 
           yield* Fiber.interrupt(first);
           yield* Fiber.join(second);
 
+          // The queued delivery got the lock, found the record, and planned nothing.
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
-            // The queued delivery plans again because the interrupted one persisted nothing.
-            "T3Gateway.planCoordinates",
-            "T3Gateway.getThreadStatus",
-            "T3Gateway.provisionThread",
-            "NTBSAdapter.acknowledge",
-            "T3Gateway.getTurnStatus",
-            "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
         }),
     );
   });
@@ -783,12 +893,12 @@ describe("NTBSProcessor", () => {
 
           yield* Fiber.interrupt(interruptedWaiter);
 
-          // The holder is unaffected: still blocked in planCoordinates, nothing stored.
+          // The holder is unaffected: still blocked in planCoordinates, only the record stored.
           expect(first.pollUnsafe()).toBeUndefined();
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toBeNull();
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
 
           const later = yield* processor
             .process(request, target)
@@ -809,9 +919,7 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
         }),
     );
   });
@@ -861,9 +969,9 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toBeNull();
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
           expect(yield* repository.findBySourceUri(secondRequest.sourceUri)).toEqual(
-            toThreadCreated(makeRequestClaimed(secondRequest, secondWorkCoordinates)),
+            secondThreadCreated,
           );
 
           yield* Deferred.succeed(releaseFirstPlan, undefined);
@@ -884,9 +992,7 @@ describe("NTBSProcessor", () => {
             "T3Gateway.getTurnStatus",
             "T3Gateway.startTurn",
           ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
         }),
     );
   });
@@ -896,7 +1002,7 @@ describe("NTBSProcessor", () => {
     A stored ThreadCreated whose turn has meanwhile completed is carried to ReplyPosted: the reply is looked up on the platform first, not found, then posted.
   */
   it.effect("resumes non-terminal exchanges when run starts", () => {
-    const reply = { type: "answer" as const, text: "Recovered reply" };
+    const reply = answer("Recovered reply");
 
     return withProcessor(
       {
@@ -906,9 +1012,6 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const threadCreated = toThreadCreated(
-            makeRequestClaimed(request, defaultWorkCoordinates),
-          );
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -934,7 +1037,7 @@ describe("NTBSProcessor", () => {
     Recovery sees the turn still active, so the reply only arrives through the ping.
   */
   it.effect("routes thread activity only for stored exchanges", () => {
-    const reply = { type: "answer" as const, text: "Reply after thread activity" };
+    const reply = answer("Reply after thread activity");
     let statusReads = 0;
 
     return withProcessor(
@@ -951,9 +1054,6 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const threadCreated = toThreadCreated(
-            makeRequestClaimed(request, defaultWorkCoordinates),
-          );
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -989,7 +1089,7 @@ describe("NTBSProcessor", () => {
   it.effect("serializes thread activity with a redelivered request", () => {
     const activityStatusStarted = Deferred.makeUnsafe<void>();
     const releaseActivityStatus = Deferred.makeUnsafe<void>();
-    const reply = { type: "answer" as const, text: "Reply from thread activity" };
+    const reply = answer("Reply from thread activity");
     let statusReads = 0;
 
     return withProcessor(
@@ -1009,9 +1109,6 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const threadCreated = toThreadCreated(
-            makeRequestClaimed(request, defaultWorkCoordinates),
-          );
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1055,7 +1152,7 @@ describe("NTBSProcessor", () => {
     The log shows provisioning skipped for the present thread, and the reply posted with the ReplyPending state the completed turn produced.
   */
   it.effect("posts a completed T3 reply", () => {
-    const reply = { type: "answer" as const, text: "The bug is fixed." };
+    const reply = answer("The bug is fixed.");
 
     return withProcessor(
       {
@@ -1077,10 +1174,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
 
-          const replyPending = toReplyPending(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-            reply,
-          );
+          const replyPending = toReplyPending(threadCreated, reply);
           expect(calls.at(-1)?.args).toEqual([replyPending]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
             toReplyPosted(replyPending, postedReplyUri),
@@ -1094,7 +1188,7 @@ describe("NTBSProcessor", () => {
     When the platform already shows the reply (a previous run posted it but crashed before persisting), the exchange is recorded as posted at the discovered URI and `postReply` is never called.
   */
   it.effect("records a reply already found on the platform without posting it again", () => {
-    const reply = { type: "answer" as const, text: "Already delivered" };
+    const reply = answer("Already delivered");
     const discoveredReplyUri = "test://reply/already-posted";
 
     return withProcessor(
@@ -1105,10 +1199,7 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const replyPending = toReplyPending(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-            reply,
-          );
+          const replyPending = toReplyPending(threadCreated, reply);
           yield* repository.upsert(replyPending);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1130,7 +1221,7 @@ describe("NTBSProcessor", () => {
     Unlike an AdapterError, which leaves the exchange pending for a retry, a rejection is terminal: the exchange becomes Undeliverable with the platform's cause.
   */
   it.effect("records a definitively rejected reply as undeliverable", () => {
-    const reply = { type: "answer" as const, text: "Reply that cannot be delivered" };
+    const reply = answer("Reply that cannot be delivered");
     const rejectionCause = { message: "The originating discussion was deleted" };
 
     return withProcessor(
@@ -1141,10 +1232,7 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const replyPending = toReplyPending(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-            reply,
-          );
+          const replyPending = toReplyPending(threadCreated, reply);
           yield* repository.upsert(replyPending);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1163,18 +1251,20 @@ describe("NTBSProcessor", () => {
 
   /*
     A `FatalError` from a T3 action means T3 will never accept the work, so retrying is pointless.
-    The processor skips straight from the claim to a failure reply: no thread is created, so no acknowledgement and no turn; the user gets told why instead.
+    The processor skips straight from the plan to a failure reply: no thread is created, so no acknowledgement and no turn; the user gets told why instead.
+    The reply keeps the planned coordinates as its context, the stored exchange does not.
   */
   it.effect("delivers a failure reply when T3 rejects thread provisioning", () => {
-    const rejection = {
+    const rejection = new FatalError({
       reason: "T3 cannot provision this request",
       cause: { message: "The selected project no longer exists" },
-    };
+      method: "provisionThread",
+    });
 
     return withProcessor(
       {
         t3Gateway: {
-          provisionThread: () => new FatalError({ ...rejection, method: "provisionThread" }),
+          provisionThread: () => rejection,
         },
       },
       ({ processor, repository, calls }) =>
@@ -1189,10 +1279,15 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
 
-          const replyPending = toReplyPending(makeRequestClaimed(request, defaultWorkCoordinates), {
+          const replyPending = toRejected(planned, rejection);
+          expect(replyPending.reply).toEqual({
             type: "failure",
             text: rejection.reason,
-            cause: rejection.cause,
+            cause: {
+              type: "rejected",
+              method: rejection.method,
+              state: { tag: "work-planned", t3: defaultWorkCoordinates },
+            },
           });
           expect(calls.at(-1)?.args).toEqual([replyPending]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
@@ -1208,7 +1303,7 @@ describe("NTBSProcessor", () => {
   */
   it.effect("retries a transient reply-posting failure during later recovery", () => {
     const firstPostAttempted = Deferred.makeUnsafe<void>();
-    const reply = { type: "answer" as const, text: "Reply after a transient posting failure" };
+    const reply = answer("Reply after a transient posting failure");
     let postAttempts = 0;
 
     return withProcessor(
@@ -1230,10 +1325,7 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const replyPending = toReplyPending(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-            reply,
-          );
+          const replyPending = toReplyPending(threadCreated, reply);
           yield* repository.upsert(replyPending);
 
           const firstRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1262,131 +1354,6 @@ describe("NTBSProcessor", () => {
         }),
     );
   });
-
-  /*
-    Startup recovery is per exchange: one exchange failing must not stop the others from being recovered.
-    Both exchanges are pending; discovery fails for the first and the second still gets posted, while the first stays pending for a later attempt.
-    The repository does not promise a recovery order, so the log is checked per source rather than as one ordered list.
-  */
-  it.effect("continues startup recovery after one exchange fails", () => {
-    const reply = {
-      type: "answer" as const,
-      text: "Reply recovered after another exchange failed",
-    };
-
-    return withProcessor(
-      {
-        adapter: {
-          findPostedReply: (state) =>
-            state.sourceUri === request.sourceUri
-              ? new AdapterError({
-                  reason: "Recovery failed for this exchange",
-                  cause: "test failure",
-                })
-              : Effect.succeed(null),
-        },
-      },
-      ({ processor, repository, calls, awaitStoredTag }) =>
-        Effect.gen(function* () {
-          const failingPending = toReplyPending(
-            toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates)),
-            reply,
-          );
-          const recoverablePending = toReplyPending(
-            toThreadCreated(makeRequestClaimed(secondRequest, secondWorkCoordinates)),
-            reply,
-          );
-          yield* repository.upsert(failingPending);
-          yield* repository.upsert(recoverablePending);
-
-          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
-          const posted = yield* awaitStoredTag(secondRequest.sourceUri, "reply-posted");
-          yield* Effect.yieldNow;
-
-          const callsFor = (sourceUri: string) =>
-            calls
-              .filter((call) => (call.args[0] as Exchange).sourceUri === sourceUri)
-              .map((call) => `${call.service}.${call.method}`);
-          expect(callsFor(request.sourceUri)).toEqual(["NTBSAdapter.findPostedReply"]);
-          expect(callsFor(secondRequest.sourceUri)).toEqual([
-            "NTBSAdapter.findPostedReply",
-            "NTBSAdapter.postReply",
-          ]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(failingPending);
-          expect(posted).toEqual(toReplyPosted(recoverablePending, postedReplyUri));
-
-          yield* Fiber.interrupt(run);
-        }),
-    );
-  });
-
-  /*
-    The activity subscription outlives a failing event.
-    The first ping's status read fails with a RetryableError; the exchange is left as it was, and the next ping is still handled and carries it to ReplyPosted.
-  */
-  it.effect("continues processing thread activity after one event fails", () => {
-    const reply = { type: "answer" as const, text: "Reply from the later activity event" };
-    let statusReads = 0;
-
-    return withProcessor(
-      {
-        t3Gateway: {
-          getTurnStatus: () =>
-            Effect.sync(() => (statusReads += 1)).pipe(
-              Effect.flatMap((read) => {
-                switch (read) {
-                  // Startup recovery.
-                  case 1:
-                    return Effect.succeed({
-                      turn: "active" as const,
-                    } as ThreadCreatedContext);
-                  // First ping.
-                  case 2:
-                    return new RetryableError({
-                      reason: "This activity event could not be processed",
-                      cause: "test failure",
-                      method: "getTurnStatus",
-                    }) as RetryableError;
-                  // Second ping.
-                  default:
-                    return Effect.succeed({
-                      turn: "completed" as const,
-                      reply,
-                    } satisfies ThreadCreatedContext);
-                }
-              }),
-            ),
-        },
-      },
-      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
-        Effect.gen(function* () {
-          const threadCreated = toThreadCreated(
-            makeRequestClaimed(request, defaultWorkCoordinates),
-          );
-          yield* repository.upsert(threadCreated);
-
-          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
-
-          yield* pingActivity(defaultThreadId);
-          yield* pingActivity(defaultThreadId);
-          const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
-
-          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
-            "T3Gateway.getTurnStatus",
-            "T3Gateway.getTurnStatus",
-            "T3Gateway.getTurnStatus",
-            "NTBSAdapter.findPostedReply",
-            "NTBSAdapter.postReply",
-          ]);
-          expect(posted).toEqual(
-            toReplyPosted(toReplyPending(threadCreated, reply), postedReplyUri),
-          );
-
-          yield* Fiber.interrupt(run);
-        }),
-    );
-  });
-
   /*
     `run` subscribes to thread activity before startup recovery, so a slow recovery does not delay live events.
     Recovery is held open on the first exchange's status read while a ping for a second exchange is delivered; the second reaches ReplyPosted with recovery still blocked.
@@ -1394,10 +1361,7 @@ describe("NTBSProcessor", () => {
   it.effect("subscribes to thread activity before startup recovery finishes", () => {
     const recoveryStarted = Deferred.makeUnsafe<void>();
     const releaseRecovery = Deferred.makeUnsafe<void>();
-    const reply = {
-      type: "answer" as const,
-      text: "Reply posted while startup recovery is blocked",
-    };
+    const reply = answer("Reply posted while startup recovery is blocked", secondWorkCoordinates);
 
     return withProcessor(
       {
@@ -1414,17 +1378,13 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const recovering = toThreadCreated(makeRequestClaimed(request, defaultWorkCoordinates));
-          yield* repository.upsert(recovering);
+          yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(recoveryStarted);
 
           // Stored only now, so recovery could not have picked it up: the ping is its only way forward.
-          const activeDuringRecovery = toThreadCreated(
-            makeRequestClaimed(secondRequest, secondWorkCoordinates),
-          );
-          yield* repository.upsert(activeDuringRecovery);
+          yield* repository.upsert(secondThreadCreated);
           yield* pingActivity(secondThreadId);
           const posted = yield* awaitStoredTag(secondRequest.sourceUri, "reply-posted");
 
@@ -1434,11 +1394,11 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.findPostedReply",
             "NTBSAdapter.postReply",
           ]);
-          expect(calls[0]?.args).toEqual([recovering]);
-          expect(calls[1]?.args).toEqual([activeDuringRecovery]);
-          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(recovering);
+          expect(calls[0]?.args).toEqual([threadCreated]);
+          expect(calls[1]?.args).toEqual([secondThreadCreated]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
           expect(posted).toEqual(
-            toReplyPosted(toReplyPending(activeDuringRecovery, reply), postedReplyUri),
+            toReplyPosted(toReplyPending(secondThreadCreated, reply), postedReplyUri),
           );
 
           yield* Deferred.succeed(releaseRecovery, undefined);

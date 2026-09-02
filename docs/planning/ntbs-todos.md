@@ -2,10 +2,6 @@
 
 The exchange model, ports, processor, and T3 gateway are implemented under `apps/server/src/ntbs/`. This file tracks only what is still open. Findings referenced by id are in `review-01-09.md`.
 
-## Request accepted before planning
-
-- [ ] Implement `ntbs-request-accepted.md`. Absorbs review items M1 and M4.
-
 ## Bound every retry (H1, M2, M3)
 
 - [ ] Add `claimedAt`/`updatedAt` and an attempt counter to `ExchangeBase`; per-state deadlines in the decider; exponential backoff in the sweeper.

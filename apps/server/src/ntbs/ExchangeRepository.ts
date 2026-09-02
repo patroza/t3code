@@ -9,8 +9,14 @@
  * duplicate requests. It does not communicate with T3 or the originating
  * platform.
  */
-import { Array, Effect, Context, Data, HashMap, Ref, Layer } from "effect";
-import { isNonTerminal, type Exchange, type NonTerminalExchange } from "./exchange.ts";
+import { Array, Effect, Context, Data, HashMap, Ref, Layer, Result } from "effect";
+import {
+  getThreadId,
+  isNonTerminal,
+  isUpdateOf,
+  type Exchange,
+  type NonTerminalExchange,
+} from "./exchange.ts";
 import type { ThreadId } from "@t3tools/contracts";
 import { isSome } from "effect/Option";
 
@@ -33,7 +39,11 @@ export interface ExchangeRepository {
     ExchangeRepositoryError
   >;
 
-  /** Inserts or replaces the exchange identified by its `sourceUri`. */
+  /**
+   * Inserts or replaces the exchange identified by its `sourceUri`, as long as it is a legal update of the stored one and the thread it refers to does not already belong to another exchange.
+   *
+   * The checks and the write are atomic, so of two conflicting concurrent upserts at most one succeeds.
+   */
   readonly upsert: (exchange: Exchange) => Effect.Effect<void, ExchangeRepositoryError>;
 }
 
@@ -46,32 +56,65 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
     HashMap.empty<string, Exchange>(),
   );
 
-  const upsert = Effect.fn("ExchangeRepository.upsert")(function* (exchange: Exchange) {
-    // we return conflicting source Uri as the first argument
-    // in case we find that the same threadId belongs already to a different sourceUri
-    const conflictingSourceUri = yield* Ref.modify(exchanges, (map) => {
-      const conflict = HashMap.findFirst(
-        map,
-        (existing, sourceUri) =>
-          sourceUri !== exchange.sourceUri && existing.t3.threadId === exchange.t3.threadId,
+  /** Whether `exchange` may be written into `map`, with the reason when it may not. */
+  const validate = (
+    map: HashMap.HashMap<string, Exchange>,
+    exchange: Exchange,
+  ): Result.Result<void, ExchangeRepositoryError> => {
+    // Rule 1: a stored exchange may only be replaced by an update of itself.
+    const previous = HashMap.get(map, exchange.sourceUri);
+
+    if (isSome(previous) && !isUpdateOf(exchange, previous.value)) {
+      return Result.fail(
+        new ExchangeRepositoryError({
+          reason: `Exchange ${exchange.sourceUri} cannot move from ${previous.value.tag} to ${exchange.tag}`,
+          cause: { sourceUri: exchange.sourceUri, from: previous.value.tag, to: exchange.tag },
+        }),
       );
-
-      return isSome(conflict)
-        ? [conflict.value[0], map]
-        : [null, HashMap.set(map, exchange.sourceUri, exchange)];
-    });
-
-    if (conflictingSourceUri !== null) {
-      return yield* new ExchangeRepositoryError({
-        reason: `Thread ${exchange.t3.threadId} already belongs to exchange ${conflictingSourceUri}`,
-        cause: {
-          threadId: exchange.t3.threadId,
-          existingSourceUri: conflictingSourceUri,
-          incomingSourceUri: exchange.sourceUri,
-        },
-      });
     }
-  });
+
+    // Rule 2: the thread an exchange refers to may not belong to another exchange.
+    const threadId = getThreadId(exchange);
+
+    if (threadId === null) {
+      return Result.void;
+    }
+
+    const owner = HashMap.findFirst(
+      map,
+      (existing, sourceUri) =>
+        sourceUri !== exchange.sourceUri && getThreadId(existing) === threadId,
+    );
+
+    if (isSome(owner)) {
+      return Result.fail(
+        new ExchangeRepositoryError({
+          reason: `Thread ${threadId} already belongs to exchange ${owner.value[0]}`,
+          cause: {
+            threadId,
+            existingSourceUri: owner.value[0],
+            incomingSourceUri: exchange.sourceUri,
+          },
+        }),
+      );
+    }
+
+    return Result.void;
+  };
+
+  // Validating and writing share one modify, so concurrent upserts cannot both pass.
+  const upsert = Effect.fn("ExchangeRepository.upsert")((exchange: Exchange) =>
+    exchanges.pipe(
+      Ref.modify((map) => {
+        const result = validate(map, exchange);
+        return [
+          result,
+          Result.isSuccess(result) ? HashMap.set(map, exchange.sourceUri, exchange) : map,
+        ];
+      }),
+      Effect.flatMap(Effect.fromResult),
+    ),
+  );
 
   const findBySourceUri = (uri: string) =>
     Ref.get(exchanges).pipe(
@@ -81,7 +124,7 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
 
   const findByThreadId = (threadId: ThreadId) =>
     Ref.get(exchanges).pipe(
-      Effect.map((map) => HashMap.filter(map, (val) => val.t3.threadId === threadId)),
+      Effect.map((map) => HashMap.filter(map, (val) => getThreadId(val) === threadId)),
       // if we get more than one Exchange in the HashMap, something's wrong
       Effect.andThen((map) =>
         HashMap.size(map) > 1
