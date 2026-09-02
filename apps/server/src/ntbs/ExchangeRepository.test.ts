@@ -1,48 +1,97 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
-import { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import { MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import {
   ExchangeRepositoryError,
   ExchangeRepository,
   inMemoryExchangeRepository,
 } from "./ExchangeRepository.ts";
 import {
-  makeRequestClaimed,
+  makeRequestAccepted,
   toReplyPending,
   toReplyPosted,
   toThreadCreated,
   toUndeliverable,
+  toWorkPlanned,
+  type Reply,
 } from "./exchange.ts";
 
-const makeExchange = (sourceUri: string, threadId: string) =>
-  makeRequestClaimed(
-    {
-      sourceUri,
-      snapshot: "request",
-      attachments: [],
-    },
-    {
-      projectId: ProjectId.make("project"),
-      startBranchName: "main",
-      startCommitSha: "start-commit-sha",
-      threadId: ThreadId.make(threadId),
-      userMessageId: MessageId.make(`message-${threadId}`),
-      worktreeBranchName: `branch-${threadId}`,
-    },
+const makeAccepted = (sourceUri: string) =>
+  makeRequestAccepted(
+    { sourceUri, snapshot: "request", attachments: [] },
+    { projectId: ProjectId.make("project"), startBranchName: "main" },
   );
+
+const makeExchange = (sourceUri: string, threadId: string) =>
+  toWorkPlanned(makeAccepted(sourceUri), {
+    projectId: ProjectId.make("project"),
+    startBranchName: "main",
+    startCommitSha: "start-commit-sha",
+    threadId: ThreadId.make(threadId),
+    userMessageId: MessageId.make(`message-${threadId}`),
+    worktreeBranchName: `branch-${threadId}`,
+  });
+
+const answerFrom = (threadId: string, text: string): Reply => ({
+  type: "answer",
+  text,
+  threadId: ThreadId.make(threadId),
+  userMessageId: MessageId.make(`message-${threadId}`),
+  turnId: TurnId.make(`turn-${threadId}`),
+});
 
 describe("inMemoryExchangeRepository", () => {
   it.layer(inMemoryExchangeRepository)((it) => {
-    it.effect("allows the same sourceUri to replace its state", () =>
+    it.effect("allows the same sourceUri to advance its state", () =>
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
-        const claimed = makeExchange("test://request/1", "thread-1");
-        const threadCreated = toThreadCreated(claimed);
+        const planned = makeExchange("test://request/1", "thread-1");
+        const threadCreated = toThreadCreated(planned);
 
-        yield* repository.upsert(claimed);
+        yield* repository.upsert(planned);
         yield* repository.upsert(threadCreated);
 
-        expect(yield* repository.findBySourceUri(claimed.sourceUri)).toEqual(threadCreated);
+        expect(yield* repository.findBySourceUri(planned.sourceUri)).toEqual(threadCreated);
+      }),
+    );
+  });
+
+  it.layer(inMemoryExchangeRepository)((it) => {
+    it.effect("allows the same state to be rewritten", () =>
+      Effect.gen(function* () {
+        const repository = yield* ExchangeRepository;
+        const planned = makeExchange("test://request/1", "thread-1");
+
+        yield* repository.upsert(planned);
+        yield* repository.upsert(planned);
+
+        expect(yield* repository.findBySourceUri(planned.sourceUri)).toEqual(planned);
+      }),
+    );
+  });
+
+  it.layer(inMemoryExchangeRepository)((it) => {
+    it.effect("refuses a replacement that is not an update of the stored exchange", () =>
+      Effect.gen(function* () {
+        const repository = yield* ExchangeRepository;
+        const planned = makeExchange("test://request/1", "thread-1");
+        const threadCreated = toThreadCreated(planned);
+        const replyPending = toReplyPending(threadCreated, answerFrom("thread-1", "reply"));
+        const posted = toReplyPosted(replyPending, "test://reply/1");
+
+        yield* repository.upsert(threadCreated);
+        const backwards = yield* Effect.flip(repository.upsert(planned));
+        expect(backwards).toBeInstanceOf(ExchangeRepositoryError);
+
+        const skippingAhead = yield* Effect.flip(repository.upsert(posted));
+        expect(skippingAhead).toBeInstanceOf(ExchangeRepositoryError);
+
+        yield* repository.upsert(replyPending);
+        yield* repository.upsert(posted);
+        const afterTerminal = yield* Effect.flip(repository.upsert(threadCreated));
+        expect(afterTerminal).toBeInstanceOf(ExchangeRepositoryError);
+
+        expect(yield* repository.findBySourceUri(planned.sourceUri)).toEqual(posted);
       }),
     );
   });
@@ -66,6 +115,25 @@ describe("inMemoryExchangeRepository", () => {
   });
 
   it.layer(inMemoryExchangeRepository)((it) => {
+    it.effect("keeps a replied exchange's thread out of reach of other sourceUris", () =>
+      Effect.gen(function* () {
+        const repository = yield* ExchangeRepository;
+        const replied = toReplyPending(
+          toThreadCreated(makeExchange("test://request/1", "shared-thread")),
+          answerFrom("shared-thread", "done"),
+        );
+        const conflicting = makeExchange("test://request/2", "shared-thread");
+
+        yield* repository.upsert(replied);
+        const error = yield* Effect.flip(repository.upsert(conflicting));
+
+        expect(error).toBeInstanceOf(ExchangeRepositoryError);
+        expect(yield* repository.findBySourceUri(conflicting.sourceUri)).toBeNull();
+      }),
+    );
+  });
+
+  it.layer(inMemoryExchangeRepository)((it) => {
     it.effect("finds an exchange by threadId", () =>
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
@@ -83,38 +151,41 @@ describe("inMemoryExchangeRepository", () => {
     it.effect("finds only non-terminal exchanges", () =>
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
-        const claimed = makeExchange("test://request/claimed", "thread-claimed");
+        const accepted = makeAccepted("test://request/accepted");
+        const planned = makeExchange("test://request/planned", "thread-planned");
         const threadCreated = toThreadCreated(
           makeExchange("test://request/thread-created", "thread-created"),
         );
         const replyPending = toReplyPending(
           toThreadCreated(makeExchange("test://request/reply-pending", "thread-reply-pending")),
-          { type: "answer", text: "pending reply" },
+          answerFrom("thread-reply-pending", "pending reply"),
         );
         const replyPosted = toReplyPosted(
           toReplyPending(
             toThreadCreated(makeExchange("test://request/reply-posted", "thread-reply-posted")),
-            { type: "answer", text: "posted reply" },
+            answerFrom("thread-reply-posted", "posted reply"),
           ),
           "test://reply/posted",
         );
         const undeliverable = toUndeliverable(
           toReplyPending(
             toThreadCreated(makeExchange("test://request/undeliverable", "thread-undeliverable")),
-            { type: "failure", text: "undeliverable reply", cause: "undeliverable te dico" },
+            answerFrom("thread-undeliverable", "undeliverable reply"),
           ),
           { message: "platform rejected the reply" },
         );
 
         yield* Effect.forEach(
-          [claimed, threadCreated, replyPending, replyPosted, undeliverable],
+          [accepted, planned, threadCreated, replyPending, replyPosted, undeliverable],
           repository.upsert,
         );
 
         const results = yield* repository.findNonTerminalExchanges;
 
-        expect(results).toHaveLength(3);
-        expect(results).toEqual(expect.arrayContaining([claimed, threadCreated, replyPending]));
+        expect(results).toHaveLength(4);
+        expect(results).toEqual(
+          expect.arrayContaining([accepted, planned, threadCreated, replyPending]),
+        );
       }),
     );
   });

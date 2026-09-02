@@ -1,4 +1,4 @@
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
+import { type ThreadId } from "@t3tools/contracts";
 import * as NTBS from "./exchange.ts";
 import { Context, Data, Effect, Semaphore, Stream } from "effect";
 import { NTBSAdapter } from "./adapter.ts";
@@ -31,23 +31,6 @@ load the stored state
 The cycle is replay safe: it observes before acting, so a crash or a redelivered message re-runs it without starting a second thread or posting a second reply.
 */
 
-/**
- * Describes _where_ the T3 works goes. Necessary for creating worktrees, threads and starting turns.
- */
-export type T3Target = {
-  readonly projectId: ProjectId;
-  /**
-   * The starting point for the thread's worktree: the new branch is created from this one.
-   *
-   * Must be a branch that exists on `origin`; it is resolved there, so the worktree starts from the
-   * latest remote commit even when the local copy is behind. Tags, commit SHAs and local-only
-   * branches are rejected.
-   *
-   * Set by the platform-specific inbound code.
-   */
-  readonly startBranchName: string;
-};
-
 export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
   reason: string;
   cause: unknown;
@@ -61,20 +44,21 @@ export interface NTBSProcessor {
    *
    * Does no filtering: the caller decides whether a request deserves T3 work, and everything passed here starts it.
    *
-   * Returns once the exchange is claimed and under way, not once the request is answered: the reply is posted later, when T3 reports the turn finished.
+   * Returns once the request is recorded, not once it is answered: the reply is posted later, when T3 reports the turn finished.
+   * Fails with a typed error only when the repository does. Anything that fails after the record dies; `run` retries the recorded exchange.
    *
-   * Idempotent per `sourceUri`: a redelivery of an already-claimed request is a no-op, whatever state that exchange has reached. Concurrent deliveries of the same request are serialized, so only the first claims it.
+   * Idempotent per `sourceUri`: a redelivery of an already-recorded request is a no-op, whatever state that exchange has reached. Concurrent deliveries of the same request are serialized, so only the first records it.
    */
   readonly process: (
     request: NTBS.Request,
-    t3Target: T3Target,
+    t3Target: NTBS.T3Target,
   ) => Effect.Effect<void, NTBSProcessorError>;
 
   /**
    * The main loop of the processor.
    * Subscribes to T3 activity, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange moves when its T3 thread does, with a periodic sweep re-driving every non-terminal exchange as the backstop for missed activity pings.
    *
-   * Never returns. It has no error channel: a failure on one exchange is logged and the next event is still processed.
+   * Never returns and has no error channel: a failure anywhere in it is a defect.
    */
   readonly run: Effect.Effect<void>;
 }
@@ -134,23 +118,14 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
     const unchanged: TransitionResult = { type: "unchanged" };
 
-    const createReplyFailure = (failure: {
-      readonly reason: string;
-      readonly cause: unknown;
-    }): NTBS.ReplyFailure => ({
-      type: "failure",
-      text: failure.reason,
-      cause: failure.cause,
-    });
-
     const persist = <State extends NTBS.Exchange>(state: State) =>
       repo.upsert(state).pipe(orFail("Failed to persist the exchange state"), Effect.as(state));
 
     /**
-     * Serializes concurrent work on the same sourceUri, protecting the check-then-act claim in `process` (findBySourceUri -> plan -> persist).
+     * Serializes concurrent work on the same sourceUri, protecting the check-then-act record in `process` (findBySourceUri -> persist).
      * The lock is in-process memory: single-writer is an assumption on the deployment, not something the code or the database enforces.
-     * Two processors on the same database would each pass the "no exchange yet" check, both claim, and the upsert would silently overwrite the first claim instead of failing.
-     * TODO: If we ever run more than one processor, this needs remote locking or a claim that can lose (e.g. a unique insert on sourceUri that rejects the second claimer).
+     * Two processors on the same database would each pass the "no exchange yet" check, both record, and the upsert would silently overwrite the first record instead of failing.
+     * TODO: If we ever run more than one processor, this needs remote locking or a record that can lose (e.g. a unique insert on sourceUri that rejects the second writer).
      */
     const exchangeLocks = new Map<string, ExchangeLock>();
 
@@ -180,13 +155,30 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         );
       });
 
-    const processRequestClaimed = Effect.fn("NTBSProcessor.processRequestClaimed")(function* (
-      state: NTBS.RequestClaimed,
+    const processRequestAccepted = Effect.fn("NTBSProcessor.processRequestAccepted")(function* (
+      state: NTBS.RequestAccepted,
+    ) {
+      // Planning creates nothing in T3, so there is nothing to observe first: plan, then record the outcome.
+      const planned = yield* t3
+        .planCoordinates(state.target.projectId, state.target.startBranchName)
+        .pipe(
+          Effect.map((coordinates) => NTBS.toWorkPlanned(state, coordinates)),
+          Effect.catchTag("FatalError", (rejection) =>
+            Effect.succeed(NTBS.toRejected(state, rejection)),
+          ),
+          orFail("Failed to plan the T3 work"),
+        );
+      const next = yield* persist(planned);
+      return transitionedTo(next);
+    });
+
+    const processWorkPlanned = Effect.fn("NTBSProcessor.processWorkPlanned")(function* (
+      state: NTBS.WorkPlanned,
     ) {
       const context = yield* t3
         .getThreadStatus(state)
         .pipe(orFail("Failed to get the T3 thread status"));
-      const decision = NTBS.fromRequestClaimed(state, context);
+      const decision = NTBS.fromWorkPlanned(state, context);
 
       switch (decision.type) {
         case "provision-thread": {
@@ -198,7 +190,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           );
 
           if (rejection !== null) {
-            const next = yield* persist(NTBS.toReplyPending(state, createReplyFailure(rejection)));
+            const next = yield* persist(NTBS.toRejected(state, rejection));
             return transitionedTo(next);
           }
 
@@ -239,9 +231,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           );
 
           if (rejection !== null) {
-            const replyPending = yield* persist(
-              NTBS.toReplyPending(state, createReplyFailure(rejection)),
-            );
+            const replyPending = yield* persist(NTBS.toRejected(state, rejection));
             return transitionedTo(replyPending);
           }
 
@@ -307,8 +297,12 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         let result: TransitionResult;
 
         switch (state.tag) {
-          case "request-claimed":
-            result = yield* processRequestClaimed(state);
+          case "request-accepted":
+            result = yield* processRequestAccepted(state);
+            break;
+
+          case "work-planned":
+            result = yield* processWorkPlanned(state);
             break;
 
           case "thread-created":
@@ -349,7 +343,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
     const process = Effect.fn("NTBSProcessor.process")(function* (
       request: NTBS.Request,
-      t3Target: T3Target,
+      t3Target: NTBS.T3Target,
     ) {
       return yield* withExchangeLock(
         request.sourceUri,
@@ -357,7 +351,8 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
           /*
             1. Check whether an Exchange exists for this source URI.
             2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
-            3. If there isn't we get the t3 coordinates, save them and advance the exchange.
+            3. If there isn't we record the request as accepted and advance the exchange.
+            From the record on, a failure is the exchange's to keep, not the caller's: it is left for `run` to retry.
           */
 
           const existing = yield* repo
@@ -368,12 +363,8 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
             return;
           }
 
-          const coordinates = yield* t3
-            .planCoordinates(t3Target.projectId, t3Target.startBranchName)
-            .pipe(orFail("Failed to plan the T3 work"));
-          const claimed = NTBS.makeRequestClaimed(request, coordinates);
-          yield* persist(claimed);
-          yield* advanceExchange(claimed);
+          const accepted = yield* persist(NTBS.makeRequestAccepted(request, t3Target));
+          yield* advanceExchange(accepted).pipe(Effect.orDie);
         }),
       );
     });
@@ -391,14 +382,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     });
 
     const subscribeToThreadActivity = Stream.runForEach(t3.threadActivity, (threadId) =>
-      processThreadActivity(threadId).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to advance an exchange after T3 thread activity", {
-            threadId,
-            cause,
-          }),
-        ),
-      ),
+      processThreadActivity(threadId).pipe(Effect.orDie),
     );
 
     const resumeNonTerminalExchanges = repo.findNonTerminalExchanges.pipe(
@@ -406,24 +390,11 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       Effect.flatMap((exchanges) =>
         Effect.forEach(
           exchanges,
-          (exchange) =>
-            advanceSavedExchange(exchange.sourceUri).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Failed to recover an exchange", {
-                  sourceUri: exchange.sourceUri,
-                  threadId: exchange.t3.threadId,
-                  cause,
-                }),
-              ),
-            ),
+          (exchange) => advanceSavedExchange(exchange.sourceUri).pipe(Effect.orDie),
           { discard: true },
         ),
       ),
-      Effect.catch((cause) =>
-        Effect.logError("Failed to start exchange recovery", {
-          cause,
-        }),
-      ),
+      Effect.orDie,
     );
 
     /*

@@ -157,12 +157,12 @@ export interface T3Gateway {
    * A missing thread is a normal answer here, it is what triggers provisioning; only at ThreadCreated does the same observation become an anomaly.
    */
   readonly getThreadStatus: (
-    state: NTBS.RequestClaimed,
-  ) => Effect.Effect<NTBS.RequestClaimedContext, RetryableError>;
+    state: NTBS.WorkPlanned,
+  ) => Effect.Effect<NTBS.WorkPlannedContext, RetryableError>;
 
   /** Reentrant: worktree, thread creation and setup scripts, each skipped if already done. */
   readonly provisionThread: (
-    state: NTBS.RequestClaimed,
+    state: NTBS.WorkPlanned,
   ) => Effect.Effect<void, RetryableError | FatalError>;
 
   /** Reports turn progress, interpreting a finished turn into a `Reply`: the agent's verbatim response when it produced one, a synthesized failure or cancellation note otherwise.
@@ -478,8 +478,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     /* TODO: We doing a lot of work behind the scenes just to know whether the thread exists or is missing, this screams sql query or something not a snapshot query
      */
     const getThreadStatus = (
-      state: NTBS.RequestClaimed,
-    ): Effect.Effect<NTBS.RequestClaimedContext, RetryableError> =>
+      state: NTBS.WorkPlanned,
+    ): Effect.Effect<NTBS.WorkPlannedContext, RetryableError> =>
       projectionSnapshotQuery.getThreadShellById(state.t3.threadId).pipe(
         Effect.map((maybeThread) => ({
           thread: Option.isNone(maybeThread) ? ("missing" as const) : ("present" as const),
@@ -528,6 +528,14 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
             Note: Loading the whole thread detail is expensive. That is fine for the one-minute sweep, but this arm also runs on every activity ping between our turn-start and T3 marking the session as running, and any streaming thread in the system pings during that window. TODO: We should review and find cheaper strategies.
           */
+          // No turn ever adopted our message, so a failure here refers to the thread and message only.
+          const settledWithoutTurn: NTBS.FailureCause = {
+            type: "settled",
+            threadId: state.t3.threadId,
+            userMessageId: state.t3.userMessageId,
+            turnId: null,
+          };
+
           const maybeThread = yield* loadThreadDetail;
           if (Option.isNone(maybeThread)) {
             // The thread existed when we reached ThreadCreated, so it was deleted since.
@@ -537,7 +545,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               reply: {
                 type: "failure",
                 text: "T3's thread could no longer be found.",
-                cause: null,
+                cause: settledWithoutTurn,
               },
             } as const;
           }
@@ -553,7 +561,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               reply: {
                 type: "failure",
                 text: thread.session.lastError ?? "T3 failed while processing this request.",
-                cause: null,
+                cause: settledWithoutTurn,
               },
             } as const;
           }
@@ -561,9 +569,17 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           return { turn: "missing" } as const;
         }
 
-        if (turn.state === "pending" || turn.state === "running") {
+        // A row without a turn id is the pending-start placeholder; T3 assigns one when the provider adopts the turn.
+        if (turn.turnId === null || turn.state === "pending" || turn.state === "running") {
           return { turn: "active" } as const;
         }
+
+        // Every reply from here on came out of this turn.
+        const coordinates: NTBS.TurnCoordinates = {
+          threadId: state.t3.threadId,
+          userMessageId: state.t3.userMessageId,
+          turnId: turn.turnId,
+        };
 
         // Only a settled turn needs the thread detail: the reply text lives in its messages.
         const maybeThread = yield* loadThreadDetail;
@@ -575,7 +591,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             reply: {
               type: "failure",
               text: "T3 finished, but its thread could no longer be found.",
-              cause: null,
+              cause: { type: "settled", ...coordinates },
             },
           } as const;
         }
@@ -594,11 +610,11 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               turn: "completed",
               reply:
                 text.length > 0
-                  ? ({ type: "answer", text } as const)
+                  ? ({ type: "answer", text, ...coordinates } as const)
                   : ({
                       type: "failure",
                       text: "T3 completed without producing a response.",
-                      cause: null,
+                      cause: { type: "settled", ...coordinates },
                     } as const),
             } as const;
           }
@@ -609,7 +625,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               reply: {
                 type: "failure",
                 text: thread.session?.lastError ?? "T3 failed while processing this request.",
-                cause: null,
+                cause: { type: "settled", ...coordinates },
               },
             } as const;
 
@@ -619,7 +635,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               reply: {
                 type: "cancellation",
                 text: "T3 stopped processing this request.",
-                cause: null,
+                ...coordinates,
               },
             } as const;
         }
@@ -689,7 +705,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
      *
      */
     const provisionThread = (
-      state: NTBS.RequestClaimed,
+      state: NTBS.WorkPlanned,
     ): Effect.Effect<void, RetryableError | FatalError> =>
       Effect.gen(function* () {
         /*
