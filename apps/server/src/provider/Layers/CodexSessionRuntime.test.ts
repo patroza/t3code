@@ -508,6 +508,9 @@ describe("T3 browser developer instructions", () => {
       NodeAssert.match(instructions, /t3-code/);
       NodeAssert.match(instructions, /preview_status/);
       NodeAssert.match(instructions, /preview_open/);
+      NodeAssert.match(instructions, /ALL_TOOLS/);
+      NodeAssert.match(instructions, /mcp__t3_code__preview_/);
+      NodeAssert.match(instructions, /do not use MCP resource-listing tools/);
       NodeAssert.match(instructions, /Do not switch to global browser skills/);
     }
   });
