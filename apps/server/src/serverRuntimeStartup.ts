@@ -43,7 +43,6 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
-import { readProviderRestartRecoveryMarker } from "./provider/ProviderRestartRecovery.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import * as OrphanSessionRecovery from "./orchestration/Services/OrphanSessionRecovery.ts";
@@ -518,12 +517,6 @@ export const reconcileProviderSessions = Effect.gen(function* () {
     const continuationMarked =
       continuationTurnId !== null &&
       (session.activeTurnId === null || continuationTurnId === session.activeTurnId);
-    const restartRecoveryMarked =
-      Option.isSome(binding) &&
-      readProviderRestartRecoveryMarker(binding.value.runtimePayload) !== undefined;
-    if (restartRecoveryMarked) {
-      continue;
-    }
     const settleAsError = (lastError: string) =>
       Effect.gen(function* () {
         yield* Effect.gen(function* () {
