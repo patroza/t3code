@@ -42,6 +42,7 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import {
   makeProviderRestartRecoveryMarker,
+  readLiveShellRestartRecoveryCandidate,
   readPersistedProviderCwd,
   readPersistedProviderInteractionMode,
   readPersistedProviderModelSelection,
@@ -1793,7 +1794,14 @@ const make = Effect.gen(function* () {
         : projectedTurns.find((turn) => turn.turnId === candidate.interruptedProviderTurnId);
     const latestProjectedTurn = projectedTurns.findLast((turn) => turn.turnId !== null);
     const projectedRecoveryTurn = projectedCandidateTurn ?? latestProjectedTurn;
-    if (projectedRecoveryTurn?.state === "completed" || projectedRecoveryTurn?.state === "error") {
+    const shellStillLive =
+      thread.session?.status === "running" ||
+      thread.session?.status === "starting" ||
+      thread.session?.activeTurnId != null;
+    if (
+      (projectedRecoveryTurn?.state === "completed" || projectedRecoveryTurn?.state === "error") &&
+      !shellStillLive
+    ) {
       yield* providerSessionDirectory
         .upsert({
           threadId: binding.threadId,
@@ -2212,12 +2220,28 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.as([] as ReadonlyArray<ProviderRuntimeBindingWithMetadata>)),
       ),
     );
+    const shells = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider restart recovery failed to read live thread shells", {
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as({ threads: [] as const })),
+      ),
+    );
+    const liveShellByThreadId = new Map(
+      shells.threads.map((thread) => [String(thread.id), thread] as const),
+    );
     const recoveryCandidates = bindings.flatMap((binding) => {
-      const candidate = readProviderRestartRecoveryCandidate({
-        runtimePayload: binding.runtimePayload,
-        status: binding.status,
-        lastSeenAt: binding.lastSeenAt,
-      });
+      const candidate =
+        readProviderRestartRecoveryCandidate({
+          runtimePayload: binding.runtimePayload,
+          status: binding.status,
+          lastSeenAt: binding.lastSeenAt,
+        }) ??
+        readLiveShellRestartRecoveryCandidate({
+          sessionStatus: liveShellByThreadId.get(String(binding.threadId))?.session?.status,
+          activeTurnId: liveShellByThreadId.get(String(binding.threadId))?.session?.activeTurnId,
+          lastSeenAt: binding.lastSeenAt,
+        });
       return candidate === undefined ? [] : [{ binding, candidate }];
     });
     const pendingTurnStarts = yield* projectionTurnRepository.listPendingTurnStarts().pipe(

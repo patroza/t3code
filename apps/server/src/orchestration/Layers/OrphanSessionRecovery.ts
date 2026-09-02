@@ -21,6 +21,7 @@ import {
   type OrphanSessionRecoveryShape,
 } from "../Services/OrphanSessionRecovery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { readProviderRestartRecoveryMarker } from "../../provider/ProviderRestartRecovery.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 
@@ -227,10 +228,20 @@ const make = Effect.gen(function* () {
           .pipe(Effect.orElseSucceed(() => ({ threads: [] as const })));
         const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
         const threadIds = new Set<string>();
+        const recoveryMarkedThreadIds = new Set(
+          bindings.flatMap((binding) =>
+            readProviderRestartRecoveryMarker(binding.runtimePayload) === undefined
+              ? []
+              : [String(binding.threadId)],
+          ),
+        );
 
         let settledSessions = 0;
         let interruptedSessions = 0;
         for (const thread of snapshot.threads) {
+          if (recoveryMarkedThreadIds.has(String(thread.id))) {
+            continue;
+          }
           const claimsLive = isLiveClaimingSessionStatus(thread.session?.status);
           const processIsLive = claimsLive ? yield* hasLiveProcess(thread.id) : false;
           // Provider restart reconciliation runs before this audit and may
@@ -258,6 +269,9 @@ const make = Effect.gen(function* () {
 
         let settledRuntimes = 0;
         for (const binding of bindings) {
+          if (recoveryMarkedThreadIds.has(String(binding.threadId))) {
+            continue;
+          }
           const claimsLive = binding.status === "running" || binding.status === "starting";
           if (!claimsLive) {
             continue;

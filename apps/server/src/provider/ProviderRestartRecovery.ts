@@ -71,6 +71,29 @@ export function readProviderRestartRecoveryCandidate(input: {
   };
 }
 
+/**
+ * Grok (and other ACP adapters) map idle-between-prompts to session
+ * `ready`, which persistence stores as a running binding with no
+ * `activeTurnId`. The orchestration shell still claims the T3 turn.
+ * Recover from that live shell instead of orphan-settling.
+ */
+export function readLiveShellRestartRecoveryCandidate(input: {
+  readonly sessionStatus: string | undefined | null;
+  readonly activeTurnId: unknown;
+  readonly lastSeenAt: string;
+}): ProviderRestartRecoveryCandidate | undefined {
+  if (input.sessionStatus !== "starting" && input.sessionStatus !== "running") {
+    return undefined;
+  }
+  if (!isTurnId(input.activeTurnId)) return undefined;
+  return {
+    version: 1,
+    interruptedProviderTurnId: input.activeTurnId,
+    shutdownAt: IsoDateTime.make(input.lastSeenAt),
+    source: "legacy-active-turn",
+  };
+}
+
 export function readPersistedProviderCwd(runtimePayload: unknown): string | undefined {
   if (!isRecord(runtimePayload)) return undefined;
   const cwd = runtimePayload.cwd;
