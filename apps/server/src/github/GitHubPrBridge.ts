@@ -36,7 +36,7 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
-import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
+import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
 import {
   extractJiraIssueKeysFromText,
   ThreadWorkItemStore,
@@ -1080,7 +1080,7 @@ export const make = Effect.gen(function* () {
     const project = shell.projects.find((candidate) =>
       matchesGitHubRepository(candidate.repositoryIdentity, invocation.repository),
     );
-    const fallbackSelection = getAutoBootstrapDefaultModelSelection();
+    const fallbackSelection = getAutoBootstrapThreadModelSelection();
     const flags = parseProviderModelFlags(invocation.prompt);
     return resolveProviderModelSelection({
       providers: yield* providerRegistry.getProviders,

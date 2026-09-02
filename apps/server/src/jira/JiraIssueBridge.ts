@@ -34,7 +34,7 @@ import { buildIntegrationSourceRef } from "../identity/stampSource.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
+import { getAutoBootstrapThreadModelSelection } from "../serverRuntimeStartup.ts";
 import {
   ThreadWorkItemStore,
   type WorkItemLookupResult,
@@ -396,7 +396,7 @@ const make = Effect.gen(function* () {
         const title =
           invocation.issueSummary?.trim() || `${invocation.issueKey} · Jira` || invocation.issueKey;
         const modelSelection =
-          project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+          project.defaultModelSelection ?? getAutoBootstrapThreadModelSelection();
         const branchName = buildJiraAutoCreateBranchName(
           invocation.issueKey,
           (yield* crypto.randomUUIDv4).slice(0, 8),
