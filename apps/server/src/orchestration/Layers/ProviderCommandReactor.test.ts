@@ -15,6 +15,7 @@ import {
   ApprovalRequestId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  EnvironmentId,
   EventId,
   IdentityUsername,
   MessageId,
@@ -23,6 +24,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
@@ -50,7 +52,7 @@ import {
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import type { ProviderRuntimeBindingWithMetadata } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
-import { TextGeneration, type TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
+import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -80,6 +82,19 @@ const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+
+const assistantQuoteText = "Retain the reconnect backoff.";
+const assistantCitation = {
+  version: 1 as const,
+  environmentId: EnvironmentId.make("source-environment"),
+  threadId: ThreadId.make("source-thread"),
+  messageId: asMessageId("source-message"),
+  text: assistantQuoteText,
+  start: 0,
+  end: assistantQuoteText.length,
+  prefix: "",
+  suffix: "",
+};
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
@@ -325,7 +340,7 @@ describe("ProviderCommandReactor", () => {
         pr: null,
       }),
     );
-    const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>((_) =>
+    const generateBranchName = vi.fn<TextGeneration["Service"]["generateBranchName"]>((_) =>
       Effect.fail(
         new TextGenerationError({
           operation: "generateBranchName",
@@ -333,7 +348,7 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
-    const generateThreadTitle = vi.fn<TextGenerationShape["generateThreadTitle"]>((_) =>
+    const generateThreadTitle = vi.fn<TextGeneration["Service"]["generateThreadTitle"]>((_) =>
       Effect.fail(
         new TextGenerationError({
           operation: "generateThreadTitle",
@@ -452,6 +467,7 @@ describe("ProviderCommandReactor", () => {
           get streamDomainEvents() {
             return engine.streamDomainEvents;
           },
+          subscribeDomainEvents: engine.subscribeDomainEvents,
           latestSequence: engine.latestSequence,
         } satisfies OrchestrationEngineService["Service"];
       }),
@@ -1468,6 +1484,46 @@ describe("ProviderCommandReactor", () => {
       restartRecovery: expect.objectContaining({ version: 1 }),
     });
   });
+
+  effectIt.effect("retains a turn dispatched immediately after start until activation", () =>
+    Effect.gen(function* () {
+      const activation = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<ProviderSession>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          serverActivation: Deferred.await(activation),
+          startSessionEffect: (session) =>
+            Deferred.succeed(started, session).pipe(Effect.as(session)),
+        }),
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-activation"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: MessageId.make("message-before-activation"),
+          role: "user",
+          text: "Start after activation",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(yield* Deferred.isDone(started)).toBe(false);
+
+      yield* Deferred.succeed(activation, undefined);
+      const session = yield* Deferred.await(started);
+      yield* Effect.promise(() => harness.drain());
+      expect(session.threadId).toBe(ThreadId.make("thread-1"));
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId: ThreadId.make("thread-1"),
+        input: "Start after activation",
+      });
+    }),
+  );
+
   effectIt.effect("projects starting before a slow provider session finishes", () =>
     Effect.gen(function* () {
       const releaseStart = yield* Deferred.make<void>();
@@ -1724,7 +1780,13 @@ describe("ProviderCommandReactor", () => {
   it("pins the first user message when regeneration context is truncated", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
-    const firstUserMessage = `Review subagent monitoring risks. ${"Opening context. ".repeat(200)}`;
+    const quoteText = "界".repeat(1_000);
+    const citation = serializeAssistantCitation({
+      ...assistantCitation,
+      text: quoteText,
+      end: quoteText.length,
+    });
+    const firstUserMessage = `Review subagent monitoring risks. ${citation} ${"Opening context. ".repeat(200)}`;
     const recentUserMessage = `LATEST FINDING: ${"implementation detail ".repeat(320)}`;
     harness.generateThreadTitle.mockReturnValue(
       Effect.succeed({ title: "Review subagent monitoring risks" }),
@@ -1827,7 +1889,8 @@ describe("ProviderCommandReactor", () => {
       throw new Error("Expected a title generation input");
     }
     const message = input.message;
-    expect(message.startsWith("USER:\nReview subagent monitoring risks.")).toBe(true);
+    expect(message.startsWith(`USER:\nReview subagent monitoring risks. ${quoteText} `)).toBe(true);
+    expect(message).not.toContain("t3-citation://");
     expect(message).toContain("[First user message truncated]");
     expect(message).toContain("[Earlier content truncated]");
     expect(message).toContain("image.png");
@@ -1836,6 +1899,14 @@ describe("ProviderCommandReactor", () => {
       "opening-context-image",
       "recent-context-image",
     ]);
+    const readModel = await harness.readModel();
+    expect(
+      readModel.threads
+        .find((entry) => entry.id === ThreadId.make("thread-1"))
+        ?.messages.find(
+          (entry) => entry.id === asMessageId("user-message-before-long-title-regeneration"),
+        )?.text,
+    ).toBe(firstUserMessage);
   });
 
   it("clears title regeneration state left pending across reactor startup", async () => {
@@ -2339,13 +2410,14 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
     const seededTitle = "Fix reconnect spinner on resume";
+    const prompt = `[effort:high]\\n\\nFix reconnect spinner on resume ${serializeAssistantCitation(assistantCitation)}`;
     harness.generateThreadTitle.mockReturnValue(
       Effect.succeed({
         title: "Reconnect spinner resume bug",
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.meta.update",
         commandId: CommandId.make("cmd-thread-title-formatted-seed"),
@@ -2354,7 +2426,19 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    const titleUpdated = await harness.runEffect(
+      harness.engine.streamDomainEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.meta-updated" &&
+            event.payload.title === "Reconnect spinner resume bug",
+        ),
+        Stream.take(1),
+        Stream.toPull,
+        Scope.provide(scope!),
+      ),
+    );
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-title-formatted"),
@@ -2362,7 +2446,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title-formatted"),
           role: "user",
-          text: "[effort:high]\\n\\nFix reconnect spinner on resume",
+          text: prompt,
           attachments: [],
         },
         titleSeed: seededTitle,
@@ -2372,25 +2456,34 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
-    await waitFor(async () => {
-      const readModel = await harness.readModel();
-      return (
-        readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.title ===
-        "Reconnect spinner resume bug"
-      );
-    });
+    await harness.runEffect(titleUpdated);
+    await harness.drain();
 
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(
+      `[effort:high]\\n\\nFix reconnect spinner on resume ${assistantQuoteText}`,
+    );
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).not.toContain("t3-citation://");
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.title).toBe("Reconnect spinner resume bug");
+    expect(
+      thread?.messages.find((entry) => entry.id === asMessageId("user-message-title-formatted"))
+        ?.text,
+    ).toBe(prompt);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({ input: prompt });
   });
 
   it("generates a worktree branch name for the first turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
+    const prompt = `Add a safer reconnect backoff. ${serializeAssistantCitation(assistantCitation)}`;
+    const statusRefreshed = await harness.runEffect(Deferred.make<void>());
+    const refreshStatus = harness.refreshStatus.getMockImplementation()!;
+    harness.refreshStatus.mockImplementation((cwd) =>
+      refreshStatus(cwd).pipe(Effect.tap(() => Deferred.succeed(statusRefreshed, undefined))),
+    );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.meta.update",
         commandId: CommandId.make("cmd-thread-branch"),
@@ -2415,7 +2508,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-branch-model"),
@@ -2423,7 +2516,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-branch-model"),
           role: "user",
-          text: "Add a safer reconnect backoff.",
+          text: prompt,
           attachments: [],
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -2432,12 +2525,19 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
-    await waitFor(() => harness.refreshStatus.mock.calls.length === 1);
-    expect(harness.generateBranchName.mock.calls[0]?.[0]).toMatchObject({
-      message: "Add a safer reconnect backoff.",
-    });
+    await harness.runEffect(Deferred.await(statusRefreshed));
+    await harness.drain();
+    expect(harness.generateBranchName.mock.calls[0]?.[0].message).toBe(
+      `Add a safer reconnect backoff. ${assistantQuoteText}`,
+    );
+    expect(harness.generateBranchName.mock.calls[0]?.[0].message).not.toContain("t3-citation://");
     expect(harness.refreshStatus.mock.calls[0]?.[0]).toBe("/tmp/provider-project-worktree");
+    const readModel = await harness.readModel();
+    expect(
+      readModel.threads
+        .find((entry) => entry.id === ThreadId.make("thread-1"))
+        ?.messages.find((entry) => entry.id === asMessageId("user-message-branch-model"))?.text,
+    ).toBe(prompt);
   });
 
   it("recreates a missing worktree from the thread branch before starting a turn", async () => {

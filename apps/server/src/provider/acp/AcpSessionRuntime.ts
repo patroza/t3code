@@ -66,6 +66,8 @@ export interface AcpSessionEventStreamBarrier {
 export interface AcpSessionPromptOptions {
   /** Deliver the prompt while a turn is still running instead of queueing behind it. */
   readonly steer?: boolean;
+  /** Settles once `session/prompt` is registered as the active prompt. */
+  readonly dispatched?: Deferred.Deferred<void>;
 }
 
 export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStreamBarrier;
@@ -200,6 +202,16 @@ export class AcpSessionRuntime extends Context.Service<
      */
     readonly handleExtNotification: EffectAcpClient.AcpClient["Service"]["handleExtNotification"];
     /**
+     * Sends only `initialize` and returns the agent's response. Health probes use this to read
+     * advertised capabilities without authenticating or opening a session, so a probe can never
+     * start an interactive login or boot MCP servers.
+     * @see https://agentclientprotocol.com/protocol/schema#initialize
+     */
+    readonly initialize: () => Effect.Effect<
+      EffectAcpSchema.InitializeResponse,
+      EffectAcpErrors.AcpError
+    >;
+    /**
      * Initializes the ACP connection, authenticates, and loads, resumes, or creates the session.
      * Concurrent calls share the same in-flight startup and a failed startup may be retried.
      */
@@ -226,6 +238,9 @@ export class AcpSessionRuntime extends Context.Service<
      * before it reaches the agent. `steer: true` opts out of that wait so the
      * prompt is delivered while a turn is still running — only meaningful for
      * agents that accept mid-turn prompts (see `makeXAiPromptCompletionRuntime`).
+     * `options.dispatched` settles once the `session/prompt` RPC is registered as
+     * the active prompt, so a caller that forks this effect knows when a later
+     * `cancel` will target this prompt.
      * @see https://agentclientprotocol.com/protocol/schema#session/prompt
      */
     readonly prompt: (
@@ -599,18 +614,19 @@ export const make = (
         ),
       );
 
-    const startOnce = Effect.gen(function* () {
-      const initializePayload = {
-        protocolVersion: 1,
-        clientCapabilities: initializeClientCapabilities,
-        clientInfo: options.clientInfo,
-      } satisfies EffectAcpSchema.InitializeRequest;
+    const initializePayload = {
+      protocolVersion: 1,
+      clientCapabilities: initializeClientCapabilities,
+      clientInfo: options.clientInfo,
+    } satisfies EffectAcpSchema.InitializeRequest;
+    const sendInitialize = runLoggedRequest(
+      "initialize",
+      initializePayload,
+      acp.agent.initialize(initializePayload),
+    );
 
-      const initializeResult = yield* runLoggedRequest(
-        "initialize",
-        initializePayload,
-        acp.agent.initialize(initializePayload),
-      );
+    const startOnce = Effect.gen(function* () {
+      const initializeResult = yield* sendInitialize;
 
       const authenticatePayload = {
         methodId: options.authMethodId,
@@ -814,6 +830,7 @@ export const make = (
       handleUnknownExtNotification: acp.handleUnknownExtNotification,
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
+      initialize: () => sendInitialize,
       start: () => start,
       processExit: child.exitCode.pipe(
         Effect.map(Number),
@@ -867,6 +884,9 @@ export const make = (
             acp.agent.prompt(requestPayload),
           ).pipe(Effect.forkIn(runtimeScope));
           yield* Ref.update(activePromptFibersRef, (fibers) => [...fibers, promptRpcFiber]);
+          if (options?.dispatched) {
+            yield* Deferred.succeed(options.dispatched, undefined);
+          }
           return yield* Fiber.join(promptRpcFiber).pipe(
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
@@ -904,9 +924,9 @@ export const make = (
               (fiber) => Fiber.interrupt(fiber).pipe(Effect.ignore),
               { concurrency: "unbounded", discard: true },
             );
-            yield* acp.agent
-              .cancel({ sessionId: started.sessionId })
-              .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
+            // Await the notification write so a replacement session/prompt
+            // cannot race ahead of session/cancel on the wire.
+            yield* acp.agent.cancel({ sessionId: started.sessionId }).pipe(Effect.ignore);
           }),
         ),
       ),
