@@ -34,8 +34,9 @@ export function resolveDiscordFollowUpDelivery(
 /**
  * Whether a continue-mention should post/adopt a fresh `_Working.._` tip.
  *
- * This is the **only** path that relocates Working mid-turn. Stream/heartbeat
- * must not hop the live tip below human chat.
+ * Discord-originated relocate path (idle turn or `--steer`). Stream/heartbeat
+ * also hop Working below an echoed desktop/web/mobile/GitHub command. Casual
+ * thread chat must not hop the live tip.
  *
  * Parked mid-turn follow-ups must not post a new tip. Adopting a new Working
  * freezes the live tip and bumps the delivery epoch, so the in-flight answer is
