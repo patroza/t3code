@@ -87,6 +87,10 @@ const isolatedUnitTestFiles = [
   "src/components/ProjectFavicon.test.tsx",
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
+  // Mocks `~/lib/assistantTextSelection` and `../ui/toast`; under
+  // isolate:false those modules are already bound and citation Range/CSS
+  // highlight fixtures never attach.
+  "src/components/chat/AssistantCitationSource.test.ts",
   "src/components/chat/MessagesTimeline.test.tsx",
   // Mocks `../assets/assetUrls` while ChatMarkdown is already bound to the
   // real module under isolate:false — useAssetUrlState then sees
@@ -114,6 +118,9 @@ const isolatedUnitTestFiles = [
   // because it does not share registries; the fork does.
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
+  // Mocks `../ui/toast`; under isolate:false an earlier file binds the real
+  // toast manager and the release-link error toast is never recorded.
+  "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
   "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   "src/connection/storage.test.ts",
   "src/contextMenuFallback.test.ts",
