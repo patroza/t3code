@@ -53,9 +53,8 @@ export class VcsProcess extends Context.Service<
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
-/** Cap concurrent source-control CLI invocations (gh/glab/az) across all worktrees. */
-const SOURCE_CONTROL_CLI_CONCURRENCY = 4;
-const SOURCE_CONTROL_COMMANDS = new Set(["gh", "glab", "az"]);
+const VCS_PROCESS_CONCURRENCY = 8;
+const GITHUB_PROCESS_CONCURRENCY = 4;
 
 const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFailureKind => {
   const normalized = stderr.toLowerCase();
@@ -120,9 +119,10 @@ export function publicDiagnosticFromStderr(stderr: string): string | undefined {
 
 export const make = Effect.gen(function* () {
   const processRunner = yield* ProcessRunner.ProcessRunner;
-  const sourceControlCliSemaphore = yield* Semaphore.make(SOURCE_CONTROL_CLI_CONCURRENCY);
+  const vcsProcesses = yield* Semaphore.make(VCS_PROCESS_CONCURRENCY);
+  const githubProcesses = yield* Semaphore.make(GITHUB_PROCESS_CONCURRENCY);
 
-  const run = Effect.fn("VcsProcess.run")(function* (input: VcsProcessInput) {
+  const runUnbounded = Effect.fn("VcsProcess.runUnbounded")(function* (input: VcsProcessInput) {
     const baseError = {
       operation: input.operation,
       command: input.command,
@@ -174,9 +174,7 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-    const result = yield* SOURCE_CONTROL_COMMANDS.has(input.command)
-      ? sourceControlCliSemaphore.withPermits(1)(runProcess)
-      : runProcess;
+    const result = yield* runProcess;
 
     if (result.code === null) {
       return yield* new VcsProcessMissingExitCodeError(baseError);
@@ -204,6 +202,11 @@ export const make = Effect.gen(function* () {
       stdoutInvalidUtf8: result.stdoutInvalidUtf8 ?? false,
       stderrInvalidUtf8: result.stderrInvalidUtf8 ?? false,
     } satisfies VcsProcessOutput;
+  });
+
+  const run = Effect.fn("VcsProcess.run")(function* (input: VcsProcessInput) {
+    const bounded = vcsProcesses.withPermits(1)(runUnbounded(input));
+    return yield* input.command === "gh" ? githubProcesses.withPermits(1)(bounded) : bounded;
   });
 
   return VcsProcess.of({ run });

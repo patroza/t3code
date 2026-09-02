@@ -24,6 +24,8 @@ const clientSettings: ClientSettings = {
   confirmThreadDelete: false,
   confirmWorktreeRemoval: true,
   confirmThreadUnpin: false,
+  continueThreadsAfterServerUpdate: true,
+  contextWindowMeterEnabled: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
   environmentIdentificationMode: "artwork",
