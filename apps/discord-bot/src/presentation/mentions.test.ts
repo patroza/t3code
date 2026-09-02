@@ -152,6 +152,8 @@ describe("shouldPostWorkingAckForContinue", () => {
   });
 
   it("posts Working for a mid-turn steer and for idle continues", () => {
+    // Only these cases relocate the in-progress message (new Working ack under
+    // the command). Queued follow-ups and human chat leave the live tip in place.
     expect(
       shouldPostWorkingAckForContinue({
         turnAlreadyRunning: true,

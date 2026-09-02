@@ -34,10 +34,14 @@ export function resolveDiscordFollowUpDelivery(
 /**
  * Whether a continue-mention should post/adopt a fresh `_Working.._` tip.
  *
- * Parked mid-turn follow-ups must not. Adopting a new Working freezes the live
- * tip and bumps the delivery epoch, so the in-flight answer is never posted
- * (queued follow-up final lands; prior final is stuck as frozen progress).
- * `--steer` still posts a new tip under the new mention.
+ * This is the **only** path that relocates Working mid-turn. Stream/heartbeat
+ * must not hop the live tip below human chat.
+ *
+ * Parked mid-turn follow-ups must not post a new tip. Adopting a new Working
+ * freezes the live tip and bumps the delivery epoch, so the in-flight answer is
+ * never posted (queued follow-up final lands; prior final is stuck as frozen
+ * progress). `--steer` / `/agent steer` still posts a new tip under the new
+ * mention. `/agent steernow` injects the queue without a new tip.
  */
 export function shouldPostWorkingAckForContinue(input: {
   readonly presentationMode?: "full" | "final-only" | undefined;
