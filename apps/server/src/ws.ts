@@ -1325,9 +1325,9 @@ const makeWsRpcLayer = (
               } else if (
                 prepareWorktree.startFromOrigin === true &&
                 // "Start from origin" is a stored default; repos without an
-                // origin remote fall back to the local base branch instead of
-                // failing the whole bootstrap on `git fetch origin`. Checked
-                // lazily so the reuse path never touches the remote.
+                // origin remote, or without the requested remote branch, fall
+                // back to the local base branch instead of failing bootstrap.
+                // Checked lazily so the reuse path never touches the remote.
                 (yield* gitWorkflow.remoteExists({
                   cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
@@ -1337,12 +1337,19 @@ const makeWsRpcLayer = (
                   cwd: prepareWorktree.projectCwd,
                   remoteName: "origin",
                 });
-                const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
                   cwd: prepareWorktree.projectCwd,
                   refName: prepareWorktree.baseBranch,
-                  fallbackRemoteName: "origin",
+                  remoteName: "origin",
                 });
-                worktreeBaseRef = resolvedRemoteBase.commitSha;
+                if (remoteBaseExists) {
+                  const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                    cwd: prepareWorktree.projectCwd,
+                    refName: prepareWorktree.baseBranch,
+                    fallbackRemoteName: "origin",
+                  });
+                  worktreeBaseRef = resolvedRemoteBase.commitSha;
+                }
               }
               const worktree = yield* gitWorkflow.createWorktree({
                 cwd: prepareWorktree.projectCwd,
