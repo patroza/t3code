@@ -112,9 +112,14 @@ The most common defect in this repo is a change that works on the path you teste
 - **Connection modes.** Local, remote/relay, and tunnel behave differently. Multi-device and multi-environment cases are real.
 - **Docs.** `docs/` splits by audience. Behavior changes that a user would notice belong in `docs/user/` (shipped-product voice, no repo tooling or source paths); architecture and contributor changes in `docs/internals/`; runbooks in `docs/operations/`; new vocabulary in `docs/internals/glossary.md`.
 
-## Pull requests (required handoff)
+## Pull requests (when publishing)
 
-When implementation work for a user request is done (code, docs, config — not pure Q&A):
+Do not commit, rebase, push, or open/update a PR merely because an edit is complete. Do those
+things only when the user explicitly requests publication or the specific version-control action,
+or when another workflow in this file explicitly requires it (for example, Discord-originated
+work). A request to change code, docs, or config does not by itself authorize publication.
+
+When publication or a PR handoff is in scope:
 
 1. **Commit** the changes on a feature branch cut from `fork/dev`.
 2. **Open or update a PR against `fork/dev`** before handing off. Never target `main`.

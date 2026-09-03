@@ -1,0 +1,124 @@
+# NTBS event processing
+
+**Status:** exploratory planning
+
+This document defines how events arriving from non-turn-based surfaces are classified and converted into T3 work. It focuses on which events start new T3 threads, which events are ignored, and how independently started threads are correlated with their external events and responses.
+
+T3 clients are built around T3 data views (projections): threads, diffs, and projects.
+
+External NTBSs like Jira, Discord, or GitHub know nothing about that: they have only limited capabilities for sending and receiving messages.
+
+The UX on these platforms has to be thoroughly scoped, and adapters to these platforms have to be extended to retain the information needed to connect T3 events to Jira, Discord, GitHub, or Teams events.
+
+## Inbound event processing
+
+### Core rule
+
+An external event starts a new T3 thread when the adapter recognizes it as one of the trigger forms defined below. Each triggering event creates a new T3 thread. NTBS does not explicitly target, continue, steer, or modify an existing T3 thread.
+
+The event is captured together with the source snapshot used to construct the first user message. The adapter must distinguish a source event from delivery attempts. Retrying or redelivering the same source event must not create another T3 thread.
+
+### Adapter storage
+
+For each inbound event, the adapter retains:
+
+- the source event ID and version, to avoid handling the same event twice;
+- the source context and message or comment IDs, so it knows where the event came from;
+- the captured source snapshot;
+- the T3 thread, user-message, and turn IDs created from the event.
+
+### Platform triggers
+
+The following source interactions start a new thread:
+
+#### Jira
+
+- A top-level comment mentioning the agent.
+- A reply mentioning the agent.
+- A comment edit that adds the agent mention to a comment that previously did not invoke the agent.
+- An edit to a comment that already invoked the agent does not trigger a new thread merely because its content changed. A new turn requires a new explicit invocation under the edited comment.
+
+#### GitHub
+
+- An issue or pull request comment mentioning the agent.
+- A pull-request review comment or reply mentioning the agent.
+- A comment edit that adds the agent mention to a comment that previously did not invoke the agent.
+- An edit to a comment that already invoked the agent does not trigger a new thread merely because its content changed. A new turn requires a new explicit invocation under the edited comment.
+
+#### Discord
+
+- A human message mentioning the configured agent user.
+- A human reply to an agent-authored message.
+- A message edit that adds the configured agent mention to a message that previously did not invoke the agent.
+- Editing a message that already invoked the agent does not start another thread merely because its content changed; a new turn requires a new explicit invocation.
+
+### Processing a trigger
+
+When a source interaction matches one of the triggers above, the adapter deduplicates the source event and captures the source snapshot used for the new thread. TODO: define the source event identity and idempotency rules, including late and out-of-order deliveries.
+
+T3 then starts a new thread from that event and snapshot. A thread already running for the same external interaction does not delay, absorb, continue, or modify the new thread.
+
+### Events that do not trigger work
+
+- Edits to a comment that already invoked the agent, including edits that change its content, unless the edited comment contains a new explicit invocation.
+- Duplicate or already-accepted deliveries do not create another thread. TODO: define the stable event identity and idempotency rules, including late and out-of-order deliveries.
+
+Events that do not match one of the triggers above are ignored. Whether adapters retain them for deduplication, audit, or external-state projection is a separate concern.
+
+### Concurrent turns
+
+Multiple events from the same external interaction may create T3 threads at the same time. Each thread produces an answer for its own triggering event and sends that answer to the exact response destination associated with that event. Threads may finish in any order; completion order does not change where their answers are sent.
+
+### Consequences
+
+- Each event has isolated T3 context; a thread does not inherit the conversation history of another event.
+- Each response must retain the exact destination associated with its triggering event.
+- Capturing the source snapshot supports reproducibility, but may increase input size, latency, and model cost.
+- High-volume external interactions may create many T3 threads and increase storage and discovery noise.
+
+### Summary
+
+- An invocation creates an independent T3 thread; it does not target or continue an existing thread.
+- Multiple events from the same external interaction may create concurrent threads.
+- Each thread produces its own answer, routed to the exact response destination associated with its originating event.
+- Duplicate or already-accepted deliveries do not create another thread. TODO: define stable event identity and idempotency rules.
+
+## Outbound response processing
+
+Outbound processing adds the acknowledgement and final-outcome message IDs, together with whether each message was posted.
+
+### Agreed decisions
+
+Only the acknowledgement and the final answer, failure, timeout, or cancellation are rendered on the external platform. All other T3 events remain internal.
+
+Each inbound event creates an immediate outbound acknowledgement. When its T3 thread ends, the adapter sends the final answer, failure, timeout, or cancellation as a new message after that acknowledgement, in the platform's native conversation scope.
+
+#### Response format
+
+Acknowledgements and final messages are text. Adapters use the platform's Markdown-like formatting, including fenced code snippets when useful.
+
+T3 does not use interactive controls, permission requests, or multiple-choice prompts on external platforms. Any question is written as ordinary text.
+
+#### Delivery failures
+
+The adapter posts the result or error as the final message. If delivery fails for a recoverable reason, it retries; otherwise the original working message remains without a follow-up, and the user may start a new request.
+
+#### Message identifiers and placement
+
+Each adapter defines how these identifiers and message relationships map to its platform:
+
+##### Jira
+
+The adapter retains the issue ID or key, invoking comment ID, root comment ID, acknowledgement comment ID, and outcome comment ID. It posts the acknowledgement and outcome as separate replies to the same root comment.
+
+##### GitHub
+
+The adapter retains the repository, pull-request number, invoking comment ID, root review-comment ID when the invocation is in a review thread, acknowledgement message ID, and outcome message ID. In a review thread, the acknowledgement and outcome both reply to the root review comment. For ordinary issue or pull-request comments, they are separate timeline comments on the pull request.
+
+##### Discord
+
+The adapter retains the thread or channel ID, invoking message ID, acknowledgement message ID, and outcome message ID. The acknowledgement replies to the invoking message, and the outcome replies to the acknowledgement.
+
+##### Teams
+
+The adapter retains the team and channel or chat ID, root conversation-message ID, invoking message ID, acknowledgement message ID, and outcome message ID. The acknowledgement and outcome are separate replies in the same root conversation.
