@@ -2,9 +2,10 @@
 
 The exchange model, ports, processor, and T3 gateway are implemented under `apps/server/src/ntbs/`. This file tracks only what is still open. Findings referenced by id are in `review-01-09.md`.
 
-## Bound every retry (H1, M2, M3)
+## Bound every retry (M2, M3)
 
-- [ ] Add `claimedAt`/`updatedAt` and an attempt counter to `ExchangeBase`; per-state deadlines in the decider; exponential backoff in the sweeper.
+Per-state deadlines are implemented: every non-terminal state expires after its deadline. Backoff was left out on purpose.
+
 - [ ] `provisionThread`: T3 invariant rejection while the thread is absent is `FatalError`, mirroring `startTurn`.
 - [ ] `getTurnStatus`: when no turn row carries our `userMessageId` but the session settled in `error`, answer `completed` with a failure reply from `session.lastError`.
 

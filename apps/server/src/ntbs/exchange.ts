@@ -1,4 +1,5 @@
 import type { ChatAttachment, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { Duration } from "effect";
 
 /*
 This file defines the durable state and pure business rules for an exchange:
@@ -106,6 +107,14 @@ export type FailureCause =
       readonly threadId: ThreadId;
       readonly userMessageId: MessageId;
       readonly turnId: TurnId | null;
+    }
+  /** The state outlived its deadline and its action was given up. `state` is reduced like in `rejected`. */
+  | {
+      readonly type: "expired";
+      readonly state:
+        | Pick<RequestAccepted, "tag">
+        | Pick<WorkPlanned, "tag" | "t3">
+        | Pick<ThreadCreated, "tag" | "t3">;
     };
 
 export type ReplyAnswer = TurnCoordinates & {
@@ -138,6 +147,13 @@ export type UndeliverableCause = {
  */
 export type ExchangeBase = Request & {
   readonly target: T3Target;
+  /** Epoch millis of when the request was recorded, which is when it was accepted. */
+  readonly createdAt: number;
+  /**
+   * Epoch millis of the last transition.
+   * The processor never rewrites a state in place, so this is when the current state began.
+   */
+  readonly updatedAt: number;
 };
 
 /**
@@ -250,12 +266,28 @@ export const isUpdateOf = (next: Exchange, previous: Exchange): boolean =>
   next.sourceUri === previous.sourceUri &&
   (next.tag === previous.tag || successors[previous.tag].includes(next.tag));
 
+/**
+ * How long an exchange may stay in each non-terminal state, in millis, before its action is given up.
+ * First guesses: planning and provisioning fail on git and the filesystem, a turn on the agent, delivery on the platform.
+ */
+const deadlines: { readonly [Tag in NonTerminalExchange["tag"]]: number } = {
+  "request-accepted": Duration.toMillis(Duration.minutes(5)),
+  "work-planned": Duration.toMillis(Duration.minutes(15)),
+  "thread-created": Duration.toMillis(Duration.hours(1)),
+  "reply-pending": Duration.toMillis(Duration.hours(1)),
+};
+
+/** Whether the current state is older than its deadline. */
+export const isExpired = (state: NonTerminalExchange, now: number): boolean =>
+  now - state.updatedAt > deadlines[state.tag];
+
 const getFailureThreadId = (cause: FailureCause): ThreadId | null => {
   switch (cause.type) {
     case "settled":
       return cause.threadId;
 
     case "rejected":
+    case "expired":
       return "t3" in cause.state ? cause.state.t3.threadId : null;
   }
 };
@@ -290,9 +322,15 @@ export const getThreadId = (exchange: Exchange): ThreadId | null => {
   }
 };
 
-export const makeRequestAccepted = (request: Request, target: T3Target): RequestAccepted => ({
+export const makeRequestAccepted = (
+  request: Request,
+  target: T3Target,
+  now: number,
+): RequestAccepted => ({
   ...request,
   target,
+  createdAt: now,
+  updatedAt: now,
   tag: "request-accepted",
 });
 
@@ -314,7 +352,8 @@ The reconciliation flow is:
 4. execute decision                            effect
 5. construct the transition from its result    pure, then persist as an effect
 
-RequestAccepted has no decider: planning creates nothing in T3, so there is nothing to observe before doing it. Its only step is the planning action itself.
+Every decider also receives the current time. When the observation shows the state's action is still needed and the state is past its deadline, the decision is to expire instead. An observation that completes the state wins over expiry, so a late result is still recorded.
+RequestAccepted observes nothing but the clock: planning creates nothing in T3, so there is nothing else to check before doing it.
 */
 
 export type WorkPlannedContext = { readonly thread: "missing" } | { readonly thread: "present" };
@@ -336,32 +375,46 @@ export type ReplyPendingContext =
     };
 
 // Picks the base fields so states that must not carry `t3` do not inherit it at runtime.
-const baseOf = ({ sourceUri, snapshot, attachments, target }: ExchangeBase): ExchangeBase => ({
+const baseOf = ({
   sourceUri,
   snapshot,
   attachments,
   target,
+  createdAt,
+  updatedAt,
+}: ExchangeBase): ExchangeBase => ({
+  sourceUri,
+  snapshot,
+  attachments,
+  target,
+  createdAt,
+  updatedAt,
 });
 
 export const toWorkPlanned = (
   state: RequestAccepted,
   coordinates: WorkCoordinates,
+  now: number,
 ): WorkPlanned => ({
   ...state,
+  updatedAt: now,
   tag: "work-planned",
   t3: coordinates,
 });
 
-export const toThreadCreated = (state: WorkPlanned): ThreadCreated => ({
+export const toThreadCreated = (state: WorkPlanned, now: number): ThreadCreated => ({
   ...state,
+  updatedAt: now,
   tag: "thread-created",
 });
 
 export const toReplyPending = (
   state: RequestAccepted | WorkPlanned | ThreadCreated,
   reply: Reply,
+  now: number,
 ): ReplyPending => ({
   ...baseOf(state),
+  updatedAt: now,
   tag: "reply-pending",
   reply,
 });
@@ -378,33 +431,70 @@ export type Rejection = {
 export const toRejected = (
   state: RequestAccepted | WorkPlanned | ThreadCreated,
   rejection: Rejection,
+  now: number,
 ): ReplyPending =>
-  toReplyPending(state, {
-    type: "failure",
-    text: rejection.reason,
-    cause: {
-      type: "rejected",
-      method: rejection.method,
-      state:
-        state.tag === "request-accepted" ? { tag: state.tag } : { tag: state.tag, t3: state.t3 },
+  toReplyPending(
+    state,
+    {
+      type: "failure",
+      text: rejection.reason,
+      cause: {
+        type: "rejected",
+        method: rejection.method,
+        state:
+          state.tag === "request-accepted" ? { tag: state.tag } : { tag: state.tag, t3: state.t3 },
+      },
     },
-  });
+    now,
+  );
 
-export const toReplyPosted = (state: ReplyPending, replySourceUri: string): ReplyPosted => ({
+/** The state outlived its deadline; the reply tells the user we gave up and the cause records where. */
+export const toExpired = (
+  state: RequestAccepted | WorkPlanned | ThreadCreated,
+  now: number,
+): ReplyPending =>
+  toReplyPending(
+    state,
+    {
+      type: "failure",
+      text: "T3 did not answer in time.",
+      cause: {
+        type: "expired",
+        state:
+          state.tag === "request-accepted" ? { tag: state.tag } : { tag: state.tag, t3: state.t3 },
+      },
+    },
+    now,
+  );
+
+export const toReplyPosted = (
+  state: ReplyPending,
+  replySourceUri: string,
+  now: number,
+): ReplyPosted => ({
   ...state,
+  updatedAt: now,
   tag: "reply-posted",
   replySourceUri,
 });
 
-export const toUndeliverable = (state: ReplyPending, cause: UndeliverableCause): Undeliverable => ({
+export const toUndeliverable = (
+  state: ReplyPending,
+  cause: UndeliverableCause,
+  now: number,
+): Undeliverable => ({
   ...state,
+  updatedAt: now,
   tag: "undeliverable",
   cause,
 });
 
+export type RequestAcceptedDecision = { readonly type: "plan" } | { readonly type: "expire" };
+
 export type WorkPlannedDecision =
   | { readonly type: "provision-thread" }
-  | { readonly type: "record-thread-created" };
+  | { readonly type: "record-thread-created" }
+  | { readonly type: "expire" };
 
 export type ThreadCreatedDecision =
   | { readonly type: "start-turn" }
@@ -412,31 +502,45 @@ export type ThreadCreatedDecision =
   | {
       readonly type: "record-reply-pending";
       readonly reply: Reply;
-    };
+    }
+  | { readonly type: "expire" };
 
 export type ReplyPendingDecision =
   | { readonly type: "post-reply" }
   | {
       readonly type: "record-reply-posted";
       readonly replySourceUri: string;
-    };
+    }
+  | { readonly type: "expire" };
+
+export const fromRequestAccepted = (state: RequestAccepted, now: number): RequestAcceptedDecision =>
+  isExpired(state, now) ? { type: "expire" } : { type: "plan" };
 
 export const fromWorkPlanned = (
-  _state: WorkPlanned,
+  state: WorkPlanned,
   context: WorkPlannedContext,
-): WorkPlannedDecision =>
-  context.thread === "missing" ? { type: "provision-thread" } : { type: "record-thread-created" };
+  now: number,
+): WorkPlannedDecision => {
+  switch (context.thread) {
+    case "missing":
+      return isExpired(state, now) ? { type: "expire" } : { type: "provision-thread" };
+
+    case "present":
+      return { type: "record-thread-created" };
+  }
+};
 
 export const fromThreadCreated = (
-  _state: ThreadCreated,
+  state: ThreadCreated,
   context: ThreadCreatedContext,
+  now: number,
 ): ThreadCreatedDecision => {
   switch (context.turn) {
     case "missing":
-      return { type: "start-turn" };
+      return isExpired(state, now) ? { type: "expire" } : { type: "start-turn" };
 
     case "active":
-      return { type: "wait" };
+      return isExpired(state, now) ? { type: "expire" } : { type: "wait" };
 
     case "completed":
       return {
@@ -447,12 +551,13 @@ export const fromThreadCreated = (
 };
 
 export const fromReplyPending = (
-  _state: ReplyPending,
+  state: ReplyPending,
   context: ReplyPendingContext,
+  now: number,
 ): ReplyPendingDecision => {
   switch (context.platformReply) {
     case "missing":
-      return { type: "post-reply" };
+      return isExpired(state, now) ? { type: "expire" } : { type: "post-reply" };
 
     case "posted":
       return {

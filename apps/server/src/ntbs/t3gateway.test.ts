@@ -600,6 +600,8 @@ const createT3Gateway = (input?: {
   };
 };
 
+const now = 1_700_000_000_000;
+
 describe("T3Gateway", () => {
   describe("planCoordinates", () => {
     /*
@@ -949,8 +951,10 @@ describe("T3Gateway", () => {
                 sourceUri: "test://happy-cases-missing-thread-1",
               },
               { projectId, startBranchName: "main" },
+              now,
             ),
             coordinates,
+            now,
           );
 
           const result = yield* t3Gateway.getThreadStatus(state);
@@ -980,8 +984,10 @@ describe("T3Gateway", () => {
                 sourceUri: "test://happy-cases-missing-thread-1",
               },
               { projectId, startBranchName: "main" },
+              now,
             ),
             coordinates,
+            now,
           );
 
           const result = yield* t3Gateway.getThreadStatus(state);
@@ -1015,8 +1021,10 @@ describe("T3Gateway", () => {
                 sourceUri: "test://happy-cases-missing-thread-1",
               },
               { projectId, startBranchName: "main" },
+              now,
             ),
             coordinates,
+            now,
           );
 
           const result = yield* t3Gateway.getThreadStatus(state).pipe(Effect.flip);
@@ -1086,7 +1094,7 @@ describe("T3Gateway", () => {
       startBranchName: coordinates.startBranchName,
     };
 
-    const workPlanned = toWorkPlanned(makeRequestAccepted(request, target), coordinates);
+    const workPlanned = toWorkPlanned(makeRequestAccepted(request, target, now), coordinates, now);
 
     describe("happy case", () => {
       /*
@@ -1406,6 +1414,7 @@ describe("T3Gateway", () => {
             sourceUri: "test://get-turn-status",
           },
           { projectId: ProjectId.make("projectId"), startBranchName: "startBranchName" },
+          now,
         ),
         {
           projectId: ProjectId.make("projectId"),
@@ -1415,7 +1424,9 @@ describe("T3Gateway", () => {
           userMessageId: MessageId.make("userMessageId"),
           worktreeBranchName: "worktreeBranchName",
         },
+        now,
       ),
+      now,
     );
 
     /** The coordinates every reply out of our turn carries. */
@@ -1933,6 +1944,7 @@ describe("T3Gateway", () => {
             sourceUri: "test://start-turn",
           },
           { projectId: ProjectId.make("projectId"), startBranchName: "startBranchName" },
+          now,
         ),
         {
           projectId: ProjectId.make("projectId"),
@@ -1942,7 +1954,9 @@ describe("T3Gateway", () => {
           userMessageId: MessageId.make("userMessageId"),
           worktreeBranchName: "worktreeBranchName",
         },
+        now,
       ),
+      now,
     );
 
     /*
