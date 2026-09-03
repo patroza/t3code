@@ -1,11 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Duration } from "effect";
 import {
   fromReplyPending,
+  fromRequestAccepted,
   fromThreadCreated,
   fromWorkPlanned,
   getThreadId,
+  isExpired,
   isUpdateOf,
   makeRequestAccepted,
+  toExpired,
   toRejected,
   toReplyPending,
   toReplyPosted,
@@ -14,6 +18,7 @@ import {
   toWorkPlanned,
   type Exchange,
   type ExchangeBase,
+  type NonTerminalExchange,
   type ReplyPosted,
   type Request,
   type RequestAccepted,
@@ -50,13 +55,17 @@ const turn = {
   turnId: TurnId.make("turnId"),
 } satisfies TurnCoordinates;
 
-const exchangeBase = { ...request, target } satisfies ExchangeBase;
+const now = 1_700_000_000_000;
+// Past every state's deadline.
+const later = now + Duration.toMillis(Duration.hours(2));
+
+const exchangeBase = { ...request, target, createdAt: now, updatedAt: now } satisfies ExchangeBase;
 
 const rejection = { reason: "T3 said no", method: "someT3Call" };
 
-const accepted = makeRequestAccepted(request, target);
-const planned = toWorkPlanned(accepted, coordinates);
-const threadCreated = toThreadCreated(planned);
+const accepted = makeRequestAccepted(request, target, now);
+const planned = toWorkPlanned(accepted, coordinates, now);
+const threadCreated = toThreadCreated(planned, now);
 const answer = { type: "answer", text: "The turn's final answer", ...turn } as const;
 
 describe("RequestAccepted", () => {
@@ -68,8 +77,24 @@ describe("RequestAccepted", () => {
     expect(planned).toEqual({ ...exchangeBase, tag: "work-planned", t3: coordinates });
   });
 
+  it("a transition stamps updatedAt and keeps createdAt", () => {
+    expect(toWorkPlanned(accepted, coordinates, later)).toEqual({
+      ...exchangeBase,
+      updatedAt: later,
+      tag: "work-planned",
+      t3: coordinates,
+    });
+  });
+
+  it.each([
+    [now, { type: "plan" }],
+    [later, { type: "expire" }],
+  ] as const)("decides at %d -> %j", (at, expected) => {
+    expect(fromRequestAccepted(accepted, at)).toEqual(expected);
+  });
+
   it("a planning rejection becomes a failure reply with no T3 context", () => {
-    expect(toRejected(accepted, rejection)).toEqual({
+    expect(toRejected(accepted, rejection, now)).toEqual({
       ...exchangeBase,
       tag: "reply-pending",
       reply: {
@@ -79,16 +104,30 @@ describe("RequestAccepted", () => {
       },
     });
   });
+
+  it("expiry becomes a failure reply with no T3 context", () => {
+    expect(toExpired(accepted, later)).toEqual({
+      ...exchangeBase,
+      updatedAt: later,
+      tag: "reply-pending",
+      reply: {
+        type: "failure",
+        text: "T3 did not answer in time.",
+        cause: { type: "expired", state: { tag: "request-accepted" } },
+      },
+    });
+  });
 });
 
 describe("WorkPlanned", () => {
-  // if thread is missing we provision the thread
-  // if its present we record it's been created
+  // missing thread -> provision it, unless expired; present thread -> record it, even when expired
   it.each([
-    [{ thread: "missing" }, { type: "provision-thread" }],
-    [{ thread: "present" }, { type: "record-thread-created" }],
-  ] as const)("decides %j -> %j", (context, expected) => {
-    expect(fromWorkPlanned(planned, context)).toEqual(expected);
+    [{ thread: "missing" }, now, { type: "provision-thread" }],
+    [{ thread: "present" }, now, { type: "record-thread-created" }],
+    [{ thread: "missing" }, later, { type: "expire" }],
+    [{ thread: "present" }, later, { type: "record-thread-created" }],
+  ] as const)("decides %j at %d -> %j", (context, at, expected) => {
+    expect(fromWorkPlanned(planned, context, at)).toEqual(expected);
   });
 
   it("toThreadCreated retags and carries the coordinates forward", () => {
@@ -96,7 +135,7 @@ describe("WorkPlanned", () => {
   });
 
   it("a provisioning rejection keeps the planned coordinates inside the reply only", () => {
-    expect(toRejected(planned, rejection)).toEqual({
+    expect(toRejected(planned, rejection, now)).toEqual({
       ...exchangeBase,
       tag: "reply-pending",
       reply: {
@@ -110,23 +149,31 @@ describe("WorkPlanned", () => {
       },
     });
   });
+
+  it("expiry keeps the planned coordinates inside the reply only", () => {
+    expect(toExpired(planned, later).reply).toEqual({
+      type: "failure",
+      text: "T3 did not answer in time.",
+      cause: { type: "expired", state: { tag: "work-planned", t3: coordinates } },
+    });
+  });
 });
 
 describe("ThreadCreated", () => {
-  // missing turn -> start it; active turn -> wait; completed turn -> record its reply
+  // missing turn -> start it; active turn -> wait; both expire; completed turn -> record its reply, even when expired
   it.each([
-    [{ turn: "missing" }, { type: "start-turn" }],
-    [{ turn: "active" }, { type: "wait" }],
-    [
-      { turn: "completed", reply: answer },
-      { type: "record-reply-pending", reply: answer },
-    ],
-  ] as const)("decides %j -> %j", (context, expected) => {
-    expect(fromThreadCreated(threadCreated, context)).toEqual(expected);
+    [{ turn: "missing" }, now, { type: "start-turn" }],
+    [{ turn: "active" }, now, { type: "wait" }],
+    [{ turn: "completed", reply: answer }, now, { type: "record-reply-pending", reply: answer }],
+    [{ turn: "missing" }, later, { type: "expire" }],
+    [{ turn: "active" }, later, { type: "expire" }],
+    [{ turn: "completed", reply: answer }, later, { type: "record-reply-pending", reply: answer }],
+  ] as const)("decides %j at %d -> %j", (context, at, expected) => {
+    expect(fromThreadCreated(threadCreated, context, at)).toEqual(expected);
   });
 
   it("completed turn's reply lands in ReplyPending verbatim and drops the coordinates", () => {
-    expect(toReplyPending(threadCreated, answer)).toEqual({
+    expect(toReplyPending(threadCreated, answer, now)).toEqual({
       ...exchangeBase,
       tag: "reply-pending",
       reply: answer,
@@ -134,7 +181,7 @@ describe("ThreadCreated", () => {
   });
 
   it("a turn-start rejection keeps the coordinates inside the reply only", () => {
-    expect(toRejected(threadCreated, rejection).reply).toEqual({
+    expect(toRejected(threadCreated, rejection, now).reply).toEqual({
       type: "failure",
       text: rejection.reason,
       cause: {
@@ -144,24 +191,39 @@ describe("ThreadCreated", () => {
       },
     });
   });
+
+  it("expiry keeps the coordinates inside the reply only", () => {
+    expect(toExpired(threadCreated, later).reply).toEqual({
+      type: "failure",
+      text: "T3 did not answer in time.",
+      cause: { type: "expired", state: { tag: "thread-created", t3: coordinates } },
+    });
+  });
 });
 
 describe("ReplyPending", () => {
-  const replyPending = toReplyPending(threadCreated, answer);
+  const replyPending = toReplyPending(threadCreated, answer, now);
 
-  // missing platform reply -> post it; posted -> record its message id
+  // missing platform reply -> post it, unless expired; posted -> record its message id, even when expired
   it.each([
-    [{ platformReply: "missing" }, { type: "post-reply" }],
+    [{ platformReply: "missing" }, now, { type: "post-reply" }],
     [
       { platformReply: "posted", replySourceUri: "test://exchange/reply" },
+      now,
       { type: "record-reply-posted", replySourceUri: "test://exchange/reply" },
     ],
-  ] as const)("decides %j -> %j", (context, expected) => {
-    expect(fromReplyPending(replyPending, context)).toEqual(expected);
+    [{ platformReply: "missing" }, later, { type: "expire" }],
+    [
+      { platformReply: "posted", replySourceUri: "test://exchange/reply" },
+      later,
+      { type: "record-reply-posted", replySourceUri: "test://exchange/reply" },
+    ],
+  ] as const)("decides %j at %d -> %j", (context, at, expected) => {
+    expect(fromReplyPending(replyPending, context, at)).toEqual(expected);
   });
 
   it("accepted delivery lands in ReplyPosted with the platform message id", () => {
-    expect(toReplyPosted(replyPending, "test://exchange/reply")).toEqual({
+    expect(toReplyPosted(replyPending, "test://exchange/reply", now)).toEqual({
       ...exchangeBase,
       tag: "reply-posted",
       reply: answer,
@@ -171,7 +233,7 @@ describe("ReplyPending", () => {
 
   it("definitive rejection lands in Undeliverable with the reply and cause", () => {
     const cause = { message: "original message was deleted" } as const;
-    expect(toUndeliverable(replyPending, cause)).toEqual({
+    expect(toUndeliverable(replyPending, cause, now)).toEqual({
       ...exchangeBase,
       tag: "undeliverable",
       reply: answer,
@@ -180,17 +242,31 @@ describe("ReplyPending", () => {
   });
 });
 
+describe("isExpired", () => {
+  const replyPending = toReplyPending(threadCreated, answer, now);
+
+  it.each<[string, NonTerminalExchange]>([
+    ["request-accepted", accepted],
+    ["work-planned", planned],
+    ["thread-created", threadCreated],
+    ["reply-pending", replyPending],
+  ])("%s is fresh at its own updatedAt and expired two hours later", (_, state) => {
+    expect(isExpired(state, now)).toBe(false);
+    expect(isExpired(state, later)).toBe(true);
+  });
+});
+
 describe("isUpdateOf", () => {
-  const replyPending = toReplyPending(threadCreated, answer);
-  const posted = toReplyPosted(replyPending, "test://exchange/reply");
-  const undeliverable = toUndeliverable(replyPending, { message: "gone" });
+  const replyPending = toReplyPending(threadCreated, answer, now);
+  const posted = toReplyPosted(replyPending, "test://exchange/reply", now);
+  const undeliverable = toUndeliverable(replyPending, { message: "gone" }, now);
 
   it.each<[string, Exchange, Exchange]>([
     ["the same state rewritten", accepted, accepted],
     ["accepted -> planned", planned, accepted],
-    ["accepted -> reply-pending", toRejected(accepted, rejection), accepted],
+    ["accepted -> reply-pending", toRejected(accepted, rejection, now), accepted],
     ["planned -> thread-created", threadCreated, planned],
-    ["planned -> reply-pending", toRejected(planned, rejection), planned],
+    ["planned -> reply-pending", toRejected(planned, rejection, now), planned],
     ["thread-created -> reply-pending", replyPending, threadCreated],
     ["reply-pending -> reply-posted", posted, replyPending],
     ["reply-pending -> undeliverable", undeliverable, replyPending],
@@ -220,14 +296,16 @@ describe("getThreadId", () => {
     ["nothing before planning", accepted, null],
     ["the coordinates while planned", planned, coordinates.threadId],
     ["the coordinates while the thread exists", threadCreated, coordinates.threadId],
-    ["the answer's thread", toReplyPending(threadCreated, answer), turn.threadId],
-    ["a settled failure's thread", toReplyPending(threadCreated, settled), turn.threadId],
-    ["nothing for a planning rejection", toRejected(accepted, rejection), null],
+    ["the answer's thread", toReplyPending(threadCreated, answer, now), turn.threadId],
+    ["a settled failure's thread", toReplyPending(threadCreated, settled, now), turn.threadId],
+    ["nothing for a planning rejection", toRejected(accepted, rejection, now), null],
     [
       "the planned thread for a later rejection",
-      toRejected(planned, rejection),
+      toRejected(planned, rejection, now),
       coordinates.threadId,
     ],
+    ["nothing for a planning expiry", toExpired(accepted, later), null],
+    ["the planned thread for a later expiry", toExpired(planned, later), coordinates.threadId],
   ])("finds %s", (_, exchange, expected) => {
     expect(getThreadId(exchange)).toBe(expected);
   });
@@ -240,11 +318,11 @@ widened and the forward-only guarantee broke.
 */
 const _forwardOnly = (posted: ReplyPosted, accepted: RequestAccepted, created: ThreadCreated) => {
   // @ts-expect-error terminal states cannot re-enter thread creation
-  toThreadCreated(posted);
+  toThreadCreated(posted, now);
   // @ts-expect-error a bare acceptance cannot record a posted reply
-  toReplyPosted(accepted, "reply://msg");
+  toReplyPosted(accepted, "reply://msg", now);
   // @ts-expect-error Undeliverable is entered only from ReplyPending
-  toUndeliverable(accepted, { message: "cause" });
+  toUndeliverable(accepted, { message: "cause" }, now);
   // @ts-expect-error planning happens once, before the thread exists
-  toWorkPlanned(created, coordinates);
+  toWorkPlanned(created, coordinates, now);
 };

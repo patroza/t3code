@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
   ExchangeRepository,
@@ -12,6 +12,7 @@ import { FatalError, RetryableError, T3Gateway } from "./t3gateway.ts";
 import { AdapterError, NTBSAdapter, ReplyRejected } from "./adapter.ts";
 import {
   makeRequestAccepted,
+  toExpired,
   toRejected,
   toReplyPending,
   toReplyPosted,
@@ -106,13 +107,17 @@ const secondWorkCoordinates: WorkCoordinates = {
 
 const postedReplyUri = "test://reply/1";
 
+/** The TestClock starts at epoch, so every transition the processor makes without adjusting it is stamped 0. */
+const now = 0;
+
 /** The states the default request walks through, for asserting on stored records. */
-const accepted = makeRequestAccepted(request, target);
-const planned = toWorkPlanned(accepted, defaultWorkCoordinates);
-const threadCreated = toThreadCreated(planned);
+const accepted = makeRequestAccepted(request, target, now);
+const planned = toWorkPlanned(accepted, defaultWorkCoordinates, now);
+const threadCreated = toThreadCreated(planned, now);
 
 const secondThreadCreated = toThreadCreated(
-  toWorkPlanned(makeRequestAccepted(secondRequest, target), secondWorkCoordinates),
+  toWorkPlanned(makeRequestAccepted(secondRequest, target, now), secondWorkCoordinates, now),
+  now,
 );
 
 /** An answer out of the turn our message started on the given coordinates. */
@@ -387,7 +392,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
 
-          const replyPending = toRejected(accepted, rejection);
+          const replyPending = toRejected(accepted, rejection, now);
           expect(replyPending.reply).toEqual({
             type: "failure",
             text: rejection.reason,
@@ -399,7 +404,7 @@ describe("NTBSProcessor", () => {
           });
           expect(calls.at(-1)?.args).toEqual([replyPending]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toReplyPosted(replyPending, postedReplyUri),
+            toReplyPosted(replyPending, postedReplyUri, now),
           );
         }),
     );
@@ -464,7 +469,11 @@ describe("NTBSProcessor", () => {
               "T3Gateway.getTurnStatus",
               "T3Gateway.startTurn",
             ]);
-            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+            // The sweep re-planned a minute in, so its transitions carry that time.
+            const sweptAt = yield* Clock.currentTimeMillis;
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+              toThreadCreated(toWorkPlanned(accepted, defaultWorkCoordinates, sweptAt), sweptAt),
+            );
 
             yield* Fiber.interrupt(run);
           }),
@@ -1023,9 +1032,9 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
 
-          const replyPending = toReplyPending(threadCreated, reply);
+          const replyPending = toReplyPending(threadCreated, reply, now);
           expect(calls.at(-1)?.args).toEqual([replyPending]);
-          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri));
+          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, now));
 
           yield* Fiber.interrupt(run);
         }),
@@ -1074,7 +1083,7 @@ describe("NTBSProcessor", () => {
           expect(calls[0]?.args).toEqual([threadCreated]);
           expect(calls[1]?.args).toEqual([threadCreated]);
           expect(posted).toEqual(
-            toReplyPosted(toReplyPending(threadCreated, reply), postedReplyUri),
+            toReplyPosted(toReplyPending(threadCreated, reply, now), postedReplyUri, now),
           );
 
           yield* Fiber.interrupt(run);
@@ -1139,7 +1148,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
           expect(posted).toEqual(
-            toReplyPosted(toReplyPending(threadCreated, reply), postedReplyUri),
+            toReplyPosted(toReplyPending(threadCreated, reply, now), postedReplyUri, now),
           );
 
           yield* Fiber.interrupt(run);
@@ -1174,10 +1183,10 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
 
-          const replyPending = toReplyPending(threadCreated, reply);
+          const replyPending = toReplyPending(threadCreated, reply, now);
           expect(calls.at(-1)?.args).toEqual([replyPending]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toReplyPosted(replyPending, postedReplyUri),
+            toReplyPosted(replyPending, postedReplyUri, now),
           );
         }),
     );
@@ -1199,7 +1208,7 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const replyPending = toReplyPending(threadCreated, reply);
+          const replyPending = toReplyPending(threadCreated, reply, now);
           yield* repository.upsert(replyPending);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1209,7 +1218,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.findPostedReply",
           ]);
           expect(calls[0]?.args).toEqual([replyPending]);
-          expect(posted).toEqual(toReplyPosted(replyPending, discoveredReplyUri));
+          expect(posted).toEqual(toReplyPosted(replyPending, discoveredReplyUri, now));
 
           yield* Fiber.interrupt(run);
         }),
@@ -1232,7 +1241,7 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const replyPending = toReplyPending(threadCreated, reply);
+          const replyPending = toReplyPending(threadCreated, reply, now);
           yield* repository.upsert(replyPending);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1242,7 +1251,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.findPostedReply",
             "NTBSAdapter.postReply",
           ]);
-          expect(undeliverable).toEqual(toUndeliverable(replyPending, rejectionCause));
+          expect(undeliverable).toEqual(toUndeliverable(replyPending, rejectionCause, now));
 
           yield* Fiber.interrupt(run);
         }),
@@ -1279,7 +1288,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.postReply",
           ]);
 
-          const replyPending = toRejected(planned, rejection);
+          const replyPending = toRejected(planned, rejection, now);
           expect(replyPending.reply).toEqual({
             type: "failure",
             text: rejection.reason,
@@ -1291,7 +1300,7 @@ describe("NTBSProcessor", () => {
           });
           expect(calls.at(-1)?.args).toEqual([replyPending]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
-            toReplyPosted(replyPending, postedReplyUri),
+            toReplyPosted(replyPending, postedReplyUri, now),
           );
         }),
     );
@@ -1325,7 +1334,7 @@ describe("NTBSProcessor", () => {
       },
       ({ processor, repository, calls, awaitStoredTag }) =>
         Effect.gen(function* () {
-          const replyPending = toReplyPending(threadCreated, reply);
+          const replyPending = toReplyPending(threadCreated, reply, now);
           yield* repository.upsert(replyPending);
 
           const firstRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -1348,7 +1357,7 @@ describe("NTBSProcessor", () => {
             "NTBSAdapter.findPostedReply",
             "NTBSAdapter.postReply",
           ]);
-          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri));
+          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, now));
 
           yield* Fiber.interrupt(secondRun);
         }),
@@ -1398,7 +1407,7 @@ describe("NTBSProcessor", () => {
           expect(calls[1]?.args).toEqual([secondThreadCreated]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
           expect(posted).toEqual(
-            toReplyPosted(toReplyPending(secondThreadCreated, reply), postedReplyUri),
+            toReplyPosted(toReplyPending(secondThreadCreated, reply, now), postedReplyUri, now),
           );
 
           yield* Deferred.succeed(releaseRecovery, undefined);
@@ -1406,4 +1415,134 @@ describe("NTBSProcessor", () => {
         }),
     );
   });
+
+  /*
+    An accepted request whose planning never succeeds is not retried forever.
+    Once the record is older than its deadline the next run expires it instead of planning again: the user gets a failure reply, and a later sweep finds nothing left to do.
+  */
+  it.effect("expires an accepted request whose planning never succeeded", () =>
+    withProcessor(
+      {
+        t3Gateway: {
+          planCoordinates: () =>
+            new RetryableError({
+              reason: "Could not fetch origin",
+              cause: "test failure",
+              method: "planCoordinates",
+            }),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(processor.process(request, target));
+          expect(exit._tag).toBe("Failure");
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
+
+          yield* TestClock.adjust("6 minutes");
+          const expiredAt = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            // Recovery expires the record instead of planning again.
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          const replyPending = toExpired(accepted, expiredAt);
+          expect(calls.at(-1)?.args).toEqual([replyPending]);
+          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, expiredAt));
+
+          yield* TestClock.adjust("1 minute");
+          expect(calls.length).toBe(3);
+
+          yield* Fiber.interrupt(run);
+        }),
+    ),
+  );
+
+  /*
+    A turn T3 keeps reporting active is given up once ThreadCreated is older than its deadline.
+    The failure reply keeps the coordinates, so later activity on that thread still finds the exchange, which is terminal and does nothing.
+  */
+  it.effect("expires a turn that never settles and ignores its later activity", () =>
+    withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () => Effect.succeed({ turn: "active" }),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          yield* TestClock.adjust("61 minutes");
+          const expiredAt = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          const replyPending = toExpired(threadCreated, expiredAt);
+          expect(replyPending.reply).toEqual({
+            type: "failure",
+            text: "T3 did not answer in time.",
+            cause: {
+              type: "expired",
+              state: { tag: "thread-created", t3: defaultWorkCoordinates },
+            },
+          });
+          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, expiredAt));
+
+          yield* pingActivity(defaultThreadId);
+          yield* TestClock.adjust("1 minute");
+          expect(calls.length).toBe(3);
+
+          yield* Fiber.interrupt(run);
+        }),
+    ),
+  );
+
+  /*
+    A reply the platform never accepts is given up once ReplyPending is older than its deadline: the exchange becomes Undeliverable without another posting attempt.
+  */
+  it.effect("gives up on a reply the platform never accepted", () =>
+    withProcessor(
+      {
+        adapter: {
+          postReply: () =>
+            new AdapterError({ reason: "Reply posting failed", cause: "test failure" }),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const replyPending = toReplyPending(threadCreated, answer("Never delivered"), now);
+          yield* repository.upsert(replyPending);
+
+          yield* TestClock.adjust("61 minutes");
+          const expiredAt = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          const undeliverable = yield* awaitStoredTag(request.sourceUri, "undeliverable");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+          ]);
+          expect(undeliverable).toEqual(
+            toUndeliverable(
+              replyPending,
+              { message: "The platform did not accept the reply in time." },
+              expiredAt,
+            ),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    ),
+  );
 });

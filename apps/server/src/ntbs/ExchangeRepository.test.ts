@@ -16,21 +16,28 @@ import {
   type Reply,
 } from "./exchange.ts";
 
+const now = 1_700_000_000_000;
+
 const makeAccepted = (sourceUri: string) =>
   makeRequestAccepted(
     { sourceUri, snapshot: "request", attachments: [] },
     { projectId: ProjectId.make("project"), startBranchName: "main" },
+    now,
   );
 
 const makeExchange = (sourceUri: string, threadId: string) =>
-  toWorkPlanned(makeAccepted(sourceUri), {
-    projectId: ProjectId.make("project"),
-    startBranchName: "main",
-    startCommitSha: "start-commit-sha",
-    threadId: ThreadId.make(threadId),
-    userMessageId: MessageId.make(`message-${threadId}`),
-    worktreeBranchName: `branch-${threadId}`,
-  });
+  toWorkPlanned(
+    makeAccepted(sourceUri),
+    {
+      projectId: ProjectId.make("project"),
+      startBranchName: "main",
+      startCommitSha: "start-commit-sha",
+      threadId: ThreadId.make(threadId),
+      userMessageId: MessageId.make(`message-${threadId}`),
+      worktreeBranchName: `branch-${threadId}`,
+    },
+    now,
+  );
 
 const answerFrom = (threadId: string, text: string): Reply => ({
   type: "answer",
@@ -46,7 +53,7 @@ describe("inMemoryExchangeRepository", () => {
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
         const planned = makeExchange("test://request/1", "thread-1");
-        const threadCreated = toThreadCreated(planned);
+        const threadCreated = toThreadCreated(planned, now);
 
         yield* repository.upsert(planned);
         yield* repository.upsert(threadCreated);
@@ -75,9 +82,9 @@ describe("inMemoryExchangeRepository", () => {
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
         const planned = makeExchange("test://request/1", "thread-1");
-        const threadCreated = toThreadCreated(planned);
-        const replyPending = toReplyPending(threadCreated, answerFrom("thread-1", "reply"));
-        const posted = toReplyPosted(replyPending, "test://reply/1");
+        const threadCreated = toThreadCreated(planned, now);
+        const replyPending = toReplyPending(threadCreated, answerFrom("thread-1", "reply"), now);
+        const posted = toReplyPosted(replyPending, "test://reply/1", now);
 
         yield* repository.upsert(threadCreated);
         const backwards = yield* Effect.flip(repository.upsert(planned));
@@ -119,8 +126,9 @@ describe("inMemoryExchangeRepository", () => {
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
         const replied = toReplyPending(
-          toThreadCreated(makeExchange("test://request/1", "shared-thread")),
+          toThreadCreated(makeExchange("test://request/1", "shared-thread"), now),
           answerFrom("shared-thread", "done"),
+          now,
         );
         const conflicting = makeExchange("test://request/2", "shared-thread");
 
@@ -155,24 +163,39 @@ describe("inMemoryExchangeRepository", () => {
         const planned = makeExchange("test://request/planned", "thread-planned");
         const threadCreated = toThreadCreated(
           makeExchange("test://request/thread-created", "thread-created"),
+          now,
         );
         const replyPending = toReplyPending(
-          toThreadCreated(makeExchange("test://request/reply-pending", "thread-reply-pending")),
+          toThreadCreated(
+            makeExchange("test://request/reply-pending", "thread-reply-pending"),
+            now,
+          ),
           answerFrom("thread-reply-pending", "pending reply"),
+          now,
         );
         const replyPosted = toReplyPosted(
           toReplyPending(
-            toThreadCreated(makeExchange("test://request/reply-posted", "thread-reply-posted")),
+            toThreadCreated(
+              makeExchange("test://request/reply-posted", "thread-reply-posted"),
+              now,
+            ),
             answerFrom("thread-reply-posted", "posted reply"),
+            now,
           ),
           "test://reply/posted",
+          now,
         );
         const undeliverable = toUndeliverable(
           toReplyPending(
-            toThreadCreated(makeExchange("test://request/undeliverable", "thread-undeliverable")),
+            toThreadCreated(
+              makeExchange("test://request/undeliverable", "thread-undeliverable"),
+              now,
+            ),
             answerFrom("thread-undeliverable", "undeliverable reply"),
+            now,
           ),
           { message: "platform rejected the reply" },
+          now,
         );
 
         yield* Effect.forEach(
