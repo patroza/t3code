@@ -130,6 +130,9 @@ const isolatedUnitTestFiles = [
   "src/environments/primary/bootstrap.test.ts",
   "src/environments/primary/httpLayer.test.ts",
   "src/hooks/useCopyToClipboard.test.ts",
+  // Mocks `react` (useCallback/useMemo) and `@effect/atom-react`; under
+  // isolate:false an earlier file binds real React and useContext is null.
+  "src/hooks/useHandleNewThread.test.ts",
   "src/hooks/useLocalStorage.test.ts",
   "src/hooks/useTheme.test.ts",
   // Mocks `react` (useSyncExternalStore) like useTheme.test.ts; under
