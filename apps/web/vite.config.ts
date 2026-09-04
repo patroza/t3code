@@ -152,6 +152,10 @@ const isolatedUnitTestFiles = [
   // bound to the real module so confirm() is never the mock and pending stays false.
   "src/lib/terminalCloseConfirm.test.ts",
   "src/providerUpdateDismissal.test.ts",
+  // Mocks `@pierre/diffs` getSharedHighlighter; under isolate:false ChatMarkdown
+  // already binds the real highlighter so the recovered-text cache test sees
+  // a live object instead of the stub.
+  "src/lib/syntaxHighlighting.test.ts",
   // Mocks `./vendor/ghostty-vt.wasm?url`; under isolate:false runtime.ts is
   // already bound to the real asset URL and fetch('/src/...wasm') is invalid.
   "src/terminal/ghostty/core.test.ts",
