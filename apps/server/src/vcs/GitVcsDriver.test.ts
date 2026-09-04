@@ -159,6 +159,7 @@ describe("GitVcsDriver bare repositories", () => {
 it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
   let observedEnv: NodeJS.ProcessEnv | undefined;
   let observedAppendTruncationMarker: boolean | undefined;
+  let observedOutputMode: VcsProcess.VcsProcessInput["outputMode"];
 
   return Effect.gen(function* () {
     const driver = yield* GitVcsDriver.makeVcsDriverShape();
@@ -171,12 +172,14 @@ it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
         GIT_INDEX_FILE: "/tmp/t3-index",
       },
       appendTruncationMarker: true,
+      outputMode: "error",
     });
 
     assert.deepStrictEqual(observedEnv, {
       GIT_INDEX_FILE: "/tmp/t3-index",
     });
     assert.strictEqual(observedAppendTruncationMarker, true);
+    assert.strictEqual(observedOutputMode, "error");
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -186,6 +189,7 @@ it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
             Effect.sync(() => {
               observedEnv = input.env;
               observedAppendTruncationMarker = input.appendTruncationMarker;
+              observedOutputMode = input.outputMode;
               return {
                 exitCode: ChildProcessSpawner.ExitCode(0),
                 stdout: "",
