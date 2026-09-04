@@ -12,6 +12,8 @@ import { buttonVariants } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
+import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
+import { AiUsageStats } from "./AiUsageStats";
 import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
@@ -104,6 +106,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     : triggerTitle;
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
+  const activeUsage = useMemo(
+    () => resolveDriverUsage(props.usageSnapshot, activeEntry?.driverKind ?? null, props.model),
+    [props.usageSnapshot, activeEntry, props.model],
+  );
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
     if (props.open === undefined) {
@@ -195,21 +201,47 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <span
           className={cn("flex min-w-0 flex-1 items-center", size === "xs" ? "gap-1" : "gap-1.5")}
         >
-          {activeEntry ? (
-            <ProviderInstanceIcon
-              driverKind={activeEntry.driverKind}
-              displayName={activeEntry.displayName}
-              accentColor={activeEntry.accentColor}
-              showBadge={showInstanceBadge}
-              className="size-4"
-              iconClassName={cn("size-4", props.activeProviderIconClassName)}
-              indicatorBackground={props.instanceIndicatorBackground ?? "var(--contrast-input)"}
-              badgeClassName={cn(
-                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]",
-                size === "xs" && "shadow-none",
-              )}
-            />
-          ) : null}
+          {activeEntry
+            ? (() => {
+                const activeDotClass = activeUsage
+                  ? usageDotFillClass(activeUsage.marker)
+                  : undefined;
+                const activeRingColor = activeUsage
+                  ? usageDotRingColor(activeUsage.marker)
+                  : undefined;
+                const providerIcon = (
+                  <ProviderInstanceIcon
+                    driverKind={activeEntry.driverKind}
+                    displayName={activeEntry.displayName}
+                    accentColor={activeEntry.accentColor}
+                    showBadge={showInstanceBadge}
+                    className="size-4"
+                    iconClassName={cn("size-4", props.activeProviderIconClassName)}
+                    indicatorBackground={
+                      props.instanceIndicatorBackground ?? "var(--contrast-input)"
+                    }
+                    badgeClassName={cn(
+                      "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]",
+                      size === "xs" && "shadow-none",
+                    )}
+                    {...(activeDotClass ? { statusDotClassName: activeDotClass } : {})}
+                    {...(activeRingColor ? { statusDotRingColor: activeRingColor } : {})}
+                  />
+                );
+                return activeUsage ? (
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                      {providerIcon}
+                    </TooltipTrigger>
+                    <TooltipPopup side="top" className="p-2 text-xs">
+                      <AiUsageStats item={activeUsage.item} />
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  providerIcon
+                );
+              })()
+            : null}
           <Tooltip>
             <TooltipTrigger
               render={

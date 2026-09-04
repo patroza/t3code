@@ -272,7 +272,14 @@ export async function resolveNavigableUrl(
   // loopback is the same loopback the port is on. A URL the label pass already
   // pointed at the environment host is not — it names the right machine on a
   // port nothing promised to publish there, so it still needs resolving.
-  if (label.resolutionKind === "direct" && !namesAnEnvironmentPort(requested, environmentUrl)) {
+  const loopbackNeedsEnvironment =
+    isLoopbackHost(requested.hostname) &&
+    (requested.hostname === "0.0.0.0" || !isLocalLoopbackHost(environmentUrl.hostname));
+  if (
+    label.resolutionKind === "direct" &&
+    !loopbackNeedsEnvironment &&
+    !namesAnEnvironmentPort(requested, environmentUrl)
+  ) {
     return label.resolvedUrl;
   }
 

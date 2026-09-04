@@ -216,9 +216,7 @@ describe("work entry labels", () => {
       turnDiffSummaryByAssistantMessageId: new Map(),
       revertTurnCountByUserMessageId: new Map(),
     });
-    expect(rows).toMatchObject([
-      { kind: "work-toggle", summary: "Used browser 1 time", summaryKind: "browser" },
-    ]);
+    expect(rows).toMatchObject([{ kind: "work" }]);
   });
 });
 
@@ -596,11 +594,7 @@ describe("deriveMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
-    expect(rows.map((row) => row.kind)).toEqual(["working", "work-toggle", "message", "work-live"]);
-    expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({
-      hiddenCount: 1,
-      summary: "Ran 1 command",
-    });
+    expect(rows.map((row) => row.kind)).toEqual(["working", "work", "message", "work-live"]);
   });
 
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
@@ -1495,7 +1489,7 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(rows.some((row) => row.kind === "turn-fold")).toBe(false);
     expect(rows.filter((row) => row.id === "working-indicator-row")).toHaveLength(1);
-    expect(rows.findIndex((row) => row.id === "working-indicator-row")).toBeLessThan(
+    expect(rows.findIndex((row) => row.id === "working-indicator-row")).toBeGreaterThan(
       rows.findIndex((row) => row.id === "old-work-entry"),
     );
     expect(rows.find((row) => row.id === "working-indicator-row")).toMatchObject({
@@ -2277,11 +2271,7 @@ describe("deriveMessagesTimelineRows", () => {
       revertTurnCountByUserMessageId: new Map(),
     });
 
-    expect(rows.map((row) => row.id)).toEqual([
-      "work-toggle:work-entry-1",
-      "user-input-entry",
-      "work-toggle:work-entry-2",
-    ]);
+    expect(rows.map((row) => row.id)).toEqual(["work-entry-1", "user-input-entry", "work-entry-2"]);
     expect(rows.find((row) => row.kind === "user-input")).toMatchObject({ userInput });
   });
 
@@ -2508,7 +2498,7 @@ describe("deriveMessagesTimelineRows", () => {
       "settled-summary",
       "turn-start-user",
       "active-assistant::pre",
-      "work-toggle:active-work",
+      "active-work",
       "steer-user",
       "working-indicator-row",
       "active-assistant::after::steer-user",
