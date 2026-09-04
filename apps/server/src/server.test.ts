@@ -9157,10 +9157,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
           },
           orchestrationEngine: {
-            // #5147 bounds thread resume with engine head (THREAD_RESUME_MAX_GAP), not
-            // projection getSnapshotSequence / subscriptionReplayLimit from #3510.
+            // Oversized thread-local event count forces a snapshot instead of
+            // catch-up replay (THREAD_RESUME_MAX_EVENTS). Live events published
+            // while that snapshot loads must still drain after it.
             latestSequence: Effect.succeed(snapshotSequence),
             streamDomainEvents: Stream.fromPubSub(liveEvents),
+            getThreadReplayStats: () =>
+              Effect.succeed({
+                eventCount: 1_001,
+                payloadBytes: 1_000,
+                hasCreateEvent: false,
+              }),
+            readThreadEvents: () => Stream.die("Oversized resume must not replay thread events"),
             readEvents: () => {
               replayCalls += 1;
               return Stream.empty;
