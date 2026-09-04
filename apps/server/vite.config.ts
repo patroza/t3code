@@ -96,6 +96,7 @@ export default mergeConfig(
               "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
+              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/Layers/GrokAdapter.test.ts",
               "src/provider/Layers/ProviderRegistry.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
@@ -120,6 +121,10 @@ export default mergeConfig(
               // real os module and the mock never applies — the CLI then
               // connects to the live Linux desktop socket.
               "src/cli/app.test.ts",
+              // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
+              // ClaudeProvider already bound the real query, so the probe returns
+              // undefined instead of the mocked account.
+              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               // xAI prompt-complete can land after the assertion under
               // isolate:false CI load (`hello from ` vs `hello from mock`).
               "src/provider/Layers/GrokAdapter.test.ts",
