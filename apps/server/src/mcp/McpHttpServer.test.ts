@@ -327,6 +327,13 @@ it.effect("renames the current thread through the Discord mirror tool", () => {
         Layer.provideMerge(
           Layer.succeed(OrchestrationEngineService, {
             readEvents: () => Stream.empty,
+            readThreadEvents: () => Stream.empty,
+            getThreadReplayStats: () =>
+              Effect.succeed({
+                eventCount: 0,
+                payloadBytes: 0,
+                hasCreateEvent: false,
+              }),
             dispatch: (command) => Effect.promise(() => dispatch(command)),
             streamDomainEvents: Stream.empty,
             subscribeDomainEvents: Effect.succeed(Stream.empty),
@@ -359,6 +366,13 @@ it.effect("rejects empty Discord mirror thread titles", () =>
         Layer.provideMerge(
           Layer.succeed(OrchestrationEngineService, {
             readEvents: () => Stream.empty,
+            readThreadEvents: () => Stream.empty,
+            getThreadReplayStats: () =>
+              Effect.succeed({
+                eventCount: 0,
+                payloadBytes: 0,
+                hasCreateEvent: false,
+              }),
             dispatch: () => Effect.die("unused"),
             streamDomainEvents: Stream.empty,
             subscribeDomainEvents: Effect.succeed(Stream.empty),

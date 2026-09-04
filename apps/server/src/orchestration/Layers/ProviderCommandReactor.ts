@@ -438,7 +438,7 @@ const make = Effect.gen(function* () {
     readonly detail: string;
     readonly createdAt: string;
   }) {
-    const thread = yield* resolveThread(input.threadId);
+    const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
       return;
     }
@@ -477,7 +477,11 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly reason: string;
   }) {
-    const thread = yield* resolveThread(input.threadId);
+    // Shell has modelSelection/runtimeMode for a missing-session fallback.
+    // Stop-context is archived-inclusive, so pending-start recovery can still
+    // settle archived threads that getThreadShellById omits.
+    const shell = yield* resolveThreadShell(input.threadId);
+    const thread = shell ?? (yield* resolveThread(input.threadId));
     if (!thread) {
       return;
     }
@@ -485,23 +489,30 @@ const make = Effect.gen(function* () {
     // Prefer ready over error: this is an orchestration glitch, not a live
     // provider failure. Keep stopped sessions stopped.
     const nextStatus = session?.status === "stopped" ? "stopped" : "ready";
-    yield* setThreadSession({
-      threadId: input.threadId,
-      session: {
-        ...(session ?? {
-          threadId: input.threadId,
-          providerName: null,
-          providerInstanceId: thread.modelSelection.instanceId,
-          runtimeMode: thread.runtimeMode,
-        }),
-        status: nextStatus,
-        activeTurnId: null,
-        // Do not sticky-page this internal failure via lastError forever.
-        lastError: nextStatus === "stopped" ? (session?.lastError ?? null) : null,
-        updatedAt: input.createdAt,
-      },
-      createdAt: input.createdAt,
-    });
+    const sessionBase =
+      session ??
+      (shell
+        ? {
+            threadId: input.threadId,
+            providerName: null,
+            providerInstanceId: shell.modelSelection.instanceId,
+            runtimeMode: shell.runtimeMode,
+          }
+        : null);
+    if (sessionBase) {
+      yield* setThreadSession({
+        threadId: input.threadId,
+        session: {
+          ...sessionBase,
+          status: nextStatus,
+          activeTurnId: null,
+          // Do not sticky-page this internal failure via lastError forever.
+          lastError: nextStatus === "stopped" ? (session?.lastError ?? null) : null,
+          updatedAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+      });
+    }
     // Belt-and-suspenders if session was already ready (session-set may no-op
     // some paths) — always clear the pending SQL placeholder.
     yield* projectionTurnRepository
@@ -536,7 +547,7 @@ const make = Effect.gen(function* () {
       compactingThreadIds.delete(threadId);
       return;
     }
-    const thread = yield* resolveThread(threadId);
+    const thread = yield* resolveThreadShell(threadId);
     if (!thread?.session) return;
     if (
       thread.session.status !== "starting" &&
@@ -614,7 +625,21 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const resolveThreadShell = Effect.fnUntraced(function* (threadId: ThreadId) {
+    return yield* projectionSnapshotQuery
+      .getThreadShellById(threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  // Archived threads must still be stoppable. Session-stop lookups include
+  // archived/deleted shells that getThreadShellById omits.
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    return yield* projectionSnapshotQuery
+      .getSessionStopContextById(threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const resolveThreadDetail = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId, { activityKinds: [] })
       .pipe(Effect.map(Option.getOrUndefined));
@@ -660,7 +685,7 @@ const make = Effect.gen(function* () {
       readonly pendingTurnStart?: boolean;
     },
   ) {
-    const thread = yield* resolveThread(threadId);
+    const thread = yield* resolveThreadShell(threadId);
     if (!thread) {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
@@ -939,7 +964,7 @@ const make = Effect.gen(function* () {
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
   }) {
-    const thread = yield* resolveThread(input.threadId);
+    const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
       return yield* Effect.die(
         new Error(`Thread '${input.threadId}' was not found in read model.`),
@@ -1080,7 +1105,7 @@ const make = Effect.gen(function* () {
           );
         if (!generated) return;
 
-        const thread = yield* resolveThread(input.threadId);
+        const thread = yield* resolveThreadShell(input.threadId);
         if (!thread) return;
         if (!canReplaceThreadTitle(thread.title, input.titleSeed)) {
           return;
@@ -1112,7 +1137,7 @@ const make = Effect.gen(function* () {
       return { _tag: "Superseded" } as const;
     }
 
-    const thread = yield* resolveThread(event.payload.threadId);
+    const thread = yield* resolveThreadDetail(event.payload.threadId);
     if (!thread || thread.titleRegeneration?.requestId !== requestId) {
       return { _tag: "Superseded" } as const;
     }
@@ -1152,7 +1177,7 @@ const make = Effect.gen(function* () {
       return { _tag: "Completed", title: undefined } as const;
     }
 
-    const latestThread = yield* resolveThread(event.payload.threadId);
+    const latestThread = yield* resolveThreadShell(event.payload.threadId);
     if (
       !latestThread ||
       latestThread.titleRegeneration?.requestId !== requestId ||
@@ -1290,7 +1315,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const thread = yield* resolveThread(event.payload.threadId);
+    const thread = yield* resolveThreadDetail(event.payload.threadId);
     if (!thread) {
       return;
     }
@@ -1487,7 +1512,7 @@ const make = Effect.gen(function* () {
           "Context compaction requires an existing conversation.",
         );
       }
-      const latestThread = yield* resolveThread(event.payload.threadId);
+      const latestThread = yield* resolveThreadShell(event.payload.threadId);
       if (
         compactingThreadIds.has(event.payload.threadId) ||
         latestThread?.session?.status === "starting" ||
@@ -1565,7 +1590,7 @@ const make = Effect.gen(function* () {
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     if (!thread) {
       return;
     }
@@ -1588,7 +1613,7 @@ const make = Effect.gen(function* () {
 
       const detail = formatFailureDetail(cause);
       return Effect.gen(function* () {
-        const latestThread = yield* resolveThread(event.payload.threadId);
+        const latestThread = yield* resolveThreadShell(event.payload.threadId);
         const latestSession = latestThread?.session;
         if (
           !latestSession ||
@@ -1616,7 +1641,7 @@ const make = Effect.gen(function* () {
             );
           }),
         );
-        const stoppedThread = yield* resolveThread(event.payload.threadId);
+        const stoppedThread = yield* resolveThreadShell(event.payload.threadId);
         const stoppedSession = stoppedThread?.session;
         if (
           !stoppedSession ||
@@ -1733,7 +1758,7 @@ const make = Effect.gen(function* () {
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
-    const thread = yield* resolveThread(event.payload.threadId);
+    const thread = yield* resolveThreadShell(event.payload.threadId);
     if (!thread) {
       return;
     }
@@ -1777,7 +1802,7 @@ const make = Effect.gen(function* () {
     function* (
       event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
     ) {
-      const thread = yield* resolveThread(event.payload.threadId);
+      const thread = yield* resolveThreadShell(event.payload.threadId);
       if (!thread) {
         return;
       }
@@ -1933,7 +1958,7 @@ const make = Effect.gen(function* () {
         yield* threadTitleRegenerationWorker.enqueue(event);
         return;
       case "thread.runtime-mode-set": {
-        const thread = yield* resolveThread(event.payload.threadId);
+        const thread = yield* resolveThreadShell(event.payload.threadId);
         if (!thread?.session || thread.session.status === "stopped") {
           return;
         }

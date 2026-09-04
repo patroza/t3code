@@ -39,6 +39,7 @@ import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
+import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { observeResponsiveBreakpointFade, usePanelAnimationSettings } from "../../panelAnimations";
@@ -51,7 +52,6 @@ import {
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { VisualStudioCode } from "../Icons";
-import { readLocalApi } from "~/localApi";
 import { useAiUsageSnapshot } from "../../hooks/useAiUsageSnapshot";
 import { resolveDriverUsage, usageDotFillClass, usageDotRingColor } from "../../aiUsageState";
 import { HostResourceStatus } from "../HostResourceStatus";
@@ -81,6 +81,7 @@ interface ChatHeaderProps {
   activeThreadModel?: string | null;
   readonly onOpenPullRequest?: ((number: number, repository?: string | null) => void) | undefined;
   onNewThreadInProject: () => void;
+  onOpenProjectSettings?: (() => void) | undefined;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -210,6 +211,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadModel = null,
   onOpenPullRequest,
   onNewThreadInProject,
+  onOpenProjectSettings,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -372,15 +374,29 @@ export const ChatHeader = memo(function ChatHeader({
   );
   const handleHeaderContextMenu = useCallback(
     (event: ReactMouseEvent) => {
-      if (!isServerThread || renamingTitle !== null) return;
+      if (renamingTitle !== null) return;
       // The right-side controls (git, scripts, open-in) keep their own
       // behavior; only the breadcrumb area opens the thread menu.
       if ((event.target as HTMLElement).closest("[data-chat-header-actions]")) return;
+      if (!isServerThread && onOpenProjectSettings === undefined) return;
       cancelPendingTitleMenu();
       event.preventDefault();
+      if (!isServerThread) {
+        const api = readLocalApi();
+        if (!api) return;
+        void api.contextMenu
+          .show([{ id: "project-settings", label: "Project settings", icon: "settings" }], {
+            x: event.clientX,
+            y: event.clientY,
+          })
+          .then((action) => {
+            if (action === "project-settings") onOpenProjectSettings?.();
+          });
+        return;
+      }
       openMenu({ x: event.clientX, y: event.clientY });
     },
-    [cancelPendingTitleMenu, isServerThread, openMenu, renamingTitle],
+    [cancelPendingTitleMenu, isServerThread, onOpenProjectSettings, openMenu, renamingTitle],
   );
   const handleRenameKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {

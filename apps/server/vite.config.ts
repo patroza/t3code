@@ -82,6 +82,8 @@ export default mergeConfig(
     test: {
       fileParallelism: true,
       maxWorkers: 4,
+      // Appended to the root setup, which mergeConfig concatenates.
+      setupFiles: ["./src/testUtils/gitConfig.setup.ts"],
       projects: [
         {
           test: {
