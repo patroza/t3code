@@ -121,10 +121,6 @@ export default mergeConfig(
               // real os module and the mock never applies — the CLI then
               // connects to the live Linux desktop socket.
               "src/cli/app.test.ts",
-              // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
-              // ClaudeProvider already bound the real query, so the probe returns
-              // undefined instead of the mocked account.
-              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               // xAI prompt-complete can land after the assertion under
               // isolate:false CI load (`hello from ` vs `hello from mock`).
               "src/provider/Layers/GrokAdapter.test.ts",
@@ -134,6 +130,23 @@ export default mergeConfig(
               "src/provider/Layers/ProviderRegistry.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-claude-probe",
+            isolate: true,
+            fileParallelism: false,
+            maxWorkers: 1,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
+              // ClaudeProvider already bound the real query. Keep this file out
+              // of the Grok isolated pool so its 4s live timeout does not race
+              // prompt-complete assertions (`hello from ` vs `hello from mock`).
+              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
             ],
           },
         },
