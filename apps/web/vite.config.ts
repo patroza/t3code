@@ -100,6 +100,10 @@ const isolatedUnitTestFiles = [
   // useAtomValue() === null and throws on `_tag`.
   "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/chat/draftHeroTransition.test.ts",
+  // Mounts react-dom createRoot against a stub document; under isolate:false
+  // an earlier file can bind a real document/ReactDOM so hide/unhide never
+  // closes the popup.
+  "src/components/chat/useComposerMenuState.test.tsx",
   "src/components/files/projectFilesQueryState.test.ts",
   // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
   // upstream and fail under isolate:false when real React is already bound.
