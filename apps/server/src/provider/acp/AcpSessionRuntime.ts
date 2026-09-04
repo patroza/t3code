@@ -1330,7 +1330,7 @@ function updateModeState(modeState: AcpSessionModeState, nextModeId: string): Ac
     : modeState;
 }
 
-const assistantItemId = (sessionId: string, runtimeId: string, segmentIndex: number) =>
+export const assistantItemId = (sessionId: string, runtimeId: string, segmentIndex: number) =>
   `assistant:${sessionId}:runtime:${runtimeId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({

@@ -166,7 +166,9 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
   it.effect("propagates autoPull through meta.update into the read model", () =>
     Effect.gen(function* () {
       const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
-      expect(readModel.projects[0]?.autoPull).toBe(false);
+      expect(
+        (projectFromModel(readModel) as { readonly autoPull?: boolean } | undefined)?.autoPull,
+      ).toBe(false);
 
       const result = yield* decideOrchestrationCommand({
         command: {
@@ -181,7 +183,9 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
       expect((event.payload as { autoPull?: unknown }).autoPull).toBe(true);
 
       const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
-      expect(updated.projects[0]?.autoPull).toBe(true);
+      expect(
+        (projectFromModel(updated) as { readonly autoPull?: boolean } | undefined)?.autoPull,
+      ).toBe(true);
     }),
   );
 });

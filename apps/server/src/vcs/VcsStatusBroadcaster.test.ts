@@ -167,6 +167,7 @@ describe("VcsStatusBroadcaster", () => {
       const testLayer = VcsStatusBroadcaster.layer.pipe(
         Layer.provideMerge(NodeServices.layer),
         Layer.provide(makeBackgroundPolicyLayer(() => true)),
+        Layer.provide(lifecycleScriptRunnerMock),
         Layer.provide(
           Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
             isEnabled: (cwd) => Effect.succeed(cwd === configuredWorkspaceRoot),
@@ -283,6 +284,7 @@ describe("VcsStatusBroadcaster", () => {
     const layer = VcsStatusBroadcaster.layer.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () => Effect.succeed(baseLocalStatus),
@@ -329,6 +331,7 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) })),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(lifecycleScriptRunnerMock),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           localStatus: () => Effect.succeed(baseLocalStatus),

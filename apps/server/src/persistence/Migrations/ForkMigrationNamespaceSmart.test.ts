@@ -7,7 +7,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import { forkMigrationTable } from "../ForkMigrations.ts";
 import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";
 import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
