@@ -66,6 +66,7 @@ import {
   buildHomeListLayout,
   buildHomeRecentListLayout,
   DEFAULT_GROUP_DISPLAY_STATE,
+  EMPTY_HOME_LIST_LAYOUT,
   homeListItemsAreEqual,
   nextGroupDisplayState,
   type HomeGroupDisplayAction,
@@ -363,32 +364,38 @@ export function HomeScreen(props: HomeScreenProps) {
   );
   const scopedProjects = useMemo(
     () =>
-      selectedProjectRefKeys === null
-        ? props.projects
-        : props.projects.filter((project) =>
-            selectedProjectRefKeys.has(scopedProjectKey(project.environmentId, project.id)),
-          ),
-    [props.projects, selectedProjectRefKeys],
+      threadListV2Enabled
+        ? []
+        : selectedProjectRefKeys === null
+          ? props.projects
+          : props.projects.filter((project) =>
+              selectedProjectRefKeys.has(scopedProjectKey(project.environmentId, project.id)),
+            ),
+    [threadListV2Enabled, props.projects, selectedProjectRefKeys],
   );
   const scopedThreads = useMemo(
     () =>
-      selectedProjectRefKeys === null
-        ? props.threads
-        : props.threads.filter((thread) =>
-            selectedProjectRefKeys.has(scopedProjectKey(thread.environmentId, thread.projectId)),
-          ),
-    [props.threads, selectedProjectRefKeys],
+      threadListV2Enabled
+        ? []
+        : selectedProjectRefKeys === null
+          ? props.threads
+          : props.threads.filter((thread) =>
+              selectedProjectRefKeys.has(scopedProjectKey(thread.environmentId, thread.projectId)),
+            ),
+    [threadListV2Enabled, props.threads, selectedProjectRefKeys],
   );
   const scopedPendingTasks = useMemo(
     () =>
-      selectedProjectRefKeys === null
-        ? props.pendingTasks
-        : props.pendingTasks.filter((pendingTask) =>
-            selectedProjectRefKeys.has(
-              scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
+      threadListV2Enabled
+        ? []
+        : selectedProjectRefKeys === null
+          ? props.pendingTasks
+          : props.pendingTasks.filter((pendingTask) =>
+              selectedProjectRefKeys.has(
+                scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
+              ),
             ),
-          ),
-    [props.pendingTasks, selectedProjectRefKeys],
+    [threadListV2Enabled, props.pendingTasks, selectedProjectRefKeys],
   );
 
   const showFlatThreadList =
@@ -398,7 +405,7 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const recentEntries = useMemo(
     () =>
-      showFlatThreadList
+      showFlatThreadList && !threadListV2Enabled
         ? buildHomeRecentListEntries({
             projects: scopedProjects,
             threads: scopedThreads,
@@ -414,11 +421,12 @@ export function HomeScreen(props: HomeScreenProps) {
       scopedThreads,
       selectedProjectRefKeys,
       showFlatThreadList,
+      threadListV2Enabled,
     ],
   );
   const recentPendingEntries = useMemo(
     () =>
-      showFlatThreadList
+      showFlatThreadList && !threadListV2Enabled
         ? buildHomeRecentPendingEntries({
             pendingTasks: scopedPendingTasks,
             selectedEnvironmentIds: props.selectedEnvironmentIds,
@@ -432,6 +440,7 @@ export function HomeScreen(props: HomeScreenProps) {
       scopedPendingTasks,
       selectedProjectRefKeys,
       showFlatThreadList,
+      threadListV2Enabled,
     ],
   );
 
@@ -747,6 +756,9 @@ export function HomeScreen(props: HomeScreenProps) {
   );
 
   const listLayout = useMemo(() => {
+    if (threadListV2Enabled) {
+      return EMPTY_HOME_LIST_LAYOUT;
+    }
     if (showFlatThreadList) {
       const activeLayout = buildHomeRecentListLayout({
         pendingTasks: recentPendingEntries.map((entry) => entry.pendingTask),
@@ -801,6 +813,7 @@ export function HomeScreen(props: HomeScreenProps) {
     recentPendingEntries,
     showFlatThreadList,
     showProjectThreadList,
+    threadListV2Enabled,
     visibleRecentEntries,
   ]);
   const pinReorderEnvironmentIds = useMemo(() => {
@@ -1250,9 +1263,11 @@ export function HomeScreen(props: HomeScreenProps) {
   // so the v1 check already covers v2.
   const hasAnyThreads =
     props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
-  const hasResults = showFlatThreadList
-    ? visibleRecentEntries.length > 0 || recentPendingEntries.length > 0
-    : projectGroups.length > 0;
+  const hasResults = threadListV2Enabled
+    ? threadListV2Items.length > 0
+    : showFlatThreadList
+      ? visibleRecentEntries.length > 0 || recentPendingEntries.length > 0
+      : projectGroups.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentIds.length === 0
       ? null

@@ -12,6 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { cast } from "effect/Function";
 import {
@@ -46,14 +47,6 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
-import {
-  contentCacheKey,
-  isCompressibleContentType,
-  isContentHashedAsset,
-  makeStaticCompressionCache,
-  negotiateStaticEncoding,
-  resolveStaticCacheControl,
-} from "./staticAssetDelivery.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -406,8 +399,6 @@ export const assetRouteLayer = HttpRouter.add(
   }),
 );
 
-const staticCompressionCache = makeStaticCompressionCache();
-
 export const attachmentUploadRouteLayer = HttpRouter.add(
   "POST",
   `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/*`,
@@ -447,10 +438,66 @@ export const attachmentUploadRouteLayer = HttpRouter.add(
   }),
 );
 
-export const staticAndDevRouteLayer = HttpRouter.add(
-  "GET",
-  "*",
-  Effect.gen(function* () {
+const decodeBuildManifest = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        file: Schema.String,
+        css: Schema.optional(Schema.Array(Schema.String)),
+        assets: Schema.optional(Schema.Array(Schema.String)),
+      }),
+    ),
+  ),
+);
+
+const loadImmutableBuildAssets = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const staticDir =
+    config.staticDir ?? (config.devUrl ? yield* ServerConfig.resolveStaticDir() : undefined);
+  if (!staticDir) return new Set<string>();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* fileSystem.readFileString(path.join(staticDir, ".vite", "manifest.json")).pipe(
+    Effect.flatMap(decodeBuildManifest),
+    Effect.map(
+      (manifest) =>
+        new Set(
+          Object.values(manifest).flatMap((entry) => [
+            entry.file,
+            ...(entry.css ?? []),
+            ...(entry.assets ?? []),
+          ]),
+        ),
+    ),
+    Effect.orElseSucceed(() => new Set<string>()),
+  );
+});
+
+const openStaticFile = Effect.fn("openStaticFile")(function* (filePath: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  // Reject directories and special files before opening. Response metadata comes from the handle.
+  const pathInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
+  if (pathInfo?.type !== "File") return null;
+  const file = yield* fileSystem.open(filePath, { flag: "r" });
+  const info = yield* file.stat;
+  return info.type === "File" ? { file, info } : null;
+});
+
+const streamStaticFile = (file: FileSystem.File, size: bigint) =>
+  Stream.unfold(
+    0n,
+    Effect.fnUntraced(function* (offset: bigint) {
+      if (offset >= size) return;
+      const remaining = size - offset;
+      const bytes = yield* file.readAlloc(remaining < 65_536n ? remaining : 65_536n);
+      if (Option.isNone(bytes)) return;
+      return [bytes.value, offset + BigInt(bytes.value.byteLength)] as const;
+    }),
+  );
+
+const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
+  function* (immutableBuildAssets: ReadonlySet<string>) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
 
@@ -472,7 +519,7 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     // Prefer the boot-time path, but re-resolve when it is empty so a mid-deploy
     // rebuild that wiped dist/client can fall back to monorepo apps/web/dist
     // (or a newly promoted client) without restarting the process.
-    let staticDir =
+    const staticDir =
       config.staticDir ?? (config.devUrl ? yield* ServerConfig.resolveStaticDir() : undefined);
     if (!staticDir) {
       return HttpServerResponse.text("No static directory configured and no dev URL set.", {
@@ -480,7 +527,6 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       });
     }
 
-    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     let staticRoot = path.resolve(staticDir);
     const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
@@ -514,53 +560,31 @@ export const staticAndDevRouteLayer = HttpRouter.add(
       }
     }
 
-    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
-    if (!fileInfo || fileInfo.type !== "File") {
-      let indexPath = path.resolve(staticRoot, "index.html");
-      let indexData = yield* fileSystem.readFile(indexPath).pipe(Effect.orElseSucceed(() => null));
-      if (!indexData) {
+    let opened = yield* openStaticFile(filePath);
+    if (!opened) {
+      filePath = path.resolve(staticRoot, "index.html");
+      opened = yield* openStaticFile(filePath);
+      if (!opened) {
         const recovered = yield* ServerConfig.resolveStaticDir();
         if (recovered !== undefined) {
           const recoveredRoot = path.resolve(recovered);
           if (recoveredRoot !== staticRoot) {
-            staticDir = recovered;
             staticRoot = recoveredRoot;
-            indexPath = path.resolve(staticRoot, "index.html");
-            indexData = yield* fileSystem
-              .readFile(indexPath)
-              .pipe(Effect.orElseSucceed(() => null));
-            // Re-attempt the original relative path under the recovered root
-            // (deep SPA links, hashed assets after a client repoint).
-            if (indexData) {
-              const recoveredFilePath = path.resolve(staticRoot, staticRelativePath);
-              if (isWithinStaticRoot(recoveredFilePath)) {
-                const recoveredInfo = yield* fileSystem
-                  .stat(recoveredFilePath)
-                  .pipe(Effect.orElseSucceed(() => null));
-                if (recoveredInfo?.type === "File") {
-                  filePath = recoveredFilePath;
-                  const recoveredData = yield* fileSystem
-                    .readFile(filePath)
-                    .pipe(Effect.orElseSucceed(() => null));
-                  if (recoveredData) {
-                    const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-                    return yield* respondWithStaticFile({
-                      data: recoveredData,
-                      contentType,
-                      cacheControl: resolveStaticCacheControl(staticRelativePath),
-                      cacheKey: isContentHashedAsset(staticRelativePath)
-                        ? staticCacheKey(recoveredFilePath, recoveredInfo)
-                        : contentCacheKey(recoveredData),
-                      acceptEncoding: request.headers["accept-encoding"],
-                    });
-                  }
-                }
+            const recoveredFilePath = path.resolve(staticRoot, staticRelativePath);
+            if (isWithinStaticRoot(recoveredFilePath)) {
+              opened = yield* openStaticFile(recoveredFilePath);
+              if (opened) {
+                filePath = recoveredFilePath;
               }
+            }
+            if (!opened) {
+              filePath = path.resolve(staticRoot, "index.html");
+              opened = yield* openStaticFile(filePath);
             }
           }
         }
       }
-      if (!indexData) {
+      if (!opened) {
         // Missing index during atomic client promote (or a broken package) is
         // temporary/operational — not a permanent missing route. 503 lets
         // desktop retry instead of painting a permanent "Not Found" shell.
@@ -569,96 +593,69 @@ export const staticAndDevRouteLayer = HttpRouter.add(
           headers: { "Retry-After": "1" },
         });
       }
-      return yield* respondWithStaticFile({
-        data: indexData,
-        contentType: "text/html; charset=utf-8",
-        // The SPA fallback always revalidates so a new build is picked up.
-        cacheControl: resolveStaticCacheControl("index.html"),
-        // Every deep link lands here, so the document is worth compressing.
-        // This is the one path whose file keeps a stable name across builds,
-        // so it is keyed by content: metadata read separately from the bytes
-        // could describe a different build than the one being served. The
-        // document is small enough for hashing it to be cheap.
-        cacheKey: contentCacheKey(indexData),
-        acceptEncoding: request.headers["accept-encoding"],
+    }
+    const fileInfo = opened.info;
+
+    // A hash-like name is not enough: custom static files can use the same naming pattern.
+    const relativePath = path.relative(staticRoot, filePath).replaceAll("\\", "/");
+    const immutable =
+      /^assets\/.+-[\w-]{8}\.[^/]+$/.test(relativePath) && immutableBuildAssets.has(relativePath);
+    const headers: Record<string, string> = {
+      "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+    };
+    const modifiedAt = Option.getOrUndefined(fileInfo.mtime);
+    const etag = modifiedAt
+      ? `W/"${fileInfo.size.toString(16)}-${modifiedAt.getTime().toString(16)}"`
+      : undefined;
+    if (etag !== undefined && modifiedAt !== undefined) {
+      headers.ETag = etag;
+      headers["Last-Modified"] = modifiedAt.toUTCString();
+    }
+
+    // If-None-Match takes precedence over dates and uses weak comparison for
+    // GET/HEAD, including when compression changes the transferred bytes.
+    const ifNoneMatch = request.headers["if-none-match"];
+    const ifModifiedSince = request.headers["if-modified-since"];
+    const unchanged =
+      ifNoneMatch !== undefined
+        ? ifNoneMatch.split(",").some((value) => {
+            const candidate = value.trim();
+            return (
+              candidate === "*" ||
+              (etag !== undefined && candidate.replace(/^W\//i, "") === etag.slice(2))
+            );
+          })
+        : ifModifiedSince !== undefined &&
+          modifiedAt !== undefined &&
+          Date.parse(modifiedAt.toUTCString()) <= Date.parse(ifModifiedSince);
+    if (unchanged) {
+      return HttpServerResponse.empty({
+        status: 304,
+        headers: { ...headers, Vary: "Accept-Encoding" },
       });
     }
 
-    const contentType = Mime.getType(filePath) ?? "application/octet-stream";
-    const data = yield* fileSystem.readFile(filePath).pipe(Effect.orElseSucceed(() => null));
-    if (!data) {
-      return HttpServerResponse.text("Internal Server Error", { status: 500 });
-    }
-
-    return yield* respondWithStaticFile({
-      data,
+    const contentType =
+      path.extname(filePath) === ".html"
+        ? "text/html; charset=utf-8"
+        : (Mime.getType(filePath) ?? "application/octet-stream");
+    // The request scope closes the handle for GET, HEAD, 304, errors, and cancellation.
+    // HEAD still passes through compression, which selects headers without reading the stream.
+    return HttpServerResponse.stream(streamStaticFile(opened.file, fileInfo.size), {
+      headers,
       contentType,
-      cacheControl: resolveStaticCacheControl(staticRelativePath),
-      // Hashed assets carry their content in their name, so metadata keying is
-      // both cheap and correct. Stable-name files (favicon, manifest, ...) can
-      // change content across a hot swap while keeping mtime/size, which would
-      // let the compression cache serve stale bytes -- key those by content,
-      // as index.html already is above.
-      cacheKey: isContentHashedAsset(staticRelativePath)
-        ? staticCacheKey(filePath, fileInfo)
-        : contentCacheKey(data),
-      acceptEncoding: request.headers["accept-encoding"],
+      contentLength: Number(fileInfo.size),
     });
+  },
+  Effect.catchTags({
+    PlatformError: () =>
+      Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
   }),
 );
 
-/**
- * Identifies a build of a hashed asset for the compression cache without
- * hashing payloads that can run to megabytes. Only used for files whose name
- * already carries a content hash (see isContentHashedAsset), so the name
- * changes whenever the bytes do and metadata keying cannot collide across a
- * rebuild or hot swap. Stable-name files are keyed by content at the call site.
- */
-function staticCacheKey(filePath: string, info: FileSystem.File.Info): string {
-  const mtimeMs = info.mtime.pipe(
-    Option.map((mtime) => mtime.getTime()),
-    Option.getOrElse(() => 0),
-  );
-  return `${filePath} ${mtimeMs} ${info.size}`;
-}
-
-const respondWithStaticFile = Effect.fn("staticAndDevRoute.respond")(function* (input: {
-  readonly data: Uint8Array;
-  readonly contentType: string;
-  readonly cacheControl: string;
-  /** Null for the SPA fallback, whose bytes are re-read on every request. */
-  readonly cacheKey: string | null;
-  readonly acceptEncoding: string | undefined;
-}) {
-  const headers: Record<string, string> = {
-    "Cache-Control": input.cacheControl,
-  };
-
-  const encoding = isCompressibleContentType(input.contentType)
-    ? negotiateStaticEncoding(input.acceptEncoding)
-    : null;
-  if (isCompressibleContentType(input.contentType)) {
-    // Announce negotiation even when this client took the identity encoding,
-    // so shared caches do not hand a compressed body to a client that
-    // cannot read it.
-    headers["Vary"] = "Accept-Encoding";
-  }
-
-  const cacheKey = input.cacheKey;
-  const compressed =
-    encoding && cacheKey !== null
-      ? yield* Effect.tryPromise(() =>
-          staticCompressionCache.get({ cacheKey, data: input.data, encoding }),
-        ).pipe(Effect.orElseSucceed(() => null))
-      : null;
-
-  if (compressed && encoding) {
-    headers["Content-Encoding"] = encoding;
-  }
-
-  return HttpServerResponse.uint8Array(compressed ?? input.data, {
-    status: 200,
-    contentType: input.contentType,
-    headers,
-  });
-});
+// Read the installed build's manifest once. Unknown files use revalidation.
+export const staticAndDevRouteLayer = Layer.unwrap(
+  loadImmutableBuildAssets.pipe(
+    Effect.map((assets) => HttpRouter.add("GET", "*", handleStaticAndDevRequest(assets))),
+  ),
+);

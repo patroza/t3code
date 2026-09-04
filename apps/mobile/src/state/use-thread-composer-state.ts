@@ -217,23 +217,28 @@ export function useThreadComposerState() {
     [selectedThreadDetail, steeringQueuedMessageIds],
   );
 
-  // Queued / outbox rows are composer chips (KeyboardStickyView), not feed
-  // bubbles — same model as web QueuedMessageChips + contracts.
-  const selectedThreadFeed = useMemo(() => {
-    if (!steeredDetail) {
-      return [];
-    }
+  const localFeedbackMessages = useMemo(() => {
     const submissions = selectedThreadKey
       ? (feedbackSubmissionsByThreadKey[selectedThreadKey] ?? [])
       : [];
-    return buildThreadFeed(steeredDetail, {
-      localMessages: submissions.flatMap((submission) =>
-        submission.status === "interrupted"
-          ? []
-          : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
-      ),
-    });
-  }, [feedbackSubmissionsByThreadKey, selectedThreadKey, steeredDetail]);
+    return submissions.flatMap((submission) =>
+      submission.status === "interrupted"
+        ? []
+        : [codexFeedbackMessage(submission), codexFeedbackMessage(submission, "assistant")],
+    );
+  }, [feedbackSubmissionsByThreadKey, selectedThreadKey]);
+  const selectedThreadMessages = steeredDetail?.messages;
+  const selectedThreadActivities = steeredDetail?.activities;
+  const selectedThreadFeed = useMemo(
+    () =>
+      selectedThreadMessages && selectedThreadActivities
+        ? buildThreadFeed(
+            { messages: selectedThreadMessages, activities: selectedThreadActivities },
+            { localMessages: localFeedbackMessages },
+          )
+        : [],
+    [localFeedbackMessages, selectedThreadActivities, selectedThreadMessages],
+  );
 
   const composerQueueItems = useMemo(() => {
     type QueueItem = {
