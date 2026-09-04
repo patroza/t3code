@@ -408,12 +408,11 @@ function resolveReferencedMessage(input: {
     const channelId = input.event.message_reference?.channel_id ?? input.event.channel_id;
     const guildId = input.event.message_reference?.guild_id ?? input.event.guild_id ?? null;
     const fetched = yield* input.rest.getMessage(channelId, refId).pipe(
-      Effect.map(
-        (message): DiscordMessageLike =>
-          discordMessageFromEvent({
-            ...message,
-            channel_id: typeof message.channel_id === "string" ? message.channel_id : channelId,
-          }),
+      Effect.map((message): DiscordMessageLike =>
+        discordMessageFromEvent({
+          ...message,
+          channel_id: typeof message.channel_id === "string" ? message.channel_id : channelId,
+        }),
       ),
       Effect.catch((error) =>
         Effect.logWarning("Failed to fetch referenced Discord message", {

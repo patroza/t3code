@@ -77,17 +77,15 @@ export const make = Effect.gen(function* () {
   const initial = yield* fileSystem.readFileString(filePath).pipe(
     Effect.map((raw) => {
       try {
-        return decodeDeliveries(raw).map(
-          (delivery): StoredJiraDelivery => ({
-            ...delivery,
-            acknowledgmentEmojiId: delivery.acknowledgmentEmojiId ?? null,
-            actorAccountId: delivery.actorAccountId ?? null,
-            actorDisplayName: delivery.actorDisplayName ?? null,
-            threadId: delivery.threadId as ThreadId | null,
-            previousTurnId: delivery.previousTurnId as TurnId | null,
-            targetTurnId: delivery.targetTurnId as TurnId | null,
-          }),
-        );
+        return decodeDeliveries(raw).map((delivery): StoredJiraDelivery => ({
+          ...delivery,
+          acknowledgmentEmojiId: delivery.acknowledgmentEmojiId ?? null,
+          actorAccountId: delivery.actorAccountId ?? null,
+          actorDisplayName: delivery.actorDisplayName ?? null,
+          threadId: delivery.threadId as ThreadId | null,
+          previousTurnId: delivery.previousTurnId as TurnId | null,
+          targetTurnId: delivery.targetTurnId as TurnId | null,
+        }));
       } catch {
         return [];
       }

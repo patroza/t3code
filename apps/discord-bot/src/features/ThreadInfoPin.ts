@@ -267,16 +267,14 @@ const loadDiscordThreadAttributionContext = (input: {
           }),
         catch: (cause) => cause,
       }).pipe(
-        Effect.map(
-          (message): DiscordThreadStarterLike => ({
-            id: message.id,
-            author: {
-              id: message.author?.id,
-              username: message.author?.username,
-              displayName: message.author?.global_name ?? message.author?.username,
-            },
-          }),
-        ),
+        Effect.map((message): DiscordThreadStarterLike => ({
+          id: message.id,
+          author: {
+            id: message.author?.id,
+            username: message.author?.username,
+            displayName: message.author?.global_name ?? message.author?.username,
+          },
+        })),
         Effect.orElseSucceed((): DiscordThreadStarterLike | null => null),
       );
     }

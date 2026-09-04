@@ -80,14 +80,12 @@ export const make = Effect.gen(function* AiUsageMonitorMake() {
     httpClient.execute,
     Effect.flatMap(HttpClientResponse.schemaBodyJson(AiUsageFeed)),
     Effect.timeout(REQUEST_TIMEOUT),
-    Effect.map(
-      (feed): AiUsageSnapshot => ({
-        generated_at: feed.generated_at ?? null,
-        worst_percent: feed.worst_percent ?? null,
-        available: true,
-        items: feed.items,
-      }),
-    ),
+    Effect.map((feed): AiUsageSnapshot => ({
+      generated_at: feed.generated_at ?? null,
+      worst_percent: feed.worst_percent ?? null,
+      available: true,
+      items: feed.items,
+    })),
     Effect.catchCause((cause) =>
       Effect.logDebug("ai-usage daemon unavailable", Cause.pretty(cause)).pipe(
         Effect.as(AI_USAGE_UNAVAILABLE),
