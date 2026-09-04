@@ -27,7 +27,6 @@ const clientSettings: ClientSettings = {
   confirmThreadDelete: false,
   confirmWorktreeRemoval: true,
   confirmThreadUnpin: false,
-  continueThreadsAfterServerUpdate: true,
   contextWindowMeterEnabled: false,
   composerCollapseOnBlur: false,
   composerCollapseOnScroll: true,
