@@ -396,9 +396,9 @@ it.layer(layer)("AntigravityAdapter", (it) => {
         expect(requests.some((request) => request.method === "session/load")).toBe(false);
         expect(
           requests
-            .filter((request) => request.method === "session/set_config_option")
+            .filter((request) => request.method === "session/set_mode")
             .map((request) => request.params),
-        ).toContainEqual({ sessionId: "mock-session-1", configId: "mode", value: "auto_edit" });
+        ).toContainEqual({ sessionId: "mock-session-1", modeId: "auto_edit" });
       }),
   );
 
