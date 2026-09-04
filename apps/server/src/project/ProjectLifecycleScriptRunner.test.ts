@@ -44,6 +44,7 @@ const makeProjectionSnapshotQueryLayer = (
   Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
     getUserInputActivity: () => Effect.die("unused"),
     getCommandReadModel: () => Effect.die("unused"),
+    getThreadRuntimeContext: () => Effect.die("unused"),
     getThreadActivitiesPage: () => Effect.die("unused"),
     getSnapshot: () => Effect.die("unused"),
     getShellSnapshot: () =>

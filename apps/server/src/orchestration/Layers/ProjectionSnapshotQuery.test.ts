@@ -576,6 +576,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(context.value, {
           id: ThreadId.make("thread-1"),
           title: "Thread 1",
+          interactionMode: snapshot.threads[0]?.interactionMode,
           session: snapshot.threads[0]?.session,
         });
       }

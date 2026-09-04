@@ -620,6 +620,14 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
+  // Archived threads must still be stoppable. Session-stop lookups include
+  // archived/deleted shells that getThreadShellById omits.
+  const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    return yield* projectionSnapshotQuery
+      .getSessionStopContextById(threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+  });
+
   const resolveThreadDetail = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId, { activityKinds: [] })
