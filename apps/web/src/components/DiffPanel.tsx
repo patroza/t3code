@@ -931,14 +931,9 @@ export default function DiffPanel({
               <ChangedFilesCard
                 turnId={selectedTurn.turnId}
                 files={selectedTurn.files}
-                expanded
-                showCompactPreview={false}
                 allDirectoriesExpanded={allDirectoriesExpanded}
                 resolvedTheme={resolvedTheme}
-                className="mt-0 shrink-0 rounded-none border-x-0 border-t-0"
-                onExpandedChange={() => {
-                  // Diff panel always shows the full file tree.
-                }}
+                className="mt-0 shrink-0 rounded-none"
                 onToggleAllDirectories={() =>
                   setThreadChangedFilesExpanded(
                     routeThreadKey,
