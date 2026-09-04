@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -126,6 +127,9 @@ interface DiscordThreadLinkRecord {
   readonly discordThreadId: string;
   readonly t3ThreadId: string;
   readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly lastActivityAt?: string;
+  readonly status?: string;
 }
 
 function expandHomePath(value: string): string {
@@ -341,19 +345,35 @@ async function resolveDiscordAliasesPath(): Promise<string | null> {
   return aliasesFile !== null ? DISCORD_DEFAULT_ALIASES_PATH : null;
 }
 
-function pickLinkedDiscordThreadId(document: unknown, t3ThreadId: string): string | null {
-  if (!Array.isArray(document)) return null;
-  const matches = document.filter(
-    (entry): entry is DiscordThreadLinkRecord =>
-      isRecord(entry) &&
-      entry.t3ThreadId === t3ThreadId &&
-      typeof entry.discordThreadId === "string" &&
-      entry.discordThreadId.trim().length > 0,
-  );
+function linksFromDocument(document: unknown): ReadonlyArray<unknown> {
+  if (Array.isArray(document)) return document;
+  if (isRecord(document) && Array.isArray(document.links)) return document.links;
+  return [];
+}
+
+function isDiscordThreadLinkRecord(entry: unknown): entry is DiscordThreadLinkRecord {
   return (
-    matches.toSorted((left, right) =>
-      String(right.createdAt ?? "").localeCompare(String(left.createdAt ?? "")),
-    )[0]?.discordThreadId ?? null
+    isRecord(entry) &&
+    typeof entry.t3ThreadId === "string" &&
+    typeof entry.discordThreadId === "string" &&
+    entry.discordThreadId.trim().length > 0
+  );
+}
+
+function linkRecency(entry: DiscordThreadLinkRecord): string {
+  return entry.lastActivityAt ?? entry.updatedAt ?? entry.createdAt ?? "";
+}
+
+function pickLinkedDiscordThreadId(document: unknown, t3ThreadId: string): string | null {
+  const matches = linksFromDocument(document).filter(
+    (entry): entry is DiscordThreadLinkRecord =>
+      isDiscordThreadLinkRecord(entry) && entry.t3ThreadId === t3ThreadId,
+  );
+  const active = matches.filter((entry) => entry.status !== "tombstone");
+  const pool = active.length > 0 ? active : matches;
+  return (
+    pool.toSorted((left, right) => linkRecency(right).localeCompare(linkRecency(left)))[0]
+      ?.discordThreadId ?? null
   );
 }
 
@@ -591,6 +611,38 @@ function buildDiscordCreateMessageBody(
   };
 }
 
+function copyBytes(bytes: Uint8Array): Uint8Array {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+
+function appendDiscordUploadFiles(form: FormData, files: ReadonlyArray<DiscordUploadFile>): void {
+  files.forEach((file, index) => {
+    const filename = file.filename.trim() !== "" ? file.filename.trim() : "attachment.bin";
+    form.append(
+      `files[${index}]`,
+      new File([copyBytes(file.bytes)], filename, {
+        type: "application/octet-stream",
+      }),
+    );
+  });
+}
+
+function buildDiscordMultipartForm(input: {
+  readonly body: ReturnType<typeof buildDiscordCreateMessageBody>;
+  readonly files: ReadonlyArray<DiscordUploadFile>;
+}): FormData {
+  const formData = new FormData();
+  formData.append("payload_json", JSON.stringify(input.body));
+  appendDiscordUploadFiles(formData, input.files);
+  return formData;
+}
+
+function messageFromUnknown(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 async function createDiscordMessage(input: {
   readonly token: string;
   readonly channelId: string;
@@ -605,23 +657,18 @@ async function createDiscordMessage(input: {
           headers: {
             Authorization: `Bot ${input.token}`,
             "Content-Type": "application/json",
+            "User-Agent": "DiscordBot (t3-discord-bot, 0.0.0)",
           },
           body: JSON.stringify(input.body),
         })
-      : await (async () => {
-          const formData = new FormData();
-          formData.set("payload_json", JSON.stringify(input.body));
-          input.files.forEach((file, index) => {
-            formData.set(`files[${index}]`, new Blob([file.bytes]), file.filename);
-          });
-          return fetch(url, {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${input.token}`,
-            },
-            body: formData,
-          });
-        })();
+      : await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bot ${input.token}`,
+            "User-Agent": "DiscordBot (t3-discord-bot, 0.0.0)",
+          },
+          body: buildDiscordMultipartForm({ body: input.body, files: input.files }),
+        });
 
   if (!response.ok) {
     const body = await response.text();
@@ -798,14 +845,14 @@ export const registerDiscordLinkedChannelPostTool = Effect.fn("DiscordLinkedChan
               ],
             });
           }).pipe(
-            Effect.catch((error: unknown) =>
-              Effect.succeed(
+            Effect.matchCause({
+              onFailure: (cause) =>
                 errorResult(
-                  error instanceof Error ? error.message : String(error),
+                  messageFromUnknown(Cause.squash(cause)),
                   "DiscordLinkedChannelPostError",
                 ),
-              ),
-            ),
+              onSuccess: (result) => result,
+            }),
           );
         }),
     });
@@ -818,4 +865,5 @@ export const __testing = {
   pickLinkedDiscordChannel,
   pickLinkedDiscordThreadId,
   resolveDiscordPostDestination,
+  buildDiscordMultipartForm,
 };

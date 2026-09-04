@@ -71,9 +71,83 @@ describe("pickLinkedDiscordThreadId", () => {
     ).toBe("discord-new");
   });
 
+  it("reads v2 links.json documents used by the Discord bot", () => {
+    expect(
+      __testing.pickLinkedDiscordThreadId(
+        {
+          version: 2,
+          links: [
+            {
+              discordThreadId: "discord-v2",
+              t3ThreadId: "t3-active",
+              createdAt: "2026-09-04T07:00:00.000Z",
+              status: "active",
+            },
+          ],
+        },
+        "t3-active",
+      ),
+    ).toBe("discord-v2");
+  });
+
+  it("skips tombstones and prefers recent activity on v2 documents", () => {
+    expect(
+      __testing.pickLinkedDiscordThreadId(
+        {
+          version: 2,
+          links: [
+            {
+              discordThreadId: "discord-tombstone",
+              t3ThreadId: "t3-active",
+              createdAt: "2026-09-04T09:00:00.000Z",
+              lastActivityAt: "2026-09-04T09:00:00.000Z",
+              status: "tombstone",
+            },
+            {
+              discordThreadId: "discord-older-active",
+              t3ThreadId: "t3-active",
+              createdAt: "2026-09-04T07:00:00.000Z",
+              lastActivityAt: "2026-09-04T07:00:00.000Z",
+              status: "active",
+            },
+            {
+              discordThreadId: "discord-newer-active",
+              t3ThreadId: "t3-active",
+              createdAt: "2026-09-04T08:00:00.000Z",
+              lastActivityAt: "2026-09-04T10:00:00.000Z",
+              status: "active",
+            },
+          ],
+        },
+        "t3-active",
+      ),
+    ).toBe("discord-newer-active");
+  });
+
   it("falls back when the active T3 thread has no Discord link", () => {
     expect(__testing.pickLinkedDiscordThreadId([], "t3-active")).toBeNull();
     expect(__testing.pickLinkedDiscordThreadId({ links: [] }, "t3-active")).toBeNull();
+  });
+});
+
+describe("buildDiscordMultipartForm", () => {
+  it("uploads files as File parts so Discord keeps the filename", () => {
+    const form = __testing.buildDiscordMultipartForm({
+      body: { content: "hi", allowed_mentions: { parse: [] } },
+      files: [
+        {
+          filename: "note.md",
+          spoiler: false,
+          bytes: new TextEncoder().encode("# hi\n"),
+        },
+      ],
+    });
+    const part = form.get("files[0]");
+    expect(part).toBeInstanceOf(File);
+    expect((part as File).name).toBe("note.md");
+    expect(form.get("payload_json")).toBe(
+      JSON.stringify({ content: "hi", allowed_mentions: { parse: [] } }),
+    );
   });
 });
 
