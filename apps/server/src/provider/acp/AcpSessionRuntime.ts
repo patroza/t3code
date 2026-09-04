@@ -1143,17 +1143,38 @@ export const make = (
           ? promptDispatchSemaphore.withPermit(cancel)
           : cancel,
       setMode: (modeId) =>
-        Ref.get(modeStateRef).pipe(
-          Effect.flatMap((modeState) => {
-            if (modeState?.currentModeId === modeId) {
-              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
-            }
-            return setConfigOption("mode", modeId).pipe(
-              Effect.tap(() => updateCurrentModeId(modeId)),
-              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
-            );
-          }),
-        ),
+        Effect.gen(function* () {
+          const normalizedModeId = modeId.trim();
+          if (!normalizedModeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const modeState = yield* Ref.get(modeStateRef);
+          if (modeState?.currentModeId === normalizedModeId) {
+            return {} satisfies EffectAcpSchema.SetSessionModeResponse;
+          }
+          const started = yield* getStartedState;
+          const requestPayload = {
+            sessionId: started.sessionId,
+            modeId: normalizedModeId,
+          } satisfies EffectAcpSchema.SetSessionModeRequest;
+          return yield* runLoggedRequest(
+            "session/set_mode",
+            requestPayload,
+            acp.agent.setSessionMode(requestPayload),
+          ).pipe(
+            Effect.tap(() => updateCurrentModeId(normalizedModeId)),
+            Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+            Effect.catch((error) => {
+              if (error._tag === "AcpRequestError" && error.code === -32601) {
+                return setConfigOption("mode", normalizedModeId).pipe(
+                  Effect.tap(() => updateCurrentModeId(normalizedModeId)),
+                  Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+                );
+              }
+              return Effect.fail(error);
+            }),
+          );
+        }),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(

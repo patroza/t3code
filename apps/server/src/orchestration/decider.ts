@@ -1436,9 +1436,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           }
           replies.push(`${question.question}\n${answer.trim()}`);
         }
-        // Commit the answer and its message together. The normal turn path
-        // steers a running agent or resumes an idle session.
-        return yield* decideCommandSequence({
+        // Commit the answer and its message together. Do not go through
+        // `thread.turn.start` here: queue-by-default would hold the answer
+        // while the agent is still running, and the user never sees it.
+        const resolvedEvents = yield* decideCommandSequence({
           readModel,
           commands: [
             {
@@ -1460,22 +1461,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 },
               },
             },
-            {
-              type: "thread.turn.start",
-              commandId: command.commandId,
-              threadId: command.threadId,
-              createdAt: command.createdAt,
-              runtimeMode: thread.runtimeMode,
-              interactionMode: thread.interactionMode,
-              message: {
-                messageId: MessageId.make(`async-answer:${command.requestId}`),
-                role: "user",
-                text: replies.join("\n\n"),
-                attachments: [],
-              },
-            },
           ],
         });
+        const turnEvents = yield* planTurnStartEvents({
+          commandId: command.commandId,
+          thread,
+          message: {
+            messageId: MessageId.make(`async-answer:${command.requestId}`),
+            text: replies.join("\n\n"),
+            attachments: [],
+          },
+          occurredAt: command.createdAt,
+        });
+        return [...resolvedEvents, ...turnEvents];
       }
       return {
         ...(yield* withEventBase({

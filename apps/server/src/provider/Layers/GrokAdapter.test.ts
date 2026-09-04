@@ -247,13 +247,31 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
           [
             {
               prompt: [{ type: "text", text: "First prompt" }],
-              result: { stopReason: "end_turn" },
+              result: {
+                stopReason: "end_turn",
+                usage: {
+                  cachedReadTokens: 200,
+                  inputTokens: 1000,
+                  outputTokens: 400,
+                  thoughtTokens: 100,
+                  totalTokens: 1500,
+                },
+              },
             },
           ],
           [
             {
               prompt: [{ type: "text", text: "Second prompt" }],
-              result: { stopReason: "end_turn" },
+              result: {
+                stopReason: "end_turn",
+                usage: {
+                  cachedReadTokens: 200,
+                  inputTokens: 1000,
+                  outputTokens: 400,
+                  thoughtTokens: 100,
+                  totalTokens: 1500,
+                },
+              },
             },
           ],
         ],

@@ -2064,6 +2064,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
             }),
@@ -2277,7 +2278,6 @@ it.layer(
             ),
             Layer.provideMerge(ModelManifest.layerTest),
             Layer.provideMerge(CodexResetCredit.layerTest),
-            Layer.provideMerge(CodexResetCredit.layerTest),
             Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
             Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
             Layer.provideMerge(
@@ -2324,6 +2324,7 @@ it.layer(
               "codex",
               "cursor",
               "grok",
+              "kimi",
               "opencode",
             ]);
             assert.strictEqual(cursorProvider?.enabled, false);

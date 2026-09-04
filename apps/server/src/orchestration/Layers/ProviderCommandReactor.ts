@@ -1839,16 +1839,9 @@ const make = Effect.gen(function* () {
     const shouldStopProvider = context.session && context.session.status !== "stopped";
     yield* (
       shouldStopProvider
-        ? providerService.stopSession({ threadId: context.threadId }).pipe(
-            Effect.interruptible,
-            Effect.timeoutOption(PROVIDER_CONTROL_TIMEOUT),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("provider session stop failed", {
-                threadId: context.threadId,
-                cause: Cause.pretty(cause),
-              }).pipe(Effect.as(Option.some(undefined))),
-            ),
-          )
+        ? providerService
+            .stopSession({ threadId: context.threadId })
+            .pipe(Effect.interruptible, Effect.timeoutOption(PROVIDER_CONTROL_TIMEOUT))
         : Effect.succeed(Option.some(undefined))
     ).pipe(
       Effect.matchCauseEffect({

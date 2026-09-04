@@ -328,7 +328,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           [
             {
               prompt: [{ type: "text", text: "please /review this" }],
-              result: { stopReason: "end_turn" },
+              result: {
+                stopReason: "end_turn",
+                usage: {
+                  cachedReadTokens: 200,
+                  inputTokens: 1000,
+                  outputTokens: 400,
+                  thoughtTokens: 100,
+                  totalTokens: 1500,
+                },
+              },
             },
           ],
         ],

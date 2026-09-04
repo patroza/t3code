@@ -4228,7 +4228,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.equal(ticketResponse.status, 200);
       const { ticket } = (yield* ticketResponse.json) as { ticket: string };
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+      const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+        wsTicket: ticket,
+      });
       const frames: string[] = [];
       yield* withWsRpcClient(
         wsUrl,
@@ -5429,7 +5431,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         headers: { authorization: `Bearer ${token.body.access_token ?? ""}` },
       });
       const { ticket } = yield* responseJsonEffect<{ readonly ticket: string }>(ticketResponse);
-      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket)}`;
+      const wsUrl = appendWsSearchParams(yield* getWsServerUrl("/ws", { authenticated: false }), {
+        wsTicket: ticket,
+      });
       yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
