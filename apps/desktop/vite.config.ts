@@ -60,6 +60,10 @@ export default defineConfig({
         },
       }),
     ],
+    // The Windows lane runs workspace suites concurrently; filesystem-heavy
+    // desktop integration tests can exceed Vitest's 5 second default there.
+    testTimeout: 15_000,
+    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
   },
   run: {
     tasks: {
@@ -133,10 +137,4 @@ export default defineConfig({
       entry: ["src/preview-pip-preload.ts"],
     },
   ],
-  test: {
-    // The Windows lane runs workspace suites concurrently; filesystem-heavy
-    // desktop integration tests can exceed Vitest's 5 second default there.
-    testTimeout: 15_000,
-    setupFiles: ["../../packages/shared/src/testing/longTempDir.ts"],
-  },
 });
