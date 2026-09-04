@@ -2719,7 +2719,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         provider: ProviderDriverKind.make("codex"),
         createdAt: "2026-01-01T00:00:00.000Z",
         threadId: session.threadId,
-        turnId: asTurnId("turn-1"),
+        turnId: asTurnId("turn-thread-1"),
         payload: { state: "completed" },
       };
 

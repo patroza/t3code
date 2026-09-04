@@ -596,26 +596,26 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       // Keep origin/participants rebuild from user messages (fork). Activities
       // and pending approvals use the cheaper SQLite-filtered queries from
       // upstream so a long-running thread's tool payloads stay off the heap.
-      const [messages, proposedPlans, activities, pendingApprovalCount] = yield* Effect.all([
-        projectionThreadMessageRepository.listByThreadId({ threadId }),
-        projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
-        projectionThreadActivityRepository.listUserInputLifecycleByThreadId({ threadId }),
-        projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
-      ]);
+      // latestUserMessageAt is a dedicated query so summary refresh does not
+      // decode message bodies (#9662). If attachments_json is corrupt, keep
+      // the existing origin/participants instead of failing the refresh.
+      const [latestUserMessageAt, proposedPlans, activities, pendingApprovalCount, messages] =
+        yield* Effect.all([
+          projectionThreadMessageRepository.getLatestUserMessageAt({ threadId }),
+          projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
+          projectionThreadActivityRepository.listUserInputLifecycleByThreadId({ threadId }),
+          projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
+          projectionThreadMessageRepository
+            .listByThreadId({ threadId })
+            .pipe(Effect.orElseSucceed(() => [] as const)),
+        ]);
 
-      let latestUserMessageAt: string | null = null;
       // Rebuild origin + participants from projected user messages so shell stays
       // consistent after resync/replay (not only first-write stamps).
       type ParticipantRow = NonNullable<(typeof existingRow.value)["participantSummaries"]>[number];
       const rebuiltParticipants: Array<ParticipantRow> = [];
       let rebuiltOrigin = existingRow.value.originSource ?? null;
       for (const message of messages) {
-        if (
-          message.role === "user" &&
-          (latestUserMessageAt === null || message.createdAt > latestUserMessageAt)
-        ) {
-          latestUserMessageAt = message.createdAt;
-        }
         if (message.role !== "user" || message.source === undefined) {
           continue;
         }

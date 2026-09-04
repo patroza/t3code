@@ -2436,7 +2436,9 @@ export function makeOpenCodeAdapter(
           }
           context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
           if (event.properties.info.role === "assistant") {
-            yield* emitOpenCodeTokenUsage(context, event.properties.info.tokens, event);
+            if (!context.turnTokenUsage) {
+              yield* emitOpenCodeTokenUsage(context, event.properties.info.tokens, event);
+            }
             const usage = context.turnTokenUsage;
             const parentMessageId =
               typeof event.properties.info.parentID === "string" &&
@@ -2551,7 +2553,7 @@ export function makeOpenCodeAdapter(
             yield* emitAssistantTextDelta(context, part, turnId, event);
           }
 
-          if (part.type === "step-finish") {
+          if (part.type === "step-finish" && !context.turnTokenUsage) {
             yield* emitOpenCodeTokenUsage(context, part.tokens, event);
           }
 
