@@ -34,6 +34,7 @@ import {
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  isVideoPreviewRequestCurrent,
   pruneOptimisticQueuedMessageIds,
   resolvedSteeredMessageIds,
   reconcileMountedTerminalThreadIds,
@@ -67,6 +68,14 @@ import {
   isThreadErrorBannerDismissedForSession,
   shouldShowThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
+
+describe("isVideoPreviewRequestCurrent", () => {
+  it("rejects changed threads and replaced previews", () => {
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-2", 1, 1)).toBe(false);
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 1, 2)).toBe(false);
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 2, 2)).toBe(true);
+  });
+});
 
 describe("agent browser close confirmation", () => {
   const surfaces = [
@@ -1811,6 +1820,7 @@ describe("thread error banner dismissal", () => {
       phase: "ready" as const,
       latestTurn: null,
       latestUserMessageId: localDispatch.latestUserMessageId,
+      projectedMessageIds: new Set<string>(),
       session: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,

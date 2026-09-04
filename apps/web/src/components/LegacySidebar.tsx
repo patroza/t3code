@@ -28,6 +28,7 @@ import { getDriverOption } from "./settings/providerDriverMeta";
 import { AiUsageStats } from "./chat/AiUsageStats";
 
 import {
+  ChangeRequestStatusIcon,
   ComposerDraftDot,
   prStatusIndicator,
   PrStatusTooltipContent,
@@ -232,7 +233,6 @@ import {
   SETTLED_TAIL_INITIAL_COUNT,
   SETTLED_TAIL_PAGE_COUNT,
   groupSettledThreadsByRecencyForSidebarV2,
-  resolveSettledTimestamp,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   sortSettledThreadsForSidebar,
@@ -241,7 +241,7 @@ import {
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
-import { sortThreads } from "../lib/threadSort";
+import { resolveSettledThreadTimestamp, sortThreads } from "../lib/threadSort";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -3338,7 +3338,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
     RECENT_PROJECT_BADGE_CLASSES[
       resolveSidebarProjectBadgeColorIndex(project.projectKey, RECENT_PROJECT_BADGE_CLASSES.length)
     ];
-  const settledTimestamp = resolveSettledTimestamp(thread);
+  const settledTimestamp = resolveSettledThreadTimestamp(thread);
   const settledTimeLabel =
     settledTimestamp === null
       ? ""
@@ -3673,6 +3673,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             <ProjectFavicon
               environmentId={thread.environmentId}
               cwd={project.workspaceRoot}
+              projectName={project.title}
               className="size-4"
               fallbackIcon={MessageSquareIcon}
             />
@@ -4654,6 +4655,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         <ProjectFavicon
                           environmentId={project.environmentId}
                           cwd={project.workspaceRoot}
+                          projectName={project.title}
                           className="size-3.5 shrink-0"
                         />
                         <span className="truncate">{project.displayName}</span>
@@ -4823,6 +4825,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                                 <ProjectFavicon
                                   environmentId={project.environmentId}
                                   cwd={project.workspaceRoot}
+                                  projectName={project.displayName}
                                   className="size-3.5 shrink-0"
                                 />
                                 <span className="truncate">{project.displayName}</span>

@@ -31,7 +31,6 @@ vi.mock("@legendapp/list/react", async () => {
           size?: boolean;
           shouldRestorePosition?: (item: { id: string }) => boolean;
         };
-    maintainVisibleContentPosition?: unknown;
     ref?: Ref<LegendListRef>;
   }) => {
     if (props.anchoredEndSpace) {
@@ -77,11 +76,6 @@ vi.mock("@legendapp/list/react", async () => {
           typeof props.maintainScrollAtEnd === "object"
             ? props.maintainScrollAtEnd.on?.layout
             : undefined
-        }
-        data-maintain-visible-content-position={
-          typeof props.maintainVisibleContentPosition === "object"
-            ? "object"
-            : props.maintainVisibleContentPosition
         }
         data-maintain-visible-content-position-data={
           typeof props.maintainVisibleContentPosition === "object"

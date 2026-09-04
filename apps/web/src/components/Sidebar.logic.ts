@@ -1,6 +1,5 @@
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-type ChangeRequestStateLike = "open" | "closed" | "merged";
 import {
   groupThreadsByRecency,
   shouldShowRecencySectionHeaders,
@@ -24,6 +23,10 @@ import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 import { isLatestTurnSettled, shouldShowPlanReadyStatus } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import type { SnoozePreset } from "./Sidebar.snooze";
+
+export { resolveSettledThreadTimestamp };
+
+type ChangeRequestStateLike = "open" | "closed" | "merged";
 
 export function resolveSidebarProjectBadgeLabel(displayName: string): string {
   const leafName = displayName.split("/").findLast(Boolean) ?? displayName;
@@ -1166,7 +1169,7 @@ export function sortSettledThreadsForSidebar<
  * (same rule as classic Threads recency).
  */
 export function groupSettledThreadsByRecencyForSidebarV2<
-  T extends SettledTimestampInput & { readonly id: string },
+  T extends SettledThreadTimestampInput & { readonly id: string },
 >(
   threads: readonly T[],
   now: Date = new Date(),
@@ -1177,7 +1180,7 @@ export function groupSettledThreadsByRecencyForSidebarV2<
   const groups = groupThreadsByRecency(
     threads,
     (thread) => {
-      const timestamp = resolveSettledTimestamp(thread);
+      const timestamp = resolveSettledThreadTimestamp(thread);
       if (timestamp === null) return Number.NaN;
       const ms = Date.parse(timestamp);
       return Number.isNaN(ms) ? Number.NaN : ms;

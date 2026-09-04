@@ -273,10 +273,6 @@ import {
   type DraftSessionState,
 } from "../composerDraftStore";
 
-// Settled-tail paging: recent history is the common lookup; the deep tail
-// stays behind an explicit Show more.
-const SETTLED_TAIL_INITIAL_COUNT = 10;
-const SETTLED_TAIL_PAGE_COUNT = 25;
 // Upstream's snoozed key spelling is "v2"/legacy; the fork had no snoozed-shelf
 // preference before sync, so adopt it. Settled shelf keeps the fork's older key
 // (SIDEBAR_V2_SETTLED_SHELF_EXPANDED_STORAGE_KEY), which holds existing prefs.

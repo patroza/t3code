@@ -36,6 +36,7 @@ import {
   ChevronDownIcon,
   CloudDownloadIcon,
   CloudUploadIcon,
+  ExternalLinkIcon,
   GitBranchPlusIcon,
   GitCommitIcon,
   InfoIcon,
@@ -48,6 +49,7 @@ import { repositoryFromChangeRequestUrl } from "~/components/pullRequest/pullReq
 import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
+import { readLocalApi } from "~/localApi";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
