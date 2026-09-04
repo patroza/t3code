@@ -76,6 +76,9 @@ const isolatedUnitTestFiles = [
   // it failed in one full run and passed in the next, purely on file ordering.
   "src/browserHistoryStore.test.ts",
   "src/browser/browserRecording.test.ts",
+  // Mocks `~/hooks/useSettings`; under isolate:false an earlier file binds
+  // the real store and getBrowserDefaults never sees the test profile list.
+  "src/browser/browserDefaults.test.ts",
   "src/browser/browserTargetResolver.test.ts",
   "src/browser/desktopTabLifetime.test.ts",
   "src/branding.test.ts",
