@@ -1,9 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - cleanup uses Node's retrying rm, which the FileSystem service does not expose.
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { vi } from "vite-plus/test";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
 import { ClaudeSettings } from "@t3tools/contracts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -189,9 +186,8 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
   );
 });
 
-it.effect("preserves initialized capabilities when optional usage times out", () =>
+it.live("preserves initialized capabilities when optional usage times out", () =>
   Effect.gen(function* () {
-    const usageStarted = yield* Deferred.make<void>();
     let abortSignal: AbortSignal | undefined;
     const query = vi.spyOn(ClaudeSdk, "query").mockImplementation(({ options }) => {
       abortSignal = options?.abortController?.signal;
@@ -200,18 +196,13 @@ it.effect("preserves initialized capabilities when optional usage times out", ()
           account: { email: "dev@example.com", subscriptionType: "pro", tokenSource: "oauth" },
           commands: [{ name: "review", description: "Review changes", argumentHint: "[path]" }],
         }),
-        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
-          Deferred.doneUnsafe(usageStarted, Effect.void);
-          return new Promise(() => {});
-        },
+        usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}),
       } as ReturnType<typeof ClaudeSdk.query>;
     });
     yield* Effect.addFinalizer(() => Effect.sync(() => query.mockRestore()));
-    const probe = yield* probeClaudeCapabilities(
+    const capabilities = yield* probeClaudeCapabilities(
       decodeClaudeSettings({ binaryPath: "claude" }),
-    ).pipe(Effect.forkChild);
-    yield* Deferred.await(usageStarted);
-    const capabilities = yield* Fiber.join(probe);
+    );
     assert.equal(capabilities?.email, "dev@example.com");
     assert.equal(capabilities?.subscriptionType, "pro");
     assert.equal(capabilities?.tokenSource, "oauth");
@@ -220,5 +211,5 @@ it.effect("preserves initialized capabilities when optional usage times out", ()
     ]);
     assert.equal(capabilities?.usage, undefined);
     assert.equal(abortSignal?.aborted, true);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), TestClock.withLive),
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
