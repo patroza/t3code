@@ -476,7 +476,10 @@ for (const [enabled, completed] of [
         const turnId = asTurnId("shutdown-recovery-turn");
         const scope = yield* Scope.make();
         const services = yield* Layer.build(
-          makeProviderServiceLive().pipe(
+          makeProviderServiceLive({
+            shutdownInterruptGracePeriod: "0 millis",
+            shutdownGracePeriod: "50 millis",
+          }).pipe(
             Layer.provide(
               Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, directory),
             ),
@@ -549,10 +552,13 @@ for (const [enabled, completed] of [
         assert.deepStrictEqual(binding.value.resumeCursor, session.resumeCursor);
         assert.equal(binding.value.status, "stopped");
         assert.propertyVal(markers[0], "activeTurnId", completed ? null : turnId);
-        if (enabled && !completed) {
+        if (!completed) {
+          // Graceful stopAll still marks working sessions with a resume cursor,
+          // even when the restart opt-in is off. Crash/machine-restart recovery
+          // is what the setting gates.
           assert.propertyVal(markers[0], "continueAfterServerUpdate", turnId);
           assert.propertyVal(binding.value.runtimePayload, "continueAfterServerUpdate", turnId);
-        } else if (completed) {
+        } else {
           assert.propertyVal(
             binding.value.runtimePayload,
             "continueAfterServerUpdate",
@@ -563,9 +569,6 @@ for (const [enabled, completed] of [
             "continueAfterServerUpdatePrepared",
             null,
           );
-        } else {
-          assert.propertyVal(markers[0], "continueAfterServerUpdate", null);
-          assert.propertyVal(binding.value.runtimePayload, "continueAfterServerUpdate", null);
         }
       }).pipe(Effect.provide(NodeServices.layer)),
   );
