@@ -162,4 +162,30 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
       expect(projectFromModel(afterClear)?.defaultThreadEnvMode).toBeNull();
     }),
   );
+
+  it.effect("propagates autoPull through meta.update into the read model", () =>
+    Effect.gen(function* () {
+      const readModel = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
+      expect(
+        (projectFromModel(readModel) as { readonly autoPull?: boolean } | undefined)?.autoPull,
+      ).toBe(false);
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.meta.update",
+          commandId: CommandId.make("cmd-project-auto-pull"),
+          projectId,
+          autoPull: true,
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+      expect((event.payload as { autoPull?: unknown }).autoPull).toBe(true);
+
+      const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
+      expect(
+        (projectFromModel(updated) as { readonly autoPull?: boolean } | undefined)?.autoPull,
+      ).toBe(true);
+    }),
+  );
 });

@@ -42,13 +42,11 @@ export function mergeOpenWithOptions(input: {
   const presentationById = new Map(input.presentations.map((entry) => [entry.entryId, entry]));
   return [
     ...builtins,
-    ...input.customEntries.map(
-      (entry): CustomOpenWithOption => ({
-        type: "custom",
-        entry,
-        presentation: presentationById.get(entry.id) ?? null,
-      }),
-    ),
+    ...input.customEntries.map((entry): CustomOpenWithOption => ({
+      type: "custom",
+      entry,
+      presentation: presentationById.get(entry.id) ?? null,
+    })),
   ];
 }
 

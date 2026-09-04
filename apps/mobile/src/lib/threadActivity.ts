@@ -24,13 +24,16 @@ import {
   commandDetailRepeatsCommand,
   extractCommandOutputText,
   isWorktreeSetupActivity,
+  liveActivityToolStatus,
   normalizeCompactToolLabel,
   omitSupersededLifecycleMarkers,
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
+  toolGroupAction,
   toolGroupSummaryKind,
   type ToolGroupSummaryKind,
 } from "@t3tools/client-runtime/work-log/presentation";
+import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import { commandProgramName } from "@t3tools/client-runtime/work-log/command-label";
 
 import * as Arr from "effect/Array";
@@ -58,7 +61,7 @@ export interface PendingUserInput {
 }
 
 export interface PendingUserInputDraftAnswer {
-  readonly selectedOptionLabels?: ReadonlyArray<string>;
+  readonly selectedOptionValues?: ReadonlyArray<string>;
   readonly customAnswer?: string;
 }
 
@@ -74,8 +77,10 @@ export interface ThreadFeedActivity {
   readonly icon:
     | "agent"
     | "alert"
+    | "browser"
     | "check"
     | "command"
+    | "computer"
     | "edit"
     | "eye"
     | "globe"
@@ -106,6 +111,9 @@ export interface WorkLogEntry {
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
+  toolSurface?: import("@t3tools/contracts").ToolActivitySurface;
+  toolIcon?: import("@t3tools/contracts").ToolActivityIcon;
+  toolSource?: import("@t3tools/contracts").ToolActivitySource;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
@@ -160,6 +168,8 @@ export type ThreadFeedEntry =
       readonly expanded: boolean;
       readonly summary: string;
       readonly summaryKind: ToolGroupSummaryKind;
+      readonly toolSurface?: WorkLogEntry["toolSurface"];
+      readonly toolIcon?: WorkLogEntry["toolIcon"];
       readonly summaryToolIcon?: "browser" | "t3-code";
       readonly hasFailure: boolean;
       readonly live: boolean;
@@ -233,6 +243,41 @@ export type ThreadFeedLatestTurn = Pick<
   readonly assistantMessageId?: MessageId | null;
 };
 
+type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
+
+// These keys are immutable inputs. Weak caches release old histories with their source data.
+const activityEntriesCache = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  ReadonlyArray<Extract<RawThreadFeedEntry, { readonly type: "activity" }>>
+>();
+const messageEntriesCache = new WeakMap<
+  OrchestrationThread["messages"][number],
+  Extract<RawThreadFeedEntry, { readonly type: "message" }>
+>();
+const activityGroupsCache = new WeakMap<ThreadFeedActivity, ThreadFeedActivityGroup>();
+const presentedActivityGroupsCache = new WeakMap<
+  ThreadFeedActivityGroup,
+  {
+    readonly unsettledTurnId: TurnId | null;
+    readonly isWorking: boolean;
+    readonly activeTail: boolean;
+    readonly rows: ReadonlyArray<ThreadFeedEntry>;
+  }
+>();
+const turnFoldRowsCache = new WeakMap<
+  ThreadFeedEntry,
+  Extract<ThreadFeedEntry, { readonly type: "turn-fold" }>
+>();
+
+export function isContextCompactionActivityGroup(
+  entry: Extract<ThreadFeedEntry, { readonly type: "activity-group" }>,
+): boolean {
+  return (
+    entry.activities.length === 1 &&
+    entry.activities[0]?.workEntry.sourceActivityKind === "context-compaction"
+  );
+}
+
 function requestKindFromRequestType(requestType: unknown): PendingApproval["requestKind"] | null {
   switch (requestType) {
     case "command_execution_approval":
@@ -298,10 +343,11 @@ function parseUserInputQuestions(
           return {
             label: record.label,
             description: record.description,
+            ...(typeof record.value === "string" ? { value: record.value } : {}),
           };
         })
         .filter((option): option is UserInputQuestion["options"][number] => option !== null);
-      if (options.length === 0) {
+      if (options.length === 0 && question.allowCustomAnswer === false) {
         return null;
       }
       return {
@@ -310,6 +356,9 @@ function parseUserInputQuestions(
         question: question.question,
         options,
         multiSelect: question.multiSelect === true,
+        ...(typeof question.allowCustomAnswer === "boolean"
+          ? { allowCustomAnswer: question.allowCustomAnswer }
+          : {}),
       };
     })
     .filter((question): question is UserInputQuestion => question !== null);
@@ -325,7 +374,23 @@ function normalizeDraftAnswer(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeSelectedOptionLabels(
+function resolvePendingUserInputOptionValue(
+  question: UserInputQuestion,
+  value: string,
+): string | null {
+  if (question.options.some((option) => option.value === value)) {
+    return value;
+  }
+
+  const label = value.trim();
+  return label.length > 0 &&
+    question.options.some((option) => option.value === undefined && option.label.trim() === label)
+    ? label
+    : null;
+}
+
+function normalizeSelectedOptionValues(
+  question: UserInputQuestion,
   value: ReadonlyArray<string> | undefined,
 ): ReadonlyArray<string> {
   if (!Array.isArray(value)) {
@@ -333,7 +398,11 @@ function normalizeSelectedOptionLabels(
   }
 
   return Array.from(
-    new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
+    new Set(
+      value
+        .map((entry) => resolvePendingUserInputOptionValue(question, entry))
+        .filter((entry): entry is string => entry !== null),
+    ),
   );
 }
 
@@ -341,29 +410,28 @@ function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | ReadonlyArray<string> | null {
-  const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
+  const customAnswer =
+    question.allowCustomAnswer === false ? null : normalizeDraftAnswer(draft?.customAnswer);
   if (customAnswer) {
     return customAnswer;
   }
 
-  const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  const selectedOptionValues = normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionValues.length > 0 ? selectedOptionValues : null;
   }
-  return selectedOptionLabels[0] ?? null;
+  return selectedOptionValues[0] ?? null;
 }
 
-/** Codex children settle via task.updated (idle/failed/interrupted), never
- * task.completed — these rows are mobile's only terminal signal for them. */
+/** Some providers settle agents through task.updated instead of task.completed. */
 const MOBILE_TERMINAL_UPDATE_STATUSES: ReadonlySet<string> = new Set([
-  "idle",
   "completed",
   "failed",
   "cancelled",
   "interrupted",
 ]);
 
-function isTerminalBypassUpdate(activity: OrchestrationThreadActivity): boolean {
+function isTerminalTaskUpdate(activity: OrchestrationThreadActivity): boolean {
   if (activity.kind !== "task.updated") {
     return false;
   }
@@ -372,9 +440,9 @@ function isTerminalBypassUpdate(activity: OrchestrationThreadActivity): boolean 
       ? (activity.payload as Record<string, unknown>)
       : null;
   return (
-    payload?.timelineBypass === true &&
-    typeof payload.status === "string" &&
-    MOBILE_TERMINAL_UPDATE_STATUSES.has(payload.status)
+    typeof payload?.status === "string" &&
+    (MOBILE_TERMINAL_UPDATE_STATUSES.has(payload.status) ||
+      (payload.timelineBypass === true && payload.status === "idle"))
   );
 }
 
@@ -383,8 +451,7 @@ function isTerminalBypassUpdate(activity: OrchestrationThreadActivity): boolean 
  * activity lives in the Agents sheet, not the work log. Terminal rows are
  * kept — with no Agents surface on mobile they are the terminal signal
  * (a surface that hides rows must keep its own terminal signal). That means
- * task.completed (Claude) AND terminal bypassed task.updated (Codex, whose
- * children never emit task.completed — review finding).
+ * task.completed and terminal task.updated, including Antigravity cancellation.
  */
 function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean {
   const payload =
@@ -394,7 +461,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
   if (!payload) {
     return false;
   }
-  const isTerminalTaskRow = activity.kind === "task.completed" || isTerminalBypassUpdate(activity);
+  const isTerminalTaskRow = activity.kind === "task.completed" || isTerminalTaskUpdate(activity);
   if (payload.timelineBypass === true && !isTerminalTaskRow) {
     return true;
   }
@@ -422,8 +489,7 @@ function deriveWorkLogEntries(
     if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
-    // Terminal bypassed updates pass: Codex children's only terminal signal.
-    if (activity.kind === "task.updated" && !isTerminalBypassUpdate(activity)) continue;
+    if (activity.kind === "task.updated" && !isTerminalTaskUpdate(activity)) continue;
     if (activity.kind === "tool.progress") continue;
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
@@ -472,9 +538,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const commandPreview = extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
-  // task.updated included: terminal bypassed updates (Codex children's only
-  // terminal signal) must carry task identity so they collapse per child
-  // instead of stacking anonymous "Task idle" rows.
+  const toolPresentation = extractToolActivityPresentation(payload);
+  // Terminal task updates carry identity so they replace each child's progress row.
   const isTaskActivity =
     activity.kind === "task.progress" ||
     activity.kind === "task.completed" ||
@@ -486,6 +551,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const taskDetailAsLabel =
     isTaskActivity &&
     !taskSummary &&
+    !title &&
     typeof payload?.detail === "string" &&
     payload.detail.length > 0
       ? payload.detail
@@ -536,7 +602,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
         toolName: data?.toolName,
         data,
       });
-    if (detail && !repeatsCommand) entry.detail = detail;
+    if (detail && detail !== title && !repeatsCommand) entry.detail = detail;
+  }
+  if (isTaskActivity && typeof payload?.error === "string" && payload.error.trim()) {
+    entry.detail = payload.error;
   }
   if (viewedImagePath) {
     entry.viewedImagePath = viewedImagePath;
@@ -552,6 +621,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (title) {
     entry.toolTitle = title;
+  }
+  if (toolPresentation.toolSurface) {
+    entry.toolSurface = toolPresentation.toolSurface;
+  }
+  if (toolPresentation.toolIcon) {
+    entry.toolIcon = toolPresentation.toolIcon;
+  }
+  if (toolPresentation.toolSource) {
+    entry.toolSource = toolPresentation.toolSource;
   }
   if (itemType === "mcp_tool_call") {
     const data = asRecord(payload?.data);
@@ -688,6 +766,9 @@ function mergeDerivedWorkLogEntries(
   const command = next.command ?? previous.command;
   const rawCommand = next.rawCommand ?? previous.rawCommand;
   const toolTitle = next.toolTitle ?? previous.toolTitle;
+  const toolSurface = next.toolSurface ?? previous.toolSurface;
+  const toolIcon = next.toolIcon ?? previous.toolIcon;
+  const toolSource = next.toolSource ?? previous.toolSource;
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
@@ -705,6 +786,9 @@ function mergeDerivedWorkLogEntries(
     ...(rawCommand ? { rawCommand } : {}),
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
     ...(toolTitle ? { toolTitle } : {}),
+    ...(toolSurface ? { toolSurface } : {}),
+    ...(toolIcon ? { toolIcon } : {}),
+    ...(toolSource ? { toolSource } : {}),
     ...(itemType ? { itemType } : {}),
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
@@ -826,6 +910,7 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.sourceActivityKind === "runtime.warning") return "warning";
+  if (entry.toolSurface) return entry.toolSurface;
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -913,6 +998,13 @@ function workEntryHeading(workEntry: WorkLogEntry): string {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+}
+
+function singleToolCallLabel(activity: ThreadFeedActivity): string {
+  const presentation = resolveWorkEntryToolPresentation(activity.workEntry, "completed");
+  if (presentation) return presentation.displayName;
+  const command = activity.workEntry.command?.trim();
+  return command || activity.summary;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1011,6 +1103,11 @@ function unwrapCommandRemainder(value: string, wrapperFlagPattern: RegExp): stri
 
   const command = value.slice(match.index + match[0].length).trim();
   if (command.length === 0) {
+    return null;
+  }
+
+  const openingQuote = command[0];
+  if ((openingQuote === "'" || openingQuote === '"') && !command.endsWith(openingQuote)) {
     return null;
   }
 
@@ -1118,6 +1215,11 @@ function extractWorkLogToolLifecycleStatus(
   payload: Record<string, unknown> | null,
 ): WorkLogToolLifecycleStatus | undefined {
   const status = payload?.status;
+  // The parent turn ended, so batch tracking is inactive. The detail explains
+  // that child status is unavailable; do not retain the earlier running marker.
+  if (status === "idle" && payload?.taskType === "subagent_batch") return "stopped";
+  if (status === "pending" || status === "running" || status === "waiting") return "inProgress";
+  if (status === "cancelled" || status === "interrupted") return "stopped";
   if (
     status === "inProgress" ||
     status === "completed" ||
@@ -1268,11 +1370,31 @@ function isEmptyMessage(entry: RawThreadFeedEntry): boolean {
 
 function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): ThreadFeedEntry[] {
   const grouped: ThreadFeedEntry[] = [];
-  // Mutable backing array for the trailing group so appending an activity is
-  // O(1) instead of re-copying the group (which made this loop quadratic on
-  // long tool runs). The array is only mutated while it is the trailing group.
-  let openGroupActivities: ThreadFeedActivity[] | null = null;
-  let openGroupTurnId: TurnId | null = null;
+  let firstActivityEntry: Extract<RawThreadFeedEntry, { readonly type: "activity" }> | null = null;
+  let openGroupActivities: ThreadFeedActivity[] = [];
+  const flushGroup = () => {
+    if (firstActivityEntry === null) return;
+    const cached = activityGroupsCache.get(firstActivityEntry.activity);
+    if (
+      cached &&
+      cached.activities.length === openGroupActivities.length &&
+      cached.activities.every((activity, index) => activity === openGroupActivities[index])
+    ) {
+      grouped.push(cached);
+    } else {
+      const group: ThreadFeedActivityGroup = {
+        type: "activity-group",
+        id: firstActivityEntry.id,
+        createdAt: firstActivityEntry.createdAt,
+        turnId: firstActivityEntry.turnId,
+        activities: openGroupActivities,
+      };
+      activityGroupsCache.set(firstActivityEntry.activity, group);
+      grouped.push(group);
+    }
+    firstActivityEntry = null;
+    openGroupActivities = [];
+  };
 
   for (const entry of entries) {
     // Skip empty messages so they don't break activity grouping.
@@ -1281,27 +1403,22 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
     }
 
     if (entry.type !== "activity") {
+      flushGroup();
       grouped.push(entry);
-      openGroupActivities = null;
       continue;
     }
 
-    if (openGroupActivities !== null && openGroupTurnId === entry.turnId) {
-      openGroupActivities.push(entry.activity);
-      continue;
+    const isCompaction = entry.activity.workEntry.sourceActivityKind === "context-compaction";
+    if (isCompaction || firstActivityEntry?.turnId !== entry.turnId) {
+      flushGroup();
     }
-
-    openGroupActivities = [entry.activity];
-    openGroupTurnId = entry.turnId;
-    grouped.push({
-      type: "activity-group",
-      id: entry.id,
-      createdAt: entry.createdAt,
-      turnId: entry.turnId,
-      activities: openGroupActivities,
-    });
+    firstActivityEntry ??= entry;
+    openGroupActivities.push(entry.activity);
+    if (isCompaction) {
+      flushGroup();
+    }
   }
-
+  flushGroup();
   return grouped;
 }
 
@@ -1532,6 +1649,16 @@ function deriveThreadFeedTurnFolds(
     if (hiddenEntryIds.size === 0) {
       continue;
     }
+    // A lone compaction row stays visible on its own; it only folds away as
+    // part of a turn that already folds other work.
+    const hidesNonCompactionWork = entries.some(
+      (entry) =>
+        hiddenEntryIds.has(entry.id) &&
+        !(entry.type === "activity-group" && isContextCompactionActivityGroup(entry)),
+    );
+    if (!hidesNonCompactionWork) {
+      continue;
+    }
 
     const firstEntry = entries[0];
     const firstHiddenEntry = entries.find((entry) => hiddenEntryIds.has(entry.id));
@@ -1611,14 +1738,26 @@ export function deriveThreadFeedPresentation(
       entry.turnId === unsettledTurnId;
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
-      result.push({
-        type: "turn-fold",
-        id: `turn-fold:${fold.turnId}`,
-        createdAt: fold.createdAt,
-        turnId: fold.turnId,
-        label: fold.label,
-        expanded: expandedTurnIds.has(fold.turnId),
-      });
+      const expanded = expandedTurnIds.has(fold.turnId);
+      let row = turnFoldRowsCache.get(entry);
+      if (
+        !row ||
+        row.turnId !== fold.turnId ||
+        row.createdAt !== fold.createdAt ||
+        row.label !== fold.label ||
+        row.expanded !== expanded
+      ) {
+        row = {
+          type: "turn-fold",
+          id: `turn-fold:${fold.turnId}`,
+          createdAt: fold.createdAt,
+          turnId: fold.turnId,
+          label: fold.label,
+          expanded,
+        };
+        turnFoldRowsCache.set(entry, row);
+      }
+      result.push(row);
     }
     if (!collapsedEntryIds.has(entry.id)) {
       appendPresentedFeedEntry(
@@ -1646,7 +1785,46 @@ function appendPresentedFeedEntry(
     result.push(entry);
     return;
   }
+  if (isContextCompactionActivityGroup(entry)) {
+    result.push(entry);
+    return;
+  }
 
+  let cached = presentedActivityGroupsCache.get(entry);
+  if (
+    !cached ||
+    cached.unsettledTurnId !== unsettledTurnId ||
+    cached.isWorking !== isWorking ||
+    cached.activeTail !== activeTail ||
+    cached.rows.some(
+      (row) => row.type === "work-toggle" && expandedWorkGroupIds.has(row.groupId) !== row.expanded,
+    )
+  ) {
+    const rows: ThreadFeedEntry[] = [];
+    appendActivityGroupRows(
+      rows,
+      entry,
+      expandedWorkGroupIds,
+      unsettledTurnId,
+      isWorking,
+      activeTail,
+    );
+    cached = { unsettledTurnId, isWorking, activeTail, rows };
+    presentedActivityGroupsCache.set(entry, cached);
+  }
+  for (const row of cached.rows) {
+    result.push(row);
+  }
+}
+
+function appendActivityGroupRows(
+  result: ThreadFeedEntry[],
+  entry: ThreadFeedActivityGroup,
+  expandedWorkGroupIds: ReadonlySet<string>,
+  unsettledTurnId: TurnId | null,
+  isWorking: boolean,
+  activeTail: boolean,
+): void {
   const activities = omitSupersededLifecycleMarkers(
     entry.activities.filter(
       (activity) =>
@@ -1718,14 +1896,44 @@ function appendToolGroupRows(
   const active = latestActiveActivity !== undefined;
   const live = activeTail || active;
   const latestActivity = latestActiveActivity ?? activities.at(-1)!;
+  const singleActivity = activities.length === 1 ? latestActivity : null;
   const summary = live
-    ? liveToolActivitySummary(latestActivity, active)
-    : activities.length === 1 && !activities[0]!.toolLike
-      ? activities[0]!.workEntry.label
-      : summarizeToolGroup(activities.map((activity) => activity.workEntry));
+    ? liveToolActivitySummary(latestActivity, live)
+    : singleActivity !== null &&
+        singleActivity.toolLike &&
+        toolGroupAction(singleActivity.workEntry) !== "edit"
+      ? singleToolCallLabel(singleActivity)
+      : singleActivity !== null && !singleActivity.toolLike
+        ? singleActivity.workEntry.label
+        : summarizeToolGroup(activities.map((activity) => activity.workEntry));
+  const primarySourceActivity = activities.find(
+    (activity) => activity.workEntry.toolSource !== undefined,
+  );
+  const primarySourceKey = primarySourceActivity?.workEntry.toolSource?.key;
+  const primarySourceIcon = primarySourceKey
+    ? (activities.find(
+        (activity) =>
+          activity.workEntry.toolSource?.key === primarySourceKey &&
+          activity.workEntry.toolIcon !== undefined,
+      )?.workEntry.toolIcon ?? primarySourceActivity?.workEntry.toolSource?.icon)
+    : undefined;
+  const groupToolSurface =
+    primarySourceActivity?.workEntry.toolSurface ??
+    latestActivity.workEntry.toolSurface ??
+    activities.findLast((activity) => activity.workEntry.toolSurface !== undefined)?.workEntry
+      .toolSurface;
+  const groupToolIcon =
+    primarySourceIcon ??
+    latestActivity.workEntry.toolIcon ??
+    activities.findLast((activity) => activity.workEntry.toolIcon !== undefined)?.workEntry
+      .toolIcon;
   const summaryToolIcon = live
     ? resolveWorkEntryToolPresentation(latestActivity.workEntry)?.icon
-    : undefined;
+    : singleActivity !== null &&
+        singleActivity.toolLike &&
+        toolGroupAction(singleActivity.workEntry) !== "edit"
+      ? resolveWorkEntryToolPresentation(singleActivity.workEntry, "completed")?.icon
+      : undefined;
   result.push({
     type: "work-toggle",
     id: `${live ? "work-live" : "work-toggle"}:${groupId}`,
@@ -1738,6 +1946,8 @@ function appendToolGroupRows(
     summaryKind: toolGroupSummaryKind(
       (live ? [latestActivity] : activities).map((activity) => activity.workEntry),
     ),
+    ...(groupToolSurface ? { toolSurface: groupToolSurface } : {}),
+    ...(groupToolIcon ? { toolIcon: groupToolIcon } : {}),
     ...(summaryToolIcon ? { summaryToolIcon } : {}),
     hasFailure: activities.findLast((activity) => activity.toolLike)?.status === "failure",
     live,
@@ -1763,16 +1973,16 @@ function appendToolGroupRows(
   });
 }
 
-function liveToolActivitySummary(activity: ThreadFeedActivity, active: boolean): string {
-  const presentation = resolveWorkEntryToolPresentation(
-    activity.workEntry,
-    active ? "inProgress" : "completed",
-  );
+function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boolean): string {
+  const status = liveActivityToolStatus(activity.lifecycleStatus, presentTense);
+  const presentation = resolveWorkEntryToolPresentation({
+    ...activity.workEntry,
+    toolLifecycleStatus: status,
+  });
   if (presentation) return presentation.displayName;
   const command = activity.workEntry.command?.trim();
   if (command) {
     const program = commandProgramName(command);
-    const status = activity.lifecycleStatus ?? (active ? "inProgress" : "completed");
     const verb =
       status === "inProgress"
         ? "Running"
@@ -1820,10 +2030,16 @@ export function derivePendingApprovals(
       ? payload.options.filter(isProviderApprovalOption)
       : undefined;
 
-    if (activity.kind === "approval.requested" && requestId && requestKind) {
+    if (
+      activity.kind === "approval.requested" &&
+      requestId &&
+      payload?.requestType !== "tool_user_input" &&
+      payload?.requestType !== "auth_tokens_refresh"
+    ) {
       openByRequestId.set(requestId, {
         requestId,
-        requestKind,
+        // Older OpenCode requests can have no recognized approval kind.
+        requestKind: requestKind ?? "command",
         createdAt: activity.createdAt,
         ...(detail ? { detail } : {}),
         ...(appName ? { appName } : {}),
@@ -1893,54 +2109,72 @@ export function derivePendingUserInputs(
 }
 
 export function setPendingUserInputCustomAnswer(
+  question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
-  const selectedOptionLabels =
+  if (question.allowCustomAnswer === false) {
+    return draft ?? {};
+  }
+
+  const selectedOptionValues =
     customAnswer.trim().length > 0
       ? undefined
-      : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+      : normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
   return {
     customAnswer,
-    ...(selectedOptionLabels && selectedOptionLabels.length > 0 ? { selectedOptionLabels } : {}),
+    ...(selectedOptionValues && selectedOptionValues.length > 0 ? { selectedOptionValues } : {}),
   };
 }
 
 export function isPendingUserInputOptionSelected(
+  question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-  optionLabel: string,
+  optionValue: string,
 ): boolean {
-  if (normalizeDraftAnswer(draft?.customAnswer)) {
+  if (question.allowCustomAnswer !== false && normalizeDraftAnswer(draft?.customAnswer)) {
     return false;
   }
 
-  return normalizeSelectedOptionLabels(draft?.selectedOptionLabels).includes(optionLabel.trim());
+  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
+  return (
+    resolvedOptionValue !== null &&
+    normalizeSelectedOptionValues(question, draft?.selectedOptionValues).includes(
+      resolvedOptionValue,
+    )
+  );
 }
 
 export function togglePendingUserInputOptionSelection(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-  optionLabel: string,
+  optionValue: string,
 ): PendingUserInputDraftAnswer {
-  const normalizedOptionLabel = optionLabel.trim();
+  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
+  if (resolvedOptionValue === null) {
+    return draft ?? {};
+  }
 
   if (question.multiSelect) {
-    const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
-    const nextSelectedOptionLabels = selectedOptionLabels.includes(normalizedOptionLabel)
-      ? selectedOptionLabels.filter((label) => label !== normalizedOptionLabel)
-      : [...selectedOptionLabels, normalizedOptionLabel];
+    const selectedOptionValues = normalizeSelectedOptionValues(
+      question,
+      draft?.selectedOptionValues,
+    );
+    const nextSelectedOptionValues = selectedOptionValues.includes(resolvedOptionValue)
+      ? selectedOptionValues.filter((value) => value !== resolvedOptionValue)
+      : [...selectedOptionValues, resolvedOptionValue];
 
     return {
       customAnswer: "",
-      ...(nextSelectedOptionLabels.length > 0
-        ? { selectedOptionLabels: nextSelectedOptionLabels }
+      ...(nextSelectedOptionValues.length > 0
+        ? { selectedOptionValues: nextSelectedOptionValues }
         : {}),
     };
   }
 
   return {
     customAnswer: "",
-    selectedOptionLabels: [normalizedOptionLabel],
+    selectedOptionValues: [resolvedOptionValue],
   };
 }
 
@@ -1952,7 +2186,7 @@ export function buildPendingUserInputAnswers(
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    if (!answer) {
+    if (answer === null) {
       return null;
     }
     answers[question.id] = answer;
@@ -1962,7 +2196,7 @@ export function buildPendingUserInputAnswers(
 }
 
 export function buildThreadFeed(
-  thread: OrchestrationThread,
+  thread: Pick<OrchestrationThread, "messages" | "activities">,
   options?: {
     readonly loadedMessages?: ReadonlyArray<OrchestrationThread["messages"][number]>;
     readonly localMessages?: ReadonlyArray<OrchestrationThread["messages"][number]>;
@@ -1974,69 +2208,20 @@ export function buildThreadFeed(
     : loadedMessages;
   const oldestLoadedMessageCreatedAt =
     options?.loadedMessages !== undefined ? (loadedMessages[0]?.createdAt ?? null) : null;
-  const workLogEntries = deriveWorkLogEntries(thread.activities);
-  const rawEntries: Array<RawThreadFeedEntry & { sortRank: number }> = [
-    ...messages.map((message) => ({
-      type: "message" as const,
-      id: message.id,
-      createdAt: message.createdAt,
-      message,
-      sortRank: 0,
-    })),
-    ...workLogEntries
-      .filter((entry) => {
-        if (options?.loadedMessages === undefined) {
-          return true;
-        }
-        return (
-          oldestLoadedMessageCreatedAt === null || entry.createdAt >= oldestLoadedMessageCreatedAt
-        );
-      })
-      .map((entry) => {
-        const summary = workEntryHeading(entry);
-        const detail = workEntryPreview(entry);
-        const getFullDetail = memoizeValue(() => buildWorkEntryExpandedBody(entry));
-        const getCopyText = memoizeValue(() => {
-          const copyLabel = capitalizePhrase(
-            normalizeCompactToolLabel(entry.toolTitle || entry.label),
-          );
-          const fullDetail = getFullDetail();
-          if (entry.command) {
-            const normalizedCommand =
-              entry.rawCommand && copyLabel.trim() !== entry.command.trim() ? entry.command : null;
-            return [copyLabel, normalizedCommand, fullDetail ?? entry.command]
-              .filter((value): value is string => Boolean(value))
-              .join("\n");
-          }
-          return [copyLabel, detail, fullDetail]
-            .filter((value, index, values): value is string => {
-              return Boolean(value) && values.indexOf(value) === index;
-            })
-            .join("\n");
-        });
-        return {
-          type: "activity" as const,
-          id: entry.id,
-          createdAt: entry.createdAt,
-          turnId: entry.turnId,
-          sortRank: 0,
-          activity: {
-            id: entry.id,
-            createdAt: entry.createdAt,
-            turnId: entry.turnId,
-            summary,
-            detail,
-            canExpand: workEntryHasExpandedBody(entry),
-            getFullDetail,
-            getCopyText,
-            icon: workEntryIcon(entry),
-            toolLike: workLogEntryIsToolLike(entry),
-            status: workEntryStatus(entry),
-            ...(entry.toolLifecycleStatus ? { lifecycleStatus: entry.toolLifecycleStatus } : {}),
-            workEntry: entry,
-          },
-        };
-      }),
+  const activityEntries = getThreadFeedActivityEntries(thread.activities);
+  const rawEntries: RawThreadFeedEntry[] = [
+    ...messages.map((message) => {
+      let entry = messageEntriesCache.get(message);
+      if (!entry) {
+        entry = { type: "message", id: message.id, createdAt: message.createdAt, message };
+        messageEntriesCache.set(message, entry);
+      }
+      return entry;
+    }),
+    ...activityEntries.filter(
+      (entry) =>
+        oldestLoadedMessageCreatedAt === null || entry.createdAt >= oldestLoadedMessageCreatedAt,
+    ),
   ];
 
   const turnIds = new Set<string>();
@@ -2077,7 +2262,28 @@ export function buildThreadFeed(
     }
   }
 
-  const expanded: Array<RawThreadFeedEntry & { sortRank: number }> = [];
+  const entries =
+    steersByTurnId.size === 0
+      ? Arr.sortWith(rawEntries, (s) => new Date(s.createdAt), Order.Date)
+      : expandThreadFeedSteers(rawEntries, steersByTurnId, steerIdSet);
+
+  return groupAdjacentActivities(entries);
+}
+
+function expandThreadFeedSteers(
+  rawEntries: ReadonlyArray<RawThreadFeedEntry>,
+  steersByTurnId: ReadonlyMap<
+    string,
+    ReadonlyArray<{ readonly id: string; readonly createdAt: string }>
+  >,
+  steerIdSet: ReadonlySet<string>,
+): RawThreadFeedEntry[] {
+  const rankedEntries: Array<{
+    readonly entry: RawThreadFeedEntry;
+    readonly id: string;
+    readonly createdAt: string;
+    readonly sortRank: number;
+  }> = [];
   for (const entry of rawEntries) {
     if (
       entry.type === "message" &&
@@ -2094,17 +2300,21 @@ export function buildThreadFeed(
           steers,
         });
         for (const segment of segments) {
-          expanded.push({
-            type: "message",
+          rankedEntries.push({
             id: segment.segmentId,
             createdAt: segment.sortAt,
             sortRank: segment.sortRank,
-            message: {
-              ...entry.message,
-              text: segment.text,
-              streaming: segment.streaming,
+            entry: {
+              type: "message",
+              id: segment.segmentId,
               createdAt: segment.sortAt,
-              updatedAt: segment.streaming ? entry.message.updatedAt : segment.sortAt,
+              message: {
+                ...entry.message,
+                text: segment.text,
+                streaming: segment.streaming,
+                createdAt: segment.sortAt,
+                updatedAt: segment.streaming ? entry.message.updatedAt : segment.sortAt,
+              },
             },
           });
         }
@@ -2112,20 +2322,73 @@ export function buildThreadFeed(
       }
     }
 
-    expanded.push({
-      ...entry,
-      sortRank: steerIdSet.has(entry.id) ? 1 : entry.sortRank,
+    rankedEntries.push({
+      entry,
+      id: entry.id,
+      createdAt: entry.createdAt,
+      sortRank: steerIdSet.has(entry.id) ? 1 : 0,
     });
   }
 
-  const entries = [...expanded]
+  return rankedEntries
     .sort((left, right) =>
       compareSteerTimelineSortable(
         { id: left.id, sortAt: left.createdAt, sortRank: left.sortRank },
         { id: right.id, sortAt: right.createdAt, sortRank: right.sortRank },
       ),
     )
-    .map(({ sortRank: _sortRank, ...entry }) => entry);
+    .map((ranked) => ranked.entry);
+}
 
-  return groupAdjacentActivities(entries);
+function getThreadFeedActivityEntries(activities: ReadonlyArray<OrchestrationThreadActivity>) {
+  const cached = activityEntriesCache.get(activities);
+  if (cached) return cached;
+  const entries = deriveWorkLogEntries(activities).map(toThreadFeedActivityEntry);
+  activityEntriesCache.set(activities, entries);
+  return entries;
+}
+
+function toThreadFeedActivityEntry(
+  entry: DerivedWorkLogEntry,
+): Extract<RawThreadFeedEntry, { readonly type: "activity" }> {
+  const summary = workEntryHeading(entry);
+  const detail = workEntryPreview(entry);
+  const getFullDetail = memoizeValue(() => buildWorkEntryExpandedBody(entry));
+  const getCopyText = memoizeValue(() => {
+    const copyLabel = capitalizePhrase(normalizeCompactToolLabel(entry.toolTitle || entry.label));
+    const fullDetail = getFullDetail();
+    if (entry.command) {
+      const normalizedCommand =
+        entry.rawCommand && copyLabel.trim() !== entry.command.trim() ? entry.command : null;
+      return [copyLabel, normalizedCommand, fullDetail ?? entry.command]
+        .filter((value): value is string => Boolean(value))
+        .join("\n");
+    }
+    return [copyLabel, detail, fullDetail]
+      .filter((value, index, values): value is string => {
+        return Boolean(value) && values.indexOf(value) === index;
+      })
+      .join("\n");
+  });
+  return {
+    type: "activity",
+    id: entry.id,
+    createdAt: entry.createdAt,
+    turnId: entry.turnId,
+    activity: {
+      id: entry.id,
+      createdAt: entry.createdAt,
+      turnId: entry.turnId,
+      summary,
+      detail,
+      canExpand: workEntryHasExpandedBody(entry),
+      getFullDetail,
+      getCopyText,
+      icon: workEntryIcon(entry),
+      toolLike: workLogEntryIsToolLike(entry),
+      status: workEntryStatus(entry),
+      ...(entry.toolLifecycleStatus ? { lifecycleStatus: entry.toolLifecycleStatus } : {}),
+      workEntry: entry,
+    },
+  };
 }

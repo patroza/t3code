@@ -670,7 +670,6 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
 
             // `shell` is updated by the concurrently running subscription fiber.
             for (let attempt = 0; attempt < SHELL_SNAPSHOT_MAX_ATTEMPTS; attempt += 1) {
-              // eslint-disable-next-line no-unmodified-loop-condition -- shell is set by shellFiber
               if (shell !== null) break;
               await Effect.runPromise(Effect.sleep(Duration.millis(SHELL_SNAPSHOT_POLL_MS)));
             }

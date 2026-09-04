@@ -7,19 +7,11 @@ const guardedMobileFile = createOxlintRuleHarness("t3code/no-mobile-uniwind-them
 });
 const reviewedInteropFile = createOxlintRuleHarness(
   "t3code/no-mobile-uniwind-theme-escape-hatches",
-  { filename: "apps/mobile/src/features/home/HomeHeader.tsx" },
+  {
+    filename: "apps/mobile/src/features/home/HomeHeader.tsx",
+    ruleOptions: [{ allowUniwindTheme: true }],
+  },
 );
-const gitOverlayInteropFile = createOxlintRuleHarness(
-  "t3code/no-mobile-uniwind-theme-escape-hatches",
-  { filename: "apps/mobile/src/features/threads/GitActionProgressOverlay.tsx" },
-);
-const threadNavigationInteropFile = createOxlintRuleHarness(
-  "t3code/no-mobile-uniwind-theme-escape-hatches",
-  { filename: "apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx" },
-);
-const webFile = createOxlintRuleHarness("t3code/no-mobile-uniwind-theme-escape-hatches", {
-  filename: "apps/web/src/ThemeSurface.tsx",
-});
 
 describe("t3code/no-mobile-uniwind-theme-escape-hatches", () => {
   guardedMobileFile.valid(
@@ -97,27 +89,9 @@ describe("t3code/no-mobile-uniwind-theme-escape-hatches", () => {
     `,
   );
 
-  gitOverlayInteropFile.valid(
-    "allows the native liquid-glass theme boundary",
-    `
-      import { useUniwindTheme } from "../../lib/useUniwindTheme";
-
-      export const tint = useUniwindTheme()["--color-glass-surface"];
-    `,
-  );
-
-  threadNavigationInteropFile.valid(
-    "allows native stack header drawer color interop",
-    `
-      import { useUniwindTheme } from "../../lib/useUniwindTheme";
-
-      export const drawer = useUniwindTheme()["--color-drawer"];
-    `,
-  );
-
-  webFile.valid(
-    "does not impose the mobile custom-theme policy on web code",
-    `const surface = <div className="bg-white dark:bg-black" />;`,
+  reviewedInteropFile.invalid(
+    "still reports appearance variants in reviewed interop boundaries",
+    `const surface = <View className="bg-white dark:bg-black" />;`,
   );
 
   guardedMobileFile.invalid(

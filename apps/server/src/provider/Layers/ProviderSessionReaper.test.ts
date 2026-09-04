@@ -168,6 +168,7 @@ describe("ProviderSessionReaper", () => {
     const providerService: ProviderServiceShape = {
       startSession: () => unsupported(),
       sendTurn: () => unsupported(),
+      compactThread: () => unsupported(),
       interruptTurn: () => unsupported(),
       compactSession: () => unsupported(),
       respondToRequest: () => unsupported(),
@@ -175,6 +176,7 @@ describe("ProviderSessionReaper", () => {
       stopSession,
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
         return Effect.succeed({
@@ -220,6 +222,7 @@ describe("ProviderSessionReaper", () => {
       ),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
+          getUserInputActivity: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
           getShellSnapshot: () => Effect.die("unused"),
@@ -342,7 +345,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
-    await Effect.runPromise(drainFibers);
+    await runtime!.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
@@ -390,7 +393,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
-    await Effect.runPromise(drainFibers);
+    await runtime!.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
@@ -494,7 +497,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
-    await Effect.runPromise(drainFibers);
+    await runtime!.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
@@ -541,7 +544,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     await startReaper();
-    await Effect.runPromise(drainFibers);
+    await runtime!.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));

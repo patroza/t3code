@@ -1,6 +1,5 @@
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-type ChangeRequestStateLike = "open" | "closed" | "merged";
 import {
   groupThreadsByRecency,
   shouldShowRecencySectionHeaders,
@@ -11,8 +10,10 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/c
 import {
   activeThreadAnchorTimestampMs,
   getThreadSortTimestamp,
+  resolveSettledThreadTimestamp,
   sortThreads,
   toSortableTimestamp,
+  type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
@@ -22,6 +23,10 @@ import { sessionNeedsWakeUp } from "@t3tools/shared/sessionWake";
 import { isLatestTurnSettled, shouldShowPlanReadyStatus } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import type { SnoozePreset } from "./Sidebar.snooze";
+
+export { resolveSettledThreadTimestamp };
+
+type ChangeRequestStateLike = "open" | "closed" | "merged";
 
 export function resolveSidebarProjectBadgeLabel(displayName: string): string {
   const leafName = displayName.split("/").findLast(Boolean) ?? displayName;
@@ -1141,41 +1146,13 @@ export function reduceSidebarProjectScopeMenuState(
   }
 }
 
-type SettledTimestampInput = Pick<
-  SidebarThreadSummary,
-  "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
->;
-
-/** The timestamp a settled row sorts and labels by: settledAt when stamped,
-    otherwise the latest message or turn stamp. updatedAt is the final net. */
-export function resolveSettledTimestamp(thread: SettledTimestampInput): string | null {
-  const settledAt = firstValidTimestamp(thread.settledAt);
-  if (settledAt !== null) return settledAt;
-  let latest: string | null = null;
-  let latestMs = Number.NEGATIVE_INFINITY;
-  for (const candidate of [
-    thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    thread.latestTurn?.startedAt,
-    thread.latestTurn?.completedAt,
-  ]) {
-    if (candidate == null) continue;
-    const parsed = Date.parse(candidate);
-    if (!Number.isNaN(parsed) && parsed > latestMs) {
-      latest = candidate;
-      latestMs = parsed;
-    }
-  }
-  return latest ?? firstValidTimestamp(thread.updatedAt);
-}
-
 // Settled rows are history, so they order by when the work ENDED, not when
 // the thread was created or last touched.
 export function sortSettledThreadsForSidebar<
-  T extends SettledTimestampInput & { readonly id: string },
+  T extends SettledThreadTimestampInput & { readonly id: string },
 >(threads: readonly T[]): T[] {
   const timestampMs = (thread: T) => {
-    const timestamp = resolveSettledTimestamp(thread);
+    const timestamp = resolveSettledThreadTimestamp(thread);
     return timestamp === null ? 0 : Date.parse(timestamp);
   };
   return [...threads].toSorted(
@@ -1192,7 +1169,7 @@ export function sortSettledThreadsForSidebar<
  * (same rule as classic Threads recency).
  */
 export function groupSettledThreadsByRecencyForSidebarV2<
-  T extends SettledTimestampInput & { readonly id: string },
+  T extends SettledThreadTimestampInput & { readonly id: string },
 >(
   threads: readonly T[],
   now: Date = new Date(),
@@ -1203,7 +1180,7 @@ export function groupSettledThreadsByRecencyForSidebarV2<
   const groups = groupThreadsByRecency(
     threads,
     (thread) => {
-      const timestamp = resolveSettledTimestamp(thread);
+      const timestamp = resolveSettledThreadTimestamp(thread);
       if (timestamp === null) return Number.NaN;
       const ms = Date.parse(timestamp);
       return Number.isNaN(ms) ? Number.NaN : ms;

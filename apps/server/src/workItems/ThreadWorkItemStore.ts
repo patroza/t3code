@@ -197,19 +197,17 @@ export const make = Effect.gen(function* () {
     Effect.map((raw) => {
       try {
         const decoded = decodeFile(raw);
-        return decoded.records.map(
-          (record): ThreadWorkItemRecord => ({
-            threadId: record.threadId as ThreadId,
-            jiraIssueKeys: mergeOrderedUnique([], record.jiraIssueKeys, normalizeJiraIssueKey),
-            githubPullRequests: mergeOrderedUnique(
-              [],
-              record.githubPullRequests,
-              normalizeGitHubPullRequestRef,
-            ),
-            sources: record.sources ?? [],
-            updatedAt: record.updatedAt,
-          }),
-        );
+        return decoded.records.map((record): ThreadWorkItemRecord => ({
+          threadId: record.threadId as ThreadId,
+          jiraIssueKeys: mergeOrderedUnique([], record.jiraIssueKeys, normalizeJiraIssueKey),
+          githubPullRequests: mergeOrderedUnique(
+            [],
+            record.githubPullRequests,
+            normalizeGitHubPullRequestRef,
+          ),
+          sources: record.sources ?? [],
+          updatedAt: record.updatedAt,
+        }));
       } catch {
         return [];
       }

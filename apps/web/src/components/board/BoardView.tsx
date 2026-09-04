@@ -907,6 +907,7 @@ function BoardContent() {
                     <ProjectFavicon
                       environmentId={selectedFilterSnapshot.environmentId}
                       cwd={selectedFilterSnapshot.workspaceRoot}
+                      projectName={selectedFilterSnapshot.displayName}
                     />
                   ) : (
                     <ProjectFaviconFallback />
@@ -930,6 +931,7 @@ function BoardContent() {
                     <ProjectFavicon
                       environmentId={snapshot.environmentId}
                       cwd={snapshot.workspaceRoot}
+                      projectName={snapshot.displayName}
                     />
                     <span className="truncate">{snapshot.displayName}</span>
                   </span>

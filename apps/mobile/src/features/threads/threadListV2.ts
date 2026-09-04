@@ -14,6 +14,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-recency-groups";
 import {
   activeThreadAnchorTimestampMs,
+  resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -292,14 +293,12 @@ export function buildThreadListV2ListItems(input: {
           : undefined,
     }),
   );
-  const pendingItems = input.pendingTasks.map(
-    (pendingTask, index): ThreadListV2ListItem => ({
-      type: "v2-pending",
-      key: `v2-pending:${pendingTask.message.messageId}`,
-      pendingTask,
-      showPendingDivider: index === 0,
-    }),
-  );
+  const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
+    type: "v2-pending",
+    key: `v2-pending:${pendingTask.message.messageId}`,
+    pendingTask,
+    showPendingDivider: index === 0,
+  }));
   const snoozedCount = input.snoozedCount ?? 0;
   const snoozedShelfHeaderIndex = input.snoozedShelfHeaderIndex ?? null;
   const settledCount = input.settledCount ?? 0;
@@ -498,8 +497,8 @@ export function buildThreadListV2Items(input: {
         );
   const orderedSettled = [...settled].sort(
     (left, right) =>
-      firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
-      firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
+      parseTimestampMs(resolveSettledThreadTimestamp(right) ?? "") -
+      parseTimestampMs(resolveSettledThreadTimestamp(left) ?? ""),
   );
   const settledLimit = input.settledLimit ?? Number.POSITIVE_INFINITY;
   const pagedSettled =

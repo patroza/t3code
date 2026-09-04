@@ -95,12 +95,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["transparent transparency solid menus dialogs composer"],
   },
   {
+    id: "panel-animations",
+    title: "Panel animations",
+    to: "/settings/appearance",
+  },
+  {
     id: "environment-identification",
     title: "Environment identification",
     to: "/settings/appearance",
     searchTerms: ["dev nightly artwork pill label hide none"],
     // The setting is stage-dependent, so its parent section is the stable destination.
-    targetId: "appearance",
+    targetId: "appearance-interface",
   },
   {
     id: "interface-font",
@@ -180,10 +185,30 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["diff ignore spaces edits default"],
   },
   {
+    id: "diff-layout",
+    title: "Diff layout",
+    to: "/settings/general",
+    searchTerms: ["stacked split side by side unified inline view"],
+  },
+  {
+    id: "proactive-panels",
+    title: "Proactive panels",
+    to: "/settings/general",
+    searchTerms: ["automatically open diff pull request pr right panel agent completion"],
+  },
+  {
     id: "skills-in-slash-menu",
     title: "Show skills in slash menu",
     to: "/settings/general",
     searchTerms: ["command menu dollar $ slash /"],
+  },
+  {
+    id: "composer-collapse",
+    title: "Collapse composer",
+    to: "/settings/general",
+    searchTerms: [
+      "composer rest resting unfocus blur focus click away scroll wheel conversation timeline shrink minimize",
+    ],
   },
   {
     id: "provider-update-checks",
@@ -301,8 +326,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Providers",
     to: "/settings/providers",
     searchTerms: [
-      "agents cli codex claude cursor grok opencode instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "agents cli codex claude cursor grok opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
     ],
+  },
+  {
+    id: "usage-providers",
+    title: "Usage providers",
+    to: "/settings/providers",
+    searchTerms: [
+      "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
+    ],
+    providerSettingsOnly: true,
   },
   {
     id: "provider-health-check-interval",
@@ -316,6 +350,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Agent browser access",
     to: "/settings/integrations",
     searchTerms: ["allow open drive preview tools sessions"],
+  },
+  {
+    id: "browser-profiles",
+    title: "Browser profiles",
+    to: "/settings/integrations",
+    targetId: "browser",
+  },
+  {
+    id: "browser-default-profile",
+    title: "Default browser profile",
+    to: "/settings/integrations",
+    targetId: "browser-profiles",
   },
   {
     id: "browser-default-viewport",
@@ -339,6 +385,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-recording-frame-rate",
     title: "Browser recording frame rate",
     to: "/settings/integrations",
+  },
+  {
+    id: "browser-link-target",
+    title: "Open links in",
+    to: "/settings/integrations",
+    searchTerms: ["links default browser in-app browser external open"],
   },
   {
     id: "browser-auto-show-floating-preview",
@@ -387,6 +439,14 @@ export const SETTINGS_SEARCH_ITEMS = [
       "override generated commit change request pr titles descriptions branch bookmark",
     ],
     primaryOnly: true,
+  },
+  {
+    id: "environment-icon",
+    title: "Environment icon",
+    to: "/settings/connections",
+    targetId: "connections-environment",
+    searchTerms: ["machine glyph sidebar mac mini studio laptop desktop server cloud vm"],
+    localBackendManagementOnly: true,
   },
   {
     id: "network-access",

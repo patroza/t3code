@@ -7,7 +7,7 @@ import * as Migrator from "effect/unstable/sql/Migrator";
 import { forkMigrationTable } from "../ForkMigrations.ts";
 import { legacyMigrationBackupTable, upstreamMigrationTable } from "../MigrationBootstrap.ts";
 import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
-import * as NodeSqliteClient from "../NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -72,10 +72,10 @@ layer("smart migration namespace repair", (it) => {
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream.slice(-4), [
-        { migration_id: 41, name: "AuthSessionClientConnection" },
-        { migration_id: 42, name: "ProjectionThreadLinkedPullRequest" },
-        { migration_id: 43, name: "ProjectionThreadsUnsettledAt" },
         { migration_id: 44, name: "ClearAutomaticProjectModelDefaults" },
+        { migration_id: 45, name: "ProjectionProjectsAutoPull" },
+        { migration_id: 46, name: "RepairAutomaticSettlementTimestamps" },
+        { migration_id: 47, name: "ProjectionProjectIcon" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id

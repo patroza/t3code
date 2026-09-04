@@ -44,7 +44,7 @@ import {
   sortLogicalProjectsForSidebar,
   groupSettledThreadsByRecencyForSidebarV2,
   isThreadSettledForDisplay,
-  resolveSettledTimestamp,
+  resolveSettledThreadTimestamp,
   sortSettledThreadsForSidebar,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -1520,10 +1520,10 @@ describe("sortSettledThreadsForSidebar", () => {
   });
 });
 
-describe("resolveSettledTimestamp", () => {
+describe("resolveSettledThreadTimestamp", () => {
   it("prefers explicit settledAt over later message activity", () => {
     expect(
-      resolveSettledTimestamp({
+      resolveSettledThreadTimestamp({
         settledAt: "2026-03-09T10:00:00.000Z",
         latestUserMessageAt: "2026-03-09T12:00:00.000Z",
         latestTurn: null,
@@ -1534,7 +1534,7 @@ describe("resolveSettledTimestamp", () => {
 
   it("falls back to the latest activity stamp when settledAt is missing", () => {
     expect(
-      resolveSettledTimestamp({
+      resolveSettledThreadTimestamp({
         settledAt: null,
         latestUserMessageAt: "2026-03-09T09:00:00.000Z",
         latestTurn: makeLatestTurn({ completedAt: "2026-03-09T11:00:00.000Z" }),

@@ -80,7 +80,6 @@ type BridgeEntry = {
  * Injected so BridgeHub does not import the full ResponseBridge module graph.
  * Requirements (T3Session, DiscordREST, …) come from the ambient ensure call context.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type BridgeRunner = (
   input: BridgeEnsureInput,
   ready: Deferred.Deferred<void>,
@@ -160,15 +159,13 @@ export const makeBridgeHub = (runBridge: BridgeRunner) =>
     const listActiveInternal = () =>
       Ref.get(bridges).pipe(
         Effect.map((map) =>
-          [...map.entries()].map(
-            ([discordChannelId, entry]): ActiveBridge => ({
-              discordChannelId,
-              t3ThreadId: entry.t3ThreadId,
-              lastActivityAt: entry.lastActivityAt,
-              preferred: entry.preferred,
-              mode: entry.mode,
-            }),
-          ),
+          [...map.entries()].map(([discordChannelId, entry]): ActiveBridge => ({
+            discordChannelId,
+            t3ThreadId: entry.t3ThreadId,
+            lastActivityAt: entry.lastActivityAt,
+            preferred: entry.preferred,
+            mode: entry.mode,
+          })),
         ),
       );
 

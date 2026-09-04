@@ -1,6 +1,5 @@
 import * as NodeZlib from "node:zlib";
 
-import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -13,6 +12,7 @@ import pkg from "./package.json" with { type: "json" };
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { tailwindPlugins } from "./vite/tailwind";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -76,6 +76,9 @@ const isolatedUnitTestFiles = [
   // it failed in one full run and passed in the next, purely on file ordering.
   "src/browserHistoryStore.test.ts",
   "src/browser/browserRecording.test.ts",
+  // Mocks `~/hooks/useSettings`; under isolate:false an earlier file binds
+  // the real store and getBrowserDefaults never sees the test profile list.
+  "src/browser/browserDefaults.test.ts",
   "src/browser/browserTargetResolver.test.ts",
   "src/browser/desktopTabLifetime.test.ts",
   "src/branding.test.ts",
@@ -97,6 +100,10 @@ const isolatedUnitTestFiles = [
   // useAtomValue() === null and throws on `_tag`.
   "src/components/ChatMarkdown.workspace-images.test.tsx",
   "src/components/chat/draftHeroTransition.test.ts",
+  // Mounts react-dom createRoot against a stub document; under isolate:false
+  // an earlier file can bind a real document/ReactDOM so hide/unhide never
+  // closes the popup.
+  "src/components/chat/useComposerMenuState.test.tsx",
   "src/components/files/projectFilesQueryState.test.ts",
   // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
   // upstream and fail under isolate:false when real React is already bound.
@@ -127,6 +134,9 @@ const isolatedUnitTestFiles = [
   "src/environments/primary/bootstrap.test.ts",
   "src/environments/primary/httpLayer.test.ts",
   "src/hooks/useCopyToClipboard.test.ts",
+  // Mocks `react` (useCallback/useMemo) and `@effect/atom-react`; under
+  // isolate:false an earlier file binds real React and useContext is null.
+  "src/hooks/useHandleNewThread.test.ts",
   "src/hooks/useLocalStorage.test.ts",
   "src/hooks/useTheme.test.ts",
   // Mocks `react` (useSyncExternalStore) like useTheme.test.ts; under
@@ -142,6 +152,13 @@ const isolatedUnitTestFiles = [
   // bound to the real module so confirm() is never the mock and pending stays false.
   "src/lib/terminalCloseConfirm.test.ts",
   "src/providerUpdateDismissal.test.ts",
+  // Mocks `@pierre/diffs` getSharedHighlighter; under isolate:false ChatMarkdown
+  // already binds the real highlighter so the recovered-text cache test sees
+  // a live object instead of the stub.
+  "src/lib/syntaxHighlighting.test.ts",
+  // Mocks `./vendor/ghostty-vt.wasm?url`; under isolate:false runtime.ts is
+  // already bound to the real asset URL and fetch('/src/...wasm') is invalid.
+  "src/terminal/ghostty/core.test.ts",
   "src/uiStateStore.test.ts",
   "src/versionSkew.test.ts",
 ] as const;
@@ -265,7 +282,7 @@ export default defineConfig(() => {
         parserOpts: { plugins: ["typescript", "jsx"] },
         presets: [reactCompilerPreset()],
       }),
-      tailwindcss(),
+      tailwindPlugins(bundledDev),
     ],
     optimizeDeps: {
       include: [
@@ -356,9 +373,15 @@ export default defineConfig(() => {
           }
         : {}),
     },
+    // @tailwindcss/vite only emits a CSS sourcemap when devSourcemap is on; without it
+    // rolldown flags the transform as SOURCEMAP_BROKEN on every sourcemapped build.
+    css: {
+      devSourcemap: buildSourcemap !== false,
+    },
     build: {
       outDir: "dist",
       emptyOutDir: true,
+      manifest: true,
       sourcemap: buildSourcemap,
     },
     test: {

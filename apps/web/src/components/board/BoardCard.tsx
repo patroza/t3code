@@ -117,7 +117,11 @@ function BoardCardBody({
     <>
       <div className="flex items-center gap-1.5">
         {project ? (
-          <ProjectFavicon environmentId={thread.environmentId} cwd={project.workspaceRoot} />
+          <ProjectFavicon
+            environmentId={thread.environmentId}
+            cwd={project.workspaceRoot}
+            projectName={project.title}
+          />
         ) : null}
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground/70">
           {project?.title ?? ""}
@@ -193,7 +197,8 @@ function BoardCardBody({
                 openPrLink(event, prStatus.url);
               }}
             >
-              <ChangeRequestStatusIcon className="size-3" />#{pr.number}
+              <ChangeRequestStatusIcon state={pr.state} isDraft={pr.isDraft} className="size-3" />#
+              {pr.number}
             </button>
           ) : (
             <span
@@ -202,7 +207,8 @@ function BoardCardBody({
                 prStatus.colorClass,
               )}
             >
-              <ChangeRequestStatusIcon className="size-3" />#{pr.number}
+              <ChangeRequestStatusIcon state={pr.state} isDraft={pr.isDraft} className="size-3" />#
+              {pr.number}
             </span>
           )
         ) : null}
