@@ -37,6 +37,7 @@ import { useThreadSelection } from "../../state/use-thread-selection";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useEnvironmentQuery } from "../../state/query";
 import { projectEnvironment } from "../../state/projects";
+import type { AssetUrlFailureReason } from "../../state/asset-url-state";
 import {
   useAdaptiveWorkspaceLayout,
   useAdaptiveWorkspacePaneRole,
@@ -53,6 +54,7 @@ import { preloadWorkspaceFileContents } from "./preload-workspace-file";
 import { SourceFileSurface } from "./SourceFileSurface";
 import { ThreadFileNavigatorPane } from "./thread-file-navigator-pane";
 import { WorkspaceFileImagePreview } from "./WorkspaceFileImagePreview";
+import { WorkspaceFilePreviewError } from "./WorkspaceFilePreviewError";
 import { WorkspaceFileVideoPreview } from "./WorkspaceFileVideoPreview";
 import { WorkspaceFileWebPreview } from "./WorkspaceFileWebPreview";
 import {
@@ -101,14 +103,18 @@ function defaultViewMode(path: string | null): FileViewMode {
 
 function FileContent(props: {
   readonly activeMode: FileViewMode;
+  readonly cwd: string;
+  readonly environmentId: EnvironmentId;
   readonly previewUri: string | null;
-  readonly previewUnavailable: boolean;
+  readonly previewFailure: AssetUrlFailureReason | null;
+  readonly onRetryPreview: () => void;
   readonly videoSource: MediaVideoPreviewSource | null;
   readonly mediaSource?: MediaActionsSource;
   readonly resolveVideoUri: () => Promise<string | null>;
   readonly fileContents: string | null;
   readonly fileError: string | null;
   readonly relativePath: string;
+  readonly threadId: ThreadId;
   readonly initialLine: number | null;
   readonly truncated: boolean;
   readonly onRefresh?: () => Promise<void> | void;
@@ -118,8 +124,22 @@ function FileContent(props: {
   const isMarkdown = isMarkdownPreviewFile(props.relativePath);
   const isBrowserFile = isWorkspaceBrowserPreviewPath(props.relativePath);
   const isImageFile = isWorkspaceImagePreviewPath(props.relativePath);
+  const isVideoFile = isVideoPreviewFile(props.relativePath);
+  // Only the surfaces that wait on a signed asset URL can be blocked by one.
+  const needsAssetUrl =
+    isVideoFile || (props.activeMode === "preview" && (isImageFile || isBrowserFile));
 
-  if (isVideoPreviewFile(props.relativePath)) {
+  if (needsAssetUrl && props.previewFailure !== null) {
+    return (
+      <WorkspaceFilePreviewError
+        environmentId={props.environmentId}
+        reason={props.previewFailure}
+        onRetry={props.onRetryPreview}
+      />
+    );
+  }
+
+  if (isVideoFile) {
     return (
       <WorkspaceFileVideoPreview
         name={basename(props.relativePath)}
@@ -127,7 +147,6 @@ function FileContent(props: {
         uri={props.previewUri}
         source={props.videoSource}
         resolvePlaybackUri={props.resolveVideoUri}
-        unavailable={props.previewUnavailable}
       />
     );
   }
@@ -179,7 +198,14 @@ function FileContent(props: {
         </View>
       ) : null}
       {props.activeMode === "preview" && isMarkdown ? (
-        <FileMarkdownPreview markdown={props.fileContents} onRefresh={props.onRefresh} />
+        <FileMarkdownPreview
+          cwd={props.cwd}
+          environmentId={props.environmentId}
+          markdown={props.fileContents}
+          relativePath={props.relativePath}
+          threadId={props.threadId}
+          onRefresh={props.onRefresh}
+        />
       ) : (
         <SourceFileSurface
           contents={props.fileContents}
@@ -584,6 +610,10 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
     assetPreviewUri === null || previewRevision === 0
       ? assetPreviewUri
       : `${assetPreviewUri}${assetPreviewUri.includes("?") ? "&" : "?"}revision=${previewRevision}`;
+  // Remounting the preview after a re-mint is what makes a failed asset URL retryable.
+  const handleRetryPreview = () => {
+    void assetPreview.refresh().finally(() => setPreviewRevision((current) => current + 1));
+  };
   const needsFileContents =
     relativePath !== null &&
     !isVideoFile &&
@@ -664,7 +694,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
               id: action.id,
               title: action.title,
               icon:
-                action.id === "share" ? ("square.and.arrow.up" as const) : ("doc.on.doc" as const),
+                action.id === "save" ? ("square.and.arrow.up" as const) : ("doc.on.doc" as const),
               inline: false,
               onPress: action.run,
             }))
@@ -885,8 +915,11 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         <FileContent
           key={previewKey}
           activeMode={resolvedActiveMode}
+          cwd={cwd}
+          environmentId={environmentId}
           previewUri={previewUri}
-          previewUnavailable={assetPreview._tag === "Failure"}
+          previewFailure={assetPreview._tag === "Failure" ? assetPreview.reason : null}
+          onRetryPreview={handleRetryPreview}
           videoSource={videoSource}
           mediaSource={mediaSource}
           resolveVideoUri={assetPreview.refresh}
@@ -894,6 +927,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
           fileError={fileQuery.error}
           initialLine={targetLine}
           relativePath={relativePath}
+          threadId={threadId}
           truncated={fileData?.truncated ?? false}
           onRefresh={() => fileQuery.refresh()}
         />

@@ -3328,6 +3328,69 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
         assert.deepEqual(pendingRows, []);
       }),
     );
+
+    it.effect("only clears the compact request that produced the compaction activity", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-compaction-correlation");
+
+        for (const [index, messageId] of ["compact-request", "new-message"].entries()) {
+          const createdAt = `2026-02-26T15:00:0${index}.000Z`;
+          yield* eventStore.append({
+            type: "thread.turn-start-requested",
+            eventId: EventId.make(`evt-compaction-pending-${index}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: createdAt,
+            commandId: CommandId.make(`cmd-compaction-pending-${index}`),
+            causationEventId: null,
+            correlationId: CorrelationId.make(`cmd-compaction-pending-${index}`),
+            metadata: {},
+            payload: {
+              threadId,
+              messageId: MessageId.make(messageId),
+              runtimeMode: "full-access",
+              createdAt,
+            },
+          });
+        }
+        yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.make("evt-compaction-stale"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-02-26T15:00:02.000Z",
+          commandId: CommandId.make("cmd-compaction-stale"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-compaction-stale"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.make("activity-compaction-stale"),
+              tone: "info",
+              kind: "context-compaction",
+              summary: "Context compacted",
+              payload: { requestId: "compact-request" },
+              turnId: null,
+              createdAt: "2026-02-26T15:00:02.000Z",
+            },
+          },
+        });
+        yield* projectionPipeline.bootstrap;
+
+        const pendingRows = yield* sql<{ readonly messageId: string }>`
+          SELECT pending_message_id AS "messageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND state = 'pending'
+        `;
+        assert.deepEqual(pendingRows, [{ messageId: "new-message" }]);
+      }),
+    );
   },
 );
 
@@ -3555,17 +3618,20 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           model: "gpt-5",
         },
         faviconPath: "brand/icon.svg",
+        projectIcon: { kind: "emoji", emoji: "🚀" },
       });
 
       const projectRows = yield* sql<{
         readonly scriptsJson: string;
         readonly defaultModelSelection: string;
         readonly faviconPath: string | null;
+        readonly projectIcon: string | null;
       }>`
         SELECT
           scripts_json AS "scriptsJson",
           default_model_selection_json AS "defaultModelSelection",
-          favicon_path AS "faviconPath"
+          favicon_path AS "faviconPath",
+          project_icon_json AS "projectIcon"
         FROM projection_projects
         WHERE project_id = 'project-scripts'
       `;
@@ -3575,6 +3641,7 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
             '[{"id":"script-1","name":"Build","command":"bun run build","icon":"build","runOnWorktreeCreate":false}]',
           defaultModelSelection: '{"instanceId":"codex","model":"gpt-5"}',
           faviconPath: "brand/icon.svg",
+          projectIcon: '{"kind":"emoji","emoji":"🚀"}',
         },
       ]);
     }),

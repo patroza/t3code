@@ -67,7 +67,11 @@ import type {
   DraftComposerAttachment,
   DraftComposerFileAttachment,
 } from "../../lib/composerImages";
-import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import {
+  buildModelOptions,
+  groupByProvider,
+  isModelSelectionUnavailable,
+} from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
@@ -114,13 +118,8 @@ export interface ThreadComposerProps {
   readonly queueCount: number;
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
-  /**
-   * Message sync phase for the selected thread (drives the status pill):
-   * "loading" = first fetch, nothing to show yet; "syncing" = cached messages
-   * are on screen while they reconcile with the server.
-   */
-  readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: OrchestrationThreadShell;
+  readonly hasCompactableConversation: boolean;
   readonly serverConfig: T3ServerConfig | null;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
@@ -229,7 +228,7 @@ export function ComposerSurface(props: {
 }
 
 type ComposerStatusPillState = {
-  readonly kind: "unavailable" | "reconnecting" | "syncing";
+  readonly kind: "unavailable" | "reconnecting";
   readonly label: string;
 };
 
@@ -237,7 +236,6 @@ function composerConnectionStatus(input: {
   readonly connectionError: string | null;
   readonly connectionState: RemoteClientConnectionState;
   readonly environmentLabel: string | null;
-  readonly threadSyncPhase?: "loading" | "syncing" | null;
 }): ComposerStatusPillState | null {
   const environmentLabel = input.environmentLabel ?? "Environment";
 
@@ -263,18 +261,6 @@ function composerConnectionStatus(input: {
     case "available":
       return { kind: "unavailable", label: `${environmentLabel} is not connected` };
     case "connected":
-      break;
-  }
-
-  // Connected: the pill is the single loading/sync indicator. One stable
-  // label per open — "Loading" when starting from scratch, "Syncing" when
-  // cached messages are already visible.
-  switch (input.threadSyncPhase) {
-    case "loading":
-      return { kind: "syncing", label: "Loading messages..." };
-    case "syncing":
-      return { kind: "syncing", label: "Syncing messages..." };
-    default:
       return null;
   }
 }
@@ -283,7 +269,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
   readonly onPress: () => void;
   readonly status: ComposerStatusPillState;
 }) {
-  const isReconnecting = props.status.kind !== "unavailable";
+  const isReconnecting = props.status.kind === "reconnecting";
   return (
     <Animated.View
       className="absolute inset-x-0 bottom-full items-center pb-2"
@@ -341,11 +327,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.connectionState !== "connected" || props.queueCount > 0 ? "Queue" : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
+  const modelUnavailable =
+    props.connectionState === "connected" &&
+    isModelSelectionUnavailable(props.serverConfig, currentModelSelection);
   const connectionStatus = composerConnectionStatus({
     connectionError: props.connectionError,
     connectionState: props.connectionState,
     environmentLabel: props.environmentLabel,
-    threadSyncPhase: props.threadSyncPhase,
   });
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
@@ -364,8 +352,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     projectCwd: props.projectCwd,
     selectedProviderStatus,
     hasThread: true,
+    hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
-    onUpdateInteractionMode: props.onUpdateInteractionMode,
+    onUpdateInteractionMode:
+      selectedProviderStatus?.showInteractionModeToggle === false
+        ? undefined
+        : props.onUpdateInteractionMode,
   });
   const { onChangeDraftMessage, onStartNewThread, draftMessage, onSendMessage } = props;
   const composerMenuItems = useMemo(() => {
@@ -427,7 +419,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     serverConfig: props.serverConfig,
     states: uploadStates,
   });
-  const canSend = hasContent && !voiceInput.blocksSubmission && attachmentBlockReason === null;
+  const canSend =
+    hasContent &&
+    !voiceInput.blocksSubmission &&
+    attachmentBlockReason === null &&
+    !modelUnavailable;
 
   // Keep the feed inset aligned with the card or compact dictation strip.
   useEffect(() => {
@@ -573,6 +569,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => ({
       ownerId: settingsOwnerId,
       environmentId: props.environmentId,
+      providerInstanceId: currentModelSelection.instanceId,
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
       onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
@@ -672,6 +669,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           />
         ) : null}
 
+        {modelUnavailable ? (
+          <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
+            <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
+          </Pressable>
+        ) : null}
+
         <ComposerSurface
           style={
             isExpanded
@@ -729,7 +732,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 multiline
                 value={props.draftMessage}
                 readOnly={voiceInput.freezesEditor}
-                skills={selectedProviderStatus?.skills ?? []}
+                skills={composerMenu.skills}
                 selection={composerMenu.selection}
                 onChangeText={props.onChangeDraftMessage}
                 onSelectionChange={composerMenu.onSelectionChange}

@@ -794,13 +794,13 @@ function DiagnosticsRefreshButton({
       <TooltipTrigger
         render={
           <Button
-            size="icon-micro"
+            size="icon-xs"
             variant="ghost-muted"
             disabled={isPending}
             onClick={onClick}
             aria-label={label}
           >
-            <RefreshCwIcon className={cn("size-3", isPending && "animate-spin")} />
+            <RefreshCwIcon className={cn(isPending && "animate-spin")} />
           </Button>
         }
       />
@@ -1147,13 +1147,13 @@ export function DiagnosticsSettingsPanel() {
               <TooltipTrigger
                 render={
                   <Button
-                    size="icon-micro"
+                    size="icon-xs"
                     variant="ghost-muted"
                     disabled={!observability?.logsDirectoryPath || isOpeningLogsDirectory}
                     onClick={openLogsDirectory}
                     aria-label="Open logs folder"
                   >
-                    <FolderOpenIcon className="size-3" />
+                    <FolderOpenIcon />
                   </Button>
                 }
               />

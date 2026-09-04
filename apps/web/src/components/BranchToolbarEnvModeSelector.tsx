@@ -7,6 +7,7 @@ import {
   resolveLockedWorkspaceLabel,
   type WorkspaceTarget,
 } from "./BranchToolbar.logic";
+import { composerFloatingLayerProps } from "./chat/composerEventScope";
 import {
   Select,
   SelectGroup,
@@ -57,7 +58,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   if (envLocked) {
     return (
       <span
-        className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
+        className="inline-flex h-7 min-w-0 items-center gap-1 border border-transparent px-[calc(--spacing(2)-1px)] font-normal text-muted-foreground/70 text-xs sm:h-6"
         data-composer-context-control
       >
         {activeWorktreePath ? (
@@ -96,7 +97,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <SelectTrigger
         variant="ghost"
         size="xs"
-        className="min-w-0 shrink font-medium"
+        className="min-w-0 shrink font-normal text-xs!"
         aria-label="Workspace"
         data-composer-context-control
       >
@@ -119,7 +120,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
           </span>
         </span>
       </SelectTrigger>
-      <SelectPopup>
+      <SelectPopup {...composerFloatingLayerProps}>
         <SelectGroup>
           <SelectGroupLabel>Workspace</SelectGroupLabel>
           <SelectItem value="local">
