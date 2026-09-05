@@ -1,15 +1,45 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   deleteThreadTargetsSequentially,
   getWorktreeRemovalAction,
+  navigateAfterThreadDeletion,
   requestThreadUnpinConfirmation,
   ThreadArchiveBlockedError,
 } from "./useThreadActions";
+import { toastManager } from "../components/ui/toast";
 
 const environmentId = EnvironmentId.make("environment-1");
+
+describe("navigateAfterThreadDeletion", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reports a rejected navigation without failing the completed deletion", async () => {
+    const addToast = vi.spyOn(toastManager, "add").mockReturnValue("navigation-error");
+
+    await expect(
+      navigateAfterThreadDeletion(() => Promise.reject(new Error("route unavailable"))),
+    ).resolves.toBeUndefined();
+
+    expect(addToast).toHaveBeenCalledOnce();
+    expect(addToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Thread deleted, but navigation failed",
+        description: "route unavailable",
+      }),
+    );
+  });
+
+  it("does not report an error after successful navigation", async () => {
+    const addToast = vi.spyOn(toastManager, "add");
+
+    await navigateAfterThreadDeletion(() => Promise.resolve());
+
+    expect(addToast).not.toHaveBeenCalled();
+  });
+});
 
 describe("ThreadArchiveBlockedError", () => {
   it("keeps the blocked thread context with the fixed message", () => {
