@@ -120,6 +120,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   resolveOpenWithPresentations: () =>
     ipcRenderer.invoke(IpcChannels.RESOLVE_OPEN_WITH_PRESENTATIONS_CHANNEL),
   openWith: (input) => ipcRenderer.invoke(IpcChannels.OPEN_WITH_CHANNEL, input),
+  openSystemSettings: (pane: string) =>
+    ipcRenderer.invoke(IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL, pane),
   probeRemoteEditors: () => ipcRenderer.invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL, undefined),
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {

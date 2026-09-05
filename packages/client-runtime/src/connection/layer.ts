@@ -14,14 +14,14 @@ import * as RpcSession from "../rpc/session.ts";
 
 const diagnosticsLogLayer = ConnectionDiagnosticsLog.layer;
 
-const resolverLayer = ConnectionResolver.layer.pipe(
-  Layer.provide(RemoteEnvironmentAuthorization.layer),
-);
-
 export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
   const driverLayer = ConnectionDriver.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(resolverLayer, RpcSession.layerWithOptions(options), diagnosticsLogLayer),
+      Layer.mergeAll(
+        ConnectionResolver.layer,
+        RpcSession.layerWithOptions(options),
+        diagnosticsLogLayer,
+      ),
     ),
   );
   const registryLayer = EnvironmentRegistry.layer.pipe(
@@ -45,7 +45,10 @@ export function layerWithOptions(options: RpcSession.RpcSessionOptions) {
       );
     }).pipe(Effect.withSpan("clientRuntime.connection.application.start")),
   );
-  return connectionStartupLayer.pipe(Layer.provideMerge(connectionServicesLayer));
+  return connectionStartupLayer.pipe(
+    Layer.provideMerge(connectionServicesLayer),
+    Layer.provideMerge(RemoteEnvironmentAuthorization.layer),
+  );
 }
 
 export const layer = layerWithOptions({});

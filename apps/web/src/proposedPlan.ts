@@ -1,5 +1,8 @@
 import { proposedPlanTitle } from "@t3tools/shared/proposedPlan";
 
+/** Prefix of the message the app sends when the user approves a plan. */
+export const PLAN_IMPLEMENTATION_PROMPT_PREFIX = "PLEASE IMPLEMENT THIS PLAN:\n";
+
 export {
   buildCollapsedProposedPlanPreviewMarkdown,
   buildPlanImplementationPrompt,

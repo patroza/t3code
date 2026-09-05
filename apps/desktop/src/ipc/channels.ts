@@ -7,6 +7,7 @@ export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 export const PICK_OPEN_WITH_APPLICATION_CHANNEL = "desktop:pick-open-with-application";
 export const RESOLVE_OPEN_WITH_PRESENTATIONS_CHANNEL = "desktop:resolve-open-with-presentations";
 export const OPEN_WITH_CHANNEL = "desktop:open-with";
+export const OPEN_SYSTEM_SETTINGS_CHANNEL = "desktop:open-system-settings";
 export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const QUIT_SHORTCUT_CHANNEL = "desktop:quit-shortcut";
