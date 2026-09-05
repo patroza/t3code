@@ -251,6 +251,7 @@ function toRuntimePayloadFromSession(
   extra?: {
     readonly modelSelection?: unknown;
     readonly interactionMode?: unknown;
+    readonly continueAfterServerUpdate?: TurnId;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
   },
@@ -260,6 +261,9 @@ function toRuntimePayloadFromSession(
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
+    ...(extra?.continueAfterServerUpdate !== undefined
+      ? { continueAfterServerUpdate: extra.continueAfterServerUpdate }
+      : {}),
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.interactionMode !== undefined ? { interactionMode: extra.interactionMode } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
@@ -914,6 +918,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     extra?: {
       readonly modelSelection?: unknown;
       readonly interactionMode?: unknown;
+      readonly continueAfterServerUpdate?: TurnId;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
     },
@@ -1563,6 +1568,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ? { interactionMode: input.interactionMode }
             : {}),
           activeTurnId: turn.turnId,
+          // Admission and marker consumption must survive the same restart.
+          continueAfterServerUpdate: null,
+          continueAfterServerUpdatePrepared: null,
           lastRuntimeEvent: "provider.sendTurn",
           lastRuntimeEventAt: turnStartedAt,
         },
@@ -1900,6 +1908,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           status: "stopped",
           runtimePayload: {
             activeTurnId: null,
+            continueAfterServerUpdate: null,
+            continueAfterServerUpdatePrepared: null,
           },
         });
         yield* analytics.record("provider.session.stopped", {
@@ -2109,6 +2119,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
+    const continueAfterRestart = yield* serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.continueThreadsAfterServerUpdate),
+      Effect.orElseSucceed(() => false),
+    );
     const properties = yield* Ref.modify(turnAnalytics, (state) => {
       const completed: Array<Readonly<Record<string, unknown>>> = [];
       for (const [sessionKey, session] of state.sessions) {
@@ -2206,6 +2220,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
     yield* Effect.forEach(activeSessions, (session) =>
       upsertSessionBinding(session, session.threadId, {
+        ...(continueAfterRestart && session.status === "running" && session.activeTurnId
+          ? { continueAfterServerUpdate: session.activeTurnId }
+          : {}),
         lastRuntimeEvent: "provider.stopAll",
         lastRuntimeEventAt,
       }),

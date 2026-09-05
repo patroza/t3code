@@ -125,10 +125,17 @@ const isolatedUnitTestFiles = [
   // because it does not share registries; the fork does.
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
+  // Mocks `../ui/button` as a host-element string; under isolate:false that
+  // stub leaks into later files (ComposerControl then renders variant as a
+  // DOM attribute and drops size classes).
+  "src/components/settings/ProjectIconPickerDialog.test.tsx",
+  "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
   // Mocks `../ui/toast`; under isolate:false an earlier file binds the real
   // toast manager and the release-link error toast is never recorded.
   "src/components/sidebar/SidebarUpdateReleaseNotes.test.tsx",
-  "src/components/settings/ProviderSettingsPanel.environment.test.tsx",
+  // Mocks `react` useState and `../ui/button` as "button"; same isolate:false
+  // Button leak as ProjectIconPickerDialog.test.tsx.
+  "src/components/usage/UsagePage.test.tsx",
   "src/connection/storage.test.ts",
   "src/contextMenuFallback.test.ts",
   "src/environments/primary/bootstrap.test.ts",

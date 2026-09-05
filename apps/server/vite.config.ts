@@ -96,6 +96,7 @@ export default mergeConfig(
               "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
+              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/Layers/GrokAdapter.test.ts",
               "src/provider/Layers/ProviderRegistry.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
@@ -129,6 +130,23 @@ export default mergeConfig(
               "src/provider/Layers/ProviderRegistry.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
+            ],
+          },
+        },
+        {
+          test: {
+            name: "server-isolated-claude-probe",
+            isolate: true,
+            fileParallelism: false,
+            maxWorkers: 1,
+            hookTimeout: serverTestTimeout,
+            testTimeout: serverTestTimeout,
+            include: [
+              // Spies `@anthropic-ai/claude-agent-sdk`.query. Under isolate:false
+              // ClaudeProvider already bound the real query. Keep this file out
+              // of the Grok isolated pool so its 4s live timeout does not race
+              // prompt-complete assertions (`hello from ` vs `hello from mock`).
+              "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
             ],
           },
         },

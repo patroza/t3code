@@ -819,8 +819,9 @@ export default function DiffPanel({
           </Tooltip>
         )}
         <ToggleGroup
-          className="shrink-0 gap-1"
-          size="sm"
+          aria-label="Diff layout"
+          className="shrink-0"
+          variant="segmented"
           value={[diffLayout]}
           onValueChange={(value) => {
             const next = value[0];
@@ -829,10 +830,10 @@ export default function DiffPanel({
             }
           }}
         >
-          <Toggle aria-label="Stacked diff view" value="stacked" variant="ghost">
+          <Toggle aria-label="Stacked diff view" value="stacked">
             <Rows3Icon className="size-3.5" />
           </Toggle>
-          <Toggle aria-label="Split diff view" value="split" variant="ghost">
+          <Toggle aria-label="Split diff view" value="split">
             <Columns2Icon className="size-3.5" />
           </Toggle>
         </ToggleGroup>
@@ -930,14 +931,9 @@ export default function DiffPanel({
               <ChangedFilesCard
                 turnId={selectedTurn.turnId}
                 files={selectedTurn.files}
-                expanded
-                showCompactPreview={false}
                 allDirectoriesExpanded={allDirectoriesExpanded}
                 resolvedTheme={resolvedTheme}
-                className="mt-0 shrink-0 rounded-none border-x-0 border-t-0"
-                onExpandedChange={() => {
-                  // Diff panel always shows the full file tree.
-                }}
+                className="mt-0 shrink-0 rounded-none"
                 onToggleAllDirectories={() =>
                   setThreadChangedFilesExpanded(
                     routeThreadKey,
