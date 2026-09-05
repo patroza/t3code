@@ -7,7 +7,11 @@ import { PreviewPortUnreachableError } from "@t3tools/contracts";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isLoopbackHost, normalizePreviewUrl } from "@t3tools/shared/preview";
 import { Schema } from "effect";
-import { isLocalLoopbackHost, isPrivateNetworkHost } from "@t3tools/shared/hostClassification";
+import {
+  isLocalLoopbackHost,
+  isPrivateNetworkHost,
+  normalizeHostname,
+} from "@t3tools/shared/hostClassification";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { previewEnvironment } from "~/state/preview";
