@@ -194,6 +194,7 @@ describe("editable file highlighting", () => {
 
   it.each([1, 60])(
     "ignores a dispatched highlight after %i Enter edits and highlights the new version",
+    { timeout: 60_000 },
     async (count) => {
       const oldResponse = await nextResponse();
       for (let index = 0; index < count; index += 1) append("\n");

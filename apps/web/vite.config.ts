@@ -163,6 +163,9 @@ const isolatedUnitTestFiles = [
   // already binds the real highlighter so the recovered-text cache test sees
   // a live object instead of the stub.
   "src/lib/syntaxHighlighting.test.ts",
+  // Real Pierre worker + 7k-line tokenizer. The 60-edit stale-highlight case
+  // timed out at 15s under isolate:false CI load.
+  "src/components/files/fileEditorHighlight.test.ts",
   // Mocks `./vendor/ghostty-vt.wasm?url`; under isolate:false runtime.ts is
   // already bound to the real asset URL and fetch('/src/...wasm') is invalid.
   "src/terminal/ghostty/core.test.ts",
