@@ -235,6 +235,7 @@ if (mode === "etarget" || mode === "failed-with-path") {
             extendEnv: false,
             env: {
               PATH: bin,
+              HOME: fixture,
               T3_TEST_MODE: mode,
               T3_TEST_CLI: cliPath,
               T3_TEST_CALLS: callsPath,
