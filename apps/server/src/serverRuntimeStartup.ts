@@ -182,7 +182,7 @@ export const recordStartupHeartbeat = Effect.gen(function* () {
   });
 });
 
-const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({
+export const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({
   instanceId: ProviderInstanceId.make("codex"),
   model: DEFAULT_MODEL,
 });

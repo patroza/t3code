@@ -188,7 +188,7 @@ export const mergeProviderSnapshot = (
           : {}),
       };
 
-const haveProvidersChanged = (
+export const haveProvidersChanged = (
   previousProviders: ReadonlyArray<ServerProvider>,
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);

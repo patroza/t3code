@@ -49,10 +49,7 @@ import {
   computeDpopJwkThumbprint,
   type DpopPublicJwk,
 } from "@t3tools/shared/dpop";
-import {
-  appendOmegentT3ProductHandshake,
-  OMEGENT_T3_CLIENT_REQUIRED_MESSAGE,
-} from "@t3tools/shared/productFamily";
+import { appendOmegentT3ProductHandshake } from "@t3tools/shared/productFamily";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { assert, it } from "@effect/vitest";

@@ -9,10 +9,16 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 import * as TestClock from "effect/testing/TestClock";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
+import type { CommandReadModel } from "./commandReadModel.ts";
+
+function firstThread(model: CommandReadModel) {
+  return Array.from(HashMap.values(model.threads))[0];
+}
 
 it.layer(NodeServices.layer)("thread history import", (it) => {
   it.effect("marks imported thread creation without changing live creation", () =>
@@ -167,7 +173,7 @@ it.layer(NodeServices.layer)("thread history import", (it) => {
         metadata: {},
         payload: { threadId, turnCount: 0 },
       });
-      expect(projected.threads[0]?.messages.map((message) => message.text)).toEqual([
+      expect(firstThread(projected)?.messages.map((message) => message.text)).toEqual([
         "Fix the bug",
         "Fixed",
       ]);
@@ -312,7 +318,7 @@ it.layer(NodeServices.layer)("thread history import", (it) => {
 
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
       expect(error.message).toContain("must be active and empty");
-      expect(readModel.threads[0]?.updatedAt).toBe(liveMessageAt);
+      expect(firstThread(readModel)?.updatedAt).toBe(liveMessageAt);
     }),
   );
 

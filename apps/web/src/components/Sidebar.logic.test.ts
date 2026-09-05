@@ -8,7 +8,6 @@ import {
   buildMultiSelectThreadContextMenuItems,
   buildSidebarThreadWorktreeSections,
   buildSidebarV2ThreadContextMenuItems,
-  buildThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   filterSidebarProjectScopeItems,
   formatWorktreeGroupLabel,

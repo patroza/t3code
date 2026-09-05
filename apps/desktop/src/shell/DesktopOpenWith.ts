@@ -198,8 +198,12 @@ export const make = Effect.gen(function* () {
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
 
+  const readClientSettings = clientSettings.get.pipe(
+    Effect.catchTag("DesktopClientSettingsReadError", () => Effect.succeed(Option.none())),
+  );
+
   const resolvePresentations = Effect.gen(function* () {
-    const settings = yield* clientSettings.get;
+    const settings = yield* readClientSettings;
     if (Option.isNone(settings)) return [];
     return yield* Effect.forEach(settings.value.openWithEntries, (entry) =>
       Effect.gen(function* () {
@@ -245,7 +249,7 @@ export const make = Effect.gen(function* () {
         reason: "not-directory",
       });
     }
-    const settings = yield* clientSettings.get;
+    const settings = yield* readClientSettings;
     const entry = Option.isSome(settings)
       ? settings.value.openWithEntries.find((candidate) => candidate.id === input.entryId)
       : undefined;
