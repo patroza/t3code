@@ -579,7 +579,7 @@ describe("thread outbox", () => {
       releaseWrite = resolve;
     });
     const storage: ThreadOutboxStorage = {
-      load: async () => [],
+      load: async () => ({ messages: [], errors: [] }),
       write: async () => {
         await writeGate;
       },
@@ -605,7 +605,7 @@ describe("thread outbox", () => {
     const registry = AtomRegistry.make();
     const writeCause = new Error("write failed");
     const storage: ThreadOutboxStorage = {
-      load: async () => [],
+      load: async () => ({ messages: [], errors: [] }),
       write: async () => {
         throw writeCause;
       },
