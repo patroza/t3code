@@ -82,6 +82,7 @@ if (args.includes("--package")) {
                   cwd: fixture,
                   env: {
                     PATH: bin,
+                    HOME: fixture,
                     T3_TEST_CLI: cliPath,
                     T3_TEST_CALLS: callsPath,
                     T3_TEST_PORT: String(port),
