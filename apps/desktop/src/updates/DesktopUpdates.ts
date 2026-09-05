@@ -156,7 +156,6 @@ export const DesktopUpdateSetChannelError = Schema.Union([
   DesktopUpdateChannelPersistenceError,
 ]);
 export type DesktopUpdateSetChannelError = typeof DesktopUpdateSetChannelError.Type;
-export const isDesktopUpdateSetChannelError = Schema.is(DesktopUpdateSetChannelError);
 
 export class DesktopUpdates extends Context.Service<
   DesktopUpdates,

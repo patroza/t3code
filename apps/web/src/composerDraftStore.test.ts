@@ -68,10 +68,7 @@ import {
   clearComposerDraftsEnvironment,
   composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
-  markPromotedDraftThread,
   markPromotedDraftThreadByRef,
-  markPromotedDraftThreads,
-  markPromotedDraftThreadsByRef,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   composerFileNeedsReattach,
@@ -1212,7 +1209,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       interactionMode: "plan",
     });
     store.setPrompt(draftId, "keep this prompt");
-    markPromotedDraftThread(threadId);
+    markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
 
     store.setLogicalProjectDraftThreadId(scopedProjectKey(projectRef), projectRef, draftId, {
       threadId: retryThreadId,
@@ -1375,12 +1372,12 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(draftId)).toBeUndefined();
   });
 
-  it("marks a promoted draft by thread id without deleting composer state", () => {
+  it("marks a promoted draft by scoped ref without deleting composer state", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
     store.setPrompt(draftId, "promote me");
 
-    markPromotedDraftThread(threadId);
+    markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
 
     expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)).toBeNull();
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.promotedTo).toEqual(
@@ -1405,20 +1402,20 @@ describe("composerDraftStore project draft thread mapping", () => {
     const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
     store.setPrompt(threadRef, "keep me");
 
-    markPromotedDraftThread(threadId);
+    markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
 
     expect(useComposerDraftStore.getState().getDraftThread(threadRef)).toBeNull();
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("keep me");
   });
 
-  it("marks promoted drafts from an iterable of server thread ids", () => {
+  it("promotes a draft without changing another thread's draft", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
     store.setPrompt(draftId, "promote me");
     store.setProjectDraftThreadId(otherProjectRef, otherDraftId, { threadId: otherThreadId });
     store.setPrompt(otherDraftId, "keep me");
 
-    markPromotedDraftThreads([threadId]);
+    markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
 
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.promotedTo).toEqual(
       scopeThreadRef(TEST_ENVIRONMENT_ID, threadId),
@@ -1430,7 +1427,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(otherDraftId)?.prompt).toBe("keep me");
   });
 
-  it("marks every matching scoped draft when multiple environments share a thread id", () => {
+  it("promotes matching thread ids separately for each environment", () => {
     const store = useComposerDraftStore.getState();
     const localThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
     const remoteThreadRef = scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId);
@@ -1440,7 +1437,16 @@ describe("composerDraftStore project draft thread mapping", () => {
     store.setProjectDraftThreadId(remoteProjectRef, remoteDraftId, { threadId });
     store.setPrompt(remoteDraftId, "remote draft");
 
-    markPromotedDraftThread(threadId);
+    markPromotedDraftThreadByRef(localThreadRef);
+
+    expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
+    expect(store.getDraftThreadByProjectRef(remoteProjectRef)?.threadId).toBe(threadId);
+    expect(store.getDraftThreadByRef(localThreadRef)?.promotedTo).toEqual(localThreadRef);
+    expect(store.getDraftThreadByRef(remoteThreadRef)?.promotedTo).toBeNull();
+    expect(draftByKey(localDraftId)?.prompt).toBe("local draft");
+    expect(draftByKey(remoteDraftId)?.prompt).toBe("remote draft");
+
+    markPromotedDraftThreadByRef(remoteThreadRef);
 
     expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
     expect(store.getDraftThreadByProjectRef(remoteProjectRef)).toBeNull();
@@ -1463,34 +1469,10 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(draftId)?.prompt).toBe("promote me");
   });
 
-  it("only marks iterable promotion cleanup entries for the matching environment refs", () => {
-    const store = useComposerDraftStore.getState();
-    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
-    store.setPrompt(draftId, "promote me");
-
-    markPromotedDraftThreadsByRef([scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId)]);
-
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)?.threadId).toBe(
-      threadId,
-    );
-    expect(draftByKey(draftId)?.prompt).toBe("promote me");
-  });
-
-  it("keeps existing server-thread composer drafts during iterable promotion cleanup", () => {
-    const store = useComposerDraftStore.getState();
-    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
-    store.setPrompt(threadRef, "keep me");
-
-    markPromotedDraftThreads([threadId]);
-
-    expect(useComposerDraftStore.getState().getDraftThread(threadRef)).toBeNull();
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("keep me");
-  });
-
   it("moves composer edits made during promotion to the canonical thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
-    markPromotedDraftThread(threadId);
+    markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
     store.setPrompt(draftId, "typed during setup");
 
     finalizePromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));

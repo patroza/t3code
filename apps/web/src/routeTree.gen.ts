@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
@@ -32,6 +33,11 @@ import { Route as ChatBoardRouteImport } from './routes/_chat.board'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
+const WelcomeRoute = WelcomeRouteImport.update({
+  id: '/welcome',
+  path: '/welcome',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UsageRoute = UsageRouteImport.update({
   id: '/usage',
   path: '/usage',
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/usage': typeof UsageRoute
   '/board': typeof ChatBoardRoute
   '/jump': typeof ChatJumpRoute
+  '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -173,6 +180,7 @@ export interface FileRoutesByTo {
   '/usage': typeof UsageRoute
   '/board': typeof ChatBoardRoute
   '/jump': typeof ChatJumpRoute
+  '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -198,6 +206,7 @@ export interface FileRoutesById {
   '/usage': typeof UsageRoute
   '/_chat/board': typeof ChatBoardRoute
   '/_chat/jump': typeof ChatJumpRoute
+  '/welcome': typeof WelcomeRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -224,6 +233,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/board'
     | '/jump'
+    | '/welcome'
     | '/pull-requests'
     | '/connect/callback'
     | '/projects/$projectKey'
@@ -246,6 +256,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/board'
     | '/jump'
+    | '/welcome'
     | '/pull-requests'
     | '/connect/callback'
     | '/projects/$projectKey'
@@ -270,6 +281,7 @@ export interface FileRouteTypes {
     | '/usage'
     | '/_chat/board'
     | '/_chat/jump'
+    | '/welcome'
     | '/_chat/pull-requests'
     | '/connect_/callback'
     | '/projects/$projectKey'
@@ -293,12 +305,20 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
+  WelcomeRoute: typeof WelcomeRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/welcome': {
+      id: '/welcome'
+      path: '/welcome'
+      fullPath: '/welcome'
+      preLoaderRoute: typeof WelcomeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/usage': {
       id: '/usage'
       path: '/usage'
@@ -510,6 +530,7 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
+  WelcomeRoute: WelcomeRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
 }

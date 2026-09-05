@@ -583,7 +583,7 @@ export function mergeOpenCodeAssistantText(
   };
 }
 
-export function appendOpenCodeAssistantTextDelta(
+function appendOpenCodeAssistantTextDelta(
   previousText: string,
   delta: string,
 ): {
