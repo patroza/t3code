@@ -17,12 +17,14 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { layerTest as codexResetCreditLayerTest } from "../Layers/codexResetCredit.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as DirenvEnvironment from "../DirenvEnvironment.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(DirenvEnvironment.layerNoop),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(ModelManifest.layerTest),
   Layer.provideMerge(codexResetCreditLayerTest),

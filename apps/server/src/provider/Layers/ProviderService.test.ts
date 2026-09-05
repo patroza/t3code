@@ -661,6 +661,7 @@ it.effect("ProviderServiceLive bounds a provider that wedges during shutdown", (
         shutdownInterruptGracePeriod: "0 millis",
         shutdownGracePeriod: "50 millis",
       }).pipe(
+        Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
