@@ -7,6 +7,7 @@
  * @module ProjectionSnapshotQuery
  */
 import type {
+  AgentSessionImportSource,
   ApprovalRequestId,
   CheckpointRef,
   OrchestrationCheckpointSummary,
@@ -177,6 +178,15 @@ export interface ProjectionSnapshotQueryShape {
   readonly getFirstActiveThreadIdByProjectId: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
+
+  /** Read completed import sources without loading thread history. */
+  readonly getImportedAgentSessionSources: (projectId: ProjectId) => Effect.Effect<
+    ReadonlyArray<{
+      readonly threadId: ThreadId;
+      readonly source: AgentSessionImportSource;
+    }>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the checkpoint context needed to resolve a single thread diff.

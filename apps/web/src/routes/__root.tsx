@@ -16,6 +16,7 @@ import { resolveServerBackedAppDisplayName } from "../branding.logic";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -100,6 +101,13 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const returningFromWelcomeRef = useRef(pathname === "/welcome");
+
+  useEffect(() => {
+    if (pathname === "/welcome") {
+      returningFromWelcomeRef.current = true;
+    }
+  }, [pathname]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -116,6 +124,19 @@ function RootRouteView() {
         <DocumentTitleSync />
         <Outlet />
       </>
+    );
+  }
+
+  // The welcome wizard is full-screen like /pair, but keeps toasts so its
+  // connect/import actions can report failures.
+  if (pathname === "/welcome") {
+    return (
+      <ToastProvider>
+        <DocumentTitleSync />
+        <ContrastAppearanceSync />
+        <FontAppearanceSync />
+        <Outlet />
+      </ToastProvider>
     );
   }
 
@@ -136,6 +157,10 @@ function RootRouteView() {
     </CommandPalette>
   );
 
+  // FirstRunGate holds back everything below it — including EventRouter,
+  // whose welcome payload navigates into a thread — until the first-run
+  // decision is known, so a fresh install renders nothing (not the shell,
+  // not a flash of threads) before landing on the welcome wizard.
   return (
     <ToastProvider>
       <AnchoredToastProvider>
@@ -144,26 +169,32 @@ function RootRouteView() {
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
-        {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-        {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-        <RelayClientInstallDialog />
-        <ConnectOnboardingDialog />
-        <SshPasswordPromptDialog />
-        <ConfirmDialogHost />
-        <SlowRpcRequestToastCoordinator />
-        <HostedStaticEnvironmentBootstrap />
-        {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-        {primaryEnvironmentAuthenticated ? <OmegentDeepLinkCoordinator /> : null}
-        {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
-        {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        {/* Claim gate: primary auth OR hosted-static (paired remotes still need identity). */}
-        {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
-          <IdentityClaimGate />
-        ) : null}
-        {appShell}
-        {/* Above the router: a theme draft is judged by walking the app, so the
-            editor has to survive navigation away from settings. */}
-        <ThemeEditorHost />
+        <FirstRunGate
+          enabled={primaryEnvironmentAuthenticated}
+          hostedStatic={authGateState.status === "hosted-static"}
+        >
+          {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
+          {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+          <RelayClientInstallDialog />
+          <ConnectOnboardingDialog />
+          <SshPasswordPromptDialog />
+          <ConfirmDialogHost />
+          <SlowRpcRequestToastCoordinator />
+          <HostedStaticEnvironmentBootstrap />
+          {primaryEnvironmentAuthenticated ? (
+            <EventRouter skipInitialBootstrapNavigation={returningFromWelcomeRef.current} />
+          ) : null}
+          {primaryEnvironmentAuthenticated ? <OmegentDeepLinkCoordinator /> : null}
+          {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
+          {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
+          {primaryEnvironmentAuthenticated || authGateState.status === "hosted-static" ? (
+            <IdentityClaimGate />
+          ) : null}
+          {appShell}
+          {/* Above the router: a theme draft is judged by walking the app, so the
+              editor has to survive navigation away from settings. */}
+          <ThemeEditorHost />
+        </FirstRunGate>
       </AnchoredToastProvider>
     </ToastProvider>
   );
@@ -389,7 +420,11 @@ function AuthenticatedTracingBootstrap() {
   return null;
 }
 
-function EventRouter() {
+function EventRouter({
+  skipInitialBootstrapNavigation,
+}: {
+  readonly skipInitialBootstrapNavigation: boolean;
+}) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -402,6 +437,7 @@ function EventRouter() {
   const serverWelcome = useAtomValue(primaryServerWelcomeAtom);
   const readPathname = useEffectEvent(() => pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
+  const skipInitialBootstrapNavigationRef = useRef(skipInitialBootstrapNavigation);
   const handledConfigEventRef = useRef(serverConfigEvent);
   const [keybindingsToastController] = useState<KeybindingsUpdateToastController>(() =>
     createKeybindingsUpdateToastController({}),
@@ -435,6 +471,11 @@ function EventRouter() {
       }
       // Do not steal `/?thread=` landings for the server's bootstrap thread.
       if (hasThreadDeepLinkIntent()) {
+        return;
+      }
+      if (skipInitialBootstrapNavigationRef.current) {
+        skipInitialBootstrapNavigationRef.current = false;
+        handledBootstrapThreadIdRef.current = payload.bootstrapThreadId;
         return;
       }
       if (handledBootstrapThreadIdRef.current === payload.bootstrapThreadId) {

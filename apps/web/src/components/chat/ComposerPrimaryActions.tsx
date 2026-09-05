@@ -45,7 +45,7 @@ export const shouldDisableCollapsedComposerSubmitAction = (input: {
 }): boolean =>
   input.isRunning || input.isSendBusy || input.isConnecting || !input.hasSendableContent;
 
-export const formatPendingPrimaryActionLabel = (input: {
+const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
   isLastQuestion: boolean;
   isResponding: boolean;

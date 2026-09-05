@@ -79,6 +79,11 @@ const isolatedUnitTestFiles = [
   // Mocks `~/hooks/useSettings`; under isolate:false an earlier file binds
   // the real store and getBrowserDefaults never sees the test profile list.
   "src/browser/browserDefaults.test.ts",
+  // Mocks `~/hooks/useSettings`; under isolate:false the real hydrate path
+  // already bound ensureLocalApi, so failed-read tests throw "Local API not found".
+  "src/browser/browserLinkTarget.test.ts",
+  // Mocks `~/localApi` persistence; same isolate:false binding as useSettings.
+  "src/browser/HostedBrowserWebview.test.tsx",
   "src/browser/browserTargetResolver.test.ts",
   "src/browser/desktopTabLifetime.test.ts",
   "src/branding.test.ts",
@@ -113,6 +118,9 @@ const isolatedUnitTestFiles = [
   // applies — the icon falls back to the browser mockup and the stored-favicon
   // assertion fails, depending only on how files land across workers.
   "src/components/preview/PreviewFaviconIcon.test.tsx",
+  // Mocks `~/localApi` getClientSettings; under isolate:false the real
+  // localApi is already bound so open waits forever or never sees the mock.
+  "src/components/preview/PreviewAutomationHosts.test.tsx",
   "src/components/preview/PreviewView.test.tsx",
   "src/components/preview/openPreviewSession.test.ts",
   "src/components/preview/openTerminalLinkInPreview.test.ts",
@@ -144,6 +152,9 @@ const isolatedUnitTestFiles = [
   // Mocks `react` (useCallback/useMemo) and `@effect/atom-react`; under
   // isolate:false an earlier file binds real React and useContext is null.
   "src/hooks/useHandleNewThread.test.ts",
+  // Mocks `~/localApi` persistence; under isolate:false the real ensureLocalApi
+  // is already bound and hydration throws "Local API not found".
+  "src/hooks/useSettings.test.ts",
   "src/hooks/useLocalStorage.test.ts",
   "src/hooks/useTheme.test.ts",
   // Mocks `react` (useSyncExternalStore) like useTheme.test.ts; under

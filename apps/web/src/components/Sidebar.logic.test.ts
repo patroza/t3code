@@ -8,18 +8,15 @@ import {
   buildMultiSelectThreadContextMenuItems,
   buildSidebarThreadWorktreeSections,
   buildSidebarV2ThreadContextMenuItems,
-  buildThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   filterSidebarProjectScopeItems,
   formatWorktreeGroupLabel,
   getSidebarThreadIdsToPrewarm,
   resolveSidebarThreadPrewarmLimit,
   SIDEBAR_THREAD_PREWARM_LIMIT,
-  getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
   reduceSidebarProjectScopeMenuState,
   getFallbackThreadIdAfterDelete,
-  getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isContextMenuPointerDown,
@@ -40,7 +37,6 @@ import {
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
   formatWorkingDurationLabel,
-  shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
   shouldRecedeSidebarThread,
   sortLogicalProjectsForSidebar,
@@ -118,56 +114,6 @@ describe("animatePinnedLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animatePinnedLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
-  });
-});
-
-describe("shouldNavigateAfterProjectRemoval", () => {
-  const projectThreads = [{ environmentId: "environment-local", id: "thread-1" }];
-
-  it("navigates away from a draft route owned by the removed project", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: { kind: "draft", draftId: "draft-1" as never },
-        projectThreads,
-        projectDraftId: "draft-1",
-      }),
-    ).toBe(true);
-  });
-
-  it("does not navigate away from a different draft route", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: { kind: "draft", draftId: "draft-2" as never },
-        projectThreads,
-        projectDraftId: "draft-1",
-      }),
-    ).toBe(false);
-  });
-
-  it("navigates away from a server thread owned by the removed project", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: {
-          kind: "server",
-          threadRef: {
-            environmentId: EnvironmentId.make("environment-local"),
-            threadId: ThreadId.make("thread-1"),
-          },
-        },
-        projectThreads,
-        projectDraftId: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not navigate from an unrelated route", () => {
-    expect(
-      shouldNavigateAfterProjectRemoval({
-        routeTarget: null,
-        projectThreads,
-        projectDraftId: null,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -1104,46 +1050,6 @@ describe("resolveAdjacentThreadId", () => {
   });
 });
 
-describe("getVisibleSidebarThreadIds", () => {
-  it("returns only the rendered visible thread order across projects", () => {
-    expect(
-      getVisibleSidebarThreadIds([
-        {
-          renderedThreadIds: [
-            ThreadId.make("thread-12"),
-            ThreadId.make("thread-11"),
-            ThreadId.make("thread-10"),
-          ],
-        },
-        {
-          renderedThreadIds: [ThreadId.make("thread-8"), ThreadId.make("thread-6")],
-        },
-      ]),
-    ).toEqual([
-      ThreadId.make("thread-12"),
-      ThreadId.make("thread-11"),
-      ThreadId.make("thread-10"),
-      ThreadId.make("thread-8"),
-      ThreadId.make("thread-6"),
-    ]);
-  });
-
-  it("skips threads from collapsed projects whose thread panels are not shown", () => {
-    expect(
-      getVisibleSidebarThreadIds([
-        {
-          shouldShowThreadPanel: false,
-          renderedThreadIds: [ThreadId.make("thread-hidden-2"), ThreadId.make("thread-hidden-1")],
-        },
-        {
-          shouldShowThreadPanel: true,
-          renderedThreadIds: [ThreadId.make("thread-12"), ThreadId.make("thread-11")],
-        },
-      ]),
-    ).toEqual([ThreadId.make("thread-12"), ThreadId.make("thread-11")]);
-  });
-});
-
 describe("isContextMenuPointerDown", () => {
   it("treats secondary-button presses as context menu gestures on all platforms", () => {
     expect(
@@ -2062,57 +1968,6 @@ describe("resolveProjectStatusIndicator", () => {
         },
       ]),
     ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
-  });
-});
-
-describe("getVisibleThreadsForProject", () => {
-  it("includes the active thread even when it falls below the folded preview", () => {
-    const threads = Array.from({ length: 8 }, (_, index) =>
-      makeThread({
-        id: ThreadId.make(`thread-${index + 1}`),
-        title: `Thread ${index + 1}`,
-      }),
-    );
-
-    const result = getVisibleThreadsForProject({
-      threads,
-      activeThreadId: ThreadId.make("thread-8"),
-      isThreadListExpanded: false,
-      previewLimit: 6,
-    });
-
-    expect(result.hasHiddenThreads).toBe(true);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual([
-      ThreadId.make("thread-1"),
-      ThreadId.make("thread-2"),
-      ThreadId.make("thread-3"),
-      ThreadId.make("thread-4"),
-      ThreadId.make("thread-5"),
-      ThreadId.make("thread-6"),
-      ThreadId.make("thread-8"),
-    ]);
-    expect(result.hiddenThreads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-7")]);
-  });
-
-  it("returns all threads when the list is expanded", () => {
-    const threads = Array.from({ length: 8 }, (_, index) =>
-      makeThread({
-        id: ThreadId.make(`thread-${index + 1}`),
-      }),
-    );
-
-    const result = getVisibleThreadsForProject({
-      threads,
-      activeThreadId: ThreadId.make("thread-8"),
-      isThreadListExpanded: true,
-      previewLimit: 6,
-    });
-
-    expect(result.hasHiddenThreads).toBe(true);
-    expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
-      threads.map((thread) => thread.id),
-    );
-    expect(result.hiddenThreads).toEqual([]);
   });
 });
 

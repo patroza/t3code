@@ -1161,6 +1161,56 @@ describe("buildRevertTurnCountByUserMessageId", () => {
       }).size,
     ).toBe(0);
   });
+
+  it.each([true, false])(
+    "returns the previous map when contents are unchanged (rollback supported: %s)",
+    (supportsConversationRollback) => {
+      const input = {
+        supportsConversationRollback,
+        timelineEntries,
+        turnDiffSummaryByAssistantMessageId,
+        inferredCheckpointTurnCountByTurnId: {},
+      };
+      const previous = buildRevertTurnCountByUserMessageId(input);
+      const streamed = timelineEntries.map((entry) =>
+        entry.message.role === "assistant"
+          ? { ...entry, message: { ...entry.message, text: "Updated the file again" } }
+          : entry,
+      );
+
+      expect(
+        buildRevertTurnCountByUserMessageId({ ...input, timelineEntries: streamed }, previous),
+      ).toBe(previous);
+    },
+  );
+
+  it("returns a new map when a revert target changes", () => {
+    const input = {
+      supportsConversationRollback: true,
+      timelineEntries,
+      turnDiffSummaryByAssistantMessageId,
+      inferredCheckpointTurnCountByTurnId: {},
+    };
+    const previous = buildRevertTurnCountByUserMessageId(input);
+    const next = buildRevertTurnCountByUserMessageId(
+      {
+        ...input,
+        turnDiffSummaryByAssistantMessageId: new Map([
+          [
+            assistantMessageId,
+            {
+              ...turnDiffSummaryByAssistantMessageId.get(assistantMessageId)!,
+              checkpointTurnCount: 3,
+            },
+          ],
+        ]),
+      },
+      previous,
+    );
+
+    expect(next).not.toBe(previous);
+    expect(next).toEqual(new Map([[userMessageId, 2]]));
+  });
 });
 
 describe("deriveComposerSendState", () => {
@@ -1516,6 +1566,33 @@ describe("shouldWriteThreadErrorToCurrentServerThread", () => {
         targetThreadId: threadId,
       }),
     ).toBe(false);
+  });
+});
+
+describe("startNewThreadForProject", () => {
+  it("starts a thread through the supplied shared handler for the active project", () => {
+    const calls: Array<{ environmentId: EnvironmentId; projectId: ProjectId }> = [];
+    const projectRef = { environmentId, projectId };
+
+    expect(
+      startNewThreadForProject(projectRef, (nextProjectRef) => {
+        calls.push(nextProjectRef);
+        return Promise.resolve();
+      }),
+    ).toBe(true);
+    expect(calls).toEqual([projectRef]);
+  });
+
+  it("does nothing when the active project is unavailable", () => {
+    let called = false;
+
+    expect(
+      startNewThreadForProject(null, () => {
+        called = true;
+        return Promise.resolve();
+      }),
+    ).toBe(false);
+    expect(called).toBe(false);
   });
 });
 

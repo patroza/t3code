@@ -24,6 +24,8 @@ const DETECTION_NEGATIVE_CACHE_TTL = Duration.seconds(15);
 export interface VcsDriverResolveInput {
   readonly cwd: string;
   readonly requestedKind?: VcsDriverKind | "auto";
+  /** Skip a cached miss so a just-created repo is visible on this call. */
+  readonly fresh?: boolean;
 }
 
 export interface VcsDriverHandle {
@@ -134,7 +136,11 @@ export const make = Effect.gen(function* () {
   const detect: VcsDriverRegistry["Service"]["detect"] = Effect.fn("VcsDriverRegistry.detect")(
     function* (input) {
       const requestedKind = yield* projectConfig.resolveKind(input);
-      return yield* Cache.get(detectionCache, detectionCacheKey({ cwd: input.cwd, requestedKind }));
+      const key = detectionCacheKey({ cwd: input.cwd, requestedKind });
+      if (input.fresh) {
+        yield* Cache.invalidate(detectionCache, key);
+      }
+      return yield* Cache.get(detectionCache, key);
     },
   );
 
