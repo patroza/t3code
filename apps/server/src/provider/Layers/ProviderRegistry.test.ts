@@ -2531,6 +2531,7 @@ it.layer(
               "codex",
               "cursor",
               "grok",
+              "kimi",
               "opencode",
             ]);
             assert.strictEqual(cursorProvider?.enabled, false);
