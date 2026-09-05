@@ -63,6 +63,8 @@ function makeThread(activities: ReadonlyArray<OrchestrationThreadActivity>): Orc
     settledAt: null,
     deletedAt: null,
     messages: [],
+    queuedMessages: [],
+    pendingTurnStart: null,
     proposedPlans: [],
     activities,
     checkpoints: [],
