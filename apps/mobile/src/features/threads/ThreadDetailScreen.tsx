@@ -93,7 +93,6 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
-import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 
 export interface ThreadDetailScreenProps {
@@ -697,9 +696,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
     const sendWillQueue = sendEntersQueue;
-    const hasUserMessage = selectedThreadFeed.some(
-      (entry) => entry.type === "message" && entry.message.role === "user",
-    );
     const messageId = await props.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
@@ -717,29 +713,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       // applied. Enabling end maintenance alone is ineffective when the list
       // was scrolled into older history.
       listRef.current?.scrollToEnd({ animated: false });
+      setSubmittedMessageId(messageId);
+      setAnchorMessageId(messageId);
     }
-    setSubmittedMessageId(messageId);
-    setAnchorMessageId(
-      resolveThreadFeedSubmissionAnchor({
-        currentAnchorMessageId: anchorMessageId,
-        submittedMessageId: messageId,
-        hasStartedTurn: props.selectedThread.latestTurn !== null,
-        hasUserMessage,
-        queuedMessageCount: props.selectedThreadQueueCount,
-      }),
-    );
     composerEditorRef.current?.blur();
     return messageId;
-  }, [
-    anchorMessageId,
-    clearUsageLimitsFor,
-    props.onSendMessage,
-    props.selectedThread.latestTurn,
-    props.selectedThreadQueueCount,
-    selectedThreadFeed,
-    selectedThreadKey,
-    sendEntersQueue,
-  ]);
+  }, [clearUsageLimitsFor, props.onSendMessage, selectedThreadKey, sendEntersQueue]);
 
   const collapseComposer = useCallback(() => {
     composerEditorRef.current?.blur();

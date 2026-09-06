@@ -60,6 +60,7 @@ describe("searchSettings", () => {
     expect(searchSettings("work").map((item) => item.id)).toEqual([
       "worktree-remove-confirmation",
       "network-access",
+      "project-defaults",
       "environment-identification",
       "continue-threads-after-server-update",
       "new-threads",
