@@ -209,7 +209,8 @@ export function collectLimitAccounts(
     // the freshest native snapshot supplies both, or neither.
     const native = [previous, next]
       .filter((candidate) => candidate.redeem !== null)
-      .toSorted((a, b) => Date.parse(b.limits.checkedAt) - Date.parse(a.limits.checkedAt))[0];
+      .slice()
+      .sort((a, b) => Date.parse(b.limits.checkedAt) - Date.parse(a.limits.checkedAt))[0];
     accounts.set(key, {
       ...previous,
       displayName: previous.displayName ?? next.displayName,
@@ -374,7 +375,7 @@ export function collectLimitPools(
     else byDriver.set(account.driver, [account]);
   }
   return [...byDriver].map(([driver, members]) => {
-    const sorted = members.toSorted(
+    const sorted = [...members].sort(
       (left, right) =>
         Number(left.redeem === null) - Number(right.redeem === null) ||
         accountSortName(left).localeCompare(accountSortName(right)),
@@ -398,7 +399,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
     }
   }
   const pools = [...byKey.values()].map((unordered): LimitPoolWindow => {
-    const members = unordered.toSorted(
+    const members = [...unordered].sort(
       (left, right) =>
         (resetMillis(left.window) ?? Number.POSITIVE_INFINITY) -
         (resetMillis(right.window) ?? Number.POSITIVE_INFINITY),
@@ -428,7 +429,8 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
               },
             ];
       })
-      .toSorted((left, right) => left.at - right.at);
+      .slice()
+      .sort((left, right) => left.at - right.at);
     return {
       id: first.id,
       kind: first.kind,
@@ -440,7 +442,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       resets,
     };
   });
-  return pools.toSorted(
+  return [...pools].sort(
     (left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
   );
 }
