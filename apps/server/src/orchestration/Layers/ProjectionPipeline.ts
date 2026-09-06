@@ -201,33 +201,6 @@ function derivePendingUserInputCountFromActivities(
   return openRequestIds.size;
 }
 
-function deriveHasActionableProposedPlan(input: {
-  readonly latestTurnId: string | null;
-  readonly proposedPlans: ReadonlyArray<ProjectionThreadProposedPlan>;
-}): boolean {
-  const sorted = [...input.proposedPlans].toSorted(
-    (left, right) =>
-      left.updatedAt.localeCompare(right.updatedAt) || left.planId.localeCompare(right.planId),
-  );
-
-  let latestForTurn: ProjectionThreadProposedPlan | null = null;
-  if (input.latestTurnId !== null) {
-    for (let index = sorted.length - 1; index >= 0; index -= 1) {
-      const plan = sorted[index];
-      if (plan?.turnId === input.latestTurnId) {
-        latestForTurn = plan;
-        break;
-      }
-    }
-  }
-  if (latestForTurn !== null) {
-    return latestForTurn.implementedAt === null;
-  }
-
-  const latestPlan = sorted.at(-1) ?? null;
-  return latestPlan !== null && latestPlan.implementedAt === null;
-}
-
 function retainProjectionMessagesAfterRevert(
   messages: ReadonlyArray<ProjectionThreadMessage>,
   turns: ReadonlyArray<ProjectionTurn>,
@@ -607,16 +580,24 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       // latestUserMessageAt is a dedicated query so summary refresh does not
       // decode message bodies (#9662). If attachments_json is corrupt, keep
       // the existing origin/participants instead of failing the refresh.
-      const [latestUserMessageAt, proposedPlans, activities, pendingApprovalCount, messages] =
-        yield* Effect.all([
-          projectionThreadMessageRepository.getLatestUserMessageAt({ threadId }),
-          projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
-          projectionThreadActivityRepository.listUserInputLifecycleByThreadId({ threadId }),
-          projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
-          projectionThreadMessageRepository
-            .listByThreadId({ threadId })
-            .pipe(Effect.orElseSucceed(() => [] as const)),
-        ]);
+      const [
+        latestUserMessageAt,
+        hasActionableProposedPlan,
+        activities,
+        pendingApprovalCount,
+        messages,
+      ] = yield* Effect.all([
+        projectionThreadMessageRepository.getLatestUserMessageAt({ threadId }),
+        projectionThreadProposedPlanRepository.hasActionableByThreadId({
+          threadId,
+          latestTurnId: existingRow.value.latestTurnId,
+        }),
+        projectionThreadActivityRepository.listUserInputLifecycleByThreadId({ threadId }),
+        projectionPendingApprovalRepository.countPendingByThreadId({ threadId }),
+        projectionThreadMessageRepository
+          .listByThreadId({ threadId })
+          .pipe(Effect.orElseSucceed(() => [] as const)),
+      ]);
 
       // Rebuild origin + participants from projected user messages so shell stays
       // consistent after resync/replay (not only first-write stamps).
@@ -673,10 +654,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       const participantSummaries = rebuiltParticipants;
 
       const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
-      const hasActionableProposedPlan = deriveHasActionableProposedPlan({
-        latestTurnId: existingRow.value.latestTurnId,
-        proposedPlans,
-      });
 
       yield* projectionThreadRepository.upsert({
         ...existingRow.value,
@@ -704,6 +681,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             linkedPullRequest: null,
+            branchPullRequest: null,
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -912,6 +890,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: event.payload.linkedPullRequest }
+              : {}),
+            ...(event.payload.branchPullRequest !== undefined
+              ? { branchPullRequest: event.payload.branchPullRequest }
               : {}),
             updatedAt: event.payload.updatedAt,
           });

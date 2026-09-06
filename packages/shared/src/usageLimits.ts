@@ -629,7 +629,7 @@ export function collectProviderUsageLimits(
     accounts.push({
       id: provider.instanceId,
       driver: provider.driver,
-      label: `${providerLimitsLabel(provider, () => undefined)} [${provider.instanceId}]`,
+      label: `${provider.displayName?.trim() || String(provider.driver)} [${provider.instanceId}]`,
       ...(provider.auth.label ? { plan: provider.auth.label } : {}),
       instanceId: provider.instanceId,
       ...(provider.displayName ? { displayName: provider.displayName } : {}),

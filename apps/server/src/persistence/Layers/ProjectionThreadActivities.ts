@@ -3,6 +3,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { NonNegativeInt } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
@@ -12,6 +13,7 @@ import {
   DeleteProjectionThreadActivitiesInput,
   ListProjectionThreadActivitiesByKindInput,
   ListProjectionThreadActivitiesInput,
+  GetLatestProjectionThreadTaskActivityInput,
   ProjectionThreadActivity,
   ProjectionThreadActivityRepository,
   type ProjectionThreadActivityRepositoryShape,
@@ -24,10 +26,10 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   }),
 );
 
-const mapActivityRows = (
-  rows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>>,
-): ReadonlyArray<ProjectionThreadActivity> =>
-  rows.map((row) => ({
+function toProjectionThreadActivity(
+  row: Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>,
+): ProjectionThreadActivity {
+  return {
     activityId: row.activityId,
     threadId: row.threadId,
     turnId: row.turnId,
@@ -37,7 +39,8 @@ const mapActivityRows = (
     payload: row.payload,
     ...(row.sequence !== null ? { sequence: row.sequence } : {}),
     createdAt: row.createdAt,
-  }));
+  };
+}
 
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown) =>
@@ -45,6 +48,10 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
       ? toPersistenceDecodeError(decodeOperation)(cause)
       : toPersistenceSqlError(sqlOperation)(cause);
 }
+
+// Match String.trim so blank saved titles cannot hide an earlier task name.
+const taskTitleWhitespace =
+  "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
 
 const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -91,7 +98,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   const listProjectionThreadActivityRows = SqlSchema.findAll({
     Request: ListProjectionThreadActivitiesInput,
     Result: ProjectionThreadActivityDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, activityKinds, limit }) =>
       sql`
         SELECT
           activity_id AS "activityId",
@@ -103,8 +110,14 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           payload_json AS "payload",
           sequence,
           created_at AS "createdAt"
-        FROM projection_thread_activities
-        WHERE thread_id = ${threadId}
+        FROM (
+          SELECT *
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            ${activityKinds === undefined ? sql`` : sql`AND ${sql.in("kind", activityKinds)}`}
+          ORDER BY sequence DESC, created_at DESC, activity_id DESC
+          ${limit === undefined ? sql`` : sql`LIMIT ${limit}`}
+        ) AS recent_activities
         ORDER BY
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
@@ -169,6 +182,40 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
       `,
   });
 
+  const getLatestProjectionThreadTaskActivityRow = SqlSchema.findOneOption({
+    Request: GetLatestProjectionThreadTaskActivityInput,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, taskId }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND kind IN ('task.started', 'task.progress')
+          AND json_extract(payload_json, '$.taskId') = ${taskId}
+          AND length(trim(
+            CASE
+              WHEN json_type(payload_json, '$.title') = 'text'
+                THEN json_extract(payload_json, '$.title')
+              WHEN kind = 'task.started' AND json_type(payload_json, '$.detail') = 'text'
+                THEN json_extract(payload_json, '$.detail')
+              ELSE ''
+            END,
+            ${taskTitleWhitespace}
+          )) > 0
+        ORDER BY sequence DESC, created_at DESC, activity_id DESC
+        LIMIT 1
+      `,
+  });
+
   const deleteProjectionThreadActivityRows = SqlSchema.void({
     Request: DeleteProjectionThreadActivitiesInput,
     execute: ({ threadId }) =>
@@ -196,7 +243,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           "ProjectionThreadActivityRepository.listByThreadId:decodeRows",
         ),
       ),
-      Effect.map(mapActivityRows),
+      Effect.map((rows) => rows.map(toProjectionThreadActivity)),
     );
 
   const listByThreadIdAndKinds: ProjectionThreadActivityRepositoryShape["listByThreadIdAndKinds"] =
@@ -222,8 +269,21 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
             "ProjectionThreadActivityRepository.listUserInputLifecycleByThreadId:decodeRows",
           ),
         ),
-        Effect.map(mapActivityRows),
+        Effect.map((rows) => rows.map(toProjectionThreadActivity)),
       );
+
+  const getLatestTaskActivity: ProjectionThreadActivityRepositoryShape["getLatestTaskActivity"] = (
+    input,
+  ) =>
+    getLatestProjectionThreadTaskActivityRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadActivityRepository.getLatestTaskActivity:query",
+          "ProjectionThreadActivityRepository.getLatestTaskActivity:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map(toProjectionThreadActivity)),
+    );
 
   const deleteByThreadId: ProjectionThreadActivityRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadActivityRows(input).pipe(
@@ -237,6 +297,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
     listByThreadId,
     listByThreadIdAndKinds,
     listUserInputLifecycleByThreadId,
+    getLatestTaskActivity,
     deleteByThreadId,
   } satisfies ProjectionThreadActivityRepositoryShape;
 });

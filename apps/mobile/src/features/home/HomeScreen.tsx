@@ -446,18 +446,17 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const hasSearchQuery = props.searchQuery.trim().length > 0;
 
-  const projectCwdByKey = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const project of props.projects) {
-      map.set(scopedProjectKey(project.environmentId, project.id), project.workspaceRoot);
-    }
-    return map;
-  }, [props.projects]);
-
   const projectByKey = useMemo(() => {
     const map = new Map<string, EnvironmentProject>();
     for (const project of props.projects) {
       map.set(scopedProjectKey(project.environmentId, project.id), project);
+    }
+    return map;
+  }, [props.projects]);
+  const projectCwdByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const project of props.projects) {
+      map.set(scopedProjectKey(project.environmentId, project.id), project.workspaceRoot);
     }
     return map;
   }, [props.projects]);
@@ -1117,6 +1116,32 @@ export function HomeScreen(props: HomeScreenProps) {
   );
   const v2KeyExtractor = useCallback((item: ThreadListV2ListItem) => item.key, []);
 
+  // FlatList treats a changed extraData identity as "re-render every visible
+  // row", so an inline object literal would invalidate all rows on every
+  // HomeScreen render.
+  const v2ExtraData = useMemo(
+    () => ({
+      projectByKey,
+      projectCwdByKey,
+      projectTitleByProjectKey: v2ProjectTitleByProjectKey,
+      serverConfigs,
+      savedConnectionsById: props.savedConnectionsById,
+      searchQuery: props.searchQuery,
+      snoozePresetMinute: nowMinute,
+      threadSearchMatchByKey,
+    }),
+    [
+      projectByKey,
+      projectCwdByKey,
+      props.searchQuery,
+      props.savedConnectionsById,
+      serverConfigs,
+      nowMinute,
+      threadSearchMatchByKey,
+      v2ProjectTitleByProjectKey,
+    ],
+  );
+
   const extraData = useMemo(
     () => ({
       projectCwdByKey,
@@ -1412,11 +1437,7 @@ export function HomeScreen(props: HomeScreenProps) {
             data={threadListV2Items}
             renderItem={renderV2Item}
             keyExtractor={v2KeyExtractor}
-            extraData={{
-              projectByKey,
-              serverConfigs,
-              savedConnectionsById: props.savedConnectionsById,
-            }}
+            extraData={v2ExtraData}
             ListHeaderComponent={v2ListHeader}
             ListFooterComponent={
               threadListV2Layout.hiddenSettledCount > 0 ? (
