@@ -4,6 +4,7 @@ import {
   CommandId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationMessage,
   OrchestrationProposedPlanId,
   CheckpointRef,
   classifyTaskAgentKind,
@@ -1934,12 +1935,24 @@ const make = Effect.gen(function* () {
           }
 
           const previousAssistantMessages = turnId
-            ? messages.filter(
-                (message) =>
-                  message.role === "assistant" &&
-                  message.turnId === turnId &&
-                  message.id !== assistantMessageId,
-              )
+            ? (yield* projectionThreadMessages.listByThreadId({ threadId: thread.id }))
+                .filter(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.turnId === turnId &&
+                    message.messageId !== assistantMessageId,
+                )
+                .map((message): OrchestrationMessage => ({
+                  id: message.messageId,
+                  role: message.role,
+                  text: message.text,
+                  attachments: message.attachments,
+                  turnId: message.turnId,
+                  streaming: message.isStreaming,
+                  source: message.source,
+                  createdAt: message.createdAt,
+                  updatedAt: message.updatedAt,
+                }))
             : [];
 
           yield* finalizeAssistantMessage({

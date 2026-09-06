@@ -176,8 +176,8 @@ describe("orchestration projector", () => {
             payload: { threadId: "thread-1", updatedAt: now, ...update.payload },
           }),
         );
-        expect(model.threads[0]?.branchPullRequest).toEqual(update.expected);
-        expect(model.threads[0]?.linkedPullRequest).toEqual(linkedPullRequest);
+        expect(firstThread(model)?.branchPullRequest).toEqual(update.expected);
+        expect(firstThread(model)?.linkedPullRequest).toEqual(linkedPullRequest);
       }
     }),
   );

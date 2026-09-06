@@ -1344,7 +1344,7 @@ export const make = Effect.gen(function* () {
       return null;
     }
 
-    const repositoryNameWithOwner = parseGitHubRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
+    const repositoryNameWithOwner = parseRepositoryNameWithOwnerFromRemoteUrl(remoteUrl);
     return repositoryNameWithOwner
       ? { ...provider, repositoryUrl: `${provider.baseUrl}/${repositoryNameWithOwner}` }
       : provider;

@@ -45,6 +45,7 @@ const makeProjectionSnapshotQueryLayer = (
     getUserInputActivity: () => Effect.die("unused"),
     getCommandReadModel: () => Effect.die("unused"),
     getThreadRuntimeContext: () => Effect.die("unused"),
+    getTurnStartMessage: () => Effect.die("unused"),
     getThreadActivitiesPage: () => Effect.die("unused"),
     getSnapshot: () => Effect.die("unused"),
     getShellSnapshot: () =>

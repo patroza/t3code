@@ -257,7 +257,7 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
                 "ProjectionThreadActivityRepository.listByThreadIdAndKinds:decodeRows",
               ),
             ),
-            Effect.map(mapActivityRows),
+            Effect.map((rows) => rows.map(toProjectionThreadActivity)),
           );
 
   const listUserInputLifecycleByThreadId: ProjectionThreadActivityRepositoryShape["listUserInputLifecycleByThreadId"] =
