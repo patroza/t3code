@@ -415,6 +415,8 @@ describe("streaming row projection", () => {
       ],
       proposedPlans: [],
       activities: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       checkpoints: history.map(({ checkpoint }) => checkpoint),
       session: null,
     };
@@ -829,8 +831,8 @@ describe("work entry labels", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
     expect(rows).toMatchObject([{ kind: "work" }]);
   });
@@ -1206,8 +1208,8 @@ describe("deriveMessagesTimelineRows", () => {
       },
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:00:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.kind)).toEqual(["working", "work", "message", "work-live"]);
@@ -1588,8 +1590,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
       latestTurn: {
         turnId: "turn-2" as never,
         state: "completed",
@@ -2886,8 +2888,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.id)).toEqual(["work-entry-1", "user-input-entry", "work-entry-2"]);
@@ -2966,8 +2968,8 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.id)).toEqual([
@@ -3109,8 +3111,8 @@ describe("deriveMessagesTimelineRows", () => {
       runningTurnId: "turn-1" as never,
       isWorking: true,
       activeTurnStartedAt: "2026-01-01T00:01:00Z",
-      turnDiffSummaryByAssistantMessageId: new Map(),
-      revertTurnCountByUserMessageId: new Map(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     });
 
     expect(rows.map((row) => row.id)).toEqual([
