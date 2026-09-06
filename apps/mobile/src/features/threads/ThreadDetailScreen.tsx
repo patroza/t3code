@@ -19,6 +19,7 @@ import type {
   RuntimeMode,
   ServerConfig as T3ServerConfig,
   ThreadId,
+  UsageLimitsReport,
   UserInputQuestion,
 } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
@@ -57,6 +58,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
@@ -71,6 +73,7 @@ import type {
 } from "../../lib/threadActivity";
 import { ComposerQueuedMessages } from "./ComposerQueuedMessages";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
@@ -90,6 +93,7 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 
 export interface ThreadDetailScreenProps {
@@ -371,6 +375,68 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const [collapsedUserInputRequestId, setCollapsedUserInputRequestId] =
     useState<ApprovalRequestId | null>(null);
   const activeUserInputRequestId = props.activePendingUserInput?.requestId ?? null;
+  // The open /usage-limits panel for this thread, model and turn. Only the open
+  // moment is stored: the rows read live provider data, so a redeemed reset
+  // credit or refreshed probe shows through. Anything that spends quota closes
+  // it: a new turn from any source, or the agent resuming after an approval or
+  // answered question.
+  const [usageLimitsPanel, setUsageLimitsPanel] = useState<{
+    readonly key: string;
+    readonly threadKey: string;
+    readonly now: number;
+  } | null>(null);
+  // A pending approval or question is part of the key: once it is answered,
+  // from this client or any other, the agent resumes and spends quota.
+  const usageLimitsKey = [
+    selectedThreadKey,
+    props.selectedThread.modelSelection.instanceId,
+    props.selectedThread.latestTurn?.turnId ?? "",
+    props.activePendingApproval?.requestId ?? props.activePendingUserInput?.requestId ?? "",
+  ].join(":");
+  // Drop the snapshot as soon as the key changes so it cannot resurface stale.
+  if (usageLimitsPanel !== null && usageLimitsPanel.key !== usageLimitsKey) {
+    setUsageLimitsPanel(null);
+  }
+  const usageLimitsReport = useMemo(
+    () =>
+      usageLimitsPanel !== null && usageLimitsPanel.key === usageLimitsKey
+        ? collectProviderUsageLimits(
+            props.selectedThread.modelSelection.instanceId,
+            props.serverConfig?.providers ?? [],
+            props.serverConfig?.usageLimitSources ?? [],
+            usageLimitsPanel.now,
+          )
+        : null,
+    [
+      props.selectedThread.modelSelection.instanceId,
+      props.serverConfig,
+      usageLimitsKey,
+      usageLimitsPanel,
+    ],
+  );
+  const showUsageLimits = useCallback(
+    (report: UsageLimitsReport | null) =>
+      setUsageLimitsPanel(
+        report === null
+          ? null
+          : {
+              key: usageLimitsKey,
+              threadKey: selectedThreadKey,
+              now: Date.parse(report.createdAt),
+            },
+      ),
+    [selectedThreadKey, usageLimitsKey],
+  );
+  const dismissUsageLimits = useCallback(() => setUsageLimitsPanel(null), []);
+  // A send may resolve after navigating away, so only the originating
+  // thread's panel is cleared; a panel opened elsewhere in the meantime stays.
+  const clearUsageLimitsFor = useCallback(
+    (threadKey: string) =>
+      setUsageLimitsPanel((current) =>
+        current !== null && current.threadKey === threadKey ? null : current,
+      ),
+    [],
+  );
   const userInputCollapsed =
     activeUserInputRequestId !== null && collapsedUserInputRequestId === activeUserInputRequestId;
   // The card's height RESERVES keyboard space at all times instead of
@@ -631,10 +697,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
     const sendWillQueue = sendEntersQueue;
+    const hasUserMessage = selectedThreadFeed.some(
+      (entry) => entry.type === "message" && entry.message.role === "user",
+    );
     const messageId = await props.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
     }
+
+    // A sent message makes the snapshot stale; a refused send leaves it in place.
+    clearUsageLimitsFor(targetThreadKey);
 
     // A send the server holds in the steering queue stays a composer chip: it
     // never becomes a feed row, so moving the feed for it would both yank a
@@ -645,12 +717,29 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       // applied. Enabling end maintenance alone is ineffective when the list
       // was scrolled into older history.
       listRef.current?.scrollToEnd({ animated: false });
-      setSubmittedMessageId(messageId);
-      setAnchorMessageId(messageId);
     }
+    setSubmittedMessageId(messageId);
+    setAnchorMessageId(
+      resolveThreadFeedSubmissionAnchor({
+        currentAnchorMessageId: anchorMessageId,
+        submittedMessageId: messageId,
+        hasStartedTurn: props.selectedThread.latestTurn !== null,
+        hasUserMessage,
+        queuedMessageCount: props.selectedThreadQueueCount,
+      }),
+    );
     composerEditorRef.current?.blur();
     return messageId;
-  }, [props.onSendMessage, selectedThreadKey, sendEntersQueue]);
+  }, [
+    anchorMessageId,
+    clearUsageLimitsFor,
+    props.onSendMessage,
+    props.selectedThread.latestTurn,
+    props.selectedThreadQueueCount,
+    selectedThreadFeed,
+    selectedThreadKey,
+    sendEntersQueue,
+  ]);
 
   const collapseComposer = useCallback(() => {
     composerEditorRef.current?.blur();
@@ -799,6 +888,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onScrollToEnd={handleScrollToEnd}
               />
               <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                {usageLimitsReport && activeUserInputRequestId === null ? (
+                  <Animated.View
+                    className="shrink-0 px-4 pb-3"
+                    entering={FadeInDown.duration(220)}
+                    exiting={FadeOut.duration(140)}
+                  >
+                    <ComposerUsageLimits
+                      report={usageLimitsReport}
+                      environmentId={props.environmentId}
+                      onClose={dismissUsageLimits}
+                    />
+                  </Animated.View>
+                ) : null}
                 {props.activePendingApproval || props.activePendingUserInput ? (
                   <Animated.View
                     className="shrink-0 gap-3 px-4 pb-3"
@@ -881,6 +983,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   onStopThread={props.onStopThread}
                   onSendMessage={handleSendMessage}
                   onStartNewThread={props.onStartNewThread}
+                  onShowUsageLimits={showUsageLimits}
                   onReconnectEnvironment={props.onReconnectEnvironment}
                   onUpdateModelSelection={props.onUpdateThreadModelSelection}
                   onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}

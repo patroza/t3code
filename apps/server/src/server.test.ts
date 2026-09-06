@@ -40,6 +40,7 @@ import {
   type ServerLifecycleStreamEvent,
   ThreadId,
   TurnId,
+  UsageLimitSourceId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -174,6 +175,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as AiUsageMonitorModule from "./aiUsage/AiUsageMonitor.ts";
 import * as HostResourceProbe from "./diagnostics/HostResourceProbe.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -510,6 +512,7 @@ const buildAppUnderTest = (options?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     environmentTheme?: Partial<EnvironmentTheme.EnvironmentThemeService["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    usageLimitSources?: Partial<UsageLimitSources.UsageLimitSources["Service"]>;
     providerService?: Partial<ProviderService.ProviderService["Service"]>;
     providerAuth?: Partial<ProviderAuthService["Service"]>;
     providerInstanceRegistry?: Partial<ProviderInstanceRegistry["Service"]>;
@@ -781,8 +784,9 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(UsageLimitSources.UsageLimitSources)({
             current: Effect.succeed([]),
-            streamChanges: Stream.empty,
+            streamChanges: Stream.make([]),
             refresh: Effect.void,
+            ...options?.layers?.usageLimitSources,
           }),
         ),
       ),
@@ -867,41 +871,40 @@ const buildAppUnderTest = (options?: {
             }),
         }),
       ),
-      Layer.provide(
-        Layer.mergeAll(
-          Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
-            readHistory: (input) =>
-              Effect.succeed({
-                readAt: TEST_EPOCH,
-                windowMs: input.windowMs,
-                bucketMs: input.bucketMs,
-                sampleIntervalMs: 5_000,
-                retainedSampleCount: 0,
-                totalCpuSecondsApprox: 0,
-                buckets: [],
-                topProcesses: [],
-                error: Option.none(),
-              }),
-          }),
-          Layer.mock(HostResourceProbe.HostResourceProbe)({
-            read: Effect.succeed({
-              status: "supported",
-              checkedAt: "1970-01-01T00:00:00.000Z",
-              source: "os",
-              hostname: "test-host",
-              platform: "linux",
-              cpuPercent: 25,
-              memoryUsedPercent: 50,
-              memoryUsedBytes: 4_000,
-              memoryAvailableBytes: 4_000,
-              memoryTotalBytes: 8_000,
-              loadAverage: { m1: 0.5, m5: 0.4, m15: 0.3 },
-              logicalCores: 4,
-              message: null,
+      Layer.provide([
+        HostResources.layer,
+        Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
+          readHistory: (input) =>
+            Effect.succeed({
+              readAt: TEST_EPOCH,
+              windowMs: input.windowMs,
+              bucketMs: input.bucketMs,
+              sampleIntervalMs: 5_000,
+              retainedSampleCount: 0,
+              totalCpuSecondsApprox: 0,
+              buckets: [],
+              topProcesses: [],
+              error: Option.none(),
             }),
+        }),
+        Layer.mock(HostResourceProbe.HostResourceProbe)({
+          read: Effect.succeed({
+            status: "supported",
+            checkedAt: "1970-01-01T00:00:00.000Z",
+            source: "os",
+            hostname: "test-host",
+            platform: "linux",
+            cpuPercent: 25,
+            memoryUsedPercent: 50,
+            memoryUsedBytes: 4_000,
+            memoryAvailableBytes: 4_000,
+            memoryTotalBytes: 8_000,
+            loadAverage: { m1: 0.5, m5: 0.4, m15: 0.3 },
+            logicalCores: 4,
+            message: null,
           }),
-        ),
-      ),
+        }),
+      ]),
       Layer.provide(
         Layer.mock(TraceDiagnostics.TraceDiagnostics)({
           read: () =>
@@ -6305,6 +6308,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("returns cached whole-host resources over websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const [first, second] = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.all(
+            [
+              client[WS_METHODS.serverGetHostResources]({}),
+              client[WS_METHODS.serverGetHostResources]({}),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        ),
+      );
+      assert.deepEqual(first, second);
+      assert.isAtLeast(first.sampledAt, 0);
+      assert.isAbove(first.cpuCount, 0);
+      assert.isAbove(first.totalMemoryBytes, 0);
+      assert.isAtLeast(first.availableMemoryBytes, 0);
+      assert.isAtMost(first.availableMemoryBytes, first.totalMemoryBytes);
+      if (first.cpuUtilization !== null) {
+        assert.isAtLeast(first.cpuUtilization, 0);
+        assert.isAtMost(first.cpuUtilization, 1);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
+  );
+
+  it.effect("counts macOS reclaimable memory once and shares concurrent samples", () =>
+    Effect.gen(function* () {
+      const commandCalls = yield* Ref.make(0);
+      const hostResources = yield* HostResources.make().pipe(
+        Effect.provideService(HostProcessPlatform, "darwin"),
+        Effect.provide(
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            string: () =>
+              Ref.update(commandCalls, (count) => count + 1).pipe(
+                Effect.as(
+                  "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n" +
+                    "Pages free: 10.\nPages inactive: 20.\nPages speculative: 5.\n" +
+                    "Pages purgeable: 999.\n",
+                ),
+              ),
+          }),
+        ),
+      );
+      const [first, second] = yield* Effect.all([hostResources.read, hostResources.read], {
+        concurrency: "unbounded",
+      });
+      assert.equal(first.availableMemoryBytes, 35 * 16384);
+      assert.deepEqual(first, second);
+      assert.deepEqual(yield* hostResources.read, first);
+      assert.equal(yield* Ref.get(commandCalls), 1);
+    }).pipe(TestClock.withLive),
+  );
+
+  it.effect("retries host sampling immediately after its caller is interrupted", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const commandCalls = yield* Ref.make(0);
+      const hostResources = yield* HostResources.make().pipe(
+        Effect.provideService(HostProcessPlatform, "darwin"),
+        Effect.provide(
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            string: () =>
+              Effect.gen(function* () {
+                const call = yield* Ref.updateAndGet(commandCalls, (count) => count + 1);
+                if (call === 1) {
+                  yield* Deferred.succeed(started, undefined);
+                  return yield* Effect.never;
+                }
+                return (
+                  "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n" +
+                  "Pages free: 10.\nPages inactive: 20.\nPages speculative: 5.\n"
+                );
+              }),
+          }),
+        ),
+      );
+      const firstRead = yield* hostResources.read.pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(firstRead);
+      const recovered = yield* hostResources.read;
+      assert.equal(recovered.availableMemoryBytes, 35 * 4096);
+      assert.equal(yield* Ref.get(commandCalls), 2);
+    }).pipe(TestClock.withLive),
+  );
+
   it.effect("routes websocket resource telemetry through the subscription", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -6400,10 +6491,94 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc subscribeServerConfig emits provider status updates", () =>
-    Effect.gen(function* () {
-      const nextProviders = [
-        {
+  it.effect.each([false, true])(
+    "routes websocket rpc subscribeServerConfig emits provider status updates (limits: %s)",
+    (hasLimits) =>
+      Effect.gen(function* () {
+        const nextProviders = [
+          {
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            installed: true,
+            version: "1.0.0",
+            status: "ready" as const,
+            auth: { status: "authenticated" as const },
+            checkedAt: "2026-04-11T00:00:00.000Z",
+            models: [],
+            slashCommands: [],
+            skills: [],
+            ...(hasLimits
+              ? {
+                  usageLimits: {
+                    checkedAt: "2026-04-11T00:00:00.000Z",
+                    windows: [
+                      { id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent: 25 },
+                    ],
+                  },
+                }
+              : {}),
+          },
+        ] as const;
+
+        yield* buildAppUnderTest({
+          layers: {
+            keybindings: {
+              loadConfigState: Effect.succeed({
+                keybindings: [],
+                issues: [],
+              }),
+              streamChanges: Stream.empty,
+            },
+            providerRegistry: {
+              getProviders: Effect.succeed([]),
+              streamChanges: Stream.succeed(nextProviders),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeServerConfig]({ usageLimitsCommand: true }).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+            ),
+          ),
+        );
+
+        const [first, second] = Array.from(events);
+        assert.equal(first?.type, "snapshot");
+        if (first?.type === "snapshot") {
+          assert.deepEqual(first.config.providers, []);
+        }
+        assert.deepEqual(second, {
+          version: 1,
+          type: "providerStatuses",
+          payload: {
+            providers: hasLimits
+              ? [
+                  {
+                    ...nextProviders[0],
+                    slashCommands: [
+                      {
+                        name: "usage-limits",
+                        description: "Show this provider's usage limits",
+                      },
+                    ],
+                  },
+                ]
+              : nextProviders,
+          },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket rpc subscribeServerConfig keeps the limits command from clients that do not ask for it",
+    () =>
+      Effect.gen(function* () {
+        const codex = {
           instanceId: ProviderInstanceId.make("codex"),
           driver: ProviderDriverKind.make("codex"),
           enabled: true,
@@ -6415,43 +6590,129 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           models: [],
           slashCommands: [],
           skills: [],
-        },
-      ] as const;
-
-      yield* buildAppUnderTest({
-        layers: {
-          keybindings: {
-            loadConfigState: Effect.succeed({
-              keybindings: [],
-              issues: [],
-            }),
-            streamChanges: Stream.empty,
+          usageLimits: {
+            checkedAt: "2026-04-11T00:00:00.000Z",
+            windows: [{ id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent: 25 }],
           },
-          providerRegistry: {
-            getProviders: Effect.succeed([]),
-            streamChanges: Stream.succeed(nextProviders),
+        };
+        yield* buildAppUnderTest({
+          layers: {
+            keybindings: {
+              loadConfigState: Effect.succeed({ keybindings: [], issues: [] }),
+              streamChanges: Stream.empty,
+            },
+            providerRegistry: {
+              getProviders: Effect.succeed([codex]),
+              streamChanges: Stream.succeed([{ ...codex, version: "1.0.1" }]),
+            },
           },
-        },
-      });
+        });
 
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const events = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(2), Stream.runCollect),
-        ),
-      );
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(2), Stream.runCollect),
+          ),
+        );
 
-      const [first, second] = Array.from(events);
-      assert.equal(first?.type, "snapshot");
-      if (first?.type === "snapshot") {
-        assert.deepEqual(first.config.providers, []);
-      }
-      assert.deepEqual(second, {
-        version: 1,
-        type: "providerStatuses",
-        payload: { providers: nextProviders },
-      });
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        const [first, second] = Array.from(events);
+        assert.equal(first?.type, "snapshot");
+        if (first?.type === "snapshot") {
+          assert.deepEqual(first.config.providers, [codex]);
+        }
+        assert.deepEqual(second, {
+          version: 1,
+          type: "providerStatuses",
+          payload: { providers: [{ ...codex, version: "1.0.1" }] },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket rpc subscribeServerConfig republishes commands when only a limits source changes",
+    () =>
+      Effect.gen(function* () {
+        const codex = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          installed: true,
+          version: "1.0.0",
+          status: "ready" as const,
+          auth: { status: "authenticated" as const },
+          checkedAt: "2026-04-11T00:00:00.000Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        };
+        const hub = {
+          id: UsageLimitSourceId.make("hub"),
+          kind: "cliproxy" as const,
+          label: "Accounts",
+          checkedAt: "2026-04-11T00:00:00.000Z",
+          accounts: [
+            {
+              id: "work",
+              driver: ProviderDriverKind.make("codex"),
+              usageLimits: {
+                checkedAt: "2026-04-11T00:00:00.000Z",
+                windows: [
+                  { id: "weekly", kind: "weekly" as const, label: "Weekly", usedPercent: 25 },
+                ],
+              },
+            },
+          ],
+        };
+
+        yield* buildAppUnderTest({
+          layers: {
+            keybindings: {
+              loadConfigState: Effect.succeed({ keybindings: [], issues: [] }),
+              streamChanges: Stream.empty,
+            },
+            // The registry emits no change: only the source refresh can carry it.
+            providerRegistry: {
+              getProviders: Effect.succeed([codex]),
+              streamChanges: Stream.empty,
+            },
+            usageLimitSources: {
+              current: Effect.succeed([]),
+              // Replay the empty snapshot, then a later refresh, as the live stream does.
+              streamChanges: Stream.concat(Stream.make([]), Stream.make([hub])),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const events = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.subscribeServerConfig]({ usageLimitsCommand: true }).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+            ),
+          ),
+        );
+
+        const [first, second] = Array.from(events);
+        assert.equal(first?.type, "snapshot");
+        if (first?.type === "snapshot") {
+          assert.deepEqual(first.config.providers, [codex]);
+        }
+        assert.deepEqual(second, {
+          version: 1,
+          type: "providerStatuses",
+          payload: {
+            providers: [
+              {
+                ...codex,
+                slashCommands: [
+                  { name: "usage-limits", description: "Show this provider's usage limits" },
+                ],
+              },
+            ],
+          },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(

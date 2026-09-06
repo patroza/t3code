@@ -217,6 +217,8 @@ export interface GitHubPullRequestSummary {
   readonly state?: "open" | "closed" | "merged";
   readonly hasFailingChecks?: boolean;
   readonly isDraft?: boolean;
+  readonly closedAt?: string | null;
+  readonly mergedAt?: string | null;
   readonly updatedAt?: string;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
@@ -382,7 +384,7 @@ export const make = Effect.gen(function* () {
           "--limit",
           String(input.limit ?? 1),
           "--json",
-          "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -414,7 +416,7 @@ export const make = Effect.gen(function* () {
           "view",
           input.reference,
           "--json",
-          "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),

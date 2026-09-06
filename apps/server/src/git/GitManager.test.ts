@@ -514,7 +514,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--limit",
             String(input.limit ?? 1),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(
           Effect.map((result) => JSON.parse(result.stdout) as unknown[]),
@@ -558,7 +558,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(
           Effect.map((result) => JSON.parse(result.stdout) as GitHubCli.GitHubPullRequestSummary),
@@ -1194,6 +1194,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(pullRequest).toEqual({
         state: "open",
+        closedAt: null,
+        mergedAt: null,
         updatedAt: "2026-04-03T15:00:00.000Z",
       });
       expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
@@ -1225,6 +1227,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                 baseRefName: "develop",
                 headRefName: "main",
                 state: "MERGED",
+                mergedAt: "2026-04-07T15:00:00Z",
                 updatedAt: "2026-04-08T15:00:00Z",
               },
             ]),
@@ -1236,6 +1239,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(pullRequest).toEqual({
         state: "merged",
+        closedAt: null,
+        mergedAt: "2026-04-07T15:00:00Z",
         updatedAt: "2026-04-08T15:00:00.000Z",
       });
     }),
@@ -1287,6 +1292,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(pullRequest).toEqual({
         state: "merged",
+        closedAt: null,
+        mergedAt: null,
         updatedAt: "2026-04-04T15:00:00.000Z",
       });
       expect(ghCalls.some((call) => call.includes("--head feature/deleted-local-branch"))).toBe(
@@ -1351,6 +1358,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(pullRequest).toEqual({
         state: "merged",
+        closedAt: null,
+        mergedAt: null,
         updatedAt: "2026-04-05T15:00:00.000Z",
       });
       expect(
@@ -1737,7 +1746,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           updatedAt: "2026-03-10T07:00:00.000Z",
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,
@@ -1803,7 +1812,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           updatedAt: "2026-03-10T07:00:00.000Z",
         });
         expect(ghCalls).toContain(
-          "pr list --head contributor:main --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head contributor:main --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,
@@ -2417,6 +2426,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(pullRequest).toEqual({
         state: "merged",
+        closedAt: null,
+        mergedAt: null,
         updatedAt: "2026-05-02T10:00:00.000Z",
       });
     }),

@@ -5,7 +5,7 @@ import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon"
 
 const testState = vi.hoisted(() => ({
   faviconUrl: "https://environment.test/api/assets/token-a/v1-20-favicon.svg",
-  lastResource: null as unknown,
+  lastTarget: null as unknown,
 }));
 
 const hooks = vi.hoisted(() => {
@@ -57,16 +57,14 @@ vi.mock("lucide-react/dynamic", () => ({
   DynamicIcon: "dynamic-icon",
   iconNames: ["alarm-clock", "folder-code"],
 }));
-const assetUrlMocks = vi.hoisted(() => ({
-  useAssetUrlState: (_environmentId: unknown, resource: unknown) => {
-    testState.lastResource = resource;
-    return { _tag: "Success", url: testState.faviconUrl };
-  },
-  useAssetUrl: vi.fn(() => testState.faviconUrl),
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: () => testState.faviconUrl,
 }));
-
-vi.mock("../assets/assetUrls", () => assetUrlMocks);
-vi.mock("~/assets/assetUrls", () => assetUrlMocks);
+vi.mock("../state/assets", () => ({
+  projectFaviconUrlAtom: (input: unknown) => {
+    testState.lastTarget = input;
+  },
+}));
 
 import { ProjectFavicon } from "./ProjectFavicon";
 
@@ -117,8 +115,6 @@ describe("ProjectFavicon", () => {
   beforeEach(() => {
     hooks.reset();
     testState.faviconUrl = "https://environment.test/api/assets/token-a/v1-20-favicon.svg";
-    assetUrlMocks.useAssetUrl.mockReset();
-    assetUrlMocks.useAssetUrl.mockImplementation(() => testState.faviconUrl);
   });
 
   it("shows a project-name icon when no favicon exists", () => {
@@ -218,10 +214,10 @@ describe("ProjectFavicon", () => {
       faviconPath: "brand/icon.svg",
     });
 
-    expect(testState.lastResource).toEqual({
-      _tag: "project-favicon",
+    expect(testState.lastTarget).toMatchObject({
+      environmentId: "environment-test",
       cwd: "/workspace-test",
-      path: "brand/icon.svg",
+      faviconPath: "brand/icon.svg",
     });
   });
 });

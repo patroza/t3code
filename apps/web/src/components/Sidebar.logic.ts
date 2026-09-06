@@ -59,7 +59,7 @@ export function resolveSidebarProjectBadgeColorIndex(
   return hash % colorCount;
 }
 
-export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
+const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
 // nearby thread usually reuses an already-hot subscription. Each prewarmed
@@ -94,7 +94,7 @@ export type SidebarThreadWorktreeSection =
 
 // A small buffer keeps the next few rows warm without leasing every row that
 // content-visibility leaves mounted below the scroll viewport.
-export const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
+const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
 
 export function useSidebarRowSubscriptionLease(isActive: boolean): {
   readonly leaseLiveStatus: boolean;
@@ -1024,13 +1024,6 @@ export function resolveSidebarV2TopStatus(input: {
   }
 }
 
-/** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
-    poison the whole ordering, so it sinks to the epoch instead. */
-export function parseTimestampMs(isoDate: string): number {
-  const parsed = Date.parse(isoDate);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
     yet-malformed string must also fall through to the next candidate rather
     than sink the row to the epoch. */
@@ -1047,7 +1040,7 @@ export function firstValidTimestampMs(
 
 /** String twin of firstValidTimestampMs for callers that need the ISO string
     (display labels, tick anchors) rather than epoch ms. */
-export function firstValidTimestamp(
+function firstValidTimestamp(
   ...candidates: ReadonlyArray<string | null | undefined>
 ): string | null {
   for (const candidate of candidates) {
@@ -1080,11 +1073,7 @@ export function sortThreadsForSidebar<
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.
-export {
-  generateSpreadPinOrderKeys,
-  pinOrderKeyBetween,
-  planPinnedReorder,
-} from "@t3tools/client-runtime/state/thread-sort";
+export { pinOrderKeyBetween, planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
 
 /**

@@ -1,5 +1,7 @@
 "use client";
 
+import { Spinner } from "~/components/ui/spinner";
+
 import { Toast } from "@base-ui/react/toast";
 import {
   useEffect,
@@ -21,7 +23,6 @@ import {
   CircleCheckIcon,
   CopyIcon,
   InfoIcon,
-  LoaderCircleIcon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
@@ -90,7 +91,7 @@ const threadToastVisibleTimeoutRemainingMs = new Map<ToastId, number>();
 const TOAST_ICONS = {
   error: CircleAlertIcon,
   info: InfoIcon,
-  loading: LoaderCircleIcon,
+  loading: Spinner,
   success: CircleCheckIcon,
   warning: TriangleAlertIcon,
 } as const;
@@ -443,7 +444,7 @@ function ToastBodyContent({
             className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
             data-slot="toast-icon"
           >
-            <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
+            <Icon className="in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
           </div>
         ) : null}
         <div

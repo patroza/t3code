@@ -1,3 +1,4 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   AlertTriangleIcon,
   ChevronDownIcon,
@@ -5,7 +6,6 @@ import {
   CopyIcon,
   FolderOpenIcon,
   InfoIcon,
-  RefreshCwIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -767,7 +767,7 @@ function DiagnosticsRefreshButton({
             onClick={onClick}
             aria-label={label}
           >
-            <RefreshCwIcon className={cn(isPending && "animate-spin")} />
+            <RefreshIcon refreshing={isPending} />
           </Button>
         }
       />

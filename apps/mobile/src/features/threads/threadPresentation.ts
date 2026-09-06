@@ -1,4 +1,5 @@
 import type { StatusTone } from "../../components/StatusPill";
+import type { OrchestrationLatestTurn, OrchestrationSession } from "@t3tools/contracts";
 import { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 
 /**
@@ -34,6 +35,16 @@ export interface ThreadStatusPresentation extends StatusTone {
   readonly pulse: boolean;
 }
 
+function isLatestTurnSettled(
+  latestTurn: OrchestrationLatestTurn | null,
+  session: OrchestrationSession | null,
+): boolean {
+  if (!latestTurn?.startedAt) return false;
+  if (!latestTurn.completedAt) return false;
+  if (!session) return true;
+  return session.status !== "running";
+}
+
 /**
  * Resolves the user-facing status of a thread, in priority order. Returns
  * `null` for quiescent threads so rows stay free of "Idle"-style noise.
@@ -46,8 +57,8 @@ export function resolveThreadStatus(
     return {
       kind: "pending-approval",
       label: "Needs Approval",
-      pillClassName: "bg-adaptive-amber-500-a12-a16",
-      textClassName: "text-adaptive-amber-700-300",
+      pillClassName: "bg-warning",
+      textClassName: "text-warning-foreground",
       iconColor: "#ff9f0a",
       iconBackground: "rgba(255,159,10,0.22)",
       pulse: false,
@@ -58,8 +69,8 @@ export function resolveThreadStatus(
     return {
       kind: "awaiting-input",
       label: "Awaiting Input",
-      pillClassName: "bg-adaptive-indigo-500-a12-a16",
-      textClassName: "text-adaptive-indigo-700-300",
+      pillClassName: "bg-primary/10",
+      textClassName: "text-foreground-secondary",
       iconColor: "#5e5ce6",
       iconBackground: "rgba(94,92,230,0.22)",
       pulse: false,
@@ -88,8 +99,8 @@ export function resolveThreadStatus(
     return {
       kind: "working",
       label: "Working",
-      pillClassName: "bg-adaptive-sky-500-a12-a16",
-      textClassName: "text-adaptive-sky-700-300",
+      pillClassName: "bg-primary/10",
+      textClassName: "text-foreground-secondary",
       iconColor: "#0a84ff",
       iconBackground: "rgba(10,132,255,0.22)",
       pulse: true,
@@ -100,8 +111,8 @@ export function resolveThreadStatus(
     return {
       kind: "connecting",
       label: "Connecting",
-      pillClassName: "bg-adaptive-sky-500-a12-a16",
-      textClassName: "text-adaptive-sky-700-300",
+      pillClassName: "bg-primary/10",
+      textClassName: "text-foreground-secondary",
       iconColor: "#0a84ff",
       iconBackground: "rgba(10,132,255,0.22)",
       pulse: true,
@@ -112,10 +123,26 @@ export function resolveThreadStatus(
     return {
       kind: "error",
       label: "Error",
-      pillClassName: "bg-adaptive-rose-500-a12-a16",
-      textClassName: "text-adaptive-rose-700-300",
+      pillClassName: "bg-danger",
+      textClassName: "text-danger-foreground",
       iconColor: "#ff453a",
       iconBackground: "rgba(255,69,58,0.22)",
+      pulse: false,
+    };
+  }
+
+  const hasPlanReadyPrompt =
+    thread.interactionMode === "plan" &&
+    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    thread.hasActionableProposedPlan;
+  if (hasPlanReadyPrompt) {
+    return {
+      kind: "plan-ready",
+      label: "Plan Ready",
+      pillClassName: "bg-primary/10",
+      textClassName: "text-foreground-secondary",
+      iconColor: "#bf5af2",
+      iconBackground: "rgba(191,90,242,0.22)",
       pulse: false,
     };
   }
