@@ -1333,6 +1333,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         text,
         attachments_json AS "attachments",
         is_streaming AS "isStreaming",
+        source_json AS "source",
         created_at AS "createdAt",
         updated_at AS "updatedAt",
         EXISTS (
@@ -3378,6 +3379,7 @@ pending_approval_requests AS (
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+        ...(row.source !== null && row.source !== undefined ? { source: row.source } : {}),
       },
       hasOtherUserMessages: row.hasOtherUserMessages === 1,
     }));
