@@ -8,10 +8,10 @@ describe("migration namespaces", () => {
   it("keeps upstream and fork manifests in independent ledgers", () => {
     assert.notEqual(upstreamMigrationTable, forkMigrationTable);
     assert.deepStrictEqual(migrationManifest.slice(-4), [
-      [44, "ClearAutomaticProjectModelDefaults"],
       [45, "ProjectionProjectsAutoPull"],
       [46, "RepairAutomaticSettlementTimestamps"],
       [47, "ProjectionProjectIcon"],
+      [48, "ProjectionThreadBranchPullRequest"],
     ]);
     assert.deepStrictEqual(forkMigrationManifest, [
       [1, "ProjectionQueuedMessages"],

@@ -1,3 +1,4 @@
+import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -13,10 +14,7 @@ import { threadEnvironment } from "../state/threads";
 import { scopedRequestKey } from "../lib/scopedEntities";
 import {
   buildPendingUserInputAnswers,
-  derivePendingApprovals,
-  derivePendingUserInputs,
   setPendingUserInputCustomAnswer,
-  sortThreadActivities,
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../lib/threadActivity";
@@ -95,24 +93,15 @@ export function useSelectedThreadRequests(activities?: ReadonlyArray<Orchestrati
     null,
   );
 
-  const requestActivities = activities ?? selectedThread?.activities ?? null;
-  // Sort once; both derivations expect the same lifecycle ordering.
-  const sortedActivities = useMemo(
-    () => (requestActivities ? sortThreadActivities(requestActivities) : []),
+  const requestActivities = activities ?? selectedThread?.activities ?? [];
+  const { approvals: activePendingApprovals, userInputs: activePendingUserInputs } = useMemo(
+    () => derivePendingRequests(requestActivities),
     [requestActivities],
   );
-  const activePendingApprovals = useMemo(
-    () => derivePendingApprovals(sortedActivities),
-    [sortedActivities],
-  );
-  // The derivations sort ascending by createdAt; surface the NEWEST open
-  // request. With lazy-loaded older pages in the set, index 0 could be an
-  // ancient dangling request hijacking the prompt for the current one.
+  // derivePendingRequests sorts ascending by createdAt; surface the NEWEST
+  // open request. With lazy-loaded older pages in the set, index 0 could be
+  // an ancient dangling request hijacking the prompt for the current one.
   const activePendingApproval = activePendingApprovals.at(-1) ?? null;
-  const activePendingUserInputs = useMemo(
-    () => derivePendingUserInputs(sortedActivities),
-    [sortedActivities],
-  );
   const activePendingUserInput = activePendingUserInputs.at(-1) ?? null;
   const activePendingUserInputDrafts =
     activePendingUserInput && selectedThreadShell

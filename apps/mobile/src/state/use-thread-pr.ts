@@ -14,7 +14,7 @@ import { useEnvironmentQuery } from "./query";
 import { presentThreadPr, type ThreadPrPresentation } from "./thread-pr-presentation";
 import { vcsEnvironment } from "./vcs";
 
-const linkedPullRequestDetailAtom = createLinkedPullRequestSummaryAtomFamily(connectionAtomRuntime);
+const pullRequestSummaryAtom = createLinkedPullRequestSummaryAtomFamily(connectionAtomRuntime);
 const MAX_THREAD_PR_SNAPSHOTS = 500;
 
 interface ThreadPrSnapshot {
@@ -36,18 +36,19 @@ export {
 } from "./thread-pr-presentation";
 
 /**
- * List-mode PR status for a thread's branch (shared budgeted remote refresh).
- * Deduped per (environmentId, cwd); use full `status` for active git chrome.
+ * Live status for a thread's server-provided PR. Visible rows share a summary
+ * request for the same PR in the same environment. When the server has not
+ * linked a PR, list rows may still pass a project cwd so unlinked branches
+ * can fall back to a budgeted git status query.
  */
 export function useThreadPr(
   thread: EnvironmentThreadShell,
-  projectCwd: string | null,
+  projectCwd?: string | null,
 ): ThreadPrPresentation | null {
-  const cwd = thread.worktreePath ?? projectCwd;
+  const cwd = thread.worktreePath ?? projectCwd ?? null;
+  const pullRequestRef = thread.linkedPullRequest ?? thread.branchPullRequest ?? null;
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-  const snapshotIdentity = JSON.stringify(
-    thread.linkedPullRequest ?? { branch: thread.branch, cwd },
-  );
+  const snapshotIdentity = JSON.stringify(pullRequestRef ?? { branch: thread.branch, cwd });
   // Select this row's entry so writes for other rows do not re-render it.
   const snapshotEntry = useAtomValue(
     threadPrSnapshotsAtom,
@@ -58,44 +59,44 @@ export function useThreadPr(
   );
   const snapshot = snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
   const gitStatus = useEnvironmentQuery(
-    thread.linkedPullRequest == null && thread.branch !== null && cwd !== null
+    pullRequestRef === null && thread.branch !== null && cwd !== null
       ? vcsEnvironment.listStatus({
           environmentId: thread.environmentId,
           input: { cwd },
         })
       : null,
   );
-  const linkedPullRequest = useEnvironmentQuery(
-    thread.linkedPullRequest == null
+  const pullRequestSummary = useEnvironmentQuery(
+    pullRequestRef === null
       ? null
-      : linkedPullRequestDetailAtom({
+      : pullRequestSummaryAtom({
           environmentId: thread.environmentId,
           input: {
-            projectId: thread.linkedPullRequest.projectId,
-            repository: thread.linkedPullRequest.repository,
-            number: thread.linkedPullRequest.number,
+            projectId: pullRequestRef.projectId,
+            repository: pullRequestRef.repository,
+            number: pullRequestRef.number,
           },
         }),
   );
 
   const live = useMemo<ThreadPrPresentation | null | undefined>(() => {
-    if (thread.linkedPullRequest != null) {
-      const detail = linkedPullRequest.data;
-      return detail === null
+    if (pullRequestRef !== null) {
+      const summary = pullRequestSummary.data;
+      return summary === null
         ? undefined
-        : presentThreadPr(pullRequestDetailToVcsStatus(detail), {
-            kind: detail.provider,
-            name: detail.provider,
+        : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
+            kind: summary.provider,
+            name: summary.provider,
             baseUrl: "",
           });
     }
 
+    if (thread.branch === null || cwd === null) return null;
     const status = gitStatus.data;
-    if (thread.branch === null) return null;
     if (status === null) return undefined;
     if (status.refName !== thread.branch || !status.pr) return null;
     return presentThreadPr(status.pr, status.sourceControlProvider);
-  }, [gitStatus.data, linkedPullRequest.data, thread.branch, thread.linkedPullRequest]);
+  }, [cwd, gitStatus.data, pullRequestRef, pullRequestSummary.data, thread.branch]);
 
   useEffect(() => {
     if (live === undefined) return;

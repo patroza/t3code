@@ -133,6 +133,10 @@ const isolatedUnitTestFiles = [
   // because it does not share registries; the fork does.
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
+  // Mocks `../../hooks/useSettings` and `../../state/environments`; under
+  // isolate:false an earlier file binds the real hooks so useEnvironments
+  // sees a null presentations map and throws on `.entries()`.
+  "src/components/settings/IntegrationsSettings.test.tsx",
   // Mocks `../ui/button` as a host-element string; under isolate:false that
   // stub leaks into later files (ComposerControl then renders variant as a
   // DOM attribute and drops size classes).

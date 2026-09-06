@@ -1406,6 +1406,7 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
     return {
       provider: PROVIDER,
       capabilities: { sessionModelSwitch: "in-session" },
+      compaction: { type: "slash-command", command: "/compress" },
       startSession,
       sendTurn,
       interruptTurn,

@@ -17,6 +17,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -35,6 +36,8 @@ export type ProjectionThreadActivity = typeof ProjectionThreadActivity.Type;
 
 export const ListProjectionThreadActivitiesInput = Schema.Struct({
   threadId: ThreadId,
+  activityKinds: Schema.optional(Schema.Array(Schema.String)),
+  limit: Schema.optional(NonNegativeInt),
 });
 export type ListProjectionThreadActivitiesInput = typeof ListProjectionThreadActivitiesInput.Type;
 
@@ -44,6 +47,13 @@ export const ListProjectionThreadActivitiesByKindInput = Schema.Struct({
 });
 export type ListProjectionThreadActivitiesByKindInput =
   typeof ListProjectionThreadActivitiesByKindInput.Type;
+
+export const GetLatestProjectionThreadTaskActivityInput = Schema.Struct({
+  threadId: ThreadId,
+  taskId: Schema.String,
+});
+export type GetLatestProjectionThreadTaskActivityInput =
+  typeof GetLatestProjectionThreadTaskActivityInput.Type;
 
 export const DeleteProjectionThreadActivitiesInput = Schema.Struct({
   threadId: ThreadId,
@@ -68,7 +78,7 @@ export interface ProjectionThreadActivityRepositoryShape {
    * List projected thread activity rows for a thread.
    *
    * Returned in ascending runtime sequence order (or creation order when
-   * sequence is unavailable).
+   * sequence is unavailable). A limit selects the newest matching rows.
    */
   readonly listByThreadId: (
     input: ListProjectionThreadActivitiesInput,
@@ -95,6 +105,13 @@ export interface ProjectionThreadActivityRepositoryShape {
   readonly listUserInputLifecycleByThreadId: (
     input: ListProjectionThreadActivitiesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadActivity>, ProjectionRepositoryError>;
+
+  /**
+   * Read the latest task-start or task-progress activity with a usable title.
+   */
+  readonly getLatestTaskActivity: (
+    input: GetLatestProjectionThreadTaskActivityInput,
+  ) => Effect.Effect<Option.Option<ProjectionThreadActivity>, ProjectionRepositoryError>;
 
   /**
    * Delete projected thread activity rows by thread.
