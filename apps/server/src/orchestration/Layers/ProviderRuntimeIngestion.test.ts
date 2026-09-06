@@ -539,6 +539,16 @@ describe("ProviderRuntimeIngestion", () => {
         runtimeMode: "approval-required",
         createdAt: base.createdAt,
       });
+      // Fork queues a follow-up while a turn is running. Steer it so the new
+      // turn is pending, matching providers that open a new turn without
+      // completing the superseded one.
+      await harness.dispatch({
+        type: "thread.queue.steer",
+        commandId: CommandId.make("steer-new-while-old-finishes"),
+        threadId,
+        messageId: asMessageId("new-turn-prompt"),
+        createdAt: base.createdAt,
+      });
       harness.setProviderSession({
         provider: base.provider,
         status: "running",
