@@ -97,7 +97,7 @@ export function resolveChangeRequestPresentation(
   }
 }
 
-export function resolveChangeRequestPresentationForKind(
+function resolveChangeRequestPresentationForKind(
   kind: SourceControlProviderKind,
 ): ChangeRequestPresentation {
   return resolveChangeRequestPresentation({ kind, name: "", baseUrl: "" });

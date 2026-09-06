@@ -1,10 +1,8 @@
 import type {
   GitRunStackedActionInput,
-  GitRunStackedActionResult,
   GitStackedAction,
   VcsStatusResult,
 } from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -403,47 +401,5 @@ export function resolveDefaultBranchActionDialogCopy(input: {
     title: "Push & create PR from default branch?",
     description: `This action will push local commits and create a PR${suffix}`,
     continueLabel: "Push & create PR",
-  };
-}
-
-export function resolveThreadBranchUpdate(
-  result: GitRunStackedActionResult,
-): { branch: string } | null {
-  if (result.branch.status !== "created" || !result.branch.name) {
-    return null;
-  }
-
-  return {
-    branch: result.branch.name,
-  };
-}
-
-export function resolveLiveThreadBranchUpdate(input: {
-  threadBranch: string | null;
-  gitStatus: VcsStatusResult | null;
-}): { branch: string | null } | null {
-  if (!input.gitStatus) {
-    return null;
-  }
-
-  if (input.gitStatus.refName === null && input.threadBranch !== null) {
-    return null;
-  }
-
-  if (input.threadBranch === input.gitStatus.refName) {
-    return null;
-  }
-
-  if (
-    input.threadBranch !== null &&
-    input.gitStatus.refName !== null &&
-    !isTemporaryWorktreeBranch(input.threadBranch) &&
-    isTemporaryWorktreeBranch(input.gitStatus.refName)
-  ) {
-    return null;
-  }
-
-  return {
-    branch: input.gitStatus.refName,
   };
 }

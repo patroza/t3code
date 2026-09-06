@@ -579,13 +579,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         <GroupSeparator {...(!compact ? { className: "hidden @3xl/header-actions:block" } : {})} />
         <Menu highlightItemOnHover={false}>
           <MenuTrigger
-            render={
-              <Button
-                aria-label={compact ? "Choose editor" : "Choose application"}
-                size="icon-xs"
-                variant="outline"
-              />
-            }
+            render={<Button aria-label="Choose editor" size="icon-xs" variant="outline" />}
           >
             <ChevronDownIcon aria-hidden="true" className="size-4" />
           </MenuTrigger>
