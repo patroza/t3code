@@ -31,9 +31,13 @@ pingdotgg/t3code:main
 - Opening or updating a PR runs Fork CI (`.github/workflows/fork-ci.yml`) but does not deploy.
   Releases come from green `fork/dev` SHAs. Machine topology and deployment implementation belong
   in a separate private operations repository, not this one.
-- The inherited upstream **`.github/workflows/ci.yml` (Blacksmith runners)** and `deploy-relay.yml`
-  workflows are **`disabled_manually` at repository level**. This fork has no Blacksmith runners.
-  **Do not re-enable** them. After an accidental re-enable: `gh workflow disable CI --repo <fork>`.
+- The inherited upstream **`.github/workflows/ci.yml` (Blacksmith runners)**, `deploy-relay.yml`,
+  and `release.yml` (T3 Connect nightly plus tag/desktop GitHub Releases) workflows are
+  **`disabled_manually` at repository level**. This fork has no Blacksmith runners and does not
+  deploy T3 Connect. Fork shipping uses Fork Release, not `release.yml`. **Do not re-enable** them.
+  After an accidental re-enable: `gh workflow disable CI --repo <fork>`,
+  `gh workflow disable "Deploy T3 Connect relay" --repo <fork>`,
+  `gh workflow disable Release --repo <fork>`.
 - Persistence migrations: keep true upstream migrations in `Migrations.ts`; rewrite fork-local
   migrations into `ForkMigrations.ts`. Never share a migration ledger between upstream and fork
   histories.
