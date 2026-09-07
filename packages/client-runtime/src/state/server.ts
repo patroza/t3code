@@ -994,7 +994,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.providerAuthStart,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.instanceId]),
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
     completeProviderAuth: createEnvironmentRpcCommand(runtime, {
@@ -1040,6 +1040,7 @@ export function createServerEnvironmentAtoms<R, E>(
     }),
     hostResources: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-resources",
+      idleTtlMs: 0,
       staleTimeMs: 5_000,
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
@@ -1084,7 +1085,7 @@ export function createServerEnvironmentAtoms<R, E>(
       concurrency: {
         mode: "singleFlight",
         // Both ids are free-form strings; a delimiter could collide.
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.instanceId]),
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {

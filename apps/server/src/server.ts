@@ -440,6 +440,7 @@ const PortScannerLayerLive = PortScanner.layer.pipe(Layer.provide(ProcessRunner.
 const TerminalLayerLive = TerminalManager.layer.pipe(
   Layer.provide(PtyAdapterLive),
   Layer.provide(PortScannerLayerLive),
+  Layer.provide(NativeTelemetryLayerLive),
 );
 
 // Self-contained: the HTTP client is only used to prove a published port
