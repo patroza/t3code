@@ -268,7 +268,7 @@ export function buildHomeRecentListLayout(input: {
   for (const [index, pendingTask] of input.pendingTasks.entries()) {
     items.push({
       type: "pending-task",
-      key: `pending-task:${pendingTask.message.messageId}`,
+      key: pendingTask.key,
       pendingTask,
       isLast:
         index === input.pendingTasks.length - 1 &&
