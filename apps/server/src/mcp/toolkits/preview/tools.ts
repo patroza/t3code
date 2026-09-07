@@ -111,8 +111,16 @@ export const PreviewSetAppearanceTool = safeBrowserTool(
 export const PreviewSnapshotTool = readonlyBrowserTool(
   Tool.make("preview_snapshot", {
     description:
-      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, a PNG screenshot, and a local artifact path when the host supports export. To return an exported image to the user, embed that path in Markdown image syntax.",
-    parameters: PreviewAutomationTabTargetInput,
+      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, a PNG screenshot, and a local artifact path when the host supports export. Set includeImage=false for text-only output with the same page metadata. To return an exported image to the user, embed that path in Markdown image syntax.",
+    parameters: Schema.Struct({
+      ...PreviewAutomationTabTargetInput.fields,
+      includeImage: Schema.optional(
+        Schema.Boolean.annotate({
+          description:
+            "Include the PNG image in the tool response. Defaults to true. Set false for text-only output.",
+        }),
+      ),
+    }),
     success: PreviewAutomationSnapshot,
     failure: PreviewAutomationError,
     dependencies,

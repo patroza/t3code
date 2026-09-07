@@ -71,19 +71,14 @@ export function buildHomeRecentPendingEntries(input: {
   const query = input.searchQuery.trim().toLocaleLowerCase();
   const entries: HomeRecentPendingEntry[] = [];
   for (const pendingTask of input.pendingTasks) {
-    if (
-      !matchesEnvironmentFilter(pendingTask.message.environmentId, input.selectedEnvironmentIds)
-    ) {
+    if (!matchesEnvironmentFilter(pendingTask.environmentId, input.selectedEnvironmentIds)) {
       continue;
     }
-    const projectKey = scopedProjectKey(
-      pendingTask.message.environmentId,
-      pendingTask.creation.projectId,
-    );
+    const projectKey = scopedProjectKey(pendingTask.environmentId, pendingTask.projectId);
     if (input.projectRefKeys != null && !input.projectRefKeys.has(projectKey)) {
       continue;
     }
-    const title = pendingTask.creation.projectTitle ?? "Unknown project";
+    const title = pendingTask.projectTitle ?? "Unknown project";
     if (query.length > 0 && !title.toLocaleLowerCase().includes(query)) {
       continue;
     }
@@ -91,7 +86,6 @@ export function buildHomeRecentPendingEntries(input: {
   }
   return entries.sort(
     (left, right) =>
-      Date.parse(right.pendingTask.message.createdAt) -
-      Date.parse(left.pendingTask.message.createdAt),
+      Date.parse(right.pendingTask.createdAt) - Date.parse(left.pendingTask.createdAt),
   );
 }
