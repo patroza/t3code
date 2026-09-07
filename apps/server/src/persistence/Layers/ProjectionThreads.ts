@@ -61,6 +61,7 @@ function toProjectionThread(row: ProjectionThreadDbRow): ProjectionThread {
     snoozedAt: row.snoozedAt,
     pinnedAt: row.pinnedAt,
     pinOrderKey: row.pinOrderKey ?? null,
+    activeOrderKey: row.activeOrderKey ?? null,
     titleRegenerationRequestId: row.titleRegenerationRequestId ?? null,
     titleRegenerationStartedAt: row.titleRegenerationStartedAt ?? null,
     latestUserMessageAt: row.latestUserMessageAt,

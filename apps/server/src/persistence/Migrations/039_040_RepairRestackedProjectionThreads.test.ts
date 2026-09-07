@@ -87,10 +87,10 @@ layer("b18 desktop migration namespace repair", (it) => {
         readonly name: string;
       }>`SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id`;
       assert.deepStrictEqual(upstreamMigrations.slice(-4), [
-        { migration_id: 45, name: "ProjectionProjectsAutoPull" },
         { migration_id: 46, name: "RepairAutomaticSettlementTimestamps" },
         { migration_id: 47, name: "ProjectionProjectIcon" },
         { migration_id: 48, name: "ProjectionThreadBranchPullRequest" },
+        { migration_id: 49, name: "ProjectionThreadsActiveOrderKey" },
       ]);
 
       const forkMigrations = yield* sql<{
