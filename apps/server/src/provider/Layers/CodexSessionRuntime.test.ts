@@ -941,15 +941,21 @@ describe("openCodexThread", () => {
           payload: CodexRpc.ClientRequestParamsByMethod[M],
         ) => {
           calls.push({ method, payload });
-          if (method === "thread/resume") {
+          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);
+        },
+        raw: {
+          request: (
+            method: "thread/resume",
+            payload: CodexRpc.ClientRequestParamsByMethod["thread/resume"],
+          ) => {
+            calls.push({ method, payload });
             return Effect.fail(
               new CodexErrors.CodexAppServerRequestError({
                 code: -32602,
                 errorMessage: "Invalid params",
               }),
             );
-          }
-          return Effect.succeed(started as CodexRpc.ClientRequestResponsesByMethod[M]);
+          },
         },
       };
 

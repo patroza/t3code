@@ -167,7 +167,6 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
-  readonly environment?: NodeJS.ProcessEnv;
   readonly resolveEnvironment?: ClaudeAdapterLiveOptions["resolveEnvironment"];
   readonly scopedLimitNames?: ClaudeAdapterLiveOptions["scopedLimitNames"];
   readonly environment?: ClaudeAdapterLiveOptions["environment"];

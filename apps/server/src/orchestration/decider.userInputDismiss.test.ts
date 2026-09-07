@@ -5,13 +5,13 @@ import {
   ProviderInstanceId,
   ThreadId,
   ApprovalRequestId,
-  type OrchestrationReadModel,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { findThreadById, fromWireReadModel } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
 
@@ -35,10 +35,8 @@ function makeRequest(responseMode: "message" | undefined): OrchestrationThreadAc
   };
 }
 
-function makeReadModel(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): OrchestrationReadModel {
-  return {
+function makeReadModel(activities: ReadonlyArray<OrchestrationThreadActivity>) {
+  return fromWireReadModel({
     snapshotSequence: 0,
     projects: [],
     threads: [
@@ -62,6 +60,8 @@ function makeReadModel(
         pinnedAt: null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [...activities],
         checkpoints: [],
@@ -69,7 +69,7 @@ function makeReadModel(
       },
     ],
     updatedAt: NOW,
-  };
+  });
 }
 
 const command = {
@@ -101,8 +101,8 @@ it.layer(NodeServices.layer)("user input dismiss decider", (it) => {
         },
       });
       const projected = yield* projectEvent(readModel, { ...events[0]!, sequence: 1 });
-      expect(projected.threads[0]?.messages).toEqual([]);
-      expect(projected.threads[0]?.latestTurn).toBeNull();
+      expect(findThreadById(projected, threadId)?.messages).toEqual([]);
+      expect(findThreadById(projected, threadId)?.latestTurn).toBeNull();
     }),
   );
 

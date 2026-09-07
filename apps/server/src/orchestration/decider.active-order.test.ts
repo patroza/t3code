@@ -4,13 +4,13 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationCommand,
-  type OrchestrationReadModel,
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { findThreadById, fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
 
@@ -21,8 +21,8 @@ const SNOOZED_AT = "1969-12-31T00:00:00.000Z";
 const FUTURE_WAKE = "1970-01-02T00:00:00.000Z";
 const THREAD_ID = ThreadId.make("thread-1");
 
-function makeReadModel(overrides: Partial<OrchestrationThread> = {}): OrchestrationReadModel {
-  return {
+function makeReadModel(overrides: Partial<OrchestrationThread> = {}): CommandReadModel {
+  return fromWireReadModel({
     snapshotSequence: 0,
     projects: [],
     threads: [
@@ -49,6 +49,8 @@ function makeReadModel(overrides: Partial<OrchestrationThread> = {}): Orchestrat
         pinOrderKey: null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints: [],
@@ -57,7 +59,7 @@ function makeReadModel(overrides: Partial<OrchestrationThread> = {}): Orchestrat
       },
     ],
     updatedAt: NOW,
-  };
+  });
 }
 
 const reorderCommand = {
@@ -88,7 +90,7 @@ it.layer(NodeServices.layer)("active thread ordering", (it) => {
             sequence: readModel.snapshotSequence + 1,
           });
         }
-        expect(readModel.threads[0]).toMatchObject({
+        expect(findThreadById(readModel, THREAD_ID)).toMatchObject({
           activeOrderKey: orderKey,
           updatedAt: NOW,
           createdAt: NOW,
@@ -133,7 +135,10 @@ it.layer(NodeServices.layer)("active thread ordering", (it) => {
       expect(events).toHaveLength(1);
       for (const event of events) {
         const projected = yield* projectEvent(readModel, { ...event, sequence: 1 });
-        expect(projected.threads[0]).toEqual({ ...readModel.threads[0], activeOrderKey: "m" });
+        expect(findThreadById(projected, THREAD_ID)).toEqual({
+          ...findThreadById(readModel, THREAD_ID),
+          activeOrderKey: "m",
+        });
       }
     }),
   );
@@ -153,7 +158,10 @@ it.layer(NodeServices.layer)("active thread ordering", (it) => {
         expect(events).toHaveLength(1);
         for (const event of events) {
           const projected = yield* projectEvent(readModel, { ...event, sequence: 1 });
-          expect(projected.threads[0]).toEqual({ ...readModel.threads[0], activeOrderKey: "m" });
+          expect(findThreadById(projected, THREAD_ID)).toEqual({
+            ...findThreadById(readModel, THREAD_ID),
+            activeOrderKey: "m",
+          });
         }
       }),
   );
@@ -186,9 +194,11 @@ it.layer(NodeServices.layer)("active thread ordering", (it) => {
             sequence: readModel.snapshotSequence + 1,
           });
         }
-        expect(readModel.threads[0]?.activeOrderKey, command.type).toBe(expectedKey);
+        expect(findThreadById(readModel, THREAD_ID)?.activeOrderKey, command.type).toBe(
+          expectedKey,
+        );
       }
-      expect(readModel.threads[0]).toMatchObject({
+      expect(findThreadById(readModel, THREAD_ID)).toMatchObject({
         title: "Renamed",
         settledOverride: "active",
         settledAt: null,

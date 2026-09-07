@@ -372,8 +372,8 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       for (const [index, event] of events.entries()) {
         projected = yield* projectEvent(projected, { ...event, sequence: index + 1 });
       }
-      expect(projected.threads[0]?.settledOverride).toBe("settled");
-      expect(projected.threads[0]?.messages).toEqual([]);
+      expect(findThreadById(projected, command.threadId)?.settledOverride).toBe("settled");
+      expect(findThreadById(projected, command.threadId)?.messages).toEqual([]);
       const repeated = yield* decideOrchestrationCommand({ command, readModel: projected });
       expect(repeated).toMatchObject({ type: "thread.settled" });
     }),

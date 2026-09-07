@@ -1632,6 +1632,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git",
         cwd,
         detail: "Git index is locked. Status will resume when the index lock is removed.",
+        failureKind: "unknown",
       });
       // Status can succeed while locked, repeatedly running LFS clean filters without caching.
       if (
