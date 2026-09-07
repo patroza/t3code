@@ -195,6 +195,7 @@ it.effect.each(
       );
       const fallbackProviderInstanceId = ProviderInstanceId.make("claudeAgent");
       const continuationSent = yield* Deferred.make<void>();
+      const continuationRunning = yield* Deferred.make<void>();
       const continuationCleared = yield* Deferred.make<void>();
       const sends: ProviderSendTurnInput[] = [];
       const dispatched: OrchestrationCommand[] = [];
@@ -288,16 +289,20 @@ it.effect.each(
         },
         dispatch: (command) =>
           Effect.sync(() => dispatched.push(command)).pipe(
+            Effect.flatMap(() => {
+              const runningCount = dispatched.filter(
+                (entry) =>
+                  entry.type === "thread.session.set" && entry.session.status === "running",
+              ).length;
+              return runningCount === 2
+                ? Deferred.succeed(continuationRunning, undefined)
+                : Effect.void;
+            }),
             Effect.as({ sequence: dispatched.length }),
           ),
       });
-      assert.isTrue(
-        dispatched.every(
-          (command) =>
-            command.type === "thread.session.set" && command.session.status === "starting",
-        ),
-      );
       yield* Deferred.await(continuationSent);
+      yield* Deferred.await(continuationRunning);
       yield* Deferred.await(continuationCleared);
 
       assert.deepStrictEqual(
@@ -313,28 +318,50 @@ it.effect.each(
           },
         ],
       );
-      assert.deepStrictEqual(
-        dispatched.map((command) =>
-          command.type === "thread.session.set"
-            ? {
+      const sessionSets = dispatched.flatMap((command) =>
+        command.type === "thread.session.set"
+          ? [
+              {
                 threadId: command.threadId,
                 status: command.session.status,
                 activeTurnId: command.session.activeTurnId,
-              }
-            : null,
-        ),
+              },
+            ]
+          : [],
+      );
+      const byThreadId = (left: { threadId: ThreadId }, right: { threadId: ThreadId }) =>
+        String(left.threadId).localeCompare(String(right.threadId));
+      assert.deepStrictEqual(
+        sessionSets
+          .filter((command) => command.status === "starting")
+          .slice()
+          .sort(byThreadId),
+        [
+          { threadId: codex.id, status: "starting" as const, activeTurnId: null },
+          { threadId: fallback.id, status: "starting" as const, activeTurnId: null },
+        ]
+          .slice()
+          .sort(byThreadId),
+      );
+      assert.deepStrictEqual(
+        sessionSets
+          .filter((command) => command.status === "running")
+          .slice()
+          .sort(byThreadId),
         [
           {
             threadId: codex.id,
-            status: "starting",
-            activeTurnId: null,
+            status: "running" as const,
+            activeTurnId: TurnId.make(`continued-${String(codex.id)}`),
           },
           {
             threadId: fallback.id,
-            status: "starting",
-            activeTurnId: null,
+            status: "running" as const,
+            activeTurnId: TurnId.make(`continued-${String(fallback.id)}`),
           },
-        ],
+        ]
+          .slice()
+          .sort(byThreadId),
       );
       for (const [thread, continuationTurnId] of [
         [codex, codex.session.activeTurnId],
@@ -909,6 +936,8 @@ for (const preparedStatus of [
       assert.deepStrictEqual(sends, [
         { threadId: thread.id, continuation: true, interactionMode: "default" },
       ]);
+      assert.equal(thread.session.status, "running");
+      assert.equal(thread.session.activeTurnId, TurnId.make("turn-recovered"));
       assert.deepStrictEqual(binding.runtimePayload, {
         activeTurnId: null,
         continueAfterServerUpdate: null,

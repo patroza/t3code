@@ -705,12 +705,29 @@ export const reconcileProviderSessions = Effect.gen(function* () {
               });
             }
             const capabilities = yield* providerService.getCapabilities(providerInstanceId);
-            yield* providerService.sendTurn({
+            const result = yield* providerService.sendTurn({
               threadId: thread.id,
               ...(capabilities.promptlessTurnContinuation === true
                 ? { continuation: true }
                 : { input: SERVER_UPDATE_CONTINUATION_PROMPT }),
               interactionMode: thread.interactionMode,
+            });
+            // Resume/continuation often does not emit turn.started until the
+            // replacement turn finishes. Leave the session running with the
+            // admitted turn id so queue.steer is not blocked for the whole turn.
+            const continuedAt = DateTime.formatIso(yield* DateTime.now);
+            yield* orchestrationEngine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.make(yield* crypto.randomUUIDv4),
+              threadId: thread.id,
+              session: {
+                ...session,
+                status: "running",
+                activeTurnId: result.turnId,
+                lastError: null,
+                updatedAt: continuedAt,
+              },
+              createdAt: continuedAt,
             });
           });
           const continuationExit = yield* Effect.exit(continuation);
