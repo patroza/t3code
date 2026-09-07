@@ -291,6 +291,17 @@ export function HomeRouteScreen() {
           }}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
+          onNewThreadOnBranch={(thread) => {
+            navigation.navigate("NewTaskSheet", {
+              screen: "NewTaskDraft",
+              params: {
+                environmentId: String(thread.environmentId),
+                projectId: String(thread.projectId),
+                branch: thread.branch,
+                worktreePath: thread.worktreePath,
+              },
+            });
+          }}
           onNewThreadInProject={(project) => {
             navigation.navigate("NewTaskSheet", {
               screen: "NewTaskDraft",

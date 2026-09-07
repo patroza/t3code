@@ -504,15 +504,19 @@ function buildThreadRowMenuActions(input: {
   readonly isSettled: boolean;
   /** Upstream's regenerate entry (#6253), sat above Archive as it is there. */
   readonly titleRegeneration: readonly MenuAction[];
+  /** Upstream #10359: start a new thread on this row's branch. */
+  readonly newThreadOnBranch: readonly MenuAction[];
 }): MenuAction[] {
   if (!input.settlementSupported) {
     return [
+      ...input.newThreadOnBranch,
       THREAD_ROW_LEGACY_MENU_ACTIONS[0]!,
       ...input.titleRegeneration,
       ...THREAD_ROW_LEGACY_MENU_ACTIONS.slice(1),
     ];
   }
   return [
+    ...input.newThreadOnBranch,
     input.isSettled
       ? { id: "unsettle", title: "Unsettle", image: "pin" }
       : { id: "settle", title: "Settle", image: "checkmark.circle" },
@@ -550,6 +554,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly isSettled?: boolean;
   readonly onSettleThread?: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread?: (thread: EnvironmentThreadShell) => void;
+  readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly titleRegenerationSupported: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
@@ -581,6 +586,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     onSettleThread,
     onUnsettleThread,
     onRegenerateThreadTitle,
+    onNewThreadOnBranch,
   } = props;
   const settlementSupported = props.settlementSupported === true;
   const isSettled = props.isSettled === true;
@@ -660,22 +666,47 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       buildThreadRowMenuActions({
         settlementSupported,
         isSettled,
+        newThreadOnBranch: thread.branch
+          ? [
+              {
+                id: "new-thread-on-branch",
+                title:
+                  Platform.OS === "ios" ? "New thread on branch" : `New thread on ${thread.branch}`,
+                image: "square.and.pencil",
+              },
+            ]
+          : [],
         titleRegeneration: buildThreadTitleRegenerationMenuItems({
           supported: props.titleRegenerationSupported,
           isRegenerating: thread.titleRegeneration != null,
         }),
       }),
-    [isSettled, props.titleRegenerationSupported, settlementSupported, thread.titleRegeneration],
+    [
+      isSettled,
+      props.titleRegenerationSupported,
+      settlementSupported,
+      thread.branch,
+      thread.titleRegeneration,
+    ],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete, handleRegenerateTitle, handleSettle, handleUnsettle],
+    [
+      handleArchive,
+      handleDelete,
+      handleRegenerateTitle,
+      handleSettle,
+      handleUnsettle,
+      onNewThreadOnBranch,
+      thread,
+    ],
   );
 
   const statusPill = effectiveStatus ? (

@@ -523,6 +523,21 @@ function AdaptiveWorkspaceLayoutContent(
     });
   }, [navigation]);
 
+  const handleNewThreadOnBranch = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      navigation.navigate("NewTaskSheet", {
+        screen: "NewTaskDraft",
+        params: {
+          environmentId: String(thread.environmentId),
+          projectId: String(thread.projectId),
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+        },
+      });
+    },
+    [navigation],
+  );
+
   const handleNewThreadInProject = useCallback(
     (project: EnvironmentProject) => {
       navigation.navigate("NewTaskSheet", {
@@ -630,6 +645,7 @@ function AdaptiveWorkspaceLayoutContent(
                     onOpenSettings={handleOpenSettings}
                     onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                     onNewThreadInProject={handleNewThreadInProject}
+                    onNewThreadOnBranch={handleNewThreadOnBranch}
                     onSelectThread={handleSelectThread}
                     onSearchQueryChange={setPrimarySidebarSearchQuery}
                     searchQuery={primarySidebarSearchQuery}
