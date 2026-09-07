@@ -40,6 +40,7 @@ const source = "export const View = () => <div>Ready</div>;";
 let pool: WorkerPoolManager;
 let renderer: FileRenderer;
 let terminationPromises: Promise<number>[];
+let animationFrames: Set<ReturnType<typeof setImmediate>>;
 
 class WorkerTransport {
   private readonly worker = new NodeWorkerThreads.Worker(
@@ -96,10 +97,19 @@ function firstEnter(highlighter: DiffsHighlighter, file: FileContents, language:
 
 beforeEach(async () => {
   terminationPromises = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-    setImmediate(() => callback(0)),
-  );
-  vi.stubGlobal("cancelAnimationFrame", clearImmediate);
+  animationFrames = new Set();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const frame = setImmediate(() => {
+      animationFrames.delete(frame);
+      callback(0);
+    });
+    animationFrames.add(frame);
+    return frame;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (frame: ReturnType<typeof setImmediate>) => {
+    animationFrames.delete(frame);
+    clearImmediate(frame);
+  });
   vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
   await disposeHighlighter();
   pool = new WorkerPoolManager(
@@ -116,6 +126,9 @@ afterEach(async () => {
   pool?.terminate();
   await Promise.all(terminationPromises);
   await disposeHighlighter();
+  // Pool termination can queue a final broadcast after its workers have exited.
+  for (const frame of animationFrames) clearImmediate(frame);
+  animationFrames.clear();
   vi.unstubAllGlobals();
 });
 
