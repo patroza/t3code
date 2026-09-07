@@ -251,15 +251,19 @@ export function useThreadComposerState() {
   // cannot be an either/or with the loaded messages.
   const pendingCreationMessage = selectedThreadCreation?.message ?? null;
   const selectedThreadFeed = useMemo(() => {
-    const loadedMessages = selectedThreadMessages ?? [];
     const feed =
       (selectedThreadMessages && selectedThreadActivities) || pendingCreationMessage !== null
         ? buildThreadFeed({
-            messages:
-              pendingCreationMessage !== null &&
-              !loadedMessages.some((message) => message.id === pendingCreationMessage.messageId)
-                ? [...loadedMessages, pendingThreadCreationMessage(pendingCreationMessage)]
-                : loadedMessages,
+            messages: selectedThreadMessages
+              ? pendingCreationMessage !== null &&
+                !selectedThreadMessages.some(
+                  (message) => message.id === pendingCreationMessage.messageId,
+                )
+                ? [...selectedThreadMessages, pendingThreadCreationMessage(pendingCreationMessage)]
+                : selectedThreadMessages
+              : pendingCreationMessage !== null
+                ? [pendingThreadCreationMessage(pendingCreationMessage)]
+                : [],
             activities: selectedThreadActivities ?? [],
           })
         : [];
