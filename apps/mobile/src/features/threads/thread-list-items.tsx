@@ -1023,6 +1023,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
 
   return (
     <ThreadSwipeable
+      threadKey={`${thread.environmentId}:${thread.id}`}
       backgroundColor={backgroundColor}
       containerStyle={
         compact ? undefined : { borderRadius: SIDEBAR_ROW_RADIUS, overflow: "hidden" }
