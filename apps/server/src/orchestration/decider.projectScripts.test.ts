@@ -13,6 +13,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
+import { findProjectById } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
 
@@ -146,7 +147,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         expect(failure).toMatchObject({ _tag: "OrchestrationCommandInvariantError" });
         expect(failure.message).toContain("Script ID");
         expect(failure.message).toContain("24");
-        expect(readModel.projects[0]?.scripts).toEqual([]);
+        expect(findProjectById(readModel, asProjectId("project-scripts"))?.scripts).toEqual([]);
       }),
     );
   }
@@ -175,7 +176,9 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       Effect.gen(function* () {
         const legacy = script("install-javascript-dependencies");
         const readModel = yield* projectWithScripts([legacy]);
-        expect(readModel.projects[0]?.scripts).toEqual([legacy]);
+        expect(findProjectById(readModel, asProjectId("project-scripts"))?.scripts).toEqual([
+          legacy,
+        ]);
         for (const scripts of [[{ ...legacy, command: "vp install" }, script("lint")], []]) {
           const result = yield* decideOrchestrationCommand({
             readModel,
