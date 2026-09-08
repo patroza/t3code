@@ -9,7 +9,7 @@
     "dev:teams": "node --watch --import tsx src/teams-main.ts",
     "start": "node --import tsx src/main.ts",
     "start:teams": "node --import tsx src/teams-main.ts",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run"
   },
   "dependencies": {
