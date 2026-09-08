@@ -141,6 +141,9 @@ const isolatedUnitTestFiles = [
   // stub window; under isolate:false an earlier file can bind the real
   // capture bridge so suppression never arms.
   "src/components/settings/useSnapShotShortcutRecorder.test.tsx",
+  // Mounts CaptureShortcutConfig through react-test-renderer; under
+  // isolate:false useTheme's useSyncExternalStore hits a second React copy.
+  "src/components/settings/CaptureShortcutConfig.test.tsx",
   // Mocks `../../hooks/useSettings` and `../../state/environments`; under
   // isolate:false an earlier file binds the real hooks so useEnvironments
   // sees a null presentations map and throws on `.entries()`.
