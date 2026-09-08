@@ -5,17 +5,17 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationReadModel,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { fromWireReadModel } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 
 const UPDATED_AT = "2026-01-01T00:00:00.000Z";
 
-const readModel: OrchestrationReadModel = {
+const readModel = fromWireReadModel({
   snapshotSequence: 0,
   projects: [],
   threads: [
@@ -36,8 +36,11 @@ const readModel: OrchestrationReadModel = {
       settledAt: null,
       snoozedUntil: null,
       snoozedAt: null,
+      pinnedAt: null,
       deletedAt: null,
       messages: [],
+      queuedMessages: [],
+      pendingTurnStart: null,
       proposedPlans: [],
       activities: [],
       checkpoints: [],
@@ -45,7 +48,7 @@ const readModel: OrchestrationReadModel = {
     },
   ],
   updatedAt: UPDATED_AT,
-};
+});
 
 const requestId = ApprovalRequestId.make("question-request");
 const command = {
