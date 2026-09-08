@@ -144,6 +144,13 @@ const isolatedUnitTestFiles = [
   // Mounts CaptureShortcutConfig through react-test-renderer; under
   // isolate:false useTheme's useSyncExternalStore hits a second React copy.
   "src/components/settings/CaptureShortcutConfig.test.tsx",
+  // Mocks `../../hooks/useSettings` without usePrimarySettingsAvailable;
+  // under isolate:false that incomplete mock leaks into SettingsRow and
+  // ProviderInstanceCard.test.ts throws on the missing export.
+  "src/components/settings/SnapShotSettings.test.tsx",
+  // Mocks `~/hooks/useSettings` with only useEnvironmentIdentificationMode;
+  // same isolate:false SettingsRow leak as SnapShotSettings.test.tsx.
+  "src/components/chat/ComposerPrimaryActions.test.tsx",
   // Mocks `../../hooks/useSettings` and `../../state/environments`; under
   // isolate:false an earlier file binds the real hooks so useEnvironments
   // sees a null presentations map and throws on `.entries()`.
