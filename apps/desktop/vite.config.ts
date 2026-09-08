@@ -16,6 +16,7 @@ const isolatedDesktopTestFiles = [
   "src/electron/ElectronTheme.test.ts",
   "src/electron/ElectronUpdater.test.ts",
   "src/electron/ElectronWindow.test.ts",
+  "src/electron/WindowsForegroundFocusThread.test.ts",
   "src/electron/MacApplicationIcon.test.ts",
   "src/ipc/methods/preview.test.ts",
   "src/preview/BrowserSession.test.ts",
