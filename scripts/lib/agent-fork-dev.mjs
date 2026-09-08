@@ -74,6 +74,28 @@ export const listChangedFilesAgainstForkDev = (opts = {}) => {
 };
 
 /**
+ * Vendored reference trees are ignored by `vp check` / oxlint. Passing thousands
+ * of them as argv (typical of an upstream Effect/Alchemy ref sync) overflows
+ * `spawnSync({ shell: true })` with E2BIG and fails the changed-file ship gate.
+ *
+ * @param {string} file
+ * @returns {boolean}
+ */
+export const isIgnoredVendorPath = (file) => {
+  const normalized = file.replaceAll("\\", "/");
+  return (
+    normalized === ".repos" || normalized.startsWith(".repos/") || normalized.includes("/.repos/")
+  );
+};
+
+/**
+ * @param {Parameters<typeof listChangedFilesAgainstForkDev>[0]} [opts]
+ * @returns {string[]}
+ */
+export const filesForChangedShipCheck = (opts = {}) =>
+  listChangedFilesAgainstForkDev(opts).filter((file) => !isIgnoredVendorPath(file));
+
+/**
  * @param {{
  *   cwd?: string
  *   runGit?: (args: string[], opts: { cwd: string }) => { status: number | null, stdout: string }

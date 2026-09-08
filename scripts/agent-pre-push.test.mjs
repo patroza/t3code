@@ -6,6 +6,7 @@ import { isCodingAgent } from "./agent-pre-push.mjs";
 import { findRealGh, requiresShipGate, stripGhGlobalFlags } from "./lib/agent-gh-policy.mjs";
 import {
   assertUpToDateWithForkDev,
+  filesForChangedShipCheck,
   listChangedFilesAgainstForkDev,
   resolveForkDevRef,
 } from "./lib/agent-fork-dev.mjs";
@@ -82,6 +83,24 @@ it("listChangedFilesAgainstForkDev: diffs merge-base..HEAD", () => {
     },
   });
   assert.deepEqual(files, ["AGENTS.md", "scripts/x.mjs"]);
+});
+
+it("filesForChangedShipCheck: drops .repos vendor trees", () => {
+  const files = filesForChangedShipCheck({
+    cwd: "/repo",
+    runGit: (args) => {
+      if (args.includes("rev-parse")) return { status: 0, stdout: "abc\n" };
+      if (args[0] === "merge-base" && args[1] === "HEAD") return { status: 0, stdout: "base123\n" };
+      if (args[0] === "diff") {
+        return {
+          status: 0,
+          stdout: "AGENTS.md\n.repos/effect-smol/x.ts\n.repos/alchemy-effect/y.ts\n",
+        };
+      }
+      return { status: 1, stdout: "" };
+    },
+  });
+  assert.deepEqual(files, ["AGENTS.md"]);
 });
 
 it("assertUpToDateWithForkDev: fails when fork/dev is not an ancestor", () => {
