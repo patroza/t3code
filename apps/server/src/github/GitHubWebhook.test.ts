@@ -424,6 +424,22 @@ describe("GitHub PR webhook", () => {
     expect(isGitHubRepositoryAllowed(new Set(["acme/widgets"]), "acme/other")).toBe(false);
   });
 
+  it("allows every repository under an owner/* entry", () => {
+    const allowed = new Set(["patroza/*", "macs-holding/*"]);
+    expect(isGitHubRepositoryAllowed(allowed, "patroza/effect")).toBe(true);
+    expect(isGitHubRepositoryAllowed(allowed, "Patroza/T3code")).toBe(true);
+    expect(isGitHubRepositoryAllowed(allowed, "macs-holding/scanner")).toBe(true);
+    expect(isGitHubRepositoryAllowed(allowed, "effect-app/libs")).toBe(false);
+    expect(isGitHubRepositoryAllowed(allowed, "patroza")).toBe(false);
+    expect(isGitHubRepositoryAllowed(allowed, "patroza/")).toBe(false);
+    expect(isGitHubRepositoryAllowed(new Set(["acme/widgets", "patroza/*"]), "acme/widgets")).toBe(
+      true,
+    );
+    expect(isGitHubRepositoryAllowed(new Set(["acme/widgets", "patroza/*"]), "acme/other")).toBe(
+      false,
+    );
+  });
+
   it("orders GitHub repository permissions", () => {
     expect(hasRequiredGitHubPermission("write", "write")).toBe(true);
     expect(hasRequiredGitHubPermission("admin", "write")).toBe(true);

@@ -100,11 +100,19 @@ export function extractJiraIssueKeysFromGitHubInvocation(
   return extractJiraIssueKeysFromText(`${invocation.pullRequestTitle}\n${invocation.prompt}`);
 }
 
+/** Empty allowlist permits every installed repo. Entries are `owner/name` or `owner/*`. */
 export function isGitHubRepositoryAllowed(
   allowedRepositories: ReadonlySet<string>,
   repository: string,
 ): boolean {
-  return allowedRepositories.size === 0 || allowedRepositories.has(repository.trim().toLowerCase());
+  if (allowedRepositories.size === 0) return true;
+  const normalized = repository.trim().toLowerCase();
+  if (allowedRepositories.has(normalized)) return true;
+  const separator = normalized.indexOf("/");
+  if (separator <= 0 || normalized.indexOf("/", separator + 1) !== -1) return false;
+  const repoName = normalized.slice(separator + 1);
+  if (repoName.length === 0) return false;
+  return allowedRepositories.has(`${normalized.slice(0, separator)}/*`);
 }
 
 function remoteMatchesGitHubRepository(
