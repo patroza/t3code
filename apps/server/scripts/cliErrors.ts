@@ -74,7 +74,7 @@ export class ServerCliBuildAssetMissingError extends Schema.TaggedError<ServerCl
  * "Not Found" shell after deploy. Fail closed at build time instead of
  * warning and shipping an empty `dist/client`.
  */
-export class ServerCliWebClientBundleMissingError extends Schema.TaggedErrorClass<ServerCliWebClientBundleMissingError>()(
+export class ServerCliWebClientBundleMissingError extends Schema.TaggedError<ServerCliWebClientBundleMissingError>()(
   "ServerCliWebClientBundleMissingError",
   {
     webDistPath: Schema.String,

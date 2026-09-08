@@ -128,7 +128,7 @@ export class TailscaleStatusParseError extends Schema.TaggedError<TailscaleStatu
   }
 }
 
-export class TailscaleServeStatusParseError extends Schema.TaggedErrorClass<TailscaleServeStatusParseError>()(
+export class TailscaleServeStatusParseError extends Schema.TaggedError<TailscaleServeStatusParseError>()(
   "TailscaleServeStatusParseError",
   { cause: Schema.Defect() },
 ) {

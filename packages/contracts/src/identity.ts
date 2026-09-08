@@ -198,7 +198,7 @@ export const IdentitySessionClaimResult = Schema.Struct({
 });
 export type IdentitySessionClaimResult = typeof IdentitySessionClaimResult.Type;
 
-export class IdentityError extends Schema.TaggedErrorClass<IdentityError>()("IdentityError", {
+export class IdentityError extends Schema.TaggedError<IdentityError>()("IdentityError", {
   code: Schema.Literals([
     "identity_map_disabled",
     "identity_unknown_person",

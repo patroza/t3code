@@ -43,7 +43,7 @@ export interface PersonIdentity {
   readonly jira?: JiraIdentityRef | undefined;
 }
 
-export class IdentityMapLoadError extends Schema.TaggedErrorClass<IdentityMapLoadError>()(
+export class IdentityMapLoadError extends Schema.TaggedError<IdentityMapLoadError>()(
   "IdentityMapLoadError",
   {
     path: Schema.String,

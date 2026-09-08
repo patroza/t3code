@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
-export class MacApplicationIconResolutionError extends Schema.TaggedErrorClass<MacApplicationIconResolutionError>()(
+export class MacApplicationIconResolutionError extends Schema.TaggedError<MacApplicationIconResolutionError>()(
   "MacApplicationIconResolutionError",
   {
     applicationPath: Schema.String,

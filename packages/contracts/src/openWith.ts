@@ -83,7 +83,7 @@ export const DesktopOpenWithInput = Schema.Struct({
 });
 export type DesktopOpenWithInput = typeof DesktopOpenWithInput.Type;
 
-export class OpenWithEnvironmentError extends Schema.TaggedErrorClass<OpenWithEnvironmentError>()(
+export class OpenWithEnvironmentError extends Schema.TaggedError<OpenWithEnvironmentError>()(
   "OpenWithEnvironmentError",
   { environmentId: EnvironmentId },
 ) {
@@ -92,7 +92,7 @@ export class OpenWithEnvironmentError extends Schema.TaggedErrorClass<OpenWithEn
   }
 }
 
-export class OpenWithMissingEntryError extends Schema.TaggedErrorClass<OpenWithMissingEntryError>()(
+export class OpenWithMissingEntryError extends Schema.TaggedError<OpenWithMissingEntryError>()(
   "OpenWithMissingEntryError",
   { entryId: OpenWithEntryId },
 ) {
@@ -108,7 +108,7 @@ export const OpenWithInvalidTargetReason = Schema.Literals([
 ]);
 export type OpenWithInvalidTargetReason = typeof OpenWithInvalidTargetReason.Type;
 
-export class OpenWithInvalidTargetError extends Schema.TaggedErrorClass<OpenWithInvalidTargetError>()(
+export class OpenWithInvalidTargetError extends Schema.TaggedError<OpenWithInvalidTargetError>()(
   "OpenWithInvalidTargetError",
   { directory: Schema.String, reason: OpenWithInvalidTargetReason },
 ) {
@@ -123,7 +123,7 @@ export class OpenWithInvalidTargetError extends Schema.TaggedErrorClass<OpenWith
   }
 }
 
-export class OpenWithUnavailableApplicationError extends Schema.TaggedErrorClass<OpenWithUnavailableApplicationError>()(
+export class OpenWithUnavailableApplicationError extends Schema.TaggedError<OpenWithUnavailableApplicationError>()(
   "OpenWithUnavailableApplicationError",
   { entryId: OpenWithEntryId, executable: Schema.String },
 ) {
@@ -132,7 +132,7 @@ export class OpenWithUnavailableApplicationError extends Schema.TaggedErrorClass
   }
 }
 
-export class OpenWithSpawnError extends Schema.TaggedErrorClass<OpenWithSpawnError>()(
+export class OpenWithSpawnError extends Schema.TaggedError<OpenWithSpawnError>()(
   "OpenWithSpawnError",
   {
     entryId: OpenWithEntryId,

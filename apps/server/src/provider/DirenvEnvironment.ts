@@ -20,7 +20,7 @@ const decodeDirenvPatch = decodeJsonResult(
   Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
 );
 
-export class DirenvEnvironmentError extends Schema.TaggedErrorClass<DirenvEnvironmentError>()(
+export class DirenvEnvironmentError extends Schema.TaggedError<DirenvEnvironmentError>()(
   "DirenvEnvironmentError",
   {
     stage: Schema.Literals(["inspection", "execution", "invalid-output"]),
