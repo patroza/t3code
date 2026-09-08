@@ -116,13 +116,7 @@ function BoardCardBody({
   return (
     <>
       <div className="flex items-center gap-1.5">
-        {project ? (
-          <ProjectFavicon
-            environmentId={thread.environmentId}
-            cwd={project.workspaceRoot}
-            projectName={project.title}
-          />
-        ) : null}
+        {project ? <ProjectFavicon project={project} /> : null}
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground/70">
           {project?.title ?? ""}
         </span>

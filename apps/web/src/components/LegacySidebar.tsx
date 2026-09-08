@@ -3187,6 +3187,9 @@ interface SidebarProjectsContentProps {
     displayName: string;
     environmentId: EnvironmentId;
     workspaceRoot: string;
+    title: string;
+    faviconPath: SidebarProjectSnapshot["faviconPath"];
+    projectIcon: SidebarProjectSnapshot["projectIcon"];
   }[];
   selectedProjectFilterKey: string | null;
   onSelectedProjectFilterKeyChange: (key: string | null) => void;
@@ -3700,13 +3703,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                 "opacity-40 grayscale group-hover/recent-thread:opacity-100 group-hover/recent-thread:grayscale-0",
             )}
           >
-            <ProjectFavicon
-              environmentId={thread.environmentId}
-              cwd={project.workspaceRoot}
-              projectName={project.title}
-              className="size-4"
-              fallbackIcon={MessageSquareIcon}
-            />
+            <ProjectFavicon project={project} className="size-4" fallbackIcon={MessageSquareIcon} />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -4682,12 +4679,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                       onClick={() => createThreadInProject(project)}
                     >
                       <span className="inline-flex min-w-0 items-center gap-2">
-                        <ProjectFavicon
-                          environmentId={project.environmentId}
-                          cwd={project.workspaceRoot}
-                          projectName={project.title}
-                          className="size-3.5 shrink-0"
-                        />
+                        <ProjectFavicon project={project} className="size-3.5 shrink-0" />
                         <span className="truncate">{project.displayName}</span>
                       </span>
                     </MenuItem>
@@ -4852,12 +4844,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                               data-testid={`sidebar-project-filter-${project.projectKey}`}
                             >
                               <span className="inline-flex min-w-0 items-center gap-2">
-                                <ProjectFavicon
-                                  environmentId={project.environmentId}
-                                  cwd={project.workspaceRoot}
-                                  projectName={project.displayName}
-                                  className="size-3.5 shrink-0"
-                                />
+                                <ProjectFavicon project={project} className="size-3.5 shrink-0" />
                                 <span className="truncate">{project.displayName}</span>
                               </span>
                             </MenuRadioItem>
@@ -5745,6 +5732,9 @@ export default function LegacySidebar() {
         displayName: project.displayName,
         environmentId: project.environmentId,
         workspaceRoot: project.workspaceRoot,
+        title: project.title,
+        faviconPath: project.faviconPath,
+        projectIcon: project.projectIcon,
       })),
     [sortedProjects],
   );
