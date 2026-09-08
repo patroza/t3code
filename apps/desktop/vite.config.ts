@@ -20,6 +20,27 @@ const isolatedDesktopTestFiles = [
   "src/ipc/methods/preview.test.ts",
   "src/preview/BrowserSession.test.ts",
   "src/preview/Manager.test.ts",
+  // Window-capture tests mock electron/nativeImage/child_process. Under
+  // isolate:false those mocks leak and later files see a half-applied vi.mock.
+  "src/snapShot/ActiveWindow.test.ts",
+  "src/snapShot/CaptureShortcutConfig.test.ts",
+  "src/snapShot/DesktopSnapShot.test.ts",
+  "src/snapShot/GnomeCaptureSetup.test.ts",
+  "src/snapShot/HyprlandSnapShot.test.ts",
+  "src/snapShot/KdeSnapShot.test.ts",
+  "src/snapShot/LinuxSnapShot.dbus.test.ts",
+  "src/snapShot/LinuxSnapShot.test.ts",
+  "src/snapShot/MacModifierPairShortcutProcess.test.ts",
+  "src/snapShot/MacSnapShot.test.ts",
+  "src/snapShot/NativeCaptureFeedback.test.ts",
+  "src/snapShot/NiriSnapShot.test.ts",
+  "src/snapShot/PortalCaptureShortcut.dbus.test.ts",
+  "src/snapShot/PortalCaptureShortcut.test.ts",
+  "src/snapShot/RegionSnapShot.test.ts",
+  "src/snapShot/SnapShotAccessibilityProcess.test.ts",
+  "src/snapShot/WindowsCaptureFeedback.test.ts",
+  "src/snapShot/captureConfigEdit.test.ts",
+  "src/snapShot/snapShot.test.ts",
   "src/window/DesktopWindow.test.ts",
 ] as const;
 
