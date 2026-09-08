@@ -11,7 +11,7 @@ import type { DesktopApplicationSelection } from "@t3tools/contracts";
 
 import * as MacApplicationIcon from "./MacApplicationIcon.ts";
 
-export class ElectronDialogPickFolderError extends Schema.TaggedErrorClass<ElectronDialogPickFolderError>()(
+export class ElectronDialogPickFolderError extends Schema.TaggedError<ElectronDialogPickFolderError>()(
   "ElectronDialogPickFolderError",
   {
     ownerWindowId: Schema.NullOr(Schema.Number),
@@ -26,7 +26,7 @@ export class ElectronDialogPickFolderError extends Schema.TaggedErrorClass<Elect
   }
 }
 
-export class ElectronDialogPickApplicationError extends Schema.TaggedErrorClass<ElectronDialogPickApplicationError>()(
+export class ElectronDialogPickApplicationError extends Schema.TaggedError<ElectronDialogPickApplicationError>()(
   "ElectronDialogPickApplicationError",
   {
     ownerWindowId: Schema.NullOr(Schema.Number),
@@ -39,7 +39,7 @@ export class ElectronDialogPickApplicationError extends Schema.TaggedErrorClass<
   }
 }
 
-export class ElectronDialogPickFilesError extends Schema.TaggedErrorClass<ElectronDialogPickFilesError>()(
+export class ElectronDialogPickFilesError extends Schema.TaggedError<ElectronDialogPickFilesError>()(
   "ElectronDialogPickFilesError",
   {
     ownerWindowId: Schema.NullOr(Schema.Number),
@@ -54,7 +54,7 @@ export class ElectronDialogPickFilesError extends Schema.TaggedErrorClass<Electr
   }
 }
 
-export class ElectronDialogShowMessageBoxError extends Schema.TaggedErrorClass<ElectronDialogShowMessageBoxError>()(
+export class ElectronDialogShowMessageBoxError extends Schema.TaggedError<ElectronDialogShowMessageBoxError>()(
   "ElectronDialogShowMessageBoxError",
   {
     type: Schema.NullOr(Schema.Literals(["none", "info", "error", "question", "warning"])),
@@ -71,7 +71,7 @@ export class ElectronDialogShowMessageBoxError extends Schema.TaggedErrorClass<E
   }
 }
 
-export class ElectronDialogShowErrorBoxError extends Schema.TaggedErrorClass<ElectronDialogShowErrorBoxError>()(
+export class ElectronDialogShowErrorBoxError extends Schema.TaggedError<ElectronDialogShowErrorBoxError>()(
   "ElectronDialogShowErrorBoxError",
   {
     titleLength: Schema.Number,
@@ -131,6 +131,7 @@ export class ElectronDialog extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronDialog") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const applicationIcon = yield* MacApplicationIcon.MacApplicationIcon;
 

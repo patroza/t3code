@@ -367,7 +367,7 @@ export type PreviewPortResolution = typeof PreviewPortResolution.Type;
  * reasons are a closed set so the UI can special-case them, and `remedy` never
  * quotes raw CLI stderr (tailscale prints auth keys there).
  */
-export class PreviewPortUnreachableError extends Schema.TaggedErrorClass<PreviewPortUnreachableError>()(
+export class PreviewPortUnreachableError extends Schema.TaggedError<PreviewPortUnreachableError>()(
   "PreviewPortUnreachableError",
   {
     port: Schema.Int,
@@ -388,7 +388,7 @@ export class PreviewPortUnreachableError extends Schema.TaggedErrorClass<Preview
   }
 }
 
-export class PreviewSessionLookupError extends Schema.TaggedErrorClass<PreviewSessionLookupError>()(
+export class PreviewSessionLookupError extends Schema.TaggedError<PreviewSessionLookupError>()(
   "PreviewSessionLookupError",
   {
     threadId: Schema.String,
@@ -400,7 +400,7 @@ export class PreviewSessionLookupError extends Schema.TaggedErrorClass<PreviewSe
   }
 }
 
-export class PreviewInvalidUrlError extends Schema.TaggedErrorClass<PreviewInvalidUrlError>()(
+export class PreviewInvalidUrlError extends Schema.TaggedError<PreviewInvalidUrlError>()(
   "PreviewInvalidUrlError",
   {
     inputLength: Schema.Number,

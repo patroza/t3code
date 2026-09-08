@@ -25,6 +25,7 @@ function ScrollArea({
   className,
   children,
   scrollFade = false,
+  scrollFadePadding = true,
   scrollbarGutter = false,
   hideScrollbars = false,
   chainVerticalScroll = false,
@@ -32,6 +33,9 @@ function ScrollArea({
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
   scrollFade?: boolean;
+  /** Keep focused and highlighted items clear of the fade. Off for lists
+   * whose rows take focus on click, where the scroll would nudge the list. */
+  scrollFadePadding?: boolean;
   scrollbarGutter?: boolean;
   hideScrollbars?: boolean;
   chainVerticalScroll?: boolean;
@@ -48,7 +52,8 @@ function ScrollArea({
           chainVerticalScroll && "overscroll-y-auto",
           chainHorizontalScroll && "overscroll-x-auto data-has-overflow-x:overscroll-x-auto",
           scrollFade &&
-            "scroll-p-[var(--fade-size)] mask-t-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-start)))] mask-b-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-end)))] mask-l-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-start)))] mask-r-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-end)))] [--fade-size:1.5rem]",
+            "mask-t-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-start)))] mask-b-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-end)))] mask-l-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-start)))] mask-r-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-end)))] [--fade-size:1.5rem]",
+          scrollFade && scrollFadePadding && "scroll-p-[var(--fade-size)]",
           scrollbarGutter && "scrollbar-gutter-stable",
           hideScrollbars &&
             "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
