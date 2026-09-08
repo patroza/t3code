@@ -133,6 +133,14 @@ const isolatedUnitTestFiles = [
   // because it does not share registries; the fork does.
   "src/components/diffs/StyledDiffCodeView.test.tsx",
   "src/components/settings/AddProviderInstanceDialog.environment.test.tsx",
+  // Replaces `window` with a capture-bridge stub and fakes rAF/localStorage;
+  // under isolate:false that window leak makes later files miss animation
+  // frames or fail composer persist verification, depending on worker order.
+  "src/components/desktop/SnapShotCoordinator.test.ts",
+  // Mocks `~/lib/desktopSnapShot` and drives keyboard recording against a
+  // stub window; under isolate:false an earlier file can bind the real
+  // capture bridge so suppression never arms.
+  "src/components/settings/useSnapShotShortcutRecorder.test.tsx",
   // Mocks `../../hooks/useSettings` and `../../state/environments`; under
   // isolate:false an earlier file binds the real hooks so useEnvironments
   // sees a null presentations map and throws on `.entries()`.
