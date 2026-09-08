@@ -34,6 +34,8 @@ export default defineConfig({
     // otherwise fails the whole pre-commit. Treat "nothing to format" as a no-op.
     "*": "vp fmt --no-error-on-unmatched-pattern",
     // Lint (with autofix) only the code files oxlint understands.
+    // lint-staged.config.js also drops `.repos/**` (oxlint ignorePatterns) so a
+    // vendor-ref sync does not fail with "No files found to lint".
     "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": "vp lint --fix",
   },
   fmt: {

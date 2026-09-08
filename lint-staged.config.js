@@ -7,5 +7,16 @@ export default {
   // unformattable (e.g. only *.nix) must not fail pre-commit.
   "*": "vp fmt --no-error-on-unmatched-pattern",
   // Lint (with autofix) only the code files oxlint understands.
-  "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": "vp lint --fix",
+  // `.repos/**` is in oxlint/fmt ignorePatterns; a sync merge stages thousands of
+  // those files, and `vp lint` exits 1 when every path in the chunk is ignored.
+  "*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}": (filenames) => {
+    const lintable = filenames.filter((file) => {
+      const normalized = file.replaceAll("\\", "/");
+      return !normalized.startsWith(".repos/") && !normalized.includes("/.repos/");
+    });
+    if (lintable.length === 0) {
+      return [];
+    }
+    return [`vp lint --fix ${lintable.map((file) => JSON.stringify(file)).join(" ")}`];
+  },
 };

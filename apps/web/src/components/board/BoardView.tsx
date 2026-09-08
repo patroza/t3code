@@ -904,11 +904,7 @@ function BoardContent() {
               <SelectValue>
                 <span className="flex min-w-0 items-center gap-1.5">
                   {selectedFilterSnapshot ? (
-                    <ProjectFavicon
-                      environmentId={selectedFilterSnapshot.environmentId}
-                      cwd={selectedFilterSnapshot.workspaceRoot}
-                      projectName={selectedFilterSnapshot.displayName}
-                    />
+                    <ProjectFavicon project={selectedFilterSnapshot} />
                   ) : (
                     <ProjectFaviconFallback />
                   )}
@@ -928,11 +924,7 @@ function BoardContent() {
               {envFilteredProjectSnapshots.map((snapshot) => (
                 <SelectItem key={snapshot.projectKey} value={snapshot.projectKey}>
                   <span className="flex min-w-0 items-center gap-1.5">
-                    <ProjectFavicon
-                      environmentId={snapshot.environmentId}
-                      cwd={snapshot.workspaceRoot}
-                      projectName={snapshot.displayName}
-                    />
+                    <ProjectFavicon project={snapshot} />
                     <span className="truncate">{snapshot.displayName}</span>
                   </span>
                 </SelectItem>

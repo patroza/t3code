@@ -27,7 +27,7 @@ import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 import { isCodingAgent } from "./lib/agent-env.mjs";
-import { listChangedFilesAgainstForkDev } from "./lib/agent-fork-dev.mjs";
+import { filesForChangedShipCheck } from "./lib/agent-fork-dev.mjs";
 import { resolveOpenPrState, shipGateScopeForPush } from "./lib/agent-pr-state.mjs";
 import {
   isShipGateForce,
@@ -63,7 +63,9 @@ const run = (label, args, opts = {}) => {
   console.error(`agent ship-gate: ${label}`);
   const result = NodeChildProcess.spawnSync(args[0], args.slice(1), {
     stdio: "inherit",
-    shell: true,
+    // File lists must not go through `sh -c` concatenation: a sync merge's
+    // changed-file argv is large enough to E2BIG even after dropping `.repos/`.
+    shell: opts.shell ?? true,
     cwd: opts.cwd ?? NodeProcess.cwd(),
     env: opts.env ?? NodeProcess.env,
   });
@@ -97,13 +99,14 @@ export const runAgentShipGate = async (opts = {}) => {
   const cache = readShipGateCache(root);
 
   if (scope === "changed") {
-    const files = listChangedFilesAgainstForkDev({ cwd: root });
+    const files = filesForChangedShipCheck({ cwd: root });
     if (files.length === 0) {
       console.error("agent ship-gate: no files changed against fork/dev — skip fmt/lint");
     } else {
       run("vp check (changed)", ["vp", "check", "--no-error-on-unmatched-pattern", ...files], {
         cwd: root,
         env,
+        shell: false,
       });
     }
     run("vpr typecheck", ["vpr", "typecheck"], { cwd: root, env });

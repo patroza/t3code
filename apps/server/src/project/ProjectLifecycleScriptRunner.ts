@@ -55,7 +55,7 @@ export interface ProjectLifecycleScriptRunnerInput {
   readonly pr?: ProjectLifecyclePrAssociation | null;
 }
 
-export class ProjectLifecycleScriptOperationError extends Schema.TaggedErrorClass<ProjectLifecycleScriptOperationError>()(
+export class ProjectLifecycleScriptOperationError extends Schema.TaggedError<ProjectLifecycleScriptOperationError>()(
   "ProjectLifecycleScriptOperationError",
   {
     lifecycle: Schema.Literals(["worktree-remove", "pr-merged"]),
@@ -71,7 +71,7 @@ export class ProjectLifecycleScriptOperationError extends Schema.TaggedErrorClas
   }
 }
 
-export class ProjectLifecycleScriptFailedError extends Schema.TaggedErrorClass<ProjectLifecycleScriptFailedError>()(
+export class ProjectLifecycleScriptFailedError extends Schema.TaggedError<ProjectLifecycleScriptFailedError>()(
   "ProjectLifecycleScriptFailedError",
   {
     lifecycle: Schema.Literals(["worktree-remove", "pr-merged"]),

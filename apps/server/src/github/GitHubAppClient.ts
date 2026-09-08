@@ -65,7 +65,7 @@ export interface GitHubComment {
   readonly url: string;
 }
 
-export class GitHubAppClientError extends Schema.TaggedErrorClass<GitHubAppClientError>()(
+export class GitHubAppClientError extends Schema.TaggedError<GitHubAppClientError>()(
   "GitHubAppClientError",
   {
     operation: Schema.String,

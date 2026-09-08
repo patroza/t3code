@@ -20,7 +20,7 @@ export interface ProjectAlias {
   readonly discordChannelId?: string;
 }
 
-export class ProjectAliasesLoadError extends Schema.TaggedErrorClass<ProjectAliasesLoadError>()(
+export class ProjectAliasesLoadError extends Schema.TaggedError<ProjectAliasesLoadError>()(
   "ProjectAliasesLoadError",
   {
     path: Schema.String,

@@ -223,12 +223,12 @@ export function shouldShowThreadBootstrapReaction(input: {
   );
 }
 
-class DiscordImageDownloadError extends Schema.TaggedErrorClass<DiscordImageDownloadError>()(
+class DiscordImageDownloadError extends Schema.TaggedError<DiscordImageDownloadError>()(
   "DiscordImageDownloadError",
   { cause: Schema.Defect() },
 ) {}
 
-class DiscordAttachmentStageError extends Schema.TaggedErrorClass<DiscordAttachmentStageError>()(
+class DiscordAttachmentStageError extends Schema.TaggedError<DiscordAttachmentStageError>()(
   "DiscordAttachmentStageError",
   { cause: Schema.Defect() },
 ) {}

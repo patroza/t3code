@@ -14,7 +14,7 @@
   "main": "./dist/extension.cjs",
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=dist/extension.cjs && esbuild src/webview.ts --bundle --platform=browser --format=iife --target=es2022 --outfile=dist/webview.js",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run"
   },
   "dependencies": {

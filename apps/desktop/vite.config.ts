@@ -16,10 +16,32 @@ const isolatedDesktopTestFiles = [
   "src/electron/ElectronTheme.test.ts",
   "src/electron/ElectronUpdater.test.ts",
   "src/electron/ElectronWindow.test.ts",
+  "src/electron/WindowsForegroundFocusThread.test.ts",
   "src/electron/MacApplicationIcon.test.ts",
   "src/ipc/methods/preview.test.ts",
   "src/preview/BrowserSession.test.ts",
   "src/preview/Manager.test.ts",
+  // Window-capture tests mock electron/nativeImage/child_process. Under
+  // isolate:false those mocks leak and later files see a half-applied vi.mock.
+  "src/snapShot/ActiveWindow.test.ts",
+  "src/snapShot/CaptureShortcutConfig.test.ts",
+  "src/snapShot/DesktopSnapShot.test.ts",
+  "src/snapShot/GnomeCaptureSetup.test.ts",
+  "src/snapShot/HyprlandSnapShot.test.ts",
+  "src/snapShot/KdeSnapShot.test.ts",
+  "src/snapShot/LinuxSnapShot.dbus.test.ts",
+  "src/snapShot/LinuxSnapShot.test.ts",
+  "src/snapShot/MacModifierPairShortcutProcess.test.ts",
+  "src/snapShot/MacSnapShot.test.ts",
+  "src/snapShot/NativeCaptureFeedback.test.ts",
+  "src/snapShot/NiriSnapShot.test.ts",
+  "src/snapShot/PortalCaptureShortcut.dbus.test.ts",
+  "src/snapShot/PortalCaptureShortcut.test.ts",
+  "src/snapShot/RegionSnapShot.test.ts",
+  "src/snapShot/SnapShotAccessibilityProcess.test.ts",
+  "src/snapShot/WindowsCaptureFeedback.test.ts",
+  "src/snapShot/captureConfigEdit.test.ts",
+  "src/snapShot/snapShot.test.ts",
   "src/window/DesktopWindow.test.ts",
 ] as const;
 
@@ -95,10 +117,17 @@ export default defineConfig({
     {
       format: "cjs",
       outDir: "dist-electron",
+      dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
-      entry: ["src/main.ts"],
+      entry: [
+        "src/main.ts",
+        "src/electron/WindowsForegroundFocusWorker.ts",
+        "src/snapShot/GlobalShiftShortcutWorker.ts",
+        "src/snapShot/RegionSnapShotWorker.ts",
+        "src/snapShot/SnapShotAccessibilityWorker.ts",
+      ],
       clean: true,
       deps: {
         alwaysBundle: (id) => id.startsWith("@t3tools/"),
@@ -108,6 +137,7 @@ export default defineConfig({
     {
       format: "cjs",
       outDir: "dist-electron",
+      dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
@@ -122,6 +152,7 @@ export default defineConfig({
     {
       format: "cjs",
       outDir: "dist-electron",
+      dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pick-preload.ts"],
@@ -132,6 +163,7 @@ export default defineConfig({
     {
       format: "cjs",
       outDir: "dist-electron",
+      dts: false,
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/preview-pip-preload.ts"],
