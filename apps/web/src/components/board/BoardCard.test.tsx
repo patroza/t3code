@@ -34,6 +34,7 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     latestUserMessageAt: "2026-07-22T09:30:00.000Z",
     branch: "feature/board",
     worktreePath: null,
+    pullRequests: [],
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,

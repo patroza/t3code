@@ -808,6 +808,7 @@ export const make = Effect.gen(function* () {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: input.branch,
         worktreePath: input.worktreePath,
+        pullRequests: [],
         latestTurn: null,
         createdAt,
         updatedAt: createdAt,

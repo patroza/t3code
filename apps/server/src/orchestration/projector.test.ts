@@ -99,6 +99,7 @@ describe("orchestration projector", () => {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         branchPullRequest: null,
         latestTurn: null,
         createdAt: now,
@@ -132,7 +133,34 @@ describe("orchestration projector", () => {
         commandId: null,
       };
       let model = yield* projectEvent(
-        createEmptyReadModel(now),
+        {
+          ...createEmptyReadModel(now),
+          projects: HashMap.fromIterable([
+            [
+              ProjectId.make("project-1"),
+              {
+                id: ProjectId.make("project-1"),
+                title: "T3 Code",
+                workspaceRoot: "/repo",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: now,
+                updatedAt: now,
+                deletedAt: null,
+                repositoryIdentity: {
+                  canonicalKey: "github.com/pingdotgg/t3code",
+                  provider: "github",
+                  displayName: "pingdotgg/t3code",
+                  locator: {
+                    source: "git-remote",
+                    remoteName: "origin",
+                    remoteUrl: "https://github.com/pingdotgg/t3code.git",
+                  },
+                },
+              },
+            ],
+          ]),
+        },
         makeEvent({
           ...eventFields,
           sequence: 1,

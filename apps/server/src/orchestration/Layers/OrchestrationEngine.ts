@@ -43,6 +43,7 @@ import {
 } from "../Errors.ts";
 import {
   createEmptyCommandReadModel,
+  findThreadById,
   fromWireReadModel,
   type CommandReadModel,
 } from "../commandReadModel.ts";
@@ -216,6 +217,31 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             commandType: envelope.command.type,
             detail: `thread ${envelope.command.threadId} has live background work`,
           });
+        }
+
+        // New and moved projects do not carry a resolved identity in the event-derived
+        // command model. Legacy PR edits need it to identify the link they replace.
+        if (
+          envelope.command.type === "thread.meta.update" &&
+          envelope.command.linkedPullRequest !== undefined
+        ) {
+          const threadId = envelope.command.threadId;
+          const thread = findThreadById(commandReadModel, threadId);
+          if (thread !== undefined) {
+            const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
+            if (Option.isSome(project)) {
+              const existing = HashMap.get(commandReadModel.projects, thread.projectId);
+              if (Option.isSome(existing)) {
+                commandReadModel = {
+                  ...commandReadModel,
+                  projects: HashMap.set(commandReadModel.projects, thread.projectId, {
+                    ...existing.value,
+                    repositoryIdentity: project.value.repositoryIdentity,
+                  }),
+                };
+              }
+            }
+          }
         }
 
         // Command snapshots omit activities at startup and cap them while running.
