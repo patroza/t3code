@@ -268,7 +268,12 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           const encoded = yield* Schema.encodeEffect(OrchestrationEvent)(event);
           const decoded = yield* Schema.decodeUnknownEffect(OrchestrationEvent)(encoded);
           // Older detail-event unions must never receive the new PR discriminants.
-          expect(isThreadDetailEvent(decoded)).toBe(false);
+          // Fork still delivers `thread.meta-updated` as a live detail event so
+          // Discord/title subscribers see renames; only the PR discriminants
+          // must stay off that union.
+          if (decoded.type.startsWith("thread.pull-request-")) {
+            expect(isThreadDetailEvent(decoded)).toBe(false);
+          }
           model = yield* projectEvent(model, decoded);
         }
         const thread = threadOf(model);
