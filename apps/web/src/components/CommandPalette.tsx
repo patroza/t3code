@@ -12,6 +12,7 @@ import {
   normalizePastedCloneUrl,
 } from "@t3tools/client-runtime/operations/projects";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
+import { createBrowseNavigationCoordinator } from "@t3tools/client-runtime/state/filesystem";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
@@ -702,6 +703,13 @@ function OpenCommandPaletteDialog(props: {
     [threadSearch.matches],
   );
   const [browseGeneration, setBrowseGeneration] = useState(0);
+  const browseNavigationRef = useRef<ReturnType<typeof createBrowseNavigationCoordinator> | null>(
+    null,
+  );
+  if (browseNavigationRef.current === null) {
+    browseNavigationRef.current = createBrowseNavigationCoordinator();
+  }
+  const browseNavigation = browseNavigationRef.current;
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
