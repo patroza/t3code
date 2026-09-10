@@ -37,6 +37,7 @@ function makeThread(
     runtimeMode: "full-access",
     branch: null,
     worktreePath: null,
+    pullRequests: [],
     createdAt: now,
     updatedAt: now,
     archivedAt: null,

@@ -30,7 +30,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type * as PlatformError from "effect/PlatformError";
 
-import { findThreadById, type CommandReadModel } from "./commandReadModel.ts";
+import { findProjectById, findThreadById, type CommandReadModel } from "./commandReadModel.ts";
 import {
   OrchestrationCommandInvariantError,
   OrchestrationThreadSettleBlockedError,
@@ -1090,7 +1090,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const legacy = legacyLinkedPullRequestOf(
         thread.pullRequests,
         thread.projectId,
-        readModel.projects.find((project) => project.id === thread.projectId)?.repositoryIdentity,
+        findProjectById(readModel, thread.projectId)?.repositoryIdentity,
       );
       const currentPullRequest =
         legacy === null
@@ -1100,7 +1100,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ) ?? null);
       if (command.linkedPullRequest != null) {
         const { linkedPullRequest: linked, ...metadata } = command;
-        const project = readModel.projects.find((project) => project.id === thread.projectId);
+        const project = findProjectById(readModel, thread.projectId);
         let host = project?.repositoryIdentity?.canonicalKey.split("/")[0] ?? "unknown";
         try {
           host = new URL(linked.url).hostname;

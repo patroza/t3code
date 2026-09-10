@@ -163,14 +163,15 @@ function updateProject(
 function pullRequestsPatch(
   thread: Pick<OrchestrationThread, "projectId">,
   pullRequests: ReadonlyArray<ThreadPullRequestLink>,
-  projects: OrchestrationReadModel["projects"],
+  projects: CommandReadModel["projects"],
 ): Pick<OrchestrationThread, "pullRequests" | "linkedPullRequest"> {
+  const project = Option.getOrUndefined(HashMap.get(projects, thread.projectId));
   return {
     pullRequests,
     linkedPullRequest: legacyLinkedPullRequestOf(
       pullRequests,
       thread.projectId,
-      projects.find((project) => project.id === thread.projectId)?.repositoryIdentity,
+      project?.repositoryIdentity,
     ),
   };
 }
@@ -611,7 +612,7 @@ export function projectEvent(
     case "thread.meta-updated":
       return decodeForEvent(ThreadMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           // Legacy single-link events replay into the link array so the
           // derived linkedPullRequest and pullRequests never disagree.
           const legacyLinkPatch =
@@ -620,7 +621,7 @@ export function projectEvent(
                   thread,
                   legacyLinkToPullRequests(
                     thread,
-                    nextBase.projects.find((project) => project.id === thread.projectId),
+                    Option.getOrUndefined(HashMap.get(nextBase.projects, thread.projectId)),
                     payload.linkedPullRequest,
                     payload.updatedAt,
                   ),
@@ -660,7 +661,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -686,7 +687,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
             return nextBase;
           }
@@ -712,7 +713,7 @@ export function projectEvent(
         "payload",
       ).pipe(
         Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          const thread = findThreadById(nextBase, payload.threadId);
           // A sync for a link the user removed in the meantime is stale; drop it.
           if (
             !thread ||

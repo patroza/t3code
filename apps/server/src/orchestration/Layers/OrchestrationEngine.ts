@@ -43,6 +43,7 @@ import {
 } from "../Errors.ts";
 import {
   createEmptyCommandReadModel,
+  findThreadById,
   fromWireReadModel,
   type CommandReadModel,
 } from "../commandReadModel.ts";
@@ -225,18 +226,20 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           envelope.command.linkedPullRequest !== undefined
         ) {
           const threadId = envelope.command.threadId;
-          const thread = commandReadModel.threads.find((thread) => thread.id === threadId);
+          const thread = findThreadById(commandReadModel, threadId);
           if (thread !== undefined) {
             const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
             if (Option.isSome(project)) {
-              commandReadModel = {
-                ...commandReadModel,
-                projects: commandReadModel.projects.map((entry) =>
-                  entry.id === thread.projectId
-                    ? { ...entry, repositoryIdentity: project.value.repositoryIdentity }
-                    : entry,
-                ),
-              };
+              const existing = HashMap.get(commandReadModel.projects, thread.projectId);
+              if (Option.isSome(existing)) {
+                commandReadModel = {
+                  ...commandReadModel,
+                  projects: HashMap.set(commandReadModel.projects, thread.projectId, {
+                    ...existing.value,
+                    repositoryIdentity: project.value.repositoryIdentity,
+                  }),
+                };
+              }
             }
           }
         }
