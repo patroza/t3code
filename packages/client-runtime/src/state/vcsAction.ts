@@ -7,6 +7,7 @@ import {
   type GitRunStackedActionInput,
   type GitRunStackedActionResult,
   GitStackedAction,
+  type ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -78,6 +79,8 @@ export interface RunVcsStackedActionInput {
   readonly featureBranch?: boolean;
   readonly disableCommitSigning?: boolean;
   readonly filePaths?: ReadonlyArray<string>;
+  /** The thread the action runs beside; the server links a pull request it creates to it. */
+  readonly threadId?: ThreadId;
   readonly onProgress?: (event: GitActionProgressEvent) => void;
 }
 
@@ -484,6 +487,7 @@ export function createVcsActionManager<R, E>(
           ...(input.featureBranch ? { featureBranch: true } : {}),
           ...(input.disableCommitSigning ? { disableCommitSigning: true } : {}),
           ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
+          ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
         };
         return consumeVcsActionProgress(
           runStreamInEnvironment(

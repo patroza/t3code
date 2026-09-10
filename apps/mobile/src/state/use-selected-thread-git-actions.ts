@@ -344,6 +344,8 @@ export function useSelectedThreadGitActions() {
               ...(actionInput.featureBranch ? { featureBranch: actionInput.featureBranch } : {}),
               ...(actionInput.disableCommitSigning ? { disableCommitSigning: true } : {}),
               ...(actionInput.filePaths?.length ? { filePaths: [...actionInput.filePaths] } : {}),
+              // A pull request the action opens is linked to the thread it ran beside.
+              threadId: thread.id,
             });
             if (AsyncResult.isFailure(result)) {
               return result;

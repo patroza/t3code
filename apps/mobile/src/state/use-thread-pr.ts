@@ -10,8 +10,13 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "./atom-registry";
+import { serverEnvironment } from "./server";
 import { useEnvironmentQuery } from "./query";
-import { presentThreadPr, type ThreadPrPresentation } from "./thread-pr-presentation";
+import {
+  resolveThreadPrSource,
+  presentThreadPr,
+  type ThreadPrPresentation,
+} from "./thread-pr-presentation";
 import { vcsEnvironment } from "./vcs";
 
 const pullRequestSummaryAtom = createLinkedPullRequestSummaryAtomFamily(connectionAtomRuntime);
@@ -36,17 +41,32 @@ export {
 } from "./thread-pr-presentation";
 
 /**
- * Live status for a thread's server-provided PR. Visible rows share a summary
- * request for the same PR in the same environment. When the server has not
- * linked a PR, list rows may still pass a project cwd so unlinked branches
- * can fall back to a budgeted git status query.
+ * Linked PRs use server snapshots. Visible rows share a summary request for
+ * the same PR in the same environment. When the server has not linked a PR,
+ * list rows may still pass a project cwd so unlinked branches can fall back
+ * to a budgeted git status query.
  */
 export function useThreadPr(
   thread: EnvironmentThreadShell,
   projectCwd?: string | null,
 ): ThreadPrPresentation | null {
   const cwd = thread.worktreePath ?? projectCwd ?? null;
-  const pullRequestRef = thread.linkedPullRequest ?? thread.branchPullRequest ?? null;
+  const supportsLinks = useAtomValue(
+    serverEnvironment.configValueAtom(thread.environmentId),
+    (config) => config?.environment.capabilities.threadPullRequests === true,
+  );
+  const { linkedPresentation, pullRequestRef } = useMemo(
+    () =>
+      resolveThreadPrSource(
+        {
+          pullRequests: thread.pullRequests,
+          linkedPullRequest: thread.linkedPullRequest,
+          branchPullRequest: thread.branchPullRequest,
+        },
+        { threadPullRequests: supportsLinks },
+      ),
+    [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
+  );
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const snapshotIdentity = JSON.stringify(pullRequestRef ?? { branch: thread.branch, cwd });
   // Select this row's entry so writes for other rows do not re-render it.
@@ -123,5 +143,5 @@ export function useThreadPr(
     });
   }, [live, snapshotIdentity, threadKey]);
 
-  return live === undefined ? snapshot : live;
+  return linkedPresentation ?? (live === undefined ? snapshot : live);
 }
