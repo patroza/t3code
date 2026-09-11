@@ -151,7 +151,8 @@ orchestration projection and command engine as the web application.
   sufficient.
 
 Private repositories should set `T3CODE_GITHUB_ALLOWED_REPOSITORIES`; an empty value allows every
-repository on which the app is installed.
+repository on which the app is installed. Entries are `owner/repo` or `owner/*` (every repository
+under that owner).
 
 ## Reliability
 
@@ -189,7 +190,7 @@ missing worktree, failed branch resolution, repository mismatch, PR mismatch, or
 | `T3CODE_GITHUB_APP_PRIVATE_KEY_PATH` | yes      | —                   | Path to the downloaded PEM key                    |
 | `T3CODE_GITHUB_WEBHOOK_SECRET`       | yes      | —                   | Shared webhook HMAC secret                        |
 | `T3CODE_GITHUB_APP_MENTION`          | yes      | —                   | Mention handle without `@`                        |
-| `T3CODE_GITHUB_ALLOWED_REPOSITORIES` | no       | all installed repos | Comma-separated `owner/repo` allowlist            |
+| `T3CODE_GITHUB_ALLOWED_REPOSITORIES` | no       | all installed repos | Comma-separated `owner/repo` or `owner/*`         |
 | `T3CODE_GITHUB_MIN_PERMISSION`       | no       | `write`             | `read`, `triage`, `write`, `maintain`, or `admin` |
 | `T3CODE_GITHUB_TURN_TIMEOUT_MS`      | no       | `1800000`           | Response bridge timeout, minimum 10 seconds       |
 
