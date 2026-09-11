@@ -472,8 +472,10 @@ function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
   const ordered = Arr.sort(activities, activityOrder);
-  const resolvedUserInputs = new Map(
-    deriveResolvedUserInputTranscripts(activities).map((entry) => [entry.activityId, entry]),
+  const resolvedTranscripts = deriveResolvedUserInputTranscripts(activities);
+  const resolvedUserInputs = new Map(resolvedTranscripts.map((entry) => [entry.activityId, entry]));
+  const resolvedUserInputsByRequestId = new Map(
+    resolvedTranscripts.map((entry) => [entry.requestId, entry]),
   );
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of foldUserInputActivities(ordered)) {
@@ -492,7 +494,13 @@ function deriveWorkLogEntries(
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
     const entry = toDerivedWorkLogEntry(activity);
-    const resolvedUserInput = resolvedUserInputs.get(activity.id);
+    const requestId =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as { requestId?: unknown }).requestId
+        : undefined;
+    const resolvedUserInput =
+      resolvedUserInputs.get(activity.id) ??
+      (typeof requestId === "string" ? resolvedUserInputsByRequestId.get(requestId) : undefined);
     if (resolvedUserInput) {
       entry.detail = resolvedUserInput.preview;
       entry.userInputTranscript = resolvedUserInput.detail;

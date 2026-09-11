@@ -118,7 +118,7 @@ describe("mobile surface existence (anti stack-drop)", () => {
       "utf8",
     );
     const tableBlock = NodeFS.readFileSync(
-      NodePath.join(root, "../modules/t3-markdown-text/src/NativeMarkdownBlock.ios.tsx"),
+      NodePath.join(root, "../modules/t3-markdown-text/src/NativeMarkdownBlock.tsx"),
       "utf8",
     );
     // Grid keys for tables (never type:beg:end → table_cell:0:0).
