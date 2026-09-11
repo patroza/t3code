@@ -9302,7 +9302,7 @@ export default function ChatView(props: ChatViewProps) {
                     }
                   : {})}
                 isWorking={!paintOnlyDisplayedTimeline && isWorking}
-                workingStepLabel={paintOnlyDisplayedTimeline ? undefined : workingStepLabel}
+                workingStepLabel={paintOnlyDisplayedTimeline ? null : workingStepLabel}
                 isPreparingWorktree={!paintOnlyDisplayedTimeline && isPreparingWorktreeUi}
                 isCompacting={!paintOnlyDisplayedTimeline && isCompacting}
                 activeTurnStartedAt={paintOnlyDisplayedTimeline ? null : activeWorkStartedAt}
