@@ -304,6 +304,19 @@ function parseUserInputQuestions(
   return parsed.length > 0 ? parsed : null;
 }
 
+function questionsFromFoldedAnswerPayload(
+  payload: Record<string, unknown> | null,
+): ReadonlyArray<UserInputQuestion> | null {
+  const texts = asRecord(payload?.questionTextById);
+  if (!texts) return null;
+  const parsed = Object.entries(texts).flatMap<UserInputQuestion>(([id, question]) =>
+    typeof question === "string" && question.length > 0
+      ? [{ id, header: question, question, options: [] }]
+      : [],
+  );
+  return parsed.length > 0 ? parsed : null;
+}
+
 function parseUserInputAnswerValues(value: unknown): ReadonlyArray<string> {
   const values = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
   return values.flatMap((entry) => {
@@ -715,6 +728,42 @@ export function deriveWorkLogEntries(
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
     if (isUserInputToolActivity(activity)) continue;
+
+    if (activity.kind === "user-input.answer-submitted") {
+      const payload = asRecord(activity.payload);
+      const requestId = asTrimmedString(payload?.requestId);
+      const answers = asRecord(payload?.answers);
+      const originalRequested = ordered.find((candidate) => {
+        if (candidate.kind !== "user-input.requested") return false;
+        return asTrimmedString(asRecord(candidate.payload)?.requestId) === requestId;
+      });
+      const questions =
+        parseUserInputQuestions(asRecord(originalRequested?.payload)) ??
+        parseUserInputQuestions(payload) ??
+        questionsFromFoldedAnswerPayload(payload);
+      if (requestId && questions) {
+        const derived = toWorkLogUserInputEntry(activity, {
+          requestId,
+          answered: Boolean(answers && Object.keys(answers).length > 0),
+          questions: questions.map((question) => toWorkLogUserInputQuestion(question, answers)),
+        });
+        entries.push(derived);
+        continue;
+      }
+      if (requestId && answers) {
+        const orphaned = toOrphanedWorkLogUserInputQuestions(answers);
+        if (orphaned.length > 0) {
+          entries.push(
+            toWorkLogUserInputEntry(activity, {
+              requestId,
+              answered: true,
+              questions: orphaned,
+            }),
+          );
+          continue;
+        }
+      }
+    }
 
     if (activity.kind === "user-input.requested") {
       const payload = asRecord(activity.payload);
