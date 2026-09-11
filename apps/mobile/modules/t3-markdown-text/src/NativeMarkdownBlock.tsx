@@ -6,7 +6,7 @@ import { CopyTextButton } from "./CopyTextButton";
 import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
 import { nativeMarkdownDocumentRuns, nativeMarkdownListItemBlocks } from "./nativeMarkdownText";
 import { markdownNodeKey, markdownTableCellKey, markdownTableRowKey } from "./markdownNodeKey";
-import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText.ios";
+import { NativeMarkdownSelectableText } from "./NativeMarkdownSelectableText";
 import type {
   MarkdownCodeHighlighter,
   MarkdownHighlightedToken,

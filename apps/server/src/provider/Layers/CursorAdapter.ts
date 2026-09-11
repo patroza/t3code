@@ -658,7 +658,10 @@ export function makeAcpCliAdapter<Settings extends AcpCliAdapterSettings>(
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const acp = yield* definition
             .makeRuntime(effectiveSettings, {
-              environment,
+              environment: McpProviderSession.withAgentDeviceEnvironment(
+                environment ?? options?.environment ?? process.env,
+                mcpSession,
+              ),
               childProcessSpawner,
               cwd,
               runtimeMode: input.runtimeMode,
