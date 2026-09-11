@@ -329,12 +329,12 @@ describe("buildThreadFeed", () => {
       ],
     });
 
-    const resolved = buildThreadFeed(thread)
+    const requested = buildThreadFeed(thread)
       .filter((entry) => entry.type === "activity-group")
       .flatMap((entry) => entry.activities)
-      .find((entry) => entry.id === "input-resolved");
-    expect(resolved?.detail).toBe("Make it sleep");
-    expect(resolved?.getFullDetail()).toContain("What is the goal?\nMake it sleep");
+      .find((entry) => entry.id === "input-requested");
+    expect(requested?.detail).toBe("Make it sleep");
+    expect(requested?.getFullDetail()).toContain("What is the goal?\nMake it sleep");
   });
 
   it("reuses unchanged feed and presentation rows during an assistant text update", () => {

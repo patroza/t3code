@@ -100,6 +100,20 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   return "completed" as const;
 }
 
+function isPendingCompactTurnStart(thread: OrchestrationThread): boolean {
+  const pending = thread.pendingTurnStart;
+  if (pending === null) {
+    return false;
+  }
+  const message = thread.messages.find((entry) => entry.id === pending.messageId);
+  return (
+    message !== undefined &&
+    message.role === "user" &&
+    (message.attachments?.length ?? 0) === 0 &&
+    message.text.trim().toLowerCase() === "/compact"
+  );
+}
+
 /**
  * Turn state to settle a still-running latest turn with when its session
  * leaves the "running" status, or null while the session is (re)starting or
@@ -957,6 +971,13 @@ export function projectEvent(
         Effect.map((payload) => {
           const thread = findThreadById(nextBase, payload.threadId);
           if (!thread) {
+            return nextBase;
+          }
+          // Match ProjectionPipeline: a pending `/compact` occupies the
+          // pending-start slot until restore. Follow-ups stay as
+          // turn-start-requested so the reactor can hold them in memory
+          // instead of replacing this placeholder (or queue-by-default).
+          if (isPendingCompactTurnStart(thread)) {
             return nextBase;
           }
           return {

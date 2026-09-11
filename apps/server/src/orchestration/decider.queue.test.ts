@@ -528,4 +528,79 @@ it.layer(NodeServices.layer)("decider queue flows", (it) => {
       expect(error.message).toContain("no queued messages");
     }),
   );
+
+  it.effect("keeps follow-ups as turn starts while a /compact pending start is held", () =>
+    Effect.gen(function* () {
+      let readModel = yield* seedReadModel;
+      readModel = yield* applyPlanned(
+        readModel,
+        yield* decideOrchestrationCommand({
+          command: {
+            ...turnStartCommand("compact"),
+            message: {
+              messageId: asMessageId("message-compact"),
+              role: "user",
+              text: "/compact",
+              attachments: [],
+            },
+          },
+          readModel,
+        }),
+      );
+      readModel = yield* withSessionStatus(readModel, "starting", readModel.snapshotSequence + 1);
+      expect(findThreadById(readModel, THREAD_ID)?.pendingTurnStart?.messageId).toEqual(
+        asMessageId("message-compact"),
+      );
+
+      const firstFollowUp = yield* decideOrchestrationCommand({
+        command: turnStartCommand("during-compact-1"),
+        readModel,
+      });
+      expect(
+        (Array.isArray(firstFollowUp) ? firstFollowUp : [firstFollowUp]).map((event) => event.type),
+      ).toEqual(["thread.message-sent", "thread.turn-start-requested"]);
+
+      readModel = yield* applyPlanned(readModel, firstFollowUp);
+      expect(findThreadById(readModel, THREAD_ID)?.pendingTurnStart?.messageId).toEqual(
+        asMessageId("message-compact"),
+      );
+
+      const secondFollowUp = yield* decideOrchestrationCommand({
+        command: turnStartCommand("during-compact-2"),
+        readModel,
+      });
+      expect(
+        (Array.isArray(secondFollowUp) ? secondFollowUp : [secondFollowUp]).map(
+          (event) => event.type,
+        ),
+      ).toEqual(["thread.message-sent", "thread.turn-start-requested"]);
+    }),
+  );
+
+  it.effect("replays an already-sent message instead of queueing it behind a pending start", () =>
+    Effect.gen(function* () {
+      let readModel = yield* seedReadModel;
+      readModel = yield* applyPlanned(
+        readModel,
+        yield* decideOrchestrationCommand({ command: turnStartCommand("replay-1"), readModel }),
+      );
+      readModel = yield* withSessionStatus(readModel, "starting", readModel.snapshotSequence + 1);
+      readModel = yield* applyPlanned(
+        readModel,
+        yield* decideOrchestrationCommand({ command: turnStartCommand("replay-2"), readModel }),
+      );
+      expect(
+        findThreadById(readModel, THREAD_ID)?.queuedMessages.map((entry) => entry.messageId),
+      ).toEqual([asMessageId("message-replay-2")]);
+
+      const replay = yield* decideOrchestrationCommand({
+        command: turnStartCommand("replay-1"),
+        readModel,
+      });
+      expect((Array.isArray(replay) ? replay : [replay]).map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+    }),
+  );
 });

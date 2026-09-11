@@ -62,7 +62,7 @@ const MONO_FONT = Platform.select({
 });
 
 function pullRequestTintColor(
-  pr: Pick<ThreadPrPresentation, "state" | "isDraft">,
+  pr: Pick<ThreadPrPresentation, "state" | "isDraft" | "others" | "kind">,
   colorScheme: "light" | "dark",
 ) {
   const dark = colorScheme === "dark";
@@ -74,8 +74,12 @@ function pullRequestTintColor(
       return dark ? "#34d399" : "#059669";
     case "merged":
       return dark ? "#a78bfa" : "#7c3aed";
-    case null:
     case "closed":
+      if (pr.kind === "stack" || pr.others > 0) {
+        return dark ? "#fb7185" : "#e11d48";
+      }
+      return dark ? "#a1a1aa" : "#71717a";
+    case null:
       return dark ? "#a1a1aa" : "#71717a";
   }
 }
