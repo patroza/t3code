@@ -184,6 +184,20 @@ function isThreadTurnActive(thread: OrchestrationThread): boolean {
   return status === "running" || status === "starting";
 }
 
+function isPendingCompactTurnStart(thread: OrchestrationThread): boolean {
+  const pending = thread.pendingTurnStart;
+  if (pending === null) {
+    return false;
+  }
+  const message = thread.messages.find((entry) => entry.id === pending.messageId);
+  return (
+    message !== undefined &&
+    message.role === "user" &&
+    (message.attachments?.length ?? 0) === 0 &&
+    message.text.trim().toLowerCase() === "/compact"
+  );
+}
+
 /**
  * Enforced here in the decider so a `thread.message-queued` event past the
  * cap is never emitted — projections and persistence stay in lockstep with
@@ -1510,8 +1524,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // dispatched (by a send or a queue drain) but the provider has not
       // reported the session status yet — a send in that gap must queue,
       // not open a second concurrent turn ahead of already-queued chips.
+      //
+      // Compaction is the other exemption: `/compact` occupies the pending
+      // slot (and the session stays `starting`) so the reactor can restore
+      // it, but follow-ups must still emit `thread.turn-start-requested`
+      // for the in-memory compaction queue. Replaying an already-sent
+      // message id is the restore path (`server:after-compaction:`) — the
+      // previous replay's pending start is still live, so queueing would
+      // swallow the rest of the held turns.
+      const isCompactionQueueHold = isPendingCompactTurnStart(targetThread);
+      const isAfterCompactionReplay = targetThread.messages.some(
+        (entry) => entry.id === command.message.messageId && entry.role === "user",
+      );
       if (
         command.bootstrap === undefined &&
+        !isCompactionQueueHold &&
+        !isAfterCompactionReplay &&
         (isThreadTurnActive(targetThread) || targetThread.pendingTurnStart !== null)
       ) {
         if (targetThread.queuedMessages.length >= MAX_THREAD_QUEUED_MESSAGES) {
