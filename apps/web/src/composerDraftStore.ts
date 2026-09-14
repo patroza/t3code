@@ -923,7 +923,6 @@ export function hasComposerDraftMessage(
         readonly images: readonly unknown[];
         readonly persistedAttachments: readonly unknown[];
         readonly terminalContexts: readonly unknown[];
-        readonly elementContexts: readonly unknown[];
         readonly previewAnnotations: readonly unknown[];
         readonly reviewComments: readonly unknown[];
       }
@@ -936,7 +935,6 @@ export function hasComposerDraftMessage(
     draft.images.length > 0 ||
     draft.persistedAttachments.length > 0 ||
     draft.terminalContexts.length > 0 ||
-    draft.elementContexts.length > 0 ||
     draft.previewAnnotations.length > 0 ||
     draft.reviewComments.length > 0
   );

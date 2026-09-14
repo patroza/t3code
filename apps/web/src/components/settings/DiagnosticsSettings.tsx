@@ -971,13 +971,13 @@ export function DiagnosticsSettingsPanel() {
     <SettingsPageContainer width="expanded" className="gap-10">
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
 
-      {primaryEnvironment ? (
+      {environment ? (
         <SettingsSection title="Host Resources">
           <div className="space-y-2 px-4 py-3 sm:px-5">
             <HostResourceStatus
-              environmentId={primaryEnvironment.environmentId}
-              environmentLabel={primaryEnvironment.label}
-              connected={primaryEnvironment.connection.phase === "connected"}
+              environmentId={environment.environmentId}
+              environmentLabel={environment.label}
+              connected={environment.connection.phase === "connected"}
               showRefresh
               unavailableLabel
             />

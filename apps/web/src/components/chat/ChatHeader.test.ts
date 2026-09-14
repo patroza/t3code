@@ -123,6 +123,7 @@ describe("resolveRemoteVscodeOpenTarget", () => {
         label: "remote-vm",
         connectionId: "bearer:remote-vm",
       }),
+      enabled: true,
       profile: Option.some(
         new BearerConnectionProfile({
           connectionId: "bearer:remote-vm",
@@ -152,6 +153,7 @@ describe("resolveRemoteVscodeOpenTarget", () => {
         label: "remote-host",
         connectionId: "ssh:remote-host",
       }),
+      enabled: true,
       profile: Option.some(
         new SshConnectionProfile({
           connectionId: "ssh:remote-host",
@@ -193,6 +195,7 @@ describe("resolveRemoteVscodeOpenTarget", () => {
             label: "remote-vm",
             connectionId: "bearer:remote-vm",
           }),
+          enabled: true,
           profile: Option.none(),
         },
         cwd: "/home/tester/projects/example",
@@ -206,6 +209,7 @@ describe("resolveRemoteVscodeOpenTarget", () => {
             label: "remote-vm",
             connectionId: "bearer:remote-vm",
           }),
+          enabled: true,
           profile: Option.some(
             new BearerConnectionProfile({
               connectionId: "bearer:remote-vm",
