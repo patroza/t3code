@@ -707,7 +707,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
          * 3. Dispatch T3 thread creation with the path Git returned.
          * 4. Run the scripts for that project.
          */
-        // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
 
         /*
         `provisionThread` is a resumable checklist, not a transaction.
@@ -724,6 +723,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
         On a fatal failure, the one moment ownership truly ends, remove the worktree best-effort, and let only the cheap branch ref leak.
         */
+        // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
         const project = yield* getProject(state.t3.projectId);
         const modelSelection =
           project.defaultModelSelection ??
@@ -776,24 +776,47 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             .pipe(
               Effect.asVoid,
               /*
-                Our "thread is missing" observation can be stale (crash after a
-                committed create, projection lag). If the thread turns out to
-                exist, this step is already done: swallow the failure and carry on.
+                A previous attempt may have created the thread before crashing.
+                If the thread exists after a failed dispatch, this step is already
+                done. A failed lookup is not evidence that it is absent.
               */
               Effect.catch((cause) =>
                 projectionSnapshotQuery.getThreadShellById(state.t3.threadId).pipe(
+                  Effect.catch((lookupCause) =>
+                    Effect.fail(
+                      new RetryableError({
+                        method: "projectionSnapshotQuery.getThreadShellById",
+                        reason:
+                          "Could not determine whether thread " +
+                          state.t3.threadId +
+                          " was created",
+                        cause: lookupCause,
+                      }),
+                    ),
+                  ),
                   Effect.map(Option.isSome),
-                  Effect.orElseSucceed(() => false),
                   Effect.flatMap((threadExists) =>
                     threadExists
                       ? Effect.void
                       : Effect.fail(
-                          new RetryableError({
-                            method: "orchestrationEngine.dispatch",
-                            reason:
-                              "Could not dispatch thread.create for thread " + state.t3.threadId,
-                            cause,
-                          }),
+                          // TODO: `OrchestrationCommandInvariantError` does not expose
+                          // which invariant failed. Treat it as fatal for now, but T3
+                          // needs a structured rejection reason before NTBS can distinguish
+                          // a missing project from other rejected create attempts.
+                          cause._tag === "OrchestrationCommandInvariantError"
+                            ? new FatalError({
+                                method: "orchestrationEngine.dispatch",
+                                reason:
+                                  "T3 rejected thread creation for thread " + state.t3.threadId,
+                                cause,
+                              })
+                            : new RetryableError({
+                                method: "orchestrationEngine.dispatch",
+                                reason:
+                                  "Could not dispatch thread.create for thread " +
+                                  state.t3.threadId,
+                                cause,
+                              }),
                         ),
                   ),
                 ),

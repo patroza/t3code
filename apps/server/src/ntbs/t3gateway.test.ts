@@ -1354,10 +1354,60 @@ describe("T3Gateway", () => {
     });
 
     describe("failures", () => {
-      it.effect("fails retryably when dispatch fails and the thread is genuinely missing", () => {
-        const { calls, layer } = createT3Gateway({
-          orchestrationEngine: { dispatchFails: true },
-          pqsm: { isThreadMissing: true },
+      it.effect(
+        "fails retryably when dispatch fails operationally and the thread is genuinely missing",
+        () => {
+          const { calls, layer } = createT3Gateway({
+            orchestrationEngine: { dispatchFails: true },
+            pqsm: { isThreadMissing: true },
+          });
+
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
+
+            const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+            expect(result._tag).toBe("RetryableError");
+            expect(result.method).toBe("orchestrationEngine.dispatch");
+
+            /*
+            A retryable failure cleans up nothing: no removeWorktree, no scripts.
+          */
+            expect(calls.map((call) => call.method)).toEqual([
+              "getProjectShellById",
+              "listRefs",
+              "createWorktree",
+              "randomUUIDv4",
+              "dispatch",
+              "getThreadShellById",
+            ]);
+          }).pipe(Effect.provide(layer));
+        },
+      );
+
+      it.effect(
+        "fails fatally when T3 rejects creation and the thread is genuinely missing",
+        () => {
+          const { layer } = createT3Gateway({
+            orchestrationEngine: { dispatchFails: "invariant" },
+            pqsm: { isThreadMissing: true },
+          });
+
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
+
+            const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+            expect(result._tag).toBe("FatalError");
+            expect(result.method).toBe("orchestrationEngine.dispatch");
+          }).pipe(Effect.provide(layer));
+        },
+      );
+
+      it.effect("keeps a failed recovery lookup retryable", () => {
+        const { layer } = createT3Gateway({
+          orchestrationEngine: { dispatchFails: "invariant" },
+          pqsm: { isGetThreadShellByIdError: true },
         });
 
         return Effect.gen(function* () {
@@ -1366,19 +1416,7 @@ describe("T3Gateway", () => {
           const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
           expect(result._tag).toBe("RetryableError");
-          expect(result.method).toBe("orchestrationEngine.dispatch");
-
-          /*
-            A retryable failure cleans up nothing: no removeWorktree, no scripts.
-          */
-          expect(calls.map((call) => call.method)).toEqual([
-            "getProjectShellById",
-            "listRefs",
-            "createWorktree",
-            "randomUUIDv4",
-            "dispatch",
-            "getThreadShellById",
-          ]);
+          expect(result.method).toBe("projectionSnapshotQuery.getThreadShellById");
         }).pipe(Effect.provide(layer));
       });
 
