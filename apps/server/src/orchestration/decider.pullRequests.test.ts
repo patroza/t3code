@@ -134,7 +134,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         host: "forge.example",
         url: "http://forge.example:3000/t3tools/t3code/pulls/42",
       });
-      let model = makeReadModel([existing]);
+      let model = makeCommandReadModel([existing]);
       const command = yield* decodeCommand({
         type: "thread.pull-request.link",
         commandId: "link-other-port",
@@ -151,7 +151,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
       );
       expect(linked.payload.link.host).toBe("forge.example:4000");
       model = yield* projectEvent(model, { ...linked, sequence: 1 });
-      expect(model.threads[0]!.pullRequests).toHaveLength(2);
+      expect(threadOf(model).pullRequests).toHaveLength(2);
       const unlink = yield* decodeCommand({
         type: "thread.pull-request.unlink",
         commandId: "unlink-old-port",
@@ -165,7 +165,7 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
         "thread.pull-request-unlinked",
       );
       model = yield* projectEvent(model, { ...unlinked, sequence: 2 });
-      expect(model.threads[0]!.pullRequests.map((link) => link.url)).toEqual([
+      expect(threadOf(model).pullRequests.map((link) => link.url)).toEqual([
         linked.payload.link.url,
       ]);
     }),

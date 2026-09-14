@@ -199,7 +199,6 @@ describe("ElectronProtocol", () => {
           yield* protocol.registerDesktopProtocol({
             scheme: "t3code",
             targetOrigin: new URL("http://127.0.0.1:3773/"),
-            backendOrigin: new URL("http://127.0.0.1:3773/"),
             clerkFrontendApiHostname: undefined,
           });
           return yield* Effect.promise(() => handler!(new Request("t3code://app/")));
@@ -209,7 +208,7 @@ describe("ElectronProtocol", () => {
       assert.equal(response.status, 200);
       assert.equal(yield* Effect.promise(() => response.text()), "<html>ready</html>");
       assert.equal(netFetchMock.mock.calls.length, 2);
-    }).pipe(Effect.provide(ElectronProtocol.layer)),
+    }).pipe(Effect.provide(protocolLayer)),
   );
 
   it.effect("preserves protocol registration failures", () =>

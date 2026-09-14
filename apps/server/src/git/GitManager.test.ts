@@ -4154,10 +4154,19 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           }),
         );
         const pr = {
-          ...mapped,
+          number: mapped.number,
+          title: mapped.title,
+          url: mapped.url,
+          baseRefName: mapped.baseRefName,
+          headRefName: mapped.headRefName,
+          state: mapped.state,
           isDraft: mapped.isDraft ?? false,
           closedAt: mapped.closedAt ?? null,
           mergedAt: mapped.mergedAt ?? null,
+          updatedAt: mapped.updatedAt,
+          isCrossRepository: mapped.isCrossRepository === true,
+          headRepositoryNameWithOwner: mapped.headRepositoryNameWithOwner ?? null,
+          headRepositoryOwnerLogin: mapped.headRepositoryOwnerLogin ?? null,
         };
         const repository = GitManager.parseRepositoryNameWithOwnerFromRemoteUrl(
           `https://forgejo.example/forgejo/${owner}/project.git`,

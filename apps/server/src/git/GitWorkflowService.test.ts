@@ -79,6 +79,7 @@ describe("GitWorkflowService", () => {
                 kind: "jj",
                 rootPath: "/jj-repo",
                 metadataPath: "/jj-repo/.jj",
+                bare: false,
                 freshness: {
                   source: "live-local",
                   observedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
@@ -86,7 +87,7 @@ describe("GitWorkflowService", () => {
                 },
               },
               driver: {} as VcsDriverRegistry.VcsDriverHandle["driver"],
-            }),
+            } satisfies VcsDriverRegistry.VcsDriverHandle),
         }),
       ),
     ),

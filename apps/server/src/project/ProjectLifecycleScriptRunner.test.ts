@@ -93,6 +93,7 @@ const makeProjectionSnapshotQueryLayer = (
       ),
     getProjectShellById: (projectId) =>
       Effect.succeed(project && projectId === project.id ? Option.some(project) : Option.none()),
+    getProjectShells: () => Effect.die("unused"),
     getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
     getImportedAgentSessionSources: () => Effect.die("unused"),
     getThreadCheckpointContext: () => Effect.die("unused"),
