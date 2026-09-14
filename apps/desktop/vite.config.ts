@@ -19,7 +19,11 @@ const isolatedDesktopTestFiles = [
   "src/electron/ElectronWindow.test.ts",
   "src/electron/WindowsForegroundFocusThread.test.ts",
   "src/electron/MacApplicationIcon.test.ts",
+  "src/ipc/methods/notificationBadge.test.ts",
   "src/ipc/methods/preview.test.ts",
+  "src/ipc/methods/window.test.ts",
+  "src/permissions/MacPermissionHelper.test.ts",
+  "src/permissions/MacSettingsWindow.test.ts",
   "src/preview/BrowserSession.test.ts",
   "src/preview/Manager.test.ts",
   // Window-capture tests mock electron/nativeImage/child_process. Under
