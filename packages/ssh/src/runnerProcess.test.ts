@@ -62,6 +62,7 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
                 cwd: fixture,
                 env: {
                   PATH: bin,
+                  HOME: process.env.HOME ?? fixture,
                   T3_TEST_PORT: String(port),
                 },
                 detached: false,
