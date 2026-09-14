@@ -70,6 +70,7 @@ describe("searchSettings", () => {
       "continue-threads-after-server-update",
       "new-threads",
       "start-from-origin",
+      "project-actions",
     ]);
     expect(searchSettings("deploy").map((item) => item.id)).toContain(
       "continue-threads-after-server-update",
