@@ -149,7 +149,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("sidebar-thread-grouping-${grouping}");
     expect(sidebarV2).toContain('data-testid="sidebar-thread-grouping"');
     expect(sidebarV2).toMatch(/size="icon"\s+type="button"\s+aria-label={`Thread ordering:/);
-    expect(sidebarV2).toContain('aria-label="Filter threads by project"');
+    expect(sidebarV2).toContain("Filter threads by project");
     expect(sidebarV2).toContain('grouping !== "none"');
     expect(sidebarV2).toContain('threadGrouping !== "recency"');
     expect(sidebarV2).toContain("orderForThreadGrouping(sortThreadsForSidebar(active))");

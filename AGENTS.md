@@ -296,6 +296,7 @@ work:
 - Browser dev is single-origin: Vite proxies `/api`, `/ws`, `/oauth`, and `/.well-known` to the backend. Do not set `VITE_HTTP_URL` or `VITE_WS_URL` for `dev`/`dev:web`.
 - Worktree paths supply stable preferred port offsets. Read the actual server and web ports from the `[dev-runner]` line because occupied ports can still shift them.
 - Before handing off a `--share` URL, open its **origin only** (no path, no token) in a controlled browser and confirm the app loads — never the full pairing URL, whose one-time token the check would consume. A successful curl is insufficient because browsers reject some otherwise reachable ports.
+- To reuse web dev auth across worktrees, configure one fixed `T3CODE_DEV_AUTH_TOKEN` in the main checkout's gitignored `.env`. The `t3.json` setup links that file into worktrees. Never commit or publish the token or a startup URL. See [Reusable dev credential](docs/operations/development.md#reusable-dev-credential).
 - Stop what you started, by the PID you tracked. See _The three ways to hurt yourself_.
 
 ## Test data

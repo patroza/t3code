@@ -21,8 +21,47 @@ import {
 export { shouldBundleCliDependency };
 
 const repoEnv = loadRepoEnv();
-const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
+  ? "nightly"
+  : "latest";
 const serverTestTimeout = 120_000;
+
+// `build:exe` wraps the same bundle in a Node single-executable. tsdown's exe
+// step refuses multi-chunk output and counts the sourcemap as a chunk, and the
+// executable needs a host Node that supports `--build-sea` (25.7+), so this is
+// a separate mode rather than a second entry in the default build.
+const packExecutable = process.env.T3CODE_PACK_EXE === "1";
+// `<platform>-<arch>` in nodejs.org naming (darwin-x64, linux-arm64, win-x64).
+// When set, tsdown injects the bundle into a downloaded Node of that target
+// instead of the host Node, which is how the arm64 macOS runner produces the
+// x64 archive. Cross-building is safe because the code cache is off.
+//
+// The Node inside the executable is pinned here rather than taken from the
+// build host, so every archive of a release embeds the same runtime no matter
+// which Node happens to run the build.
+const SEA_NODE_VERSION = "26.8.2";
+const SEA_TARGETS = {
+  "darwin-arm64": { platform: "darwin", arch: "arm64" },
+  "darwin-x64": { platform: "darwin", arch: "x64" },
+  "linux-arm64": { platform: "linux", arch: "arm64" },
+  "linux-x64": { platform: "linux", arch: "x64" },
+  "win-arm64": { platform: "win", arch: "arm64" },
+  "win-x64": { platform: "win", arch: "x64" },
+} as const;
+const packExecutableTarget = process.env.T3CODE_PACK_EXE_TARGET?.trim();
+if (packExecutableTarget && !Object.hasOwn(SEA_TARGETS, packExecutableTarget)) {
+  throw new Error(
+    `T3CODE_PACK_EXE_TARGET must be one of ${Object.keys(SEA_TARGETS).join(", ")}, got "${packExecutableTarget}".`,
+  );
+}
+const packExecutableTargets = packExecutableTarget
+  ? [
+      {
+        ...SEA_TARGETS[packExecutableTarget as keyof typeof SEA_TARGETS],
+        nodeVersion: SEA_NODE_VERSION,
+      },
+    ]
+  : undefined;
 
 export default mergeConfig(
   baseConfig,
@@ -37,14 +76,30 @@ export default mergeConfig(
       },
     },
     pack: {
-      entry: ["src/bin.ts"],
-      outDir: "dist",
-      sourcemap: true,
-      // Never wipe dist/ wholesale: deploy builds the server while a live
-      // process is still serving dist/client. Full clean deletes that tree and
-      // desktop opens to an empty shell until (if) the client is recopied.
-      // cli.ts selectively removes non-client artifacts before pack instead.
-      clean: false,
+      // The executable embeds one entry; the history worker becomes a hidden
+      // subcommand there instead of a sibling script.
+      entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
+      outDir: packExecutable ? "dist-exe" : "dist",
+      sourcemap: !packExecutable,
+      // Never wipe dist/ wholesale during the default pack: deploy builds the
+      // server while a live process is still serving dist/client. The exe pack
+      // writes to dist-exe and can clean. cli.ts selectively removes non-client
+      // artifacts before pack instead.
+      clean: packExecutable,
+      ...(packExecutable
+        ? {
+            exe: {
+              fileName: "t3",
+              outDir: "dist-exe",
+              ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
+              // Node's SEA docs: `import()` does not work when useCodeCache is
+              // true, and the server reaches several modules that way. The
+              // cache is also platform-bound, so leaving it off keeps the
+              // build correct on any host.
+              seaConfig: { useCodeCache: false },
+            },
+          }
+        : {}),
       deps: {
         // Both halves are required. `alwaysBundle` forces the JS dependencies in
         // (declared deps are external by default, which is what this change is

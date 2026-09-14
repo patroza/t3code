@@ -8,6 +8,7 @@ import {
   isImportedAgentSessionMessageId,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationMessage,
   type OrchestrationQueuedMessage,
   type OrchestrationThread,
   type ThreadPullRequestKey,
@@ -209,6 +210,7 @@ interface TurnStartMessageInput {
   readonly messageId: OrchestrationQueuedMessage["messageId"];
   readonly text: string;
   readonly attachments: OrchestrationQueuedMessage["attachments"];
+  readonly context?: OrchestrationMessage["context"];
   readonly modelSelection?: OrchestrationQueuedMessage["modelSelection"];
   readonly titleSeed?: string;
   readonly sourceProposedPlan?: OrchestrationQueuedMessage["sourceProposedPlan"];
@@ -249,6 +251,7 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       role: "user",
       text: message.text,
       attachments: message.attachments,
+      ...(message.context !== undefined ? { context: message.context } : {}),
       turnId: null,
       streaming: false,
       ...(message.source !== undefined ? { source: message.source } : {}),
@@ -1578,6 +1581,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.message.messageId,
           text: command.message.text,
           attachments: command.message.attachments,
+          ...(command.message.context !== undefined ? { context: command.message.context } : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
@@ -2007,6 +2011,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.conversation.revert":
     case "thread.checkpoint.revert": {
       yield* requireThread({
         readModel,
@@ -2024,6 +2029,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+          ...(command.type === "thread.conversation.revert" ? { restoreFiles: false } : {}),
           createdAt: command.createdAt,
         },
       };

@@ -126,6 +126,8 @@ afterEach(async () => {
   pool?.terminate();
   await Promise.all(terminationPromises);
   await disposeHighlighter();
+  // Drain the pool's final state broadcast before removing the animation frame stubs.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   // Pool termination can queue a final broadcast after its workers have exited.
   for (const frame of animationFrames) clearImmediate(frame);
   animationFrames.clear();

@@ -150,7 +150,7 @@ const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const KIMI_DRIVER_KIND = ProviderDriverKind.make("kimi");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
-export const DEFAULT_MODEL = "gpt-5.6-sol";
+export const DEFAULT_MODEL = "gpt-6-astra";
 
 /**
  * Grok's default model. Grok Build held this slot from the original Grok
@@ -164,6 +164,7 @@ export const GROK_DEFAULT_MODEL = "grok-4.6";
  * default; when none are available, Codex's own `isDefault` flag wins.
  */
 export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [
+  DEFAULT_MODEL,
   "gpt-5.6-sol",
   "gpt-5.6-terra",
 ];
@@ -174,7 +175,7 @@ export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "low";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
-  [CLAUDE_DRIVER_KIND]: "claude-opus-4-8",
+  [CLAUDE_DRIVER_KIND]: "claude-fable-5-1",
   [CURSOR_DRIVER_KIND]: "auto",
   [GROK_DRIVER_KIND]: GROK_DEFAULT_MODEL,
   [KIMI_DRIVER_KIND]: "kimi-code/k3",

@@ -331,6 +331,10 @@ export function isContextCompactionActivityGroup(
   );
 }
 
+function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
+  return entry.activities.some((activity) => activity.workEntry.questionAnswer !== undefined);
+}
+
 function normalizeDraftAnswer(value: string | undefined): string | null {
   if (typeof value !== "string") {
     return null;
@@ -1641,13 +1645,15 @@ function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): Th
       continue;
     }
 
-    const isCompaction = entry.activity.workEntry.sourceActivityKind === "context-compaction";
-    if (isCompaction || firstActivityEntry?.turnId !== entry.turnId) {
+    const isStandalone =
+      entry.activity.workEntry.sourceActivityKind === "context-compaction" ||
+      entry.activity.workEntry.questionAnswer !== undefined;
+    if (isStandalone || firstActivityEntry?.turnId !== entry.turnId) {
       flushGroup();
     }
     firstActivityEntry ??= entry;
     openGroupActivities.push(entry.activity);
-    if (isCompaction) {
+    if (isStandalone) {
       flushGroup();
     }
   }
@@ -1875,7 +1881,9 @@ function deriveThreadFeedTurnFolds(
       entries
         .filter(
           (entry) =>
-            entry.id !== firstAssistantMessageId && entry.id !== terminalAssistantMessageId,
+            entry.id !== firstAssistantMessageId &&
+            entry.id !== terminalAssistantMessageId &&
+            !(entry.type === "activity-group" && isUserInputActivityGroup(entry)),
         )
         .map((entry) => entry.id),
     );
@@ -2055,7 +2063,7 @@ function appendPresentedFeedEntry(
     result.push(entry);
     return;
   }
-  if (isContextCompactionActivityGroup(entry)) {
+  if (isContextCompactionActivityGroup(entry) || isUserInputActivityGroup(entry)) {
     result.push(entry);
     return;
   }
