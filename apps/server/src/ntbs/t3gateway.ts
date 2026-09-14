@@ -242,6 +242,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       Effect.gen(function* () {
         // Check if origin exist. If not, T3 will never be able to accept this work.
         // The lookup failing is operational; a definitive `false` is not.
+        // TODO: GitWorkflowService.remoteExists rejects bare repositories before Git runs,
+        // even though the underlying command supports them; fix the shared guard.
         yield* gitWorkflowService.remoteExists({ cwd, remoteName: "origin" }).pipe(
           orFail("retryable")(
             "gitWorkflowService.remoteExists",
@@ -309,8 +311,9 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
     /**
      * Finds or creates the checkout for `worktreeBranchName` and returns the path
-     * Git actually uses. Git owns path selection; the exchange only persists the
-     * branch needed to rediscover an interrupted attempt.
+     * Git actually uses. Repository-level Git operations run from `workspaceRoot`;
+     * thread-scoped work uses the returned checkout path. Git owns path selection,
+     * while the exchange persists only the branch needed to resume provisioning.
      */
     const ensureWorktree = (input: {
       readonly workspaceRoot: string;
