@@ -90,9 +90,9 @@ Keep NTBS-created T3 threads after their responses are posted for now. Once the 
 The Jira auto-create flow (`JiraIssueBridge.ts`) creates a worktree before dispatching
 `thread.create` but has no compensation: a failed dispatch orphans the branch and worktree. The
 NTBS processor fixed this with `Effect.onError` → forced `removeWorktree` (cleanup errors logged,
-original cause re-raised). Rather than patching the bridge separately, extract the shared
-`provisionThreadWorktree` helper proposed in `create-thread.adversarial-review.md` and let both
-flows use it — the Jira bridge is expected to collapse onto NTBS eventually anyway.
+original cause re-raised). Rather than patching the bridge separately, share a
+`provisionThreadWorktree` helper between both flows — the Jira bridge is expected to collapse onto
+NTBS eventually anyway.
 
 ## Delete the temporary branch when thread provisioning fails
 
