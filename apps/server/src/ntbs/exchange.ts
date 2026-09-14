@@ -1,10 +1,11 @@
+/*
+  This file defines the basics of the exchange model and its business rules:
+  one admitted external request, its T3 work, and delivery of the eventual reply back to the originating platform.
+
+  Everything in this file is data structures or pure business logic.
+*/
 import type { ChatAttachment, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { Duration } from "effect";
-
-/*
-This file defines the durable state and pure business rules for an exchange:
-one admitted external request, its T3 work, and delivery of the eventual reply back to the originating platform.
-*/
 
 export type Request = {
   /**
@@ -59,6 +60,7 @@ export type T3Target = {
 
 /** Stable identifiers and locations for an exchange's T3 work. */
 export type WorkCoordinates = {
+  // TODO: Isn't this doubled from T3Target?
   readonly projectId: ProjectId;
   /**
    * The branch this work starts from, and the commit it pointed at on `origin` when the work was planned.
@@ -224,9 +226,7 @@ export type NonTerminalExchange = RequestAccepted | WorkPlanned | ThreadCreated 
 export type TerminalExchange = ReplyPosted | Undeliverable;
 
 /**
- * One exchange between an external platform and T3, from request acceptance through
- * final-reply delivery. The tag says how far it got; the repository stores the
- * latest value per `sourceUri` so non-terminal exchanges resume after a restart.
+ * One exchange between an external platform and T3, from request acceptance through final-reply delivery. The tag says how far it got; the repository stores the latest value per `sourceUri` so non-terminal exchanges resume after a restart.
  */
 export type Exchange = NonTerminalExchange | TerminalExchange;
 
@@ -281,7 +281,7 @@ const deadlines: { readonly [Tag in NonTerminalExchange["tag"]]: number } = {
 export const isExpired = (state: NonTerminalExchange, now: number): boolean =>
   now - state.updatedAt > deadlines[state.tag];
 
-const getFailureThreadId = (cause: FailureCause): ThreadId | null => {
+const getThreadIdFromFailure = (cause: FailureCause): ThreadId | null => {
   switch (cause.type) {
     case "settled":
       return cause.threadId;
@@ -292,14 +292,14 @@ const getFailureThreadId = (cause: FailureCause): ThreadId | null => {
   }
 };
 
-const getReplyThreadId = (reply: Reply): ThreadId | null => {
+const getThreadIdFromReply = (reply: Reply): ThreadId | null => {
   switch (reply.type) {
     case "answer":
     case "cancellation":
       return reply.threadId;
 
     case "failure":
-      return getFailureThreadId(reply.cause);
+      return getThreadIdFromFailure(reply.cause);
   }
 };
 
@@ -318,7 +318,7 @@ export const getThreadId = (exchange: Exchange): ThreadId | null => {
     case "reply-pending":
     case "reply-posted":
     case "undeliverable":
-      return getReplyThreadId(exchange.reply);
+      return getThreadIdFromReply(exchange.reply);
   }
 };
 
@@ -352,8 +352,8 @@ The reconciliation flow is:
 4. execute decision                            effect
 5. construct the transition from its result    pure, then persist as an effect
 
-Every decider also receives the current time. When the observation shows the state's action is still needed and the state is past its deadline, the decision is to expire instead. An observation that completes the state wins over expiry, so a late result is still recorded.
-RequestAccepted observes nothing but the clock: planning creates nothing in T3, so there is nothing else to check before doing it.
+Every decider also receives the current time. When the observation shows the state's action is still needed and the state is past its deadline, the decision is to expire instead. An observation that completes the state wins over expiry, so a late result is still recorded (TODO: Verify?)
+RequestAccepted observes nothing but the clock: planning creates nothing in T3, so there is nothing else to check before doing it (TODO: Is this needed here?)
 */
 
 export type WorkPlannedContext = { readonly thread: "missing" } | { readonly thread: "present" };
@@ -513,8 +513,10 @@ export type ReplyPendingDecision =
     }
   | { readonly type: "expire" };
 
-export const fromRequestAccepted = (state: RequestAccepted, now: number): RequestAcceptedDecision =>
-  isExpired(state, now) ? { type: "expire" } : { type: "plan" };
+export const fromRequestAccepted = (
+  state: RequestAccepted,
+  now: number,
+): RequestAcceptedDecision => (isExpired(state, now) ? { type: "expire" } : { type: "plan" });
 
 export const fromWorkPlanned = (
   state: WorkPlanned,

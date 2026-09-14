@@ -1,3 +1,8 @@
+/*
+  This file describes the adapter: the interface through external platforms like Jira/Linear/etc interact with T3.
+
+  The adapter is platform-agnostic. Each platform needs to expose its own.
+*/
 import type { ReplyPending, ThreadCreated, UndeliverableCause } from "./exchange.ts";
 import { Context, Data, Effect } from "effect";
 

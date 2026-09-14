@@ -24,6 +24,7 @@ import {
   OrchestrationThreadShell,
   ProjectId,
   ProviderInstanceId,
+  ServerSettingsError,
   ThreadId,
   TurnId,
   VcsCreateWorktreeResult,
@@ -44,6 +45,7 @@ import {
 } from "./exchange.ts";
 import { ServerConfig } from "../config.ts";
 import { LogLevel } from "effect/Config";
+import * as ServerSettings from "../serverSettings.ts";
 
 /**
  * Every mocked dependency records into one shared, ordered log.
@@ -236,6 +238,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
                 model: "custom",
                 options: [],
               },
+              pullRequests: [],
               projectId: ProjectId.make("projectId"),
               runtimeMode: "auto",
               session: {
@@ -275,6 +278,7 @@ const createPSQM = (record: CallRecordResult, input?: PSQMInput) => {
                 model: "custom",
                 options: [],
               },
+              pullRequests: [],
               runtimeMode: "auto",
               interactionMode: "default",
               branch: "some-branch",
@@ -491,12 +495,14 @@ const serverConfigMock = Layer.mock(ServerConfig, {
   attachmentsDir: "attachmentsDir",
   autoBootstrapProjectFromCwd: false,
   baseDir: "baseDir",
+  browserArtifactsDir: "browserArtifactsDir",
   cwd: "cwd",
   dbPath: "dbPath",
   desktopBootstrapToken: "desktopBootstrapToken",
   devAllowedOrigins: [],
   devUrl: undefined,
   environmentIdPath: "environmentIdPath",
+  environmentThemesDir: "environmentThemesDir",
   host: "host",
   keybindingsConfigPath: "keybindingsConfigPath",
   logLevel: LogLevel.make("All"),
@@ -578,6 +584,7 @@ const createT3Gateway = (input?: {
   projectSetupScriptRunner?: ProjectSetupScriptRunnerInput;
   fileSystem?: FileSystemInput;
   turnRepository?: ProjectionTurnRepositoryInput;
+  serverSettings?: Layer.Layer<ServerSettings.ServerSettingsService, ServerSettingsError>;
 }) => {
   const { calls, recordResult, record } = createCallLog();
 
@@ -593,6 +600,13 @@ const createT3Gateway = (input?: {
           createProjectionTurnRepositoryMock(recordResult, input?.turnRepository),
           createCryptoMock(recordResult, input?.crypto),
           serverConfigMock,
+          input?.serverSettings ??
+            ServerSettings.layerTest({
+              defaultModelSelection: {
+                instanceId: ProviderInstanceId.make("claude-code"),
+                model: "claude-sonnet-4-6",
+              },
+            }),
           createFileSystemMock(recordResult, input?.fileSystem),
         ),
       ),
@@ -1095,6 +1109,98 @@ describe("T3Gateway", () => {
     };
 
     const workPlanned = toWorkPlanned(makeRequestAccepted(request, target, now), coordinates, now);
+
+    describe("model selection", () => {
+      const projectSelection = {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
+      const serverSelection = {
+        instanceId: ProviderInstanceId.make("claude-code"),
+        model: "claude-sonnet-4-6",
+      };
+
+      it.effect.each([
+        {
+          name: "project overrides server",
+          projectModel: projectSelection,
+          serverModel: serverSelection,
+          expected: projectSelection,
+        },
+        {
+          name: "uses project default when server default is unset",
+          projectModel: projectSelection,
+          serverModel: null,
+          expected: projectSelection,
+        },
+        {
+          name: "inherits server default",
+          projectModel: null,
+          serverModel: serverSelection,
+          expected: serverSelection,
+        },
+      ])("$name", ({ projectModel, serverModel, expected }) => {
+        const { calls, layer } = createT3Gateway({
+          pqsm: { getProjectShellById: { success: { defaultModelSelection: projectModel } } },
+          serverSettings: ServerSettings.layerTest({ defaultModelSelection: serverModel }),
+        });
+
+        return Effect.gen(function* () {
+          const gateway = yield* T3Gateway;
+          yield* gateway.provisionThread(workPlanned);
+
+          expect(calls.find((call) => call.method === "dispatch")?.input).toMatchObject({
+            type: "thread.create",
+            modelSelection: expected,
+          });
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("rejects missing defaults before creating a worktree or thread", () => {
+        const { calls, layer } = createT3Gateway({
+          serverSettings: ServerSettings.layerTest({ defaultModelSelection: null }),
+        });
+
+        return Effect.gen(function* () {
+          const gateway = yield* T3Gateway;
+          const error = yield* gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(error).toMatchObject({
+            _tag: "FatalError",
+            method: "provisionThread",
+            reason:
+              "No default model is configured for this project or server. Set a model in project or machine settings and submit the request again.",
+          });
+          expect(calls.map((call) => call.method)).toEqual(["getProjectShellById"]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("retries a settings read failure before creating a worktree or thread", () => {
+        const cause = new ServerSettingsError({
+          settingsPath: "settingsPath",
+          operation: "read-file",
+          cause: "Settings unavailable",
+        });
+        const { calls, layer } = createT3Gateway({
+          serverSettings: Layer.mock(ServerSettings.ServerSettingsService, {
+            getSettings: Effect.fail(cause),
+          }),
+        });
+
+        return Effect.gen(function* () {
+          const gateway = yield* T3Gateway;
+          const error = yield* gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(error).toMatchObject({
+            _tag: "RetryableError",
+            method: "serverSettings.getSettings",
+            cause,
+          });
+          expect(calls.map((call) => call.method)).toEqual(["getProjectShellById"]);
+        }).pipe(Effect.provide(layer));
+      });
+    });
 
     describe("happy case", () => {
       /*

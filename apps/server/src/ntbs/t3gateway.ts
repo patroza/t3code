@@ -33,7 +33,7 @@ import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { ServerConfig } from "../config.ts";
-import { getAutoBootstrapDefaultModelSelection } from "../serverRuntimeStartup.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 /*
   NTBS architecture:
@@ -109,6 +109,10 @@ type T3GatewayRequirements =
     Needed to know where the worktrees directory is at.
   */
   | ServerConfig
+  /*
+    Supplies the environment's current default model when the project inherits it.
+  */
+  | ServerSettingsService
   /*
     Probes and clears leftover worktree directories during reentrant provisioning.
   */
@@ -212,6 +216,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
     const serverConfig = yield* ServerConfig;
+
+    const serverSettings = yield* ServerSettingsService;
 
     const orchestrationEngine = yield* OrchestrationEngineService;
 
@@ -735,6 +741,24 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         On a fatal failure, the one moment ownership truly ends, remove the worktree best-effort, and let only the cheap branch ref leak.
         */
         const project = yield* getProject(state.t3.projectId);
+        const modelSelection =
+          project.defaultModelSelection ??
+          (yield* serverSettings.getSettings.pipe(
+            orFail("retryable")(
+              "serverSettings.getSettings",
+              "Could not load the default model for thread " + state.t3.threadId,
+            ),
+          )).defaultModelSelection;
+
+        if (modelSelection === null) {
+          return yield* new FatalError({
+            method: "provisionThread",
+            reason:
+              "No default model is configured for this project or server. Set a model in project or machine settings and submit the request again.",
+            cause: null,
+          });
+        }
+
         const { workspaceRoot } = project;
         const { worktreesDir } = serverConfig;
 
@@ -755,9 +779,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
           const commandId = CommandId.make(yield* randomUUID);
           const createdAt = yield* getNow;
-
-          const modelSelection =
-            project.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
 
           yield* orchestrationEngine
             .dispatch(
