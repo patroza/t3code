@@ -3,7 +3,6 @@ The T3 gateway module exposes the interface that the NTBS processor uses to comm
 with T3, similar to how adapter models the interaction with the external platform.
  */
 
-import * as NodePath from "node:path";
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -32,7 +31,6 @@ import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
-import { ServerConfig } from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 /*
@@ -106,10 +104,6 @@ type T3GatewayRequirements =
    */
   | Crypto.Crypto
   /*
-    Needed to know where the worktrees directory is at.
-  */
-  | ServerConfig
-  /*
     Supplies the environment's current default model when the project inherits it.
   */
   | ServerSettingsService
@@ -125,24 +119,12 @@ interface RemoteBranchTip {
 }
 
 /*
-  Git refuses `worktree add` at a path whose directory is gone but is still listed
-  in `.git/worktrees`. Healing needs `git worktree prune`, which the git driver
-  does not expose yet, so this state is terminal for the exchange.
+  A failed create can still expose an unexpected stale registration. Registrations
+  discovered through `listRefs` are pruned before creation; anything left here is
+  terminal because the gateway does not know which unrelated path would be safe to prune.
 */
 const isStaleWorktreeRegistration = (cause: { readonly detail: string }): boolean =>
   /missing but (?:already registered|locked)/i.test(cause.detail);
-
-/** Derives the worktree checkout path. Copied from GitVcsDriverCore.createWorktree. */
-const deriveWorktreePath = (input: {
-  readonly worktreesDir: string;
-  readonly workspaceRoot: string;
-  readonly worktreeBranchName: string;
-}): string =>
-  NodePath.join(
-    input.worktreesDir,
-    NodePath.basename(input.workspaceRoot),
-    input.worktreeBranchName.replace(/\//g, "-"),
-  );
 
 export interface T3Gateway {
   /**
@@ -214,8 +196,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         );
 
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-
-    const serverConfig = yield* ServerConfig;
 
     const serverSettings = yield* ServerSettingsService;
 
@@ -328,66 +308,27 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
     const fileSystem = yield* FileSystem.FileSystem;
 
     /**
-     * Guarantees `worktreePath` is a registered checkout of `worktreeBranchName`,
-     * adopting whatever an interrupted attempt left behind: an intact checkout is
-     * reused, debris at the path is destroyed, a surviving branch is checked out
-     * instead of re-created, and only then is anything created fresh from the
-     * commit pinned at claim.
+     * Finds or creates the checkout for `worktreeBranchName` and returns the path
+     * Git actually uses. Git owns path selection; the exchange only persists the
+     * branch needed to rediscover an interrupted attempt.
      */
     const ensureWorktree = (input: {
       readonly workspaceRoot: string;
-      readonly worktreePath: string;
       readonly worktreeBranchName: string;
       readonly startCommitSha: string;
       readonly startBranchName: string;
-    }): Effect.Effect<void, RetryableError | FatalError> =>
+    }): Effect.Effect<string, RetryableError | FatalError> =>
       Effect.gen(function* () {
-        const pathExists = yield* fileSystem
-          .exists(input.worktreePath)
-          .pipe(orFail("retryable")("fileSystem.exists", "Could not inspect the worktree path"));
-
-        if (pathExists) {
-          // Ask git, not the filesystem: the step is only done when the
-          // directory is a checkout of the minted branch.
-          const status = yield* gitWorkflowService
-            .localStatus({ cwd: input.worktreePath })
-            .pipe(
-              orFail("retryable")(
-                "gitWorkflowService.localStatus",
-                "Could not inspect the existing worktree",
-              ),
-            );
-
-          if (status.isRepo && status.refName === input.worktreeBranchName) {
-            return;
-          }
-
-          /*
-            The path is namespaced by this exchange's minted branch, so whatever
-            else sits here is our own debris (partial checkout, junk). Plain
-            directory removal is the fallback for content git does not recognize
-            as a worktree.
-          */
-          yield* gitWorkflowService
-            .removeWorktree({ cwd: input.workspaceRoot, path: input.worktreePath, force: true })
-            .pipe(
-              Effect.catch(() => fileSystem.remove(input.worktreePath, { recursive: true })),
-              orFail("retryable")(
-                "gitWorkflowService.removeWorktree",
-                "Could not clear the leftover worktree path",
-              ),
-            );
-        }
-
-        const branchExists = yield* gitWorkflowService
+        const branch = yield* gitWorkflowService
           .listRefs({
             cwd: input.workspaceRoot,
             query: input.worktreeBranchName,
             refKind: "local",
+            refresh: true,
           })
           .pipe(
             Effect.map((result) =>
-              result.refs.some((ref) => ref.name === input.worktreeBranchName),
+              result.refs.find((ref) => ref.name === input.worktreeBranchName),
             ),
             orFail("retryable")(
               "gitWorkflowService.listRefs",
@@ -395,20 +336,61 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             ),
           );
 
-        yield* gitWorkflowService
+        if (branch?.worktreePath) {
+          const existingWorktreePath = branch.worktreePath;
+          const pathExists = yield* fileSystem
+            .exists(existingWorktreePath)
+            .pipe(orFail("retryable")("fileSystem.exists", "Could not inspect the worktree path"));
+
+          if (pathExists) {
+            const status = yield* gitWorkflowService
+              .localStatus({ cwd: existingWorktreePath })
+              .pipe(
+                orFail("retryable")(
+                  "gitWorkflowService.localStatus",
+                  "Could not inspect the existing worktree",
+                ),
+              );
+
+            if (status.isRepo && status.refName === input.worktreeBranchName) {
+              return existingWorktreePath;
+            }
+
+            yield* gitWorkflowService
+              .removeWorktree({ cwd: input.workspaceRoot, path: existingWorktreePath, force: true })
+              .pipe(
+                Effect.catch(() => fileSystem.remove(existingWorktreePath, { recursive: true })),
+                orFail("retryable")(
+                  "gitWorkflowService.removeWorktree",
+                  "Could not clear the leftover worktree path",
+                ),
+              );
+          } else {
+            yield* gitWorkflowService
+              .pruneWorktrees({ cwd: input.workspaceRoot })
+              .pipe(
+                orFail("retryable")(
+                  "gitWorkflowService.pruneWorktrees",
+                  "Could not clear the stale worktree registration",
+                ),
+              );
+          }
+        }
+
+        return yield* gitWorkflowService
           .createWorktree(
-            branchExists
+            branch
               ? {
                   // A previous attempt created the branch; check it out instead of re-branching.
                   cwd: input.workspaceRoot,
-                  path: input.worktreePath,
+                  path: null,
                   refName: input.worktreeBranchName,
                   deferDependencyInstall: true,
                 }
               : {
                   // First real attempt: branch off the commit pinned at claim.
                   cwd: input.workspaceRoot,
-                  path: input.worktreePath,
+                  path: null,
                   refName: input.startCommitSha,
                   newRefName: input.worktreeBranchName,
                   baseRefName: input.startBranchName,
@@ -416,6 +398,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                 },
           )
           .pipe(
+            Effect.map((result) => result.worktree.path),
             Effect.mapError((cause) =>
               isStaleWorktreeRegistration(cause)
                 ? new FatalError({
@@ -426,7 +409,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                   })
                 : new RetryableError({
                     method: "gitWorkflowService.createWorktree",
-                    reason: "Could not create the worktree at " + input.worktreePath,
+                    reason: "Could not create the worktree for " + input.worktreeBranchName,
                     cause,
                   }),
             ),
@@ -717,18 +700,16 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         /*
          * In order we need to:
          * 1. get the actual project details, where is the workspace root path located at?
-         * 2. get the worktrees path location. T3 does not create worktrees inside the project workspace, because a checkout nested inside the user's project repository directory would pollute it (untracked noise in `git status`, IDE/watcher/grep pickup, accidental commits) and worktrees are T3-owned disposable state, so they live inside T3's home where they can be wiped without touching the user's code (which may even be a bare repo with no working tree to nest into at all).
-         * 3. Derive the worktree path: where are we going to put the files we're going to work with?
-         * 4. Create the actual worktree
-         * 5. Dispatch T3 thread creation
-         * 6. Run the scripts for that project
+         * 2. Find an existing checkout for the planned branch, or ask Git to create one.
+         * 3. Dispatch T3 thread creation with the path Git returned.
+         * 4. Run the scripts for that project.
          */
         // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
 
         /*
         `provisionThread` is a resumable checklist, not a transaction.
 
-        Every attempt re-derives its *facts* from live state, the project's `workspaceRoot`, and the worktree path computed from the pinned branch name, then walks three steps, each one "check, then do", so a retry after any interruption skips whatever already happened.
+        Every attempt re-derives its *facts* from live project and Git state, then walks three steps, each one "check, then do", so a retry after any interruption skips whatever already happened.
 
         **Worktree**. If the directory exists, reuse it. If only the branch survives from a crashed attempt, recreate the checkout from that branch instead of re-branching from the start commit. Otherwise create it fresh from the pinned commit.
 
@@ -760,23 +741,15 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
         }
 
         const { workspaceRoot } = project;
-        const { worktreesDir } = serverConfig;
 
-        const worktreePath = deriveWorktreePath({
+        const worktreePath = yield* ensureWorktree({
           workspaceRoot,
-          worktreesDir,
           worktreeBranchName: state.t3.worktreeBranchName,
+          startCommitSha: state.t3.startCommitSha,
+          startBranchName: state.t3.startBranchName,
         });
 
         yield* Effect.gen(function* () {
-          yield* ensureWorktree({
-            workspaceRoot,
-            worktreePath,
-            worktreeBranchName: state.t3.worktreeBranchName,
-            startCommitSha: state.t3.startCommitSha,
-            startBranchName: state.t3.startBranchName,
-          });
-
           const commandId = CommandId.make(yield* randomUUID);
           const createdAt = yield* getNow;
 

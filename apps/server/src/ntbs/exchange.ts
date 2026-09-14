@@ -58,7 +58,13 @@ export type T3Target = {
   readonly startBranchName: string;
 };
 
-/** Stable identifiers and locations for an exchange's T3 work. */
+/**
+ * Stable identities and pinned Git state needed to resume an exchange.
+ *
+ * Filesystem locations are intentionally excluded: live project state identifies
+ * the repository, and `worktreeBranchName` identifies any checkout created for
+ * the exchange. The thread records the actual checkout path after creation.
+ */
 export type WorkCoordinates = {
   // TODO: Isn't this doubled from T3Target?
   readonly projectId: ProjectId;

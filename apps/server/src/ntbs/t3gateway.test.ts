@@ -43,8 +43,6 @@ import {
   type T3Target,
   type WorkCoordinates,
 } from "./exchange.ts";
-import { ServerConfig } from "../config.ts";
-import { LogLevel } from "effect/Config";
 import * as ServerSettings from "../serverSettings.ts";
 
 /**
@@ -347,6 +345,7 @@ const createProjectionTurnRepositoryMock = (
 };
 
 type GitLayerInput = {
+  createdWorktreePath?: string;
   createWorkreeFails?: boolean | { detail: string };
   failsBranchResolutionWith?: "retryable" | "fatal";
   fetchRemoteFails?: boolean;
@@ -355,6 +354,7 @@ type GitLayerInput = {
   resolvedRemoteSha?: string;
   removeWorkTreeFails?: boolean;
   worktreeBranchExists?: boolean;
+  worktreeBranchPath?: string;
   localStatus?: { isRepo?: boolean; refName?: string };
 };
 
@@ -384,7 +384,10 @@ const createGitWorkflowServiceMock = (
               )
             : Effect.succeed(
                 VcsCreateWorktreeResult.make({
-                  worktree: { path: callInput.path || "path", refName: callInput.refName },
+                  worktree: {
+                    path: callInput.path ?? input?.createdWorktreePath ?? "path",
+                    refName: callInput.newRefName ?? callInput.refName,
+                  },
                 }),
               ),
         ),
@@ -427,7 +430,7 @@ const createGitWorkflowServiceMock = (
                   name: callInput.query ?? "worktreeBranchName",
                   current: false,
                   isDefault: false,
-                  worktreePath: null,
+                  worktreePath: input.worktreeBranchPath ?? null,
                 },
               ]
             : [],
@@ -443,6 +446,7 @@ const createGitWorkflowServiceMock = (
           input?.removeWorkTreeFails ? Effect.fail(createGitCommandError()) : Effect.void,
         ),
       ),
+    pruneWorktrees: (callInput) => record("pruneWorktrees", callInput),
 
     resolveRemoteTrackingCommit: (callInput) =>
       recordGit("resolveRemoteTrackingCommit", callInput, {
@@ -472,7 +476,7 @@ const ProjectSetupScriptRunnerMock = (
 
   return Layer.mock(ProjectSetupScriptRunner, {
     runForThread: (callInput) =>
-      call("runForThread", input).pipe(
+      call("runForThread", callInput).pipe(
         Effect.andThen(() =>
           input?.runForThreadFails
             ? Effect.fail(
@@ -489,56 +493,6 @@ const ProjectSetupScriptRunnerMock = (
       ),
   });
 };
-
-const serverConfigMock = Layer.mock(ServerConfig, {
-  anonymousIdPath: "anonymousIdPath",
-  attachmentsDir: "attachmentsDir",
-  autoBootstrapProjectFromCwd: false,
-  baseDir: "baseDir",
-  browserArtifactsDir: "browserArtifactsDir",
-  cwd: "cwd",
-  dbPath: "dbPath",
-  desktopBootstrapToken: "desktopBootstrapToken",
-  devAllowedOrigins: [],
-  devUrl: undefined,
-  environmentIdPath: "environmentIdPath",
-  environmentThemesDir: "environmentThemesDir",
-  host: "host",
-  keybindingsConfigPath: "keybindingsConfigPath",
-  logLevel: LogLevel.make("All"),
-  logWebSocketEvents: false,
-  logsDir: "logsDir",
-  mode: "desktop",
-  noBrowser: false,
-  otlpExportIntervalMs: 0,
-  otlpMetricsUrl: undefined,
-  otlpServiceName: "otlpServiceName",
-  otlpTracesUrl: "otlpTracesUrl",
-  port: 8000,
-  providerEventLogPath: "providerEventLogPath",
-  providerLogsDir: "providerLogsDir",
-  providerStatusCacheDir: "providerStatusCacheDir",
-  secretsDir: "secretsDir",
-  serverLogPath: "serverLogPath",
-  serverRuntimeStatePath: "serverRuntimeStatePath",
-  serverTracePath: "serverTracePath",
-  settingsPath: "settingsPath",
-  startupPresentation: "headless",
-  stateDir: "stateDir",
-  staticDir: "staticDir",
-  tailscaleServeEnabled: false,
-  tailscaleServePort: 8001,
-  terminalLogsDir: "terminalLogsDir",
-  traceBatchWindowMs: 0,
-  traceMaxBytes: 1024,
-  traceMaxFiles: 80,
-  traceMinLevel: LogLevel.make("All"),
-  traceTimingEnabled: false,
-  worktreesDir: "/worktreesDir",
-  desktopTelemetryControlFd: 8002,
-  desktopTelemetryFd: 8003,
-  resourceMonitorPath: "resourceMonitorPath",
-});
 
 type FileSystemInput = {
   worktreePathExists?: boolean;
@@ -599,7 +553,6 @@ const createT3Gateway = (input?: {
           createGitWorkflowServiceMock(recordResult, record, input?.gwfs),
           createProjectionTurnRepositoryMock(recordResult, input?.turnRepository),
           createCryptoMock(recordResult, input?.crypto),
-          serverConfigMock,
           input?.serverSettings ??
             ServerSettings.layerTest({
               defaultModelSelection: {
@@ -1083,10 +1036,9 @@ describe("T3Gateway", () => {
       Quite sure the current implementation can be updated and made better than the current void into null and rejection !== null in `processor.ts` as of 6d70ff461df16d1a052ce3656131613647940028.
 
       What does `provisionThread` depends on?
-      1. ServerConfig to know the worktrees location
-      2. GitWorkflowService for worktree creation (and deletion)
-      3. OrchestrationEngineService for dispatching the command to create the thread
-      4. ProjectScriptRunner for executing the scripts in the thread/cwd
+      1. GitWorkflowService for worktree discovery, creation, and deletion
+      2. OrchestrationEngineService for dispatching the command to create the thread
+      3. ProjectScriptRunner for executing the scripts in the thread/cwd
     */
     const request: Request = {
       attachments: [],
@@ -1207,7 +1159,10 @@ describe("T3Gateway", () => {
         Pristine first attempt: `createWorktree` takes the fresh-create arm, dispatch succeeds so the stale-observation recovery never fires, scripts run last.
       */
       it.effect("provisions worktree, thread, and scripts in order from a clean slate", () => {
-        const { calls, layer } = createT3Gateway();
+        const createdWorktreePath = "/git-selected/worktree";
+        const { calls, layer } = createT3Gateway({
+          gwfs: { createdWorktreePath },
+        });
 
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
@@ -1216,7 +1171,6 @@ describe("T3Gateway", () => {
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
-            "exists",
             "listRefs",
             "createWorktree",
             "randomUUIDv4",
@@ -1226,9 +1180,17 @@ describe("T3Gateway", () => {
 
           // Fresh-create arm, off the commit pinned at claim.
           expect(calls.find((call) => call.method === "createWorktree")?.input).toMatchObject({
+            path: null,
             refName: coordinates.startCommitSha,
             newRefName: coordinates.worktreeBranchName,
             baseRefName: coordinates.startBranchName,
+          });
+          expect(calls.find((call) => call.method === "dispatch")?.input).toMatchObject({
+            type: "thread.create",
+            worktreePath: createdWorktreePath,
+          });
+          expect(calls.find((call) => call.method === "runForThread")?.input).toMatchObject({
+            worktreePath: createdWorktreePath,
           });
         }).pipe(Effect.provide(layer));
       });
@@ -1249,7 +1211,6 @@ describe("T3Gateway", () => {
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
-            "exists",
             "listRefs",
             "createWorktree",
             "randomUUIDv4",
@@ -1266,7 +1227,11 @@ describe("T3Gateway", () => {
       it.effect("reuses an intact worktree left by an interrupted attempt", () => {
         const { calls, layer } = createT3Gateway({
           fileSystem: { worktreePathExists: true },
-          gwfs: { localStatus: { isRepo: true, refName: coordinates.worktreeBranchName } },
+          gwfs: {
+            worktreeBranchExists: true,
+            worktreeBranchPath: "/existing/worktree",
+            localStatus: { isRepo: true, refName: coordinates.worktreeBranchName },
+          },
         });
 
         return Effect.gen(function* () {
@@ -1276,6 +1241,7 @@ describe("T3Gateway", () => {
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
+            "listRefs",
             "exists",
             "localStatus",
             "randomUUIDv4",
@@ -1286,12 +1252,16 @@ describe("T3Gateway", () => {
       });
 
       /*
-        Resume: something occupies the path but git does not recognize it as a checkout of the minted branch, so it is destroyed and provisioning restarts from the pinned commit.
+        Resume: Git reports the branch at a path that no longer contains its checkout, so the path is cleared and the surviving branch is checked out again.
       */
-      it.effect("destroys debris at the worktree path and creates fresh", () => {
+      it.effect("replaces debris at a registered worktree path", () => {
         const { calls, layer } = createT3Gateway({
           fileSystem: { worktreePathExists: true },
-          gwfs: { localStatus: { isRepo: false } },
+          gwfs: {
+            worktreeBranchExists: true,
+            worktreeBranchPath: "/existing/worktree",
+            localStatus: { isRepo: false },
+          },
         });
 
         return Effect.gen(function* () {
@@ -1301,20 +1271,51 @@ describe("T3Gateway", () => {
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
+            "listRefs",
             "exists",
             "localStatus",
             "removeWorktree",
-            "listRefs",
             "createWorktree",
             "randomUUIDv4",
             "dispatch",
             "runForThread",
           ]);
 
-          // Fresh-create arm: branch off the pinned commit, not a checkout of a survivor.
+          const createInput = calls.find((call) => call.method === "createWorktree")?.input;
+          expect(createInput).toMatchObject({
+            path: null,
+            refName: coordinates.worktreeBranchName,
+          });
+          expect(createInput).not.toHaveProperty("newRefName");
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("prunes a missing registered checkout and recreates it from its branch", () => {
+        const { calls, layer } = createT3Gateway({
+          gwfs: {
+            worktreeBranchExists: true,
+            worktreeBranchPath: "/missing/worktree",
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          yield* t3Gateway.provisionThread(workPlanned);
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "exists",
+            "pruneWorktrees",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "runForThread",
+          ]);
           expect(calls.find((call) => call.method === "createWorktree")?.input).toMatchObject({
-            refName: coordinates.startCommitSha,
-            newRefName: coordinates.worktreeBranchName,
+            path: null,
+            refName: coordinates.worktreeBranchName,
           });
         }).pipe(Effect.provide(layer));
       });
@@ -1336,7 +1337,6 @@ describe("T3Gateway", () => {
 
             expect(calls.map((call) => call.method)).toEqual([
               "getProjectShellById",
-              "exists",
               "listRefs",
               "createWorktree",
               "randomUUIDv4",
@@ -1373,7 +1373,6 @@ describe("T3Gateway", () => {
           */
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
-            "exists",
             "listRefs",
             "createWorktree",
             "randomUUIDv4",
@@ -1401,7 +1400,6 @@ describe("T3Gateway", () => {
 
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
-            "exists",
             "listRefs",
             "createWorktree",
             "randomUUIDv4",
@@ -1413,10 +1411,10 @@ describe("T3Gateway", () => {
       });
 
       /*
-        A worktree path that is still registered to a deleted checkout needs manual `git worktree prune`, so retrying would fail forever.
+        An unexpected stale registration that was not discoverable from our branch cannot be cleaned up safely.
       */
       it.effect(
-        "fails fatally when the worktree path is a stale registration, removing the worktree",
+        "fails fatally when worktree creation finds an unrelated stale registration",
         () => {
           const { calls, layer } = createT3Gateway({
             gwfs: {
@@ -1434,10 +1432,8 @@ describe("T3Gateway", () => {
 
             expect(calls.map((call) => call.method)).toEqual([
               "getProjectShellById",
-              "exists",
               "listRefs",
               "createWorktree",
-              "removeWorktree",
             ]);
           }).pipe(Effect.provide(layer));
         },
@@ -1459,7 +1455,6 @@ describe("T3Gateway", () => {
           // Retryable, so the failed creation attempt is not cleaned up.
           expect(calls.map((call) => call.method)).toEqual([
             "getProjectShellById",
-            "exists",
             "listRefs",
             "createWorktree",
           ]);
