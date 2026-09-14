@@ -63,6 +63,35 @@ function bareHandle(cwd: string): VcsDriverRegistry.VcsDriverHandle {
 }
 
 describe("GitWorkflowService", () => {
+  it.effect("reports a non-Git VCS repository as not a Git repository", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      const isRepository = yield* workflow.isRepository("/jj-repo");
+
+      assert.equal(isRepository, false);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          detect: () =>
+            Effect.succeed({
+              kind: "jj",
+              repository: {
+                kind: "jj",
+                rootPath: "/jj-repo",
+                metadataPath: "/jj-repo/.jj",
+                freshness: {
+                  source: "live-local",
+                  observedAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+                  expiresAt: Option.none(),
+                },
+              },
+              driver: {} as VcsDriverRegistry.VcsDriverHandle["driver"],
+            }),
+        }),
+      ),
+    ),
+  );
+
   it.effect("returns an empty local status when no VCS repository is detected", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;

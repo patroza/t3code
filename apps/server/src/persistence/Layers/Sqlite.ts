@@ -26,8 +26,7 @@ const makeRuntimeSqliteLayer = Effect.fn("makeRuntimeSqliteLayer")(function* (
 ) {
   const runtime = process.versions.bun !== undefined ? "bun" : "node";
   const loader = defaultSqliteClientLoaders[runtime];
-  const clientModule = yield* Effect.promise<Loader>(loader);
-  return clientModule.layer(config);
+  return (yield* Effect.promise<Loader>(loader)).layer(config);
 }, Layer.unwrap);
 
 const setup = (trial: boolean) =>

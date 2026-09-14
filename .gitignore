@@ -5,6 +5,7 @@ node_modules
 *.log
 *.tsbuildinfo
 apps/*/dist
+apps/*/dist-exe
 apps/vscode/*.vsix
 infra/*/dist
 .astro
@@ -34,6 +35,8 @@ dist-electron/
 .dir-deploy-n
 .showcase/
 apps/mobile/.showcase/
+apps/mobile/.generated/
+/.generated/
 artifacts/app-store/screenshots/
 .github/pr-assets/
 native/**/target/
@@ -48,3 +51,6 @@ node_modules/
 # agent gh shim + local run state (ship-gate cache, etc.)
 .tools/
 .run/
+
+# pnpm content-addressable store; never belongs in the repo.
+.pnpm-store/

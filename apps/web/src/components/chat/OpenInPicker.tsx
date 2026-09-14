@@ -37,8 +37,13 @@ import {
 } from "../../openWith";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
-import { openRemoteEditorUrl, useRemoteOpenState } from "../../remoteOpen";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  openRemoteEditorUrl,
+  useRemoteCapableEditors,
+  useRemoteOpenHint,
+  useRemoteOpenState,
+} from "../../remoteOpen";
+import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { shellEnvironment } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -69,6 +74,8 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   AntigravityIcon,
   CursorIcon,
+  FileExplorerIcon,
+  FinderIcon,
   Icon,
   KiroIcon,
   TraeIcon,
@@ -164,6 +171,54 @@ const OPEN_WITH_KIND_LABELS: Record<OpenWithEntryKind, string> = {
   other: "Other",
 };
 
+type OpenInOption = {
+  label: string;
+  Icon: Icon;
+  value: EditorId;
+  kind: "brand" | "generic";
+};
+
+export const resolveOpenInOptions = (
+  platform: string,
+  availableEditors: ReadonlyArray<EditorId>,
+) => {
+  const baseOptions: ReadonlyArray<Omit<OpenInOption, "label">> = [
+    { Icon: CursorIcon, value: "cursor", kind: "brand" },
+    { Icon: TraeIcon, value: "trae", kind: "brand" },
+    { Icon: KiroIcon, value: "kiro", kind: "brand" },
+    { Icon: VisualStudioCode, value: "vscode", kind: "brand" },
+    { Icon: VisualStudioCodeInsiders, value: "vscode-insiders", kind: "brand" },
+    { Icon: VSCodium, value: "vscodium", kind: "brand" },
+    { Icon: Zed, value: "zed", kind: "brand" },
+    { Icon: AntigravityIcon, value: "antigravity", kind: "brand" },
+    { Icon: IntelliJIdeaIcon, value: "idea", kind: "brand" },
+    { Icon: AquaIcon, value: "aqua", kind: "brand" },
+    { Icon: CLionIcon, value: "clion", kind: "brand" },
+    { Icon: DataGripIcon, value: "datagrip", kind: "brand" },
+    { Icon: DataSpellIcon, value: "dataspell", kind: "brand" },
+    { Icon: GoLandIcon, value: "goland", kind: "brand" },
+    { Icon: PhpStormIcon, value: "phpstorm", kind: "brand" },
+    { Icon: PyCharmIcon, value: "pycharm", kind: "brand" },
+    { Icon: RiderIcon, value: "rider", kind: "brand" },
+    { Icon: RubyMineIcon, value: "rubymine", kind: "brand" },
+    { Icon: RustRoverIcon, value: "rustrover", kind: "brand" },
+    { Icon: WebStormIcon, value: "webstorm", kind: "brand" },
+    {
+      Icon: isMacPlatform(platform)
+        ? FinderIcon
+        : isWindowsPlatform(platform)
+          ? FileExplorerIcon
+          : FolderClosedIcon,
+      value: "file-manager",
+      kind: isMacPlatform(platform) || isWindowsPlatform(platform) ? "brand" : "generic",
+    },
+  ];
+  const availableEditorSet = new Set(availableEditors);
+  return baseOptions
+    .filter((option) => availableEditorSet.has(option.value))
+    .map((option) => ({ ...option, label: editorLabelForPlatform(option.value, platform) }));
+};
+
 const DIRECTORY_MODE_LABELS: Record<OpenWithDirectoryMode, string> = {
   "open-target": "Open target",
   "working-directory": "Working directory",
@@ -216,7 +271,19 @@ function OptionIcon({
   }
   const presentation = builtinPresentationById.get(option.id);
   if (!presentation) return null;
-  const BuiltinIcon = presentation.Icon;
+  const BuiltinIcon =
+    option.id === "file-manager"
+      ? isMacPlatform(navigator.platform)
+        ? FinderIcon
+        : isWindowsPlatform(navigator.platform)
+          ? FileExplorerIcon
+          : FolderClosedIcon
+      : presentation.Icon;
+  const kind =
+    option.id === "file-manager" &&
+    (isMacPlatform(navigator.platform) || isWindowsPlatform(navigator.platform))
+      ? "brand"
+      : presentation.kind;
   return (
     <span
       aria-hidden="true"
@@ -225,7 +292,7 @@ function OptionIcon({
       <BuiltinIcon
         className={cn(
           "size-full",
-          presentation.kind === "brand" ? "text-foreground opacity-100" : "text-muted-foreground",
+          kind === "brand" ? "text-foreground opacity-100" : "text-muted-foreground",
         )}
       />
     </span>
@@ -265,6 +332,12 @@ export const OpenInPicker = memo(function OpenInPicker({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const remote = useRemoteOpenState(environmentId);
+  const remoteCapableEditors = useRemoteCapableEditors();
+  const [remoteHintSeen, markRemoteHintSeen] = useRemoteOpenHint();
+  const environmentLabel = useEnvironment(environmentId)?.label ?? "this machine";
+  // Remote mode ignores the server's PATH probe: what matters is what runs on
+  // the viewing machine, which only the desktop app can probe.
+  const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
   const canManageCustom =
     !compact &&
     environmentId === primaryEnvironmentId &&
@@ -324,12 +397,12 @@ export const OpenInPicker = memo(function OpenInPicker({
   const options = useMemo(
     () =>
       mergeOpenWithOptions({
-        availableEditors,
+        availableEditors: effectiveEditors,
         customEntries: settings.openWithEntries,
         presentations: resolvedPresentations,
         includeCustomEntries: canManageCustom,
       }),
-    [availableEditors, canManageCustom, resolvedPresentations, settings.openWithEntries],
+    [canManageCustom, effectiveEditors, resolvedPresentations, settings.openWithEntries],
   );
   const legacyPreferredEditor = readLegacyPreferredEditor();
   const preferredOption = useMemo(
@@ -397,7 +470,8 @@ export const OpenInPicker = memo(function OpenInPicker({
           absolutePath: openInCwd,
         });
         if (url === undefined) return;
-        await openRemoteEditorUrl(url);
+        const opened = await openRemoteEditorUrl(url);
+        if (opened) markRemoteHintSeen();
         return;
       }
       const localApi = readLocalApi();
@@ -422,7 +496,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         );
       }
     },
-    [environmentId, openInCwd, openInEditorMutation, persistPreference, remote],
+    [environmentId, markRemoteHintSeen, openInCwd, openInEditorMutation, persistPreference, remote],
   );
 
   useEffect(() => {
@@ -562,7 +636,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           className="ps-[8.5px]"
           size="xs"
           variant="outline"
-          disabled={!preferredOption || !openInCwd}
+          disabled={!preferredOption || !openInCwd || remote.mode === "remote-unavailable"}
           onClick={() => preferredOption && void dispatch(preferredOption)}
         >
           {preferredOption && <OptionIcon option={preferredOption} className="size-3.5" />}
@@ -584,7 +658,14 @@ export const OpenInPicker = memo(function OpenInPicker({
             <ChevronDownIcon aria-hidden="true" className="size-4" />
           </MenuTrigger>
           <MenuPopup align="end">
-            {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+            {remote.mode === "remote-unavailable" ? (
+              <MenuItem disabled>No SSH route to {environmentLabel}</MenuItem>
+            ) : options.length === 0 ? (
+              <MenuItem disabled>No installed editors found</MenuItem>
+            ) : null}
+            {remote.mode === "remote-links" && !remoteHintSeen && (
+              <MenuItem disabled>Opens over SSH. Needs your key on {environmentLabel}</MenuItem>
+            )}
             {options.map((option) => {
               const reference = refForOpenWithOption(option);
               const isEffective =

@@ -38,6 +38,11 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
+    readonly isRepository: (cwd: string) => Effect.Effect<boolean, GitManagerServiceError>;
+    readonly hasCommit: (input: {
+      readonly cwd: string;
+      readonly refName: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
     readonly status: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
@@ -70,6 +75,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
+      options?: GitVcsDriver.CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     readonly fetchRemote: (input: {
       readonly cwd: string;
@@ -339,6 +345,31 @@ export const make = Effect.gen(function* () {
       ensureGit(operation, input.cwd).pipe(Effect.andThen(run(input)));
 
   return GitWorkflowService.of({
+    isRepository: (cwd) =>
+      registry.detect({ cwd }).pipe(
+        Effect.map((handle) => handle?.kind === "git"),
+        Effect.mapError(
+          (cause) =>
+            new GitManagerError({
+              operation: "GitWorkflowService.isRepository",
+              cwd,
+              detail: "Failed to detect a VCS repository for this Git workflow.",
+              cause,
+            }),
+        ),
+      ),
+    hasCommit: (input) =>
+      ensureGitCommand("GitWorkflowService.hasCommit", input.cwd).pipe(
+        Effect.andThen(
+          git.execute({
+            operation: "GitWorkflowService.hasCommit",
+            cwd: input.cwd,
+            args: ["rev-parse", "--verify", `${input.refName}^{commit}`],
+            allowNonZeroExit: true,
+          }),
+        ),
+        Effect.map((result) => result.exitCode === 0),
+      ),
     status: (input) =>
       detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
@@ -390,9 +421,9 @@ export const make = Effect.gen(function* () {
       ),
     // `git worktree add` is the whole point of a bare source repository: the
     // thread gets its own checkout, so the source never needs one.
-    createWorktree: (input) =>
+    createWorktree: (input, options) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd, { allowBare: true }).pipe(
-        Effect.andThen(git.createWorktree(input)),
+        Effect.andThen(git.createWorktree(input, options)),
       ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd, { allowBare: true }).pipe(

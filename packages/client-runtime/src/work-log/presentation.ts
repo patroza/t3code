@@ -658,7 +658,8 @@ export function omitSupersededLifecycleMarkers<T>(
     }
   }
 
-  return reversedEntries.slice().reverse();
+  // Hermes lacks toReversed; this array is local, so reversing it cannot mutate the input.
+  return reversedEntries.reverse();
 }
 
 export function toolGroupSummaryKind(
