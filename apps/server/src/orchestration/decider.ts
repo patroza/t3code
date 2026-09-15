@@ -221,6 +221,8 @@ interface TurnStartMessageInput {
 /**
  * Plan the `thread.message-sent` + `thread.turn-start-requested` event pair
  * shared by immediate turn starts, queued-message steers, and queue drains.
+ * Skip `thread.message-sent` when the user message was already persisted
+ * (`thread.message.user.append` during worktree bootstrap).
  */
 const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
   commandId,
@@ -237,28 +239,35 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
   PlatformError.PlatformError,
   Crypto.Crypto
 > {
-  const userMessageEvent: PlannedOrchestrationEvent = {
-    ...(yield* withEventBase({
-      aggregateKind: "thread",
-      aggregateId: thread.id,
-      occurredAt,
-      commandId,
-    })),
-    type: "thread.message-sent",
-    payload: {
-      threadId: thread.id,
-      messageId: message.messageId,
-      role: "user",
-      text: message.text,
-      attachments: message.attachments,
-      ...(message.context !== undefined ? { context: message.context } : {}),
-      turnId: null,
-      streaming: false,
-      ...(message.source !== undefined ? { source: message.source } : {}),
-      createdAt: occurredAt,
-      updatedAt: occurredAt,
-    },
-  };
+  // A worktree bootstrap persists the message ahead of the turn with
+  // `thread.message.user.append`; the turn then only references it.
+  const persistedUserMessage = thread.messages.find(
+    (entry) => entry.id === message.messageId && entry.role === "user" && entry.turnId === null,
+  );
+  const userMessageEvent: PlannedOrchestrationEvent | null = persistedUserMessage
+    ? null
+    : {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt,
+          commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: thread.id,
+          messageId: message.messageId,
+          role: "user",
+          text: message.text,
+          attachments: message.attachments,
+          ...(message.context !== undefined ? { context: message.context } : {}),
+          turnId: null,
+          streaming: false,
+          ...(message.source !== undefined ? { source: message.source } : {}),
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      };
   const turnStartRequestedEvent: PlannedOrchestrationEvent = {
     ...(yield* withEventBase({
       aggregateKind: "thread",
@@ -266,7 +275,7 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       occurredAt,
       commandId,
     })),
-    causationEventId: userMessageEvent.eventId,
+    ...(userMessageEvent ? { causationEventId: userMessageEvent.eventId } : {}),
     type: "thread.turn-start-requested",
     payload: {
       threadId: thread.id,
@@ -319,7 +328,11 @@ const planTurnStartEvents = Effect.fn("planTurnStartEvents")(function* ({
       },
     });
   }
-  return [...lifecycleResetEvents, userMessageEvent, turnStartRequestedEvent];
+  return [
+    ...lifecycleResetEvents,
+    ...(userMessageEvent ? [userMessageEvent] : []),
+    turnStartRequestedEvent,
+  ];
 });
 
 /**
@@ -1196,9 +1209,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.meta-updated",
         payload: {
           threadId: command.threadId,
-          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(command.title !== undefined
+            ? {
+                title: command.title,
+                titleState: {
+                  source: "manual" as const,
+                  version: command.commandId,
+                  needsRefinement: false,
+                },
+              }
+            : {}),
           ...(command.regenerateTitle === true
             ? {
+                titleState: {
+                  source: "generated" as const,
+                  version: command.commandId,
+                  needsRefinement: false,
+                },
                 regenerateTitle: true as const,
                 previousTitle: thread.title,
                 titleRegeneration: {
@@ -1406,6 +1433,77 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           branchPullRequest: command.branchPullRequest,
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
+            : {}),
+          updatedAt: thread.updatedAt,
+        },
+      };
+    }
+
+    case "thread.title.generate.complete": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const current =
+        thread.deletedAt === null &&
+        thread.titleState?.source !== "manual" &&
+        thread.title === command.expectedTitle &&
+        (thread.titleState?.version ?? null) === command.expectedVersion &&
+        thread.titleRegeneration == null;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: yield* nowIso,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          ...(current
+            ? {
+                title: command.title,
+                titleState: {
+                  source: "generated" as const,
+                  version: command.commandId,
+                  needsRefinement: command.needsRefinement,
+                },
+              }
+            : {}),
+          updatedAt: thread.updatedAt,
+        },
+      };
+    }
+
+    case "thread.title.refine": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const current =
+        thread.deletedAt === null &&
+        thread.latestTurn?.state === "completed" &&
+        thread.session?.status === "ready" &&
+        thread.titleState?.source === "generated" &&
+        thread.titleState.version === command.expectedVersion &&
+        thread.titleState.needsRefinement &&
+        thread.titleRegeneration == null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          ...(current
+            ? {
+                titleState: {
+                  source: "generated" as const,
+                  version: command.commandId,
+                  needsRefinement: false,
+                },
+                regenerateTitle: true as const,
+                previousTitle: thread.title,
+                titleRegeneration: { requestId: command.commandId, startedAt: occurredAt },
+              }
             : {}),
           updatedAt: thread.updatedAt,
         },
@@ -1738,6 +1836,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         queuedMessage,
         occurredAt: command.createdAt,
       });
+    }
+
+    case "thread.message.user.append": {
+      if (isImportedAgentSessionMessageId(command.message.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message id '${command.message.messageId}' uses the reserved imported-session namespace.`,
+        });
+      }
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (thread.messages.some((message) => message.id === command.message.messageId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Message '${command.message.messageId}' already exists on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: { deferredTurn: true },
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          role: "user",
+          text: command.message.text,
+          attachments: command.message.attachments,
+          ...(command.message.context !== undefined ? { context: command.message.context } : {}),
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
     }
 
     case "thread.turn.interrupt": {

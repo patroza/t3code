@@ -20,6 +20,8 @@ type NewTaskDraftRouteParams = {
   readonly environmentId?: string | string[];
   readonly projectId?: string | string[];
   readonly title?: string | string[];
+  /** Set by Add Project when this draft opens while the project's clone runs. */
+  readonly cloning?: string | string[];
   readonly pendingTaskId?: string | string[];
   readonly draftId?: string | string[];
   readonly incomingShareId?: string | string[];
@@ -57,6 +59,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
       projectId,
       branch: workspacePicker ? null : (firstParam(params.branch) ?? null),
       worktreePath: workspacePicker ? null : (firstParam(params.worktreePath) ?? null),
+      cloning: firstParam(params.cloning) === "1",
     };
   }, [params, workspaceMode]);
   const initialWorkspaceSelection = useMemo<ComposerDraftWorkspaceSelection | undefined>(() => {

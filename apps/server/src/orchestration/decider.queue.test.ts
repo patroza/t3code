@@ -598,7 +598,6 @@ it.layer(NodeServices.layer)("decider queue flows", (it) => {
         readModel,
       });
       expect((Array.isArray(replay) ? replay : [replay]).map((event) => event.type)).toEqual([
-        "thread.message-sent",
         "thread.turn-start-requested",
       ]);
     }),

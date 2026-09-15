@@ -281,7 +281,10 @@ work:
   Emulator available on the host to one isolated environment and verify the affected flow. On
   compatible macOS hosts, prefer iOS for cross-platform changes and stream it through serve-sim in
   the T3 Code in-app browser or another available agent browser; use Android when it is the affected
-  or viable platform.
+  or viable platform. For authorized mobile verification, a missing or outdated native client is a
+  build step, not a blocker. Run `node scripts/mobile-native-client.ts ensure <ios|android>
+<device-id>` on the simulator host before starting Metro. It checks the local Expo fingerprint and
+  builds/installs when needed. See `test-t3-mobile` for the full workflow.
 - Subagents must not independently launch dev servers or repeat integrated client verification
   unless their delegated task explicitly requires it.
 - Stop dev servers, watchers, and other long-running verification processes when the focused

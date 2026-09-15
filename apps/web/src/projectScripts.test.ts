@@ -31,6 +31,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         runOnWorktreeRemove: false,
         runOnPrMerged: false,
+        waitForSetup: false,
         previewUrl: "http://localhost:5733",
         autoOpenPreview: true,
       }),
@@ -54,6 +55,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         runOnWorktreeRemove: false,
         runOnPrMerged: false,
+        waitForSetup: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -75,6 +77,7 @@ describe("projectScripts helpers", () => {
         runOnWorktreeCreate: false,
         runOnWorktreeRemove: true,
         runOnPrMerged: true,
+        waitForSetup: false,
         previewUrl: null,
         autoOpenPreview: false,
       }),
@@ -87,6 +90,27 @@ describe("projectScripts helpers", () => {
       runOnWorktreeRemove: true,
       runOnPrMerged: true,
     });
+  });
+
+  it("only records async: false for setup scripts that should block the agent", () => {
+    const input = {
+      name: "Setup",
+      command: "pnpm i",
+      icon: "configure",
+      runOnWorktreeRemove: false,
+      runOnPrMerged: false,
+      previewUrl: null,
+      autoOpenPreview: false,
+    } as const;
+    expect(
+      buildProjectScript("setup", { ...input, runOnWorktreeCreate: true, waitForSetup: true }),
+    ).toMatchObject({ runOnWorktreeCreate: true, async: false });
+    expect(
+      buildProjectScript("setup", { ...input, runOnWorktreeCreate: true, waitForSetup: false }),
+    ).not.toHaveProperty("async");
+    expect(
+      buildProjectScript("setup", { ...input, runOnWorktreeCreate: false, waitForSetup: true }),
+    ).not.toHaveProperty("async");
   });
 
   it("builds and parses script run commands", () => {

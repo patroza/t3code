@@ -1,3 +1,4 @@
+import { Toolbar } from "@base-ui/react/toolbar";
 import { type AiUsageSnapshot, type ProviderInstanceId } from "@t3tools/contracts";
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SparklesIcon, StarIcon } from "lucide-react";
@@ -49,6 +50,7 @@ const PICKER_TOOLTIP_CLASS = "max-w-64 text-balance font-normal leading-snug";
 export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   selectedInstanceId: ProviderInstanceId | "favorites";
   onSelectInstance: (instanceId: ProviderInstanceId | "favorites") => void;
+  onFocusSearch: () => void;
   /**
    * Instance entries to render as rail buttons. Each entry becomes one icon
    * keyed by `instanceId`, so the default built-in Codex and a user-authored
@@ -115,7 +117,20 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   }, [props.instanceEntries, props.selectedInstanceId, showFavorites]);
 
   return (
-    <div className="w-11 shrink-0 overflow-hidden bg-muted/30" data-model-picker-sidebar="true">
+    <Toolbar.Root
+      className="w-11 shrink-0 overflow-hidden bg-muted/30"
+      data-model-picker-sidebar="true"
+      aria-label="Providers"
+      orientation="vertical"
+      onKeyDown={(event) => {
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          props.onFocusSearch();
+          return;
+        }
+      }}
+    >
       <div className="h-full overflow-y-auto overscroll-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div ref={sidebarContentRef} className="relative flex min-h-full flex-col gap-1 p-1">
           {selectedIndicatorTop !== null ? (
@@ -135,16 +150,17 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <button
+                      <Toolbar.Button
                         className={cn(
                           "relative isolate flex w-full cursor-pointer aspect-square items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] focus-visible:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] focus-visible:outline-none",
                         )}
                         onClick={() => handleSelect("favorites")}
                         type="button"
                         aria-label="Favorites"
+                        aria-pressed={props.selectedInstanceId === "favorites"}
                       >
                         <StarIcon className="size-5 fill-current shrink-0" aria-hidden />
-                      </button>
+                      </Toolbar.Button>
                     }
                   />
                   <TooltipPopup
@@ -194,7 +210,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   : entry.displayName;
 
             const button = (
-              <button
+              <Toolbar.Button
                 className={cn(
                   "relative isolate flex w-full cursor-pointer aspect-square items-center justify-center rounded-md transition-colors hover:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] focus-visible:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] focus-visible:outline-none",
                   isDisabled && "opacity-50 cursor-not-allowed hover:bg-transparent",
@@ -210,6 +226,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   setHoveredInstanceId((current) => (current === entry.instanceId ? null : current))
                 }
                 disabled={isDisabled}
+                focusableWhenDisabled={!isDisabled}
+                aria-pressed={isSelected}
                 type="button"
                 aria-label={
                   isUnavailable || isContextDisabled
@@ -244,7 +262,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                     <SparklesIcon className="size-2" />
                   </span>
                 ) : null}
-              </button>
+              </Toolbar.Button>
             );
 
             const trigger = isDisabled ? (
@@ -275,6 +293,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
           })}
         </div>
       </div>
-    </div>
+    </Toolbar.Root>
   );
 });

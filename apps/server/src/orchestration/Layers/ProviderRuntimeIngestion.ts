@@ -198,13 +198,20 @@ const MARKDOWN_FENCE_PATTERN = /^( *)(`{3,}|~{3,})/;
 // CommonMark blank lines hold only spaces and tabs. Other whitespace, such as
 // a no-break space, is paragraph content.
 const BLANK_LINE_PATTERN = /^[ \t]*$/;
+// A bullet or ordered marker followed by whitespace, at any indentation so
+// nested items count. The trailing space is required, so a partial `-` or
+// `1.` never matches before the model finishes the marker.
+const LIST_ITEM_START_PATTERN = /^[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]/;
 
 /**
- * Splits buffered assistant text at the last blank line or closing code fence
- * that is not inside an open fenced code block. `ready` is safe to deliver now
- * because the markdown before it will not change shape as more text arrives.
- * `rest` stays buffered until the next boundary or completion. Only fully
- * terminated lines count, so a trailing partial line never leaks.
+ * Splits buffered assistant text at the last blank line, closing code fence,
+ * or list item start that is not inside an open fenced code block. `ready` is
+ * safe to deliver now because the markdown before it will not change shape as
+ * more text arrives. `rest` stays buffered until the next boundary or
+ * completion. Only fully terminated lines count, so a trailing partial line
+ * never leaks; a list item start is the one lookahead that may sit on the
+ * partial line, since tight lists have no blank lines between items and would
+ * otherwise land all at once.
  */
 export function splitBufferedAssistantText(text: string): { ready: string; rest: string } {
   let openFence: { marker: string; indent: number } | null = null;
@@ -212,10 +219,15 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
   let lineStart = 0;
   for (;;) {
     const newline = text.indexOf("\n", lineStart);
+    const line = text
+      .slice(lineStart, newline === -1 ? text.length : newline)
+      .replace(/[ \t\r]+$/, "");
+    if (openFence === null && lineStart > 0 && LIST_ITEM_START_PATTERN.test(line)) {
+      boundary = lineStart;
+    }
     if (newline === -1) {
       break;
     }
-    const line = text.slice(lineStart, newline).replace(/[ \t\r]+$/, "");
     const fenceMatch = MARKDOWN_FENCE_PATTERN.exec(line);
     if (fenceMatch) {
       const indent = fenceMatch[1]!.length;
@@ -2218,17 +2230,19 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "thread.metadata.updated" && event.payload.name) {
-        // Upstream's guard (it also allows replacing a title that still equals
-        // the seed), with the fork's sanitisation kept: a provider-supplied name
-        // can carry control characters and arbitrary length.
-        if (canReplaceThreadTitle(thread.title)) {
+        // Provider-supplied names can carry control characters and arbitrary
+        // length; skip a manual title and still sanitise before generating.
+        if (thread.titleState?.source !== "manual" && canReplaceThreadTitle(thread.title)) {
           const sanitized = sanitizeTitle(event.payload.name);
           if (sanitized.length > 0) {
             yield* orchestrationEngine.dispatch({
-              type: "thread.meta.update",
+              type: "thread.title.generate.complete",
               commandId: yield* providerCommandId(event, "thread-meta-update"),
               threadId: thread.id,
               title: sanitized,
+              expectedTitle: thread.title,
+              expectedVersion: thread.titleState?.version ?? null,
+              needsRefinement: false,
             });
           }
         }

@@ -5241,6 +5241,7 @@ describe("agent browser access", () => {
         getThreadActivitiesPage: () => Effect.die("unused"),
         getThreadLifecycleById: () => Effect.die("unused"),
         getUserInputActivity: () => Effect.die("unused"),
+        listActivitiesByKind: () => Effect.die("unused"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),

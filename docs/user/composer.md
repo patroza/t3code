@@ -29,6 +29,13 @@ also send files to T3 Code through another app's system share sheet.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
+## Send while the agent is working
+
+A message sent during a running turn is queued on the server and shown as a
+chip above the composer. The queue drains in order when the turn finishes.
+Use **Send now** to steer the queued message into the current turn, or **Edit**
+to pull it back into the composer.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue

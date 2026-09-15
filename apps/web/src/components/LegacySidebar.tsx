@@ -10,6 +10,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   EllipsisVerticalIcon,
+  FolderCodeIcon,
   FolderIcon,
   FolderPlusIcon,
   Globe2Icon,
@@ -4862,7 +4863,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                             data-testid="sidebar-project-filter-all"
                           >
                             <span className="inline-flex min-w-0 items-center gap-2">
-                              <ProjectFaviconFallback className="size-3.5" />
+                              <ProjectFaviconFallback className="size-3.5" icon={FolderCodeIcon} />
                               <span className="truncate">All projects</span>
                             </span>
                           </MenuRadioItem>
