@@ -1453,6 +1453,36 @@ describe("T3Gateway", () => {
       });
 
       /*
+        Reproduces the orphan half of H3: removing the worktree while leaving the thread behind
+        points T3 at a path that no longer exists. A fatal provisioning failure after the thread was
+        created must delete that thread too. Expected to fail until cleanup dispatches `thread.delete`.
+      */
+      it.effect.fails("deletes the thread it created when provisioning fails fatally", () => {
+        const { calls, layer } = createT3Gateway({
+          projectSetupScriptRunner: { runForThreadFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          const dispatched = calls
+            .filter((call) => call.method === "dispatch")
+            .map((call) => call.input);
+
+          // Cleanup removes the worktree but leaves the thread pointing at its former path.
+          expect(calls.map((call) => call.method)).toContain("removeWorktree");
+          expect(dispatched).toContainEqual(
+            expect.objectContaining({
+              type: "thread.delete",
+              threadId: workPlanned.t3.threadId,
+            }),
+          );
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
         An unexpected stale registration that was not discoverable from our branch cannot be cleaned up safely.
       */
       it.effect(

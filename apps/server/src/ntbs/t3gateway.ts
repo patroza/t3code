@@ -824,8 +824,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             );
 
           /*
-            Script failures are thread-provisioning errors: fatal.
-            We don't pretend stuff is working if it's not.
+            Failure to launch setup is fatal to provisioning. Once launched, setup
+            may still be running or fail later; T3 does not report its completion.
+            NTBS follows that behavior.
+            TODO: Revisit if T3 exposes setup completion.
           */
           yield* projectScriptRunner
             .runForThread({
@@ -837,7 +839,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
             .pipe(
               orFail("fatal")(
                 "projectScriptRunner.runForThread",
-                "Failed to run scripts while provisioning thread",
+                "Failed to launch setup while provisioning thread",
               ),
             );
         }).pipe(

@@ -2,15 +2,11 @@
 
 The exchange model, ports, processor, and T3 gateway are implemented under `apps/server/src/ntbs/`. This file tracks only what is still open. Findings referenced by id are in `review-01-09.md`.
 
-## Durable readiness marker (H3, H4)
+## Orphaned-thread cleanup (H3)
 
-Provisioning today is worktree → `thread.create` with the final path → fire-and-forget setup script. `getThreadStatus` reports `present` from the thread shell alone, so a crash between `thread.create` and setup skips setup permanently, and a fatal cleanup leaves a thread pointing at a removed worktree.
+If setup fails to launch after thread creation, fatal cleanup removes the worktree but leaves the thread pointing at the deleted path.
 
-- [ ] Create the thread with `worktreePath: null`, ensure the worktree, run setup and wait, then dispatch `thread.meta.update` with the final path.
-- [ ] Add `ProjectSetupScriptRunner.runForThreadAndWait` backed by `ProcessRunner`, with a timeout and bounded diagnostic output; failure or timeout is `RetryableError`.
-- [ ] `getThreadStatus` reports `present` only with a non-null `worktreePath`. Fix the test that pins the opposite.
 - [ ] On `FatalError` after `thread.create`, cleanup also dispatches `thread.delete`.
-- [ ] Setup is at-least-once; scripts must be idempotent.
 
 ## Other review items
 
