@@ -2,12 +2,6 @@
 
 The exchange model, ports, processor, and T3 gateway are implemented under `apps/server/src/ntbs/`. This file tracks only what is still open. Findings referenced by id are in `review-01-09.md`.
 
-## Orphaned-thread cleanup (H3)
-
-If setup fails to launch after thread creation, fatal cleanup removes the worktree but leaves the thread pointing at the deleted path.
-
-- [ ] On `FatalError` after `thread.create`, cleanup also dispatches `thread.delete`.
-
 ## Other review items
 
 - [ ] H5: narrow `threadActivity` to session/turn lifecycle events.

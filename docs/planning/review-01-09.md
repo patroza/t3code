@@ -4,19 +4,9 @@
 
 **Method:** one manual pass plus three independent adversarial reviewers with separate lenses (processor/exchange soundness, gateway vs T3 internals, test-suite adequacy). Findings below are deduplicated and ranked. Every claim was verified against source; line numbers are as of commit `c80ee1bb8`.
 
-## Verdict in one paragraph
-
-Fatal provisioning cleanup can leave a thread pointing at a removed worktree; a failing gateway test now reproduces this. NTBS follows T3's setup behavior: launch success does not guarantee script completion, and completion tracking is deferred until T3 exposes it. The activity loop still consumes every thread event sequentially, although adapter and gateway calls now have timeouts. Tests cover deadline handling, timeout recovery through sweeps and activity, and lock release; real-engine integration remains open.
-
 ## Part 1 — Implementation soundness
 
 ### HIGH
-
-**H3. Fatal provisioning cleanup orphans a thread.**
-If setup fails to launch after `thread.create`, fatal cleanup removes the worktree but leaves the T3 thread pointing at the deleted path. A later provider launch can then fail because its working directory is missing. The gateway test `deletes the thread it created when provisioning fails fatally` reproduces this and remains intentionally failing until the fix is implemented.
-Fix: cleanup must also dispatch `thread.delete` for the affected thread.
-
-Setup recovery remains a known limitation: a crash between thread creation and setup launch can cause recovery to skip setup. NTBS is not introducing a separate setup lifecycle or a path-based readiness marker; the gateway TODO records the decision to revisit completion tracking when T3 supports it.
 
 **H5. The activity loop processes every thread event sequentially.**
 `threadActivity` in `t3gateway.ts` forwards every thread event system-wide, including token deltas. `Stream.runForEach` in `processor.ts` handles these pings sequentially, taking the source lock and advancing the exchange inline. Adapter and gateway calls now have timeouts, but a slow call or a wait for another attempt's lock still delays other exchanges' pings while events accumulate in the unbounded buffer.
@@ -41,6 +31,10 @@ Fix: narrow the filter to session/turn lifecycle events. If measured latency war
 **L4. `resolveRemoteTrackingCommit` fatal classification is broader than "branch missing".** `t3gateway.ts:306-318`: any non-zero git exit (index.lock, corrupt ref) becomes "Branch does not exist on origin". Acceptable, but say so in the comment.
 
 **L5. `runtimeMode: "full-access"` for externally-triggered work.** It is already the engine default and bypasses nothing extra, but it is the one place a policy hook for untrusted input would go. Note it; do not solve it now.
+
+### Deferred
+
+**Setup recovery.** A crash between thread creation and setup launch can cause recovery to skip setup. Revisit when T3 exposes setup completion; NTBS will not introduce a separate setup lifecycle.
 
 ### Verified sound
 
@@ -83,8 +77,7 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 
 ## Recommended order
 
-1. H3: delete the affected thread during fatal provisioning cleanup and make the existing reproduction test pass.
-2. M1: decide how `process` should return after recording a request when subsequent work fails, and whether that work belongs in the caller's fiber.
-3. H5: narrow the activity filter. Non-blocking pings can wait until the platform adapter exists and shows real latency.
-4. Tests: one real-engine integration test, injectable failing repository, `startTurn` fatal path, sweep racing activity, and bound `awaitStoredTag`.
-5. M4: separate user-facing rejection messages from diagnostics before a real adapter posts them.
+1. M1: decide how `process` should return after recording a request when subsequent work fails, and whether that work belongs in the caller's fiber.
+2. H5: narrow the activity filter. Non-blocking pings can wait until the platform adapter exists and shows real latency.
+3. Tests: one real-engine integration test, injectable failing repository, `startTurn` fatal path, sweep racing activity, and bound `awaitStoredTag`.
+4. M4: separate user-facing rejection messages from diagnostics before a real adapter posts them.

@@ -717,11 +717,11 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
         **Thread**. Create it. If the dispatch fails but the thread turns out to exist, a stale observation raced us and the step is already done.
 
-        **Setup scripts**. Failures are fatal, like any other provisioning error: we don't pretend the workspace works when it doesn't.
+        **Setup scripts**. Failure to launch setup is fatal; script completion is not tracked by T3.
 
         On a retryable failure, cleanup nothing. The half-finished work is owned by the exchange record and is exactly what the next reconcile pass resumes from.
 
-        On a fatal failure, the one moment ownership truly ends, remove the worktree best-effort, and let only the cheap branch ref leak.
+        On a fatal failure, delete a thread created by this attempt before removing its worktree. If deletion fails, keep the worktree so the surviving thread still has a directory. A thread found during recovery and its worktree belong to an earlier attempt and are left intact. The branch ref is left behind.
         */
         // We refetch because the project details we had from `planCoordinates` might have changed, the project might've been deleted, etc
         const project = yield* getProject(state.t3.projectId);
@@ -752,6 +752,8 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           startBranchName: state.t3.startBranchName,
         });
 
+        let threadCreationState: "not-created" | "created" | "recovered" = "not-created";
+
         yield* Effect.gen(function* () {
           const commandId = CommandId.make(yield* randomUUID);
           const createdAt = yield* getNow;
@@ -774,7 +776,10 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               }),
             )
             .pipe(
-              Effect.asVoid,
+              Effect.tap(() => {
+                threadCreationState = "created";
+                return Effect.void;
+              }),
               /*
                 A previous attempt may have created the thread before crashing.
                 If the thread exists after a failed dispatch, this step is already
@@ -797,7 +802,9 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                   Effect.map(Option.isSome),
                   Effect.flatMap((threadExists) =>
                     threadExists
-                      ? Effect.void
+                      ? Effect.sync(() => {
+                          threadCreationState = "recovered";
+                        })
                       : Effect.fail(
                           // TODO: `OrchestrationCommandInvariantError` does not expose
                           // which invariant failed. Treat it as fatal for now, but T3
@@ -843,13 +850,37 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               ),
             );
         }).pipe(
-          Effect.tapError((error) =>
-            error._tag === "FatalError"
-              ? gitWorkflowService
-                  .removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: true })
-                  .pipe(Effect.ignore)
-              : Effect.void,
-          ),
+          Effect.tapError((error) => {
+            if (error._tag !== "FatalError" || threadCreationState === "recovered") {
+              return Effect.void;
+            }
+
+            return Effect.gen(function* () {
+              if (threadCreationState === "created") {
+                yield* orchestrationEngine.dispatch(
+                  OrchestrationCommand.make({
+                    type: "thread.delete",
+                    commandId: CommandId.make(yield* randomUUID),
+                    threadId: state.t3.threadId,
+                  }),
+                );
+              }
+
+              yield* gitWorkflowService.removeWorktree({
+                cwd: workspaceRoot,
+                path: worktreePath,
+                force: true,
+              });
+            }).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to clean up NTBS thread provisioning", {
+                  threadId: state.t3.threadId,
+                  worktreePath,
+                  cause,
+                }),
+              ),
+            );
+          }),
         );
       });
 

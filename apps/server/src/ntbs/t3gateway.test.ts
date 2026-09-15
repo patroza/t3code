@@ -130,6 +130,7 @@ const createGitCommandError = (exitCode?: number, detail = "") =>
 type OrchestrationEngineInput = {
   /** `"invariant"` fails with the decider's rejection; `true` with an operational persistence error. */
   dispatchFails?: boolean | "invariant";
+  deleteFails?: boolean;
   /** Signals, then hangs `dispatch` so a caller can interrupt a provision mid-flight. */
   dispatchStalls?: Deferred.Deferred<void>;
   /** Emitted through `streamDomainEvents` as a finite stream, unlike the live infinite PubSub one. */
@@ -153,9 +154,9 @@ const createOrchestrationEngineServiceMock = (
         Effect.andThen(() =>
           input?.dispatchStalls
             ? Deferred.succeed(input.dispatchStalls, undefined).pipe(Effect.andThen(Effect.never))
-            : input?.dispatchFails
+            : input?.dispatchFails || (_command.type === "thread.delete" && input?.deleteFails)
               ? Effect.fail(
-                  input.dispatchFails === "invariant"
+                  input?.dispatchFails === "invariant"
                     ? new OrchestrationCommandInvariantError({
                         commandType: _command.type,
                         detail: "rejected by the decider",
@@ -1392,7 +1393,7 @@ describe("T3Gateway", () => {
       it.effect(
         "fails fatally when T3 rejects creation and the thread is genuinely missing",
         () => {
-          const { layer } = createT3Gateway({
+          const { calls, layer } = createT3Gateway({
             orchestrationEngine: { dispatchFails: "invariant" },
             pqsm: { isThreadMissing: true },
           });
@@ -1404,6 +1405,8 @@ describe("T3Gateway", () => {
 
             expect(result._tag).toBe("FatalError");
             expect(result.method).toBe("orchestrationEngine.dispatch");
+            expect(calls.map((call) => call.method)).toContain("removeWorktree");
+            expect(calls.filter((call) => call.method === "dispatch")).toHaveLength(1);
           }).pipe(Effect.provide(layer));
         },
       );
@@ -1427,37 +1430,42 @@ describe("T3Gateway", () => {
       /*
         The one moment ownership truly ends: a fatal error removes the worktree.
       */
-      it.effect("fails fatally when setup scripts fail, removing the worktree", () => {
-        const { calls, layer } = createT3Gateway({
-          projectSetupScriptRunner: { runForThreadFails: true },
-        });
+      it.effect(
+        "fails fatally when setup cannot launch, deleting the thread before its worktree",
+        () => {
+          const { calls, layer } = createT3Gateway({
+            projectSetupScriptRunner: { runForThreadFails: true },
+          });
 
-        return Effect.gen(function* () {
-          const t3Gateway = yield* T3Gateway;
+          return Effect.gen(function* () {
+            const t3Gateway = yield* T3Gateway;
 
-          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+            const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
 
-          expect(result._tag).toBe("FatalError");
-          expect(result.method).toBe("projectScriptRunner.runForThread");
+            expect(result._tag).toBe("FatalError");
+            expect(result.method).toBe("projectScriptRunner.runForThread");
 
-          expect(calls.map((call) => call.method)).toEqual([
-            "getProjectShellById",
-            "listRefs",
-            "createWorktree",
-            "randomUUIDv4",
-            "dispatch",
-            "runForThread",
-            "removeWorktree",
-          ]);
-        }).pipe(Effect.provide(layer));
-      });
+            expect(calls.map((call) => call.method)).toEqual([
+              "getProjectShellById",
+              "listRefs",
+              "createWorktree",
+              "randomUUIDv4",
+              "dispatch",
+              "runForThread",
+              "randomUUIDv4",
+              "dispatch",
+              "removeWorktree",
+            ]);
+          }).pipe(Effect.provide(layer));
+        },
+      );
 
       /*
         Reproduces the orphan half of H3: removing the worktree while leaving the thread behind
         points T3 at a path that no longer exists. A fatal provisioning failure after the thread was
-        created must delete that thread too. Expected to fail until cleanup dispatches `thread.delete`.
+        created must delete that thread too.
       */
-      it.effect.fails("deletes the thread it created when provisioning fails fatally", () => {
+      it.effect("deletes the thread it created when provisioning fails fatally", () => {
         const { calls, layer } = createT3Gateway({
           projectSetupScriptRunner: { runForThreadFails: true },
         });
@@ -1471,7 +1479,6 @@ describe("T3Gateway", () => {
             .filter((call) => call.method === "dispatch")
             .map((call) => call.input);
 
-          // Cleanup removes the worktree but leaves the thread pointing at its former path.
           expect(calls.map((call) => call.method)).toContain("removeWorktree");
           expect(dispatched).toContainEqual(
             expect.objectContaining({
@@ -1479,6 +1486,48 @@ describe("T3Gateway", () => {
               threadId: workPlanned.t3.threadId,
             }),
           );
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("keeps the worktree when thread deletion fails, preserving the setup error", () => {
+        const { calls, layer } = createT3Gateway({
+          orchestrationEngine: { deleteFails: true },
+          projectSetupScriptRunner: { runForThreadFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const gateway = yield* T3Gateway;
+          const error = yield* gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(error._tag).toBe("FatalError");
+          expect(error.method).toBe("projectScriptRunner.runForThread");
+          expect(
+            calls.filter((call) => call.method === "dispatch").map((call) => call.input),
+          ).toContainEqual(
+            expect.objectContaining({
+              type: "thread.delete",
+              threadId: workPlanned.t3.threadId,
+            }),
+          );
+          expect(calls.map((call) => call.method)).not.toContain("removeWorktree");
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("keeps a recovered thread and its worktree when setup cannot launch", () => {
+        const { calls, layer } = createT3Gateway({
+          orchestrationEngine: { dispatchFails: "invariant" },
+          projectSetupScriptRunner: { runForThreadFails: true },
+        });
+
+        return Effect.gen(function* () {
+          const gateway = yield* T3Gateway;
+          const error = yield* gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(error._tag).toBe("FatalError");
+          expect(error.method).toBe("projectScriptRunner.runForThread");
+          expect(calls.map((call) => call.method)).toContain("getThreadShellById");
+          expect(calls.filter((call) => call.method === "dispatch")).toHaveLength(1);
+          expect(calls.map((call) => call.method)).not.toContain("removeWorktree");
         }).pipe(Effect.provide(layer));
       });
 
