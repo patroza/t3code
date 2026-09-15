@@ -22,6 +22,7 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import { GrokTranscriptResync } from "../externalSessions/GrokTranscriptResync.ts";
 import * as IdentityService from "../identity/IdentityService.ts";
 import { stampOrchestrationCommandSource } from "../identity/stampSource.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -46,6 +47,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const grokTranscriptResync = yield* GrokTranscriptResync;
     const identity = yield* IdentityService.IdentityService;
     const sessions = yield* SessionStore.SessionStore;
+    const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
 
     return handlers
       .handle(
@@ -119,6 +121,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          yield* ProjectCloneTracker.rejectCommandsDuringClone(
+            projectCloneTracker,
+            args.payload,
+          ).pipe(
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_dispatch_failed", cause),
+            ),
+          );
           const clientDeviceType = yield* sessions.listActive().pipe(
             Effect.map(
               (active) =>
@@ -145,7 +155,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             clientDeviceType,
             people: mapPeople,
           });
-          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+          const result = yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
             Effect.tapError(() =>
               cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
             ),
@@ -153,6 +163,11 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
+          yield* ProjectCloneTracker.discardCloneForDeletedProject(
+            projectCloneTracker,
+            normalizedCommand,
+          );
+          return result;
         }),
       );
   }),

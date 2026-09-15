@@ -280,6 +280,7 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
 
@@ -293,6 +294,7 @@ export const makeAcpTextGeneration = Effect.fn("makeAcpTextGeneration")(function
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 

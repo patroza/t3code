@@ -49,6 +49,7 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { BoardScreen } from "../board/BoardScreen";
 import {
   DEFAULT_OWNERSHIP_FILTER,
@@ -1123,6 +1124,7 @@ function ThreadNavigationSidebarPane(
       serverConfigs,
     ],
   );
+  useThreadJumpShortcuts(listItems, handleSelectThread);
   const sidebarItemsAreEqual = useCallback(
     (previous: SidebarListItem, item: SidebarListItem): boolean => {
       if (previous.type === "v2-thread" && item.type === "v2-thread") {

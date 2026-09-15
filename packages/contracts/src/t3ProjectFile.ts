@@ -56,6 +56,12 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, the script runs automatically when T3 observes the branch change request transition to merged (independent of worktree removal). Runs in the status cwd (worktree or project root).",
     }),
   ),
+  async: Schema.optionalKey(
+    Schema.Boolean.annotate({
+      description:
+        "Only for runOnWorktreeCreate scripts. When true (the default), the agent starts while the script is still running. Set false to hold the agent until the script exits.",
+    }),
+  ),
   previewUrl: Schema.optionalKey(
     trimmedNonEmpty({
       description:
