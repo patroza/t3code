@@ -26,6 +26,7 @@ import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -251,6 +252,7 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(true),
   });
   const startupReconciliationDone = yield* Deferred.make<void>();
+  const reactorHasStarted = yield* Ref.make(false);
 
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
@@ -2217,6 +2219,7 @@ const make = Effect.gen(function* () {
   });
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
+    yield* Ref.set(reactorHasStarted, true);
     const pendingTitles = yield* findPendingThreadTitles().pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -2297,7 +2300,9 @@ const make = Effect.gen(function* () {
   return {
     start,
     drain: Effect.gen(function* () {
-      yield* Deferred.await(startupReconciliationDone);
+      if (yield* Ref.get(reactorHasStarted)) {
+        yield* Deferred.await(startupReconciliationDone);
+      }
       yield* worker.drain;
       yield* threadTitleRegenerationWorker.drain;
     }),

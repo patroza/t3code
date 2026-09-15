@@ -40,6 +40,9 @@ import {
 import { ServerConfig } from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+// Cap concurrent `git` spawns across all worktrees. Unbounded fan-out during
+// reconnect/VCS storms was thrashing host memory and delaying RPC pongs.
+// Long-running commands (null timeout or above DEFAULT_TIMEOUT_MS) skip this.
 const gitProcesses = Semaphore.makeUnsafe(8);
 // `git worktree add` checks out the full tree, so on large repositories it can
 // take well beyond the default 30s (e.g. a 375k-file repo takes ~40s on an idle
@@ -72,11 +75,6 @@ const DETERMINISTIC_WORKTREE_PREPARATION_FAILURES = [
  */
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(90);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
-/**
- * Cap concurrent `git` spawns across all worktrees. Unbounded fan-out during
- * reconnect/VCS storms was thrashing host memory and delaying RPC pongs.
- */
-const GIT_PROCESS_CONCURRENCY = 8;
 
 function worktreePreparationDetail(input: {
   readonly stderr: string;
@@ -845,7 +843,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
-  const gitProcessSemaphore = yield* Semaphore.make(GIT_PROCESS_CONCURRENCY);
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -958,24 +955,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
       const execution = runGitCommand().pipe(Effect.scoped);
       if (timeoutMs === null) {
-        return yield* gitProcessSemaphore.withPermits(1)(execution);
+        return yield* execution;
       }
 
-      return yield* gitProcessSemaphore.withPermits(1)(
-        execution.pipe(
-          Effect.timeoutOption(timeoutMs),
-          Effect.flatMap((result) =>
-            Option.match(result, {
-              onNone: () =>
-                Effect.fail(
-                  new GitCommandError({
-                    ...gitCommandContext(commandInput),
-                    detail: "Git command timed out.",
-                  }),
-                ),
-              onSome: Effect.succeed,
-            }),
-          ),
+      return yield* execution.pipe(
+        Effect.timeoutOption(timeoutMs),
+        Effect.flatMap((result) =>
+          Option.match(result, {
+            onNone: () =>
+              Effect.fail(
+                new GitCommandError({
+                  ...gitCommandContext(commandInput),
+                  detail: "Git command timed out.",
+                }),
+              ),
+            onSome: Effect.succeed,
+          }),
         ),
       );
     },

@@ -1060,6 +1060,7 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
             getUserInputActivity: () => Effect.die("unused"),
+            listActivitiesByKind: () => Effect.succeed([]),
             getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
             getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
             getShellSnapshot: () =>
@@ -11523,10 +11524,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 3);
+      assert.equal(response.sequence, 6);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.turn.start"],
+        [
+          "thread.create",
+          "thread.message.user.append",
+          "thread.activity.append",
+          "thread.session.set",
+          "thread.meta.update",
+          "thread.turn.start",
+          "thread.activity.append",
+        ],
       );
       // Reuse wins over the requested new branch and origin refresh.
       assert.equal(fetchRemote.mock.calls.length, 0);
@@ -11536,7 +11545,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         refName: "feature/base",
         path: null,
       });
-      const metaUpdate = dispatchedCommands[1];
+      const metaUpdate = dispatchedCommands.find(
+        (command) => command.type === "thread.meta.update",
+      );
       assertTrue(metaUpdate?.type === "thread.meta.update");
       if (metaUpdate?.type === "thread.meta.update") {
         assert.equal(metaUpdate.branch, "feature/base");
@@ -11653,7 +11664,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         newRefName: "feature/base",
         path: null,
       });
-      const metaUpdate = dispatchedCommands[1];
+      const metaUpdate = dispatchedCommands.find(
+        (command) => command.type === "thread.meta.update",
+      );
       assertTrue(metaUpdate?.type === "thread.meta.update");
       if (metaUpdate?.type === "thread.meta.update") {
         assert.equal(metaUpdate.branch, "feature/base");
@@ -11870,7 +11883,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.sequence, 2);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.turn.start"],
+        ["thread.create", "thread.turn.start", "thread.activity.append"],
       );
       assert.equal(createWorktree.mock.calls.length, 0);
       assert.equal(runForThread.mock.calls.length, 0);
@@ -12010,7 +12023,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      // create (failed duplicate) + meta.update + setup-script.requested/started + turn.start
+      // create (failed duplicate) + meta.update + setup-script.requested/started + turn.start + settled setup
       assert.equal(response.sequence, 5);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
@@ -12020,6 +12033,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           "thread.activity.append",
           "thread.activity.append",
           "thread.turn.start",
+          "thread.activity.append",
         ],
       );
       // Re-add at the same path for the existing branch; no origin fetch / new branch.
@@ -12539,6 +12553,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 return { sequence: dispatchedCommands.length };
               }),
             readEvents: () => Stream.empty,
+          },
+          // Fork bootstrap waits for the worktree path to appear in the
+          // projection before running setup / starting the agent. Without
+          // this the wait sleeps on the TestClock and the subscribe hangs.
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    worktreePath: "/tmp/bootstrap-worktree",
+                  }),
+                ),
+              ),
           },
           projectSetupScriptRunner: {
             runForThread,
