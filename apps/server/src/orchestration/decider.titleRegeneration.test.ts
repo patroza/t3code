@@ -2,6 +2,7 @@ import { CommandId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/con
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as HashMap from "effect/HashMap";
 
 import { decideOrchestrationCommand } from "./decider.ts";
 import { fromWireReadModel, type CommandReadModel } from "./commandReadModel.ts";
@@ -83,7 +84,7 @@ it.layer(NodeServices.layer)("title regeneration decider", (it) => {
         },
         readModel: {
           ...readModel,
-          threads: readModel.threads.map((thread) => ({
+          threads: HashMap.map(readModel.threads, (thread) => ({
             ...thread,
             titleState: {
               source: "manual" as const,

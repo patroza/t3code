@@ -3356,7 +3356,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThread !== undefined &&
     pendingWorktreeThreadIds.has(activeThread.id) &&
     !activeThread.worktreePath;
-  const isPreparingWorktreeUi = isPreparingWorktree || hasPendingWorktreeIntent;
   const optimisticCompactionMessage = optimisticUserMessages.at(-1);
   const pendingCompactionMessage =
     isSendBusy &&
@@ -3406,6 +3405,7 @@ export default function ChatView(props: ChatViewProps) {
     isCompacting ||
     awaitingBootstrapTurn;
   const isPreparingWorktree = isLocallyPreparingWorktree || awaitingBootstrapTurn;
+  const isPreparingWorktreeUi = isPreparingWorktree || hasPendingWorktreeIntent;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -8053,11 +8053,6 @@ export default function ChatView(props: ChatViewProps) {
       submissionIntent: resolvedSubmissionIntent,
     });
     let turnStartSucceeded = false;
-    setWorktreeSetupRef(
-      baseBranchForWorktree
-        ? { environmentId, threadId: threadIdForSend, ownerKey: worktreeSetupOwnerKey }
-        : null,
-    );
 
     try {
       const messageCreatedAt = new Date().toISOString();

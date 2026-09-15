@@ -266,6 +266,7 @@ it.effect("reports clone progress from git's stderr and keeps its error text on 
                   cwd: input.cwd,
                   detail: "Git command exited with a non-zero status.",
                   exitCode: 128,
+                  failureKind: "unknown",
                 });
               }),
           },

@@ -11781,6 +11781,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             scriptCommand: "npm install",
             terminalId: "setup-setup",
             cwd: existingWorktreePath,
+            async: true,
           }),
       );
 
@@ -11923,6 +11924,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             scriptCommand: "npm install",
             terminalId: "setup-setup",
             cwd: missingWorktreePath,
+            async: true,
           }),
       );
 

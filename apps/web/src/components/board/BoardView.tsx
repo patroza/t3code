@@ -27,6 +27,7 @@ import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/threa
 import type { EnvironmentId, ScopedThreadRef, VcsStatusResult } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
+import { FolderCodeIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -906,7 +907,7 @@ function BoardContent() {
                   {selectedFilterSnapshot ? (
                     <ProjectFavicon project={selectedFilterSnapshot} />
                   ) : (
-                    <ProjectFaviconFallback />
+                    <ProjectFaviconFallback icon={FolderCodeIcon} />
                   )}
                   <span className="truncate">
                     {selectedFilterSnapshot?.displayName ?? "All projects"}
@@ -917,7 +918,7 @@ function BoardContent() {
             <SelectPopup>
               <SelectItem value={BOARD_PROJECT_FILTER_ALL}>
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <ProjectFaviconFallback />
+                  <ProjectFaviconFallback icon={FolderCodeIcon} />
                   <span className="truncate">All projects</span>
                 </span>
               </SelectItem>

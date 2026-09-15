@@ -1357,7 +1357,7 @@ describe("orchestration projector", () => {
           activityEvent(3 + index, `tool-${index}`, "tool.completed"),
         );
       }
-      const thread = model.threads.find((entry) => entry.id === threadId);
+      const thread = firstThread(model);
       expect(thread?.activities).toHaveLength(501);
       expect(thread?.activities[0]?.id).toBe(`worktree-setup:${threadId}`);
     }),
