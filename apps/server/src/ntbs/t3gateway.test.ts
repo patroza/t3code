@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@effect/vitest";
 import { t3GatewayLive, T3Gateway } from "./t3gateway.ts";
-import { DateTime, Effect, Layer, Option, Ref, FileSystem, Stream } from "effect";
+import { DateTime, Deferred, Effect, Fiber, Layer, Option, Ref, FileSystem, Stream } from "effect";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -130,6 +130,8 @@ const createGitCommandError = (exitCode?: number, detail = "") =>
 type OrchestrationEngineInput = {
   /** `"invariant"` fails with the decider's rejection; `true` with an operational persistence error. */
   dispatchFails?: boolean | "invariant";
+  /** Signals, then hangs `dispatch` so a caller can interrupt a provision mid-flight. */
+  dispatchStalls?: Deferred.Deferred<void>;
   /** Emitted through `streamDomainEvents` as a finite stream, unlike the live infinite PubSub one. */
   domainEvents?: ReadonlyArray<OrchestrationEvent>;
 };
@@ -149,16 +151,18 @@ const createOrchestrationEngineServiceMock = (
     dispatch: (_command) =>
       call("dispatch", _command).pipe(
         Effect.andThen(() =>
-          input?.dispatchFails
-            ? Effect.fail(
-                input.dispatchFails === "invariant"
-                  ? new OrchestrationCommandInvariantError({
-                      commandType: _command.type,
-                      detail: "rejected by the decider",
-                    })
-                  : toPersistenceSqlError("some operation")("some cause"),
-              )
-            : Effect.succeed({ sequence: 0 }),
+          input?.dispatchStalls
+            ? Deferred.succeed(input.dispatchStalls, undefined).pipe(Effect.andThen(Effect.never))
+            : input?.dispatchFails
+              ? Effect.fail(
+                  input.dispatchFails === "invariant"
+                    ? new OrchestrationCommandInvariantError({
+                        commandType: _command.type,
+                        detail: "rejected by the decider",
+                      })
+                    : toPersistenceSqlError("some operation")("some cause"),
+                )
+              : Effect.succeed({ sequence: 0 }),
         ),
       ),
     streamDomainEvents: Stream.fromIterable(input?.domainEvents ?? []),
@@ -1495,6 +1499,36 @@ describe("T3Gateway", () => {
             "getProjectShellById",
             "listRefs",
             "createWorktree",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        Interruption is not a fatal error. The processor times a hung provision out and interrupts
+        it, and cleanup must stay reserved for the fatal path: no removeWorktree, so the next
+        reconcile pass can still observe whatever the dispatch managed to commit.
+      */
+      it.effect("keeps the worktree when a provision is interrupted", () => {
+        const dispatchStalled = Deferred.makeUnsafe<void>();
+        const { calls, layer } = createT3Gateway({
+          orchestrationEngine: { dispatchStalls: dispatchStalled },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const provision = yield* t3Gateway
+            .provisionThread(workPlanned)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(dispatchStalled);
+          yield* Fiber.interrupt(provision);
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
           ]);
         }).pipe(Effect.provide(layer));
       });

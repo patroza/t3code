@@ -6,15 +6,11 @@
 
 ## Verdict in one paragraph
 
-The model and the orchestration loop are sound. The five-state exchange, the pure deciders, observe-before-act, the per-source lock, the claim idempotency, and the recovery/sweep loop all hold up under interruption and crash analysis, and the reviewers found no way to create two threads or post two replies for one request. The problems are at the seams with T3: three assumptions the gateway makes about T3 internals are false in realistic failure modes, and each one turns a failure that should end in a failure reply into either silence or an infinite retry. Those must be fixed before the first real adapter, because every one of them is triggered by something a user will do (delete a thread, name a wrong branch, have a provider that fails to launch). The test suite is thorough for the happy and transient-failure paths of the processor and for gateway classification, but it never exercises the sweeper, never tests against the real engine, and in one place pins the opposite of the documented contract.
+The remaining gateway concerns center on setup readiness: recovery can skip setup, and starting a script does not establish that it finished successfully. The activity loop still consumes every thread event sequentially, although adapter and gateway calls now have timeouts. Tests cover deadline handling, timeout recovery through sweeps and activity, and lock release; real-engine integration and setup-readiness coverage remain open.
 
 ## Part 1 — Implementation soundness
 
 ### HIGH
-
-**H2. A rejected request produces silence, and the documented contract says otherwise.**
-`processor.ts:371-373` maps `FatalError` from `planCoordinates` (branch not on origin, project missing, no `origin` remote) to `NTBSProcessorError` with nothing persisted. `t3gateway.ts:72` claims the processor "converts that into a reply-pending failure"; it cannot, because `ExchangeBase` requires the coordinates that just failed. The user who typed a wrong branch name never hears back; the webhook errors, the platform redelivers, and each redelivery does a full `git fetch`.
-Fix: decide who owns this reply. Either a typed `NTBSRequestRejected` error the inbound code must render to the platform, or a `RequestRejected` state with `t3: null` that flows through normal delivery. Fix the comment on `t3gateway.ts:72` either way.
 
 **H3. Crash after `thread.create` but before setup scripts skips setup permanently; fatal cleanup orphans a thread.**
 Provisioning order is worktree → `thread.create` with the final `worktreePath` → scripts (`t3gateway.ts:690-765`). `getThreadStatus` (`:480-491`) reports `present` from the shell alone, so recovery after a crash in that window decides `record-thread-created` and never runs setup. On a `FatalError` after `thread.create`, `tapError` (`:767-773`) removes the worktree but leaves the T3 thread pointing at the deleted path; the provider then spawns with a missing cwd and errors, which the gateway now reports as a failure reply (see "Resolved"). `ntbs-todos.md` ("Settled gateway contracts") specified `worktreePath: null` on create, a blocking setup, then `thread.meta.update` as the durable readiness marker. That design was not implemented and the comment on `t3gateway.ts:163` ("each skipped if already done") is false for setup.
@@ -24,23 +20,17 @@ Fix: implement the documented readiness marker, or at minimum dispatch `thread.d
 `ProjectSetupScriptRunner.runForThread` (`ProjectSetupScriptRunner.ts:141-182`) opens a terminal, writes `command\r`, returns `started`. The comment at `t3gateway.ts:749-752` ("Script failures are … fatal") is false: only terminal open/write failures are errors. `startTurn` can run while `pnpm install` is still executing. `ntbs-todos.md` required `runForThreadAndWait`; it was never added.
 Fix: add the blocking runner with a timeout, or rewrite the comment and accept the race explicitly.
 
-**H5. Head-of-line blocking on the activity loop, fed by an unbounded firehose.**
-`threadActivity` (`t3gateway.ts:638-644`) forwards every thread event system-wide, token deltas included, from `PubSub.unbounded` (`OrchestrationEngine.ts:92`). `Stream.runForEach` (`processor.ts:393`) processes pings strictly sequentially, each taking the per-source lock and running port calls with no timeout anywhere. One `postReply` hanging on Jira for 60 s parks every other exchange's completion ping behind it while the pubsub buffer grows without bound. A ping on a `request-claimed` exchange runs `provisionThread` (git fetch, worktree, scripts) inline in the loop.
-Fix: (a) narrow the filter to session/turn lifecycle events; (b) make pings non-blocking (record "dirty" and let the holder re-drive, or `withPermitsIfAvailable`); (c) `Effect.timeout` on every adapter and gateway call, classified retryable.
+**H5. The activity loop processes every thread event sequentially.**
+`threadActivity` in `t3gateway.ts` forwards every thread event system-wide, including token deltas. `Stream.runForEach` in `processor.ts` handles these pings sequentially, taking the source lock and advancing the exchange inline. Adapter and gateway calls now have timeouts, but a slow call or a wait for another attempt's lock still delays other exchanges' pings while events accumulate in the unbounded buffer.
+Fix: narrow the filter to session/turn lifecycle events. If measured latency warrants it, coalesce pending pings or avoid waiting on occupied source locks while ensuring the exchange is driven again.
 
 ### MEDIUM
 
 **M1. `process` can fail after the claim and the caller cannot tell.** `processor.ts:375-376`: `persist(claimed)` succeeds, `advanceExchange` fails transiently, `process` returns an error. The doc says it "returns once the exchange is claimed". A webhook handler will post its own error while the sweeper later posts the real reply. Also heavy provisioning runs inside the webhook request fiber. Fix: after the claim, log-and-succeed (as `run` does) or fork the advance into `run`'s scope.
 
-**M2. `provisionThread` does not distinguish command rejection from infrastructure failure.** The original deleted-ID example is obsolete: `requireThreadAbsent` now explicitly permits recreating deleted thread IDs. The remaining issue is the dispatch-failure handler in `t3gateway.ts`: it checks whether the thread exists, treats a failed lookup as absence, and makes every failure retryable unless it finds a thread. A rejection can therefore be retried unnecessarily until the provisioning deadline. Fix: preserve successful recovery when the thread exists; keep lookup failures retryable without claiming absence; when absence is confirmed, classify invariant rejections as fatal and infrastructure failures as retryable.
+**M4. Failure replies expose internal wording.** Stored failure causes are now structured rather than raw errors, but `toRejected` still copies `rejection.reason` into the platform reply. Gateway reasons can contain implementation details such as thread UUIDs. Fix: separate user-facing failure text from diagnostic wording.
 
-`OrchestrationEngine.dispatch` waits for command processing, including the transaction that persists events and updates projections. A successful return establishes that creation committed, although another command may subsequently delete the thread. The recovery lookup runs after a failed dispatch; it is not a check immediately after merely enqueueing creation. The gateway comment attributing this to "projection lag" is misleading for this engine.
-
-**M3. Deadlines exist, but do not bound individual calls.** The original absence-of-deadlines finding is resolved: `exchange.ts` expires planning after 5 minutes, provisioning after 15 minutes, and turn execution and reply delivery after 1 hour in their respective states. Deciders check these deadlines during reconciliation, with completed observations taking precedence. A hung adapter or gateway call can prevent reconciliation from reaching those checks, and status reads can repeatedly fail before the decider runs. Expiring an exchange also does not itself cancel provider work. Remaining fix, shared with H5: bound calls and ensure observation failures cannot indefinitely bypass expiry. Timing out a dispatch only stops waiting; the queued command may still commit, so recovery must observe before retrying. Backoff was deliberately omitted; attempt counters and exponential backoff are not required to implement the existing deadlines.
-
-**M4. Stored replies carry raw `cause: unknown` and leak internal text.** `processor.ts:137-144` stores `FatalError.cause` verbatim: error instances, git results, possibly cyclic. A real repository will JSON-encode it; a throw there fails `persist` and strands the exchange. `text: failure.reason` is what gets posted to the platform ("T3 rejected the turn start for thread <uuid>"). Gateway replies write `cause: null` contrary to the structured causes in `ntbs-todos.md`. Fix: type `cause` as a JSON-safe schema, convert at the boundary, and separate user-facing text from diagnostics.
-
-**M5. Nothing is wired.** No SQL `ExchangeRepository`, no real adapter, no consumer of `makeNTBSProcessor` outside tests. The "durable" in the design is the in-memory HashMap today. Not a defect, but it bounds what this review can say: the persistence assumptions in M4 and the index needs in L2 are untested.
+**M5. Nothing is wired.** No SQL `ExchangeRepository`, no real adapter, no consumer of `makeNTBSProcessor` outside tests. The "durable" in the design is the in-memory HashMap today. Not a defect, but it bounds what this review can say: SQL persistence and the index needs in L2 are untested.
 
 ### LOW
 
@@ -66,7 +56,7 @@ Fix: (a) narrow the filter to session/turn lifecycle events; (b) make pings non-
 
 ### Gaps that matter
 
-1. **The sweeper has never run in a test.** `it.effect` provides a `TestClock`, so `Effect.delay("1 minute")` never fires and every `run` test interrupts first. The design's backstop for missed pings, and a sweep racing an activity ping on the same source, is one `TestClock.adjust("1 minute")` away.
+1. **A sweep racing an activity ping on the same exchange still needs coverage.** Sweeper recovery after a timeout is now tested; simultaneous sweep and activity handling is a separate case.
 2. **No integration test against the real `OrchestrationEngine` + sqlite.** The whole design rests on dispatch being synchronous with projection; `t3gateway.ts:184-186` says "no test in this package would notice" if that broke. One test that dispatches `thread.turn.start` through the real engine and reads `getTurnStatus` would pin it, and would have caught the provider-failure retry loop fixed on 2026-09-02 (see "Resolved").
 3. **`getThreadStatus` test pins the opposite of the documented contract.** `t3gateway.test.ts:955` asserts `present` with a mock whose `worktreePath` is `null`; `ntbs-todos.md` says that must be `missing`. Either the doc or the test is wrong, and today the code follows the test (H3).
 4. **Uncovered processor branches:** `startTurn` `FatalError` → `ReplyPending` (`processor.ts:241-246`); `persist` failure (reachable via two requests planned onto one `threadId`); `findByThreadId` / `findNonTerminalExchanges` failures (harness hard-wires the in-memory repo, so no failing repository can be injected); recovery racing activity for the same exchange; `findPostedReply` transient failure followed by a retry that repeats discovery; a burst of pings during an active turn proving no duplicate `postReply`.
@@ -100,9 +90,8 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 
 ## Recommended order
 
-1. M2: distinguish invariant rejections from infrastructure failures in `provisionThread`, without treating a failed recovery lookup as confirmed absence. M3's state deadlines are implemented; address the remaining hung-call and observation-failure gaps alongside H5.
-2. H3 + H4: implement the documented readiness marker (`worktreePath: null` → blocking setup → `thread.meta.update`) and make `getThreadStatus` honour it. Fix the `getThreadStatus` test to match.
-3. H2 + M1: define who posts the reply for a request T3 refuses before a claim exists, and make `process` return once claimed.
-4. H5: narrow the activity filter and add timeouts. Non-blocking pings can wait until the platform adapter exists and shows real latency.
-5. Tests: sweeper via `TestClock`, one real-engine integration test, injectable failing repository, `startTurn` fatal path, and bound `awaitStoredTag`.
-6. M4 before the SQL repository lands, so `cause` never hits the database unserialized.
+1. H3 + H4: implement the documented readiness marker (`worktreePath: null` → blocking setup → `thread.meta.update`) and make `getThreadStatus` honour it. Fix the `getThreadStatus` test to match.
+2. M1: decide how `process` should return after recording a request when subsequent work fails, and whether that work belongs in the caller's fiber.
+3. H5: narrow the activity filter. Non-blocking pings can wait until the platform adapter exists and shows real latency.
+4. Tests: one real-engine integration test, injectable failing repository, `startTurn` fatal path, sweep racing activity, and bound `awaitStoredTag`.
+5. M4: separate user-facing rejection messages from diagnostics before a real adapter posts them.

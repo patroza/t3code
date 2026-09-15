@@ -1,12 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
   ExchangeRepository,
   ExchangeRepositoryError,
   inMemoryExchangeRepository,
 } from "./ExchangeRepository.ts";
-import { makeNTBSProcessor, type NTBSProcessor } from "./processor.ts";
+import { makeNTBSProcessor, NTBSProcessorError, type NTBSProcessor } from "./processor.ts";
 import { MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { FatalError, RetryableError, T3Gateway } from "./t3gateway.ts";
 import { AdapterError, NTBSAdapter, ReplyRejected } from "./adapter.ts";
@@ -788,7 +788,9 @@ describe("NTBSProcessor", () => {
           ]);
 
           yield* Deferred.succeed(releaseThreadStatus, undefined);
-          expect((yield* Fiber.await(first))._tag).toBe("Failure");
+          // A failed observation becomes an unknown context: leave the persisted
+          // plan in place and let recovery decide whether to retry or expire it.
+          expect((yield* Fiber.await(first))._tag).toBe("Success");
           yield* Fiber.join(second);
 
           // The redelivery found the plan and added nothing to the log.
@@ -1545,4 +1547,1116 @@ describe("NTBSProcessor", () => {
         }),
     ),
   );
+
+  /*
+    A hung status read must not hold the exchange lock forever or start the action it was checking for.
+    After the observe timeout the failed check becomes unknown, the decider waits, and a queued
+    delivery of the same request can acquire the lock. Provisioning, a turn, and a second reply
+    post stay unstarted.
+    The timeout must not crash `run` either: the run fiber is the only thing that consumes thread
+    activity, so after it we ping and require the exchange to be driven on to its reply. A run that
+    died with the timeout would release the lock all the same and pass the earlier assertions, but
+    it would never see the ping.
+  */
+  const settledReply = answer("Reply after the timeout");
+  const hungReplyPending = toReplyPending(threadCreated, answer("Hung reply lookup"), now);
+
+  it.effect.each([
+    {
+      observation: "T3Gateway.getThreadStatus",
+      action: "T3Gateway.provisionThread",
+      seed: planned,
+      hang: (started: Deferred.Deferred<void>): ServiceInput => {
+        let reads = 0;
+        return {
+          t3Gateway: {
+            getThreadStatus: () => {
+              reads += 1;
+              return reads === 1
+                ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.succeed({ thread: "present" as const });
+            },
+            getTurnStatus: () =>
+              Effect.succeed({ turn: "completed" as const, reply: settledReply }),
+          },
+        };
+      },
+      expectedCalls: [
+        "T3Gateway.getThreadStatus",
+        "T3Gateway.getThreadStatus",
+        "NTBSAdapter.acknowledge",
+        "T3Gateway.getTurnStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) =>
+        toReplyPosted(
+          toReplyPending(toThreadCreated(planned, at), settledReply, at),
+          postedReplyUri,
+          at,
+        ),
+    },
+    {
+      observation: "T3Gateway.getTurnStatus",
+      action: "T3Gateway.startTurn",
+      seed: threadCreated,
+      hang: (started: Deferred.Deferred<void>): ServiceInput => {
+        let reads = 0;
+        return {
+          t3Gateway: {
+            getTurnStatus: () => {
+              reads += 1;
+              return reads === 1
+                ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.succeed({ turn: "completed" as const, reply: settledReply });
+            },
+          },
+        };
+      },
+      expectedCalls: [
+        "T3Gateway.getTurnStatus",
+        "T3Gateway.getTurnStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) =>
+        toReplyPosted(toReplyPending(threadCreated, settledReply, at), postedReplyUri, at),
+    },
+    {
+      observation: "NTBSAdapter.findPostedReply",
+      action: "NTBSAdapter.postReply",
+      seed: hungReplyPending,
+      hang: (started: Deferred.Deferred<void>): ServiceInput => {
+        let reads = 0;
+        return {
+          adapter: {
+            findPostedReply: () => {
+              reads += 1;
+              return reads === 1
+                ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.succeed(postedReplyUri);
+            },
+          },
+        };
+      },
+      expectedCalls: ["NTBSAdapter.findPostedReply", "NTBSAdapter.findPostedReply"],
+      expectedState: (at: number) => toReplyPosted(hungReplyPending, postedReplyUri, at),
+    },
+  ] as const)(
+    "times out $observation, releases the lock, and does not call $action",
+    ({ observation, seed, hang, expectedCalls, expectedState }) => {
+      const started = Deferred.makeUnsafe<void>();
+
+      return withProcessor(
+        hang(started),
+        ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+          Effect.gen(function* () {
+            yield* repository.upsert(seed);
+
+            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.await(started);
+
+            const queued = yield* processor
+              .process(request, target)
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Effect.yieldNow;
+            expect(queued.pollUnsafe()).toBeUndefined();
+
+            yield* TestClock.adjust("10 seconds");
+            yield* Fiber.join(queued);
+            const resumedAt = yield* Clock.currentTimeMillis;
+
+            // `run` is still alive: a crash would also have released the lock and let the queued
+            // duplicate return, so the lock alone does not prove the timeout was survived.
+            expect(run.pollUnsafe()).toBeUndefined();
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([observation]);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(seed);
+
+            // A later thread-activity ping proves `run` outlived the timeout: only a live run
+            // consumes the ping and drives the exchange on from the state the timeout left.
+            yield* pingActivity(defaultThreadId);
+            yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual(expectedCalls);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+              expectedState(resumedAt),
+            );
+
+            yield* Fiber.interrupt(run);
+          }),
+      );
+    },
+  );
+
+  /*
+    A failed status check is only "wait" while the state still has time left. Once it is expired
+    the failure must move the exchange to its terminal outcome instead: a failure reply posted for
+    WorkPlanned and ThreadCreated, Undeliverable for ReplyPending. Whether the check fails at once
+    or hangs, the outcome is the same; a failing or hung check must not strand the exchange past
+    its deadline.
+  */
+  const neverCheckedReplyPending = toReplyPending(
+    threadCreated,
+    answer("A reply that was never checked"),
+    now,
+  );
+
+  const expiredCheckScenarios = [
+    {
+      observation: "T3Gateway.getThreadStatus",
+      seed: planned,
+      fail: (): ServiceInput => ({
+        t3Gateway: {
+          getThreadStatus: () =>
+            new RetryableError({
+              reason: "Thread lookup failed",
+              cause: "test failure",
+              method: "getThreadStatus",
+            }),
+        },
+      }),
+      hang: (started: Deferred.Deferred<void>): ServiceInput => ({
+        t3Gateway: {
+          getThreadStatus: () =>
+            Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      }),
+      settledTag: "reply-posted" as const,
+      expectedCalls: [
+        "T3Gateway.getThreadStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) => toReplyPosted(toExpired(planned, at), postedReplyUri, at),
+    },
+    {
+      observation: "T3Gateway.getTurnStatus",
+      seed: threadCreated,
+      fail: (): ServiceInput => ({
+        t3Gateway: {
+          getTurnStatus: () =>
+            new RetryableError({
+              reason: "Turn lookup failed",
+              cause: "test failure",
+              method: "getTurnStatus",
+            }),
+        },
+      }),
+      hang: (started: Deferred.Deferred<void>): ServiceInput => ({
+        t3Gateway: {
+          getTurnStatus: () =>
+            Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      }),
+      settledTag: "reply-posted" as const,
+      expectedCalls: [
+        "T3Gateway.getTurnStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) =>
+        toReplyPosted(toExpired(threadCreated, at), postedReplyUri, at),
+    },
+    {
+      observation: "NTBSAdapter.findPostedReply",
+      seed: neverCheckedReplyPending,
+      fail: (): ServiceInput => ({
+        adapter: {
+          findPostedReply: () =>
+            new AdapterError({ reason: "Reply lookup failed", cause: "test failure" }),
+        },
+      }),
+      hang: (started: Deferred.Deferred<void>): ServiceInput => ({
+        adapter: {
+          findPostedReply: () =>
+            Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      }),
+      settledTag: "undeliverable" as const,
+      expectedCalls: ["NTBSAdapter.findPostedReply"],
+      expectedState: (at: number) =>
+        toUndeliverable(
+          neverCheckedReplyPending,
+          { message: "The platform did not accept the reply in time." },
+          at,
+        ),
+    },
+  ] as const;
+
+  it.effect.each(expiredCheckScenarios)(
+    "expires an exchange to its terminal outcome when $observation fails after expiry",
+    ({ seed, fail, settledTag, expectedCalls, expectedState }) =>
+      withProcessor(fail(), ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(seed);
+
+          yield* TestClock.adjust("61 minutes");
+          const expiredAt = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* awaitStoredTag(request.sourceUri, settledTag);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual(expectedCalls);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            expectedState(expiredAt),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+      ),
+  );
+
+  /*
+    The hung variant: the state is already expired when the check hangs, so the observation runs
+    to the observe timeout and the failure becomes unknown. Expiry, not the hang, decides the
+    outcome.
+  */
+  it.effect.each(expiredCheckScenarios)(
+    "expires an exchange to its terminal outcome when $observation hangs after expiry",
+    ({ seed, hang, settledTag, expectedCalls, expectedState }) => {
+      const started = Deferred.makeUnsafe<void>();
+
+      return withProcessor(hang(started), ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(seed);
+
+          yield* TestClock.adjust("61 minutes");
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(started);
+
+          yield* TestClock.adjust("10 seconds");
+          const expiredAt = yield* Clock.currentTimeMillis;
+
+          yield* awaitStoredTag(request.sourceUri, settledTag);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual(expectedCalls);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            expectedState(expiredAt),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+      );
+    },
+  );
+
+  /*
+    Confirmed completion is recorded even after the state's deadline. A present thread is
+    recorded, a completed turn yields its reply, and a reply already on the platform is recorded
+    as posted instead of expiring or posting again.
+  */
+  const discoveredPostedReplyUri = "test://reply/discovered-after-expiry";
+  const lateReplyPending = toReplyPending(
+    threadCreated,
+    answer("A reply the platform already accepted"),
+    now,
+  );
+
+  it.effect.each([
+    {
+      observation: "T3Gateway.getThreadStatus",
+      seed: planned,
+      succeed: (): ServiceInput => ({
+        t3Gateway: {
+          getThreadStatus: () => Effect.succeed({ thread: "present" as const }),
+          getTurnStatus: () => Effect.succeed({ turn: "completed" as const, reply: settledReply }),
+        },
+      }),
+      expectedCalls: [
+        "T3Gateway.getThreadStatus",
+        "NTBSAdapter.acknowledge",
+        "T3Gateway.getTurnStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) =>
+        toReplyPosted(
+          toReplyPending(toThreadCreated(planned, at), settledReply, at),
+          postedReplyUri,
+          at,
+        ),
+    },
+    {
+      observation: "T3Gateway.getTurnStatus",
+      seed: threadCreated,
+      succeed: (): ServiceInput => ({
+        t3Gateway: {
+          getTurnStatus: () => Effect.succeed({ turn: "completed" as const, reply: settledReply }),
+        },
+      }),
+      expectedCalls: [
+        "T3Gateway.getTurnStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) =>
+        toReplyPosted(toReplyPending(threadCreated, settledReply, at), postedReplyUri, at),
+    },
+    {
+      observation: "NTBSAdapter.findPostedReply",
+      seed: lateReplyPending,
+      succeed: (): ServiceInput => ({
+        adapter: {
+          findPostedReply: () => Effect.succeed(discoveredPostedReplyUri),
+        },
+      }),
+      expectedCalls: ["NTBSAdapter.findPostedReply"],
+      expectedState: (at: number) => toReplyPosted(lateReplyPending, discoveredPostedReplyUri, at),
+    },
+  ] as const)(
+    "records the confirmed result of a $observation check that succeeds after expiry",
+    ({ seed, succeed, expectedCalls, expectedState }) =>
+      withProcessor(succeed(), ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(seed);
+
+          yield* TestClock.adjust("61 minutes");
+          const confirmedAt = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual(expectedCalls);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            expectedState(confirmedAt),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+      ),
+  );
+
+  /*
+    Planning has its own timeout, shorter than the state's deadline. A plan that hangs is
+    abandoned at that timeout: nothing transitions, no coordinates are invented, and the record
+    stays RequestAccepted for a later pass. That pass either plans for real if the deadline has
+    not passed, or expires the record once it has.
+  */
+  it.effect.each([
+    {
+      outcome: "re-plans and finishes",
+      laterAdvance: "1 minute",
+      expectedCalls: [
+        "T3Gateway.planCoordinates",
+        "T3Gateway.planCoordinates",
+        "T3Gateway.getThreadStatus",
+        "NTBSAdapter.acknowledge",
+        "T3Gateway.getTurnStatus",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) =>
+        toReplyPosted(
+          toReplyPending(
+            toThreadCreated(toWorkPlanned(accepted, defaultWorkCoordinates, at), at),
+            settledReply,
+            at,
+          ),
+          postedReplyUri,
+          at,
+        ),
+    },
+    {
+      outcome: "expires",
+      laterAdvance: "5 minutes",
+      expectedCalls: [
+        "T3Gateway.planCoordinates",
+        "NTBSAdapter.findPostedReply",
+        "NTBSAdapter.postReply",
+      ],
+      expectedState: (at: number) => toReplyPosted(toExpired(accepted, at), postedReplyUri, at),
+    },
+  ] as const)(
+    "leaves RequestAccepted after a planning timeout, and a later pass $outcome",
+    ({ laterAdvance, expectedCalls, expectedState }) => {
+      const planStarted = Deferred.makeUnsafe<void>();
+      let planCalls = 0;
+
+      return withProcessor(
+        {
+          t3Gateway: {
+            planCoordinates: () => {
+              planCalls += 1;
+              return planCalls === 1
+                ? Deferred.succeed(planStarted, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.succeed(defaultWorkCoordinates);
+            },
+            getThreadStatus: () => Effect.succeed({ thread: "present" }),
+            getTurnStatus: () => Effect.succeed({ turn: "completed", reply: settledReply }),
+          },
+        },
+        ({ processor, repository, calls, awaitStoredTag }) =>
+          Effect.gen(function* () {
+            const first = yield* processor
+              .process(request, target)
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.await(planStarted);
+
+            // The planning timeout is one minute, well under the state's five. The attempt must
+            // fail for that reason, not merely fail.
+            yield* TestClock.adjust("1 minute");
+            const exit = yield* Fiber.await(first);
+            expect(Exit.isFailure(exit)).toBe(true);
+            if (Exit.isFailure(exit)) {
+              const defect = Cause.squash(exit.cause);
+              expect(defect).toBeInstanceOf(NTBSProcessorError);
+              if (defect instanceof NTBSProcessorError) {
+                expect(defect.reason).toBe("Failed to plan the T3 work");
+                expect(Cause.isTimeoutError(defect.cause)).toBe(true);
+              }
+            }
+
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+              "T3Gateway.planCoordinates",
+            ]);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
+
+            yield* TestClock.adjust(laterAdvance);
+            const at = yield* Clock.currentTimeMillis;
+
+            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+            yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual(expectedCalls);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(expectedState(at));
+
+            yield* Fiber.interrupt(run);
+          }),
+      );
+    },
+  );
+
+  /*
+    Provisioning has its own timeout too. A hung provision is abandoned at that timeout and the
+    exchange stays WorkPlanned, with no second provision attempted; the next pass observes before
+    acting. A thread the timed-out provision had in fact already created (the dispatch committed,
+    the call just never returned) is then discovered and recorded rather than provisioned again.
+    The worktree itself is untouched here: compensation lives inside the gateway, and only the
+    gateway's own test can see it.
+  */
+  it.effect(
+    "leaves WorkPlanned after a provisioning timeout and later discovers a created thread",
+    () => {
+      const provisionStarted = Deferred.makeUnsafe<void>();
+      let threadStatusReads = 0;
+
+      return withProcessor(
+        {
+          t3Gateway: {
+            getThreadStatus: () => {
+              threadStatusReads += 1;
+              return Effect.succeed(
+                threadStatusReads === 1
+                  ? { thread: "missing" as const }
+                  : { thread: "present" as const },
+              );
+            },
+            provisionThread: () =>
+              Deferred.succeed(provisionStarted, undefined).pipe(Effect.andThen(Effect.never)),
+            getTurnStatus: () =>
+              Effect.succeed({ turn: "completed" as const, reply: settledReply }),
+          },
+        },
+        ({ processor, repository, calls, awaitStoredTag }) =>
+          Effect.gen(function* () {
+            const first = yield* processor
+              .process(request, target)
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.await(provisionStarted);
+
+            // Provisioning has five minutes, less than the state's fifteen.
+            yield* TestClock.adjust("5 minutes");
+            const exit = yield* Fiber.await(first);
+            expect(Exit.isFailure(exit)).toBe(true);
+            if (Exit.isFailure(exit)) {
+              const defect = Cause.squash(exit.cause);
+              expect(defect).toBeInstanceOf(NTBSProcessorError);
+              if (defect instanceof NTBSProcessorError) {
+                expect(defect.reason).toBe("Failed to provision the T3 thread");
+                expect(Cause.isTimeoutError(defect.cause)).toBe(true);
+              }
+            }
+
+            // The plan survived the timeout and only the one provision was attempted.
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+              "T3Gateway.planCoordinates",
+              "T3Gateway.getThreadStatus",
+              "T3Gateway.provisionThread",
+            ]);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(planned);
+
+            const at = yield* Clock.currentTimeMillis;
+
+            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+            yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+            // The second observation found the thread present, so provisioning was not repeated.
+            expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+              "T3Gateway.planCoordinates",
+              "T3Gateway.getThreadStatus",
+              "T3Gateway.provisionThread",
+              "T3Gateway.getThreadStatus",
+              "NTBSAdapter.acknowledge",
+              "T3Gateway.getTurnStatus",
+              "NTBSAdapter.findPostedReply",
+              "NTBSAdapter.postReply",
+            ]);
+            expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+              toReplyPosted(
+                toReplyPending(toThreadCreated(planned, at), settledReply, at),
+                postedReplyUri,
+                at,
+              ),
+            );
+
+            yield* Fiber.interrupt(run);
+          }),
+      );
+    },
+  );
+
+  /*
+    Turn start has its own timeout too. A hung start is abandoned at that timeout, the exchange
+    stays ThreadCreated, and no second start is attempted. The next pass observes first, so a turn
+    the timed-out start had in fact already begun (the dispatch committed, the call just never
+    returned) is discovered rather than started twice.
+  */
+  it.effect("leaves ThreadCreated after a turn-start timeout and later discovers the turn", () => {
+    const startStarted = Deferred.makeUnsafe<void>();
+    let turnStatusReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getThreadStatus: () => Effect.succeed({ thread: "present" }),
+          getTurnStatus: () => {
+            turnStatusReads += 1;
+            return Effect.succeed(
+              turnStatusReads === 1
+                ? { turn: "missing" as const }
+                : { turn: "completed" as const, reply: settledReply },
+            );
+          },
+          startTurn: () =>
+            Deferred.succeed(startStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const first = yield* processor
+            .process(request, target)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(startStarted);
+
+          // Turn start has thirty seconds, well under the state's hour.
+          yield* TestClock.adjust("30 seconds");
+          const exit = yield* Fiber.await(first);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const defect = Cause.squash(exit.cause);
+            expect(defect).toBeInstanceOf(NTBSProcessorError);
+            if (defect instanceof NTBSProcessorError) {
+              expect(defect.reason).toBe("Failed to start the T3 turn");
+              expect(Cause.isTimeoutError(defect.cause)).toBe(true);
+            }
+          }
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          const at = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          // The second observation found the turn, so it was not started a second time.
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(toReplyPending(threadCreated, settledReply, at), postedReplyUri, at),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    Posting has its own timeout too. A hung post is abandoned at that timeout, the exchange stays
+    ReplyPending, and no second post is attempted. The next pass observes first, so a reply the
+    timed-out post had in fact already delivered (the platform accepted it, the call just never
+    returned) is found on the platform and recorded instead of posted again.
+  */
+  it.effect("leaves ReplyPending after a reply-post timeout and later discovers the reply", () => {
+    const postStarted = Deferred.makeUnsafe<void>();
+    const discoveredReplyUri = "test://reply/posted-before-timeout";
+    let findReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getThreadStatus: () => Effect.succeed({ thread: "present" }),
+          getTurnStatus: () => Effect.succeed({ turn: "completed", reply: settledReply }),
+        },
+        adapter: {
+          findPostedReply: () => {
+            findReads += 1;
+            return Effect.succeed(findReads === 1 ? null : discoveredReplyUri);
+          },
+          postReply: () =>
+            Deferred.succeed(postStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const first = yield* processor
+            .process(request, target)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(postStarted);
+
+          // Posting has thirty seconds, well under the state's hour.
+          yield* TestClock.adjust("30 seconds");
+          const exit = yield* Fiber.await(first);
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const defect = Cause.squash(exit.cause);
+            expect(defect).toBeInstanceOf(NTBSProcessorError);
+            if (defect instanceof NTBSProcessorError) {
+              expect(defect.reason).toBe("Failed to post the platform reply");
+              expect(Cause.isTimeoutError(defect.cause)).toBe(true);
+            }
+          }
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          const replyPending = toReplyPending(threadCreated, settledReply, now);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(replyPending);
+
+          const at = yield* Clock.currentTimeMillis;
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          // The second lookup found the reply, so it was not posted a second time.
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+            "NTBSAdapter.findPostedReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(replyPending, discoveredReplyUri, at),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    The acknowledgement is best-effort and not part of the durable exchange. A hung one is cut
+    off at its own timeout and swallowed, never undoing the ThreadCreated state that was already
+    persisted before it was attempted. The pipeline simply carries on to the turn.
+  */
+  it.effect("keeps ThreadCreated when the acknowledgement times out", () => {
+    const acknowledgeStarted = Deferred.makeUnsafe<void>();
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getThreadStatus: () => Effect.succeed({ thread: "present" }),
+        },
+        adapter: {
+          acknowledge: () =>
+            Deferred.succeed(acknowledgeStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      },
+      ({ processor, repository, calls }) =>
+        Effect.gen(function* () {
+          const pump = yield* processor
+            .process(request, target)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(acknowledgeStarted);
+
+          // Persisted before the acknowledgement was even attempted.
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* TestClock.adjust("10 seconds");
+          yield* Fiber.join(pump);
+
+          // The timeout was swallowed and the pipeline continued as if the acknowledgement failed.
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+        }),
+    );
+  });
+
+  /*
+    An action may not outlive the deadline of the state it acts on. `act` gives the underlying
+    effect `min(its own limit, time left on the state)`, so a state already close to its deadline
+    cannot be held open for the full length of an action whose own limit is longer.
+  */
+  it.effect("gives an action no more than the time remaining before its deadline", () => {
+    const startTurnStarted = Deferred.makeUnsafe<void>();
+    const startTurnInterrupted = Deferred.makeUnsafe<void>();
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          startTurn: () =>
+            Deferred.succeed(startTurnStarted, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(startTurnInterrupted, undefined)),
+            ),
+        },
+      },
+      ({ processor, repository, calls }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          // Ten seconds left before ThreadCreated expires, well under startTurn's thirty.
+          yield* TestClock.adjust("3590 seconds");
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(startTurnStarted);
+
+          // One second short of the deadline: the action is still running, uncut.
+          yield* TestClock.adjust("9 seconds");
+          yield* Effect.yieldNow;
+          expect(Deferred.isDoneUnsafe(startTurnInterrupted)).toBe(false);
+
+          // At the deadline it is cut off, exactly as the state expires.
+          yield* TestClock.adjust("1 second");
+          yield* Effect.yieldNow;
+          expect(Deferred.isDoneUnsafe(startTurnInterrupted)).toBe(true);
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    A timeout is not an outcome. It leaves the exchange exactly where it was, writing no failure
+    reply and cleaning up nothing. The next observation decides what actually happened.
+  */
+  it.effect("leaves the outcome to the next observation after an action timeout", () => {
+    const startTurnStarted = Deferred.makeUnsafe<void>();
+    const startTurnInterrupted = Deferred.makeUnsafe<void>();
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          startTurn: () =>
+            Deferred.succeed(startTurnStarted, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(startTurnInterrupted, undefined)),
+            ),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          // Ten seconds left, so the turn-start timeout lands exactly on the deadline.
+          yield* TestClock.adjust("3590 seconds");
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(startTurnStarted);
+          yield* TestClock.adjust("10 seconds");
+          yield* Effect.yieldNow;
+
+          // The timeout wrote nothing: still the same non-terminal record, no reply.
+          expect(Deferred.isDoneUnsafe(startTurnInterrupted)).toBe(true);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          // The next observation decides: the turn is still missing and the deadline has passed,
+          // so the exchange expires to its failure reply.
+          yield* pingActivity(defaultThreadId);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          const at = yield* Clock.currentTimeMillis;
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(toExpired(threadCreated, at), postedReplyUri, at),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /* An expired request skips planning and proceeds to its failure reply. */
+  it.effect("does not start an action for a state that is already expired", () => {
+    return withProcessor({}, ({ processor, repository, calls, awaitStoredTag }) =>
+      Effect.gen(function* () {
+        yield* repository.upsert(accepted);
+
+        yield* TestClock.adjust("5 minutes");
+
+        const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+        yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+        const at = yield* Clock.currentTimeMillis;
+        // Planning never ran: the exchange expired to its failure reply instead.
+        expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+          "NTBSAdapter.findPostedReply",
+          "NTBSAdapter.postReply",
+        ]);
+        expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+          toReplyPosted(toExpired(accepted, at), postedReplyUri, at),
+        );
+
+        yield* Fiber.interrupt(run);
+      }),
+    );
+  });
+
+  /*
+    The sweeper is the backstop for a timeout nothing else wakes. After the timed-out attempt
+    leaves the exchange untouched, the next sweep re-drives it and a fresh observation finishes it.
+  */
+  it.effect("re-drives a timed-out exchange from the sweeper", () => {
+    const startTurnStarted = Deferred.makeUnsafe<void>();
+    const reply = answer("Reply after the sweep");
+    let turnStatusReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () => {
+            turnStatusReads += 1;
+            return Effect.succeed(
+              turnStatusReads === 1
+                ? { turn: "missing" as const }
+                : { turn: "completed" as const, reply },
+            );
+          },
+          startTurn: () =>
+            Deferred.succeed(startTurnStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(startTurnStarted);
+
+          // The attempt times out with the record untouched; nothing else wakes it.
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          // One sweep interval after recovery finished, the sweeper picks it up again.
+          yield* TestClock.adjust("1 minute");
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          const at = yield* Clock.currentTimeMillis;
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(toReplyPending(threadCreated, reply, at), postedReplyUri, at),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    Thread activity wakes a timed-out exchange too. The ping arrives after the timed-out attempt,
+    re-runs the observation, and the confirmed result finishes the exchange.
+  */
+  it.effect("re-drives a timed-out exchange from a thread-activity event", () => {
+    const startTurnStarted = Deferred.makeUnsafe<void>();
+    const reply = answer("Reply after the activity ping");
+    let turnStatusReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () => {
+            turnStatusReads += 1;
+            return Effect.succeed(
+              turnStatusReads === 1
+                ? { turn: "missing" as const }
+                : { turn: "completed" as const, reply },
+            );
+          },
+          startTurn: () =>
+            Deferred.succeed(startTurnStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(startTurnStarted);
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* pingActivity(defaultThreadId);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          const at = yield* Clock.currentTimeMillis;
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(toReplyPending(threadCreated, reply, at), postedReplyUri, at),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    A delivery queued behind a timed-out one is not stranded: the timeout releases the source lock
+    like any other exit, and the queued delivery then finds the recorded request and returns.
+  */
+  it.effect("lets a queued delivery proceed once the first attempt times out", () => {
+    const planStarted = Deferred.makeUnsafe<void>();
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          planCoordinates: () =>
+            Deferred.succeed(planStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        },
+      },
+      ({ processor, repository, calls }) =>
+        Effect.gen(function* () {
+          const first = yield* processor
+            .process(request, target)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(planStarted);
+
+          const second = yield* processor
+            .process(request, target)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Effect.yieldNow;
+
+          // Parked behind the first delivery's lock.
+          expect(second.pollUnsafe()).toBeUndefined();
+
+          // Planning's timeout is a minute, well inside the state's five.
+          yield* TestClock.adjust("1 minute");
+          expect((yield* Fiber.await(first))._tag).toBe("Failure");
+          yield* Fiber.join(second);
+
+          // The queued delivery found the record and planned nothing.
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+          ]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(accepted);
+        }),
+    );
+  });
+
+  /*
+    A timeout is contained to its own exchange. The run keeps going after one: a second exchange
+    stored only after the first has timed out is still swept and reaches its reply.
+  */
+  it.effect("does not let one timed-out exchange stop the others", () => {
+    const startTurnStarted = Deferred.makeUnsafe<void>();
+    const reply = answer("Reply from the untroubled exchange", secondWorkCoordinates);
+    let startTurnCalls = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: (state) =>
+            state.sourceUri === secondRequest.sourceUri
+              ? Effect.succeed({ turn: "completed" as const, reply })
+              : Effect.succeed({ turn: "missing" as const }),
+          // The stuck exchange hangs on its first turn start; later attempts are fine.
+          startTurn: (state) => {
+            if (state.sourceUri !== request.sourceUri) {
+              return Effect.void;
+            }
+            startTurnCalls += 1;
+            return startTurnCalls === 1
+              ? Deferred.succeed(startTurnStarted, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.void;
+          },
+        },
+      },
+      ({ processor, repository, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(startTurnStarted);
+
+          // The stuck exchange times out during startup recovery, leaving the record untouched.
+          yield* TestClock.adjust("30 seconds");
+          yield* Effect.yieldNow;
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          // Stored only now, so the sweeper is the only thing that can reach it. That it arrives
+          // at its reply proves the run survived the other exchange's timeout.
+          yield* repository.upsert(secondThreadCreated);
+          yield* TestClock.adjust("1 minute");
+          yield* awaitStoredTag(secondRequest.sourceUri, "reply-posted");
+
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
 });

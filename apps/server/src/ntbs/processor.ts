@@ -1,6 +1,6 @@
 import { type ThreadId } from "@t3tools/contracts";
 import * as NTBS from "./exchange.ts";
-import { Clock, Context, Data, Effect, Semaphore, Stream } from "effect";
+import { Cause, Clock, Context, Data, Duration, Effect, Result, Semaphore, Stream } from "effect";
 import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
 import { ExchangeRepository } from "./ExchangeRepository.ts";
@@ -38,6 +38,60 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
 
 const SWEEP_INTERVAL = "1 minute";
 
+/*
+  The following timeouts limit how long the NTBS processor waits for specific external events.
+
+  E.g. the processor cannot hang forever waiting the response of a database query or for T3 to start a turn.
+
+  With those we can make the user experience and business logic more linear and a stuck dependency cannot block the processing of an exchange forever.
+
+  E.g. if `yield someReadOperation` remains stuck, without timeouts the processing would fall in a limbo forever with the processor holding the exchange's lock forever.
+*/
+const OBSERVE_TIMEOUT = Duration.toMillis(Duration.seconds(10));
+const PLAN_COORDINATES_TIMEOUT = Duration.toMillis(Duration.minutes(1));
+const PROVISION_THREAD_TIMEOUT = Duration.toMillis(Duration.minutes(5));
+const START_TURN_TIMEOUT = Duration.toMillis(Duration.seconds(30));
+const POST_REPLY_TIMEOUT = Duration.toMillis(Duration.seconds(30));
+const ACKNOWLEDGE_TIMEOUT = Duration.toMillis(Duration.seconds(10));
+
+/**
+ * TODO: Evaluate whether we can turn both observe and act below in one generic `attempt` helper.
+ * Also evaluate whether we need `Result` at all.
+ */
+
+/**
+ * Checks external state without letting an unanswered check hold the exchange lock forever.
+ * The caller decides what to do with the failed observation.
+ */
+const observeWithTimeout = Effect.fn("NTBSProcessor.observeWithTimeout")(function* <A, E, R>(
+  state: NTBS.NonTerminalExchange,
+  effect: Effect.Effect<A, E, R>,
+) {
+  const now = yield* Clock.currentTimeMillis;
+  const remaining = NTBS.expiresAt(state) - now;
+  const timeout = remaining > 0 ? Math.min(OBSERVE_TIMEOUT, remaining) : OBSERVE_TIMEOUT;
+  return yield* effect.pipe(Effect.timeout(timeout), Effect.result);
+});
+
+/**
+ * Action equivalent of observeWithTimeout with one major difference: while observe allows for one additional execution after expiry, `act` does not retry.
+ * */
+const act = Effect.fn("NTBSProcessor.act")(function* <A, E, R>(
+  state: NTBS.NonTerminalExchange,
+  effect: Effect.Effect<A, E, R>,
+  limit: number,
+) {
+  const now = yield* Clock.currentTimeMillis;
+  const remaining = NTBS.expiresAt(state) - now;
+  if (remaining <= 0) {
+    return yield* new Cause.TimeoutError();
+  }
+
+  // A timeout cannot trigger a cleanup.
+  // It is not possible to undo queueing a command or the act of posting a platform response. The next attempt after a timeout should first re-observe the situation again.
+  return yield* effect.pipe(Effect.timeout(Math.min(limit, remaining)));
+});
+
 export interface NTBSProcessor {
   /**
    * Handles a request coming from an external platform.
@@ -58,7 +112,7 @@ export interface NTBSProcessor {
    * The main loop of the processor.
    * Subscribes to T3 activity, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange moves when its T3 thread does, with a periodic sweep re-driving every non-terminal exchange as the backstop for missed activity pings.
    *
-   * Never returns and has no error channel: a failure anywhere in it is a defect.
+   * Expected failures are logged without stopping subsequent activity or sweeps.
    */
   readonly run: Effect.Effect<void>;
 }
@@ -121,6 +175,22 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const persist = <State extends NTBS.Exchange>(state: State) =>
       repo.upsert(state).pipe(orFail("Failed to persist the exchange state"), Effect.as(state));
 
+    const expire = Effect.fn("NTBSProcessor.expire")(function* (
+      state: NTBS.NonTerminalExchange,
+      now: number,
+    ) {
+      const next = yield* persist(
+        state.tag === "reply-pending"
+          ? NTBS.toUndeliverable(
+              state,
+              { message: "The platform did not accept the reply in time." },
+              now,
+            )
+          : NTBS.toExpired(state, now),
+      );
+      return transitionedTo(next);
+    });
+
     /**
      * Serializes concurrent work on the same sourceUri, protecting the check-then-act record in `process` (findBySourceUri -> persist).
      * The lock is in-process memory: single-writer is an assumption on the deployment, not something the code or the database enforces.
@@ -163,22 +233,28 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
       switch (decision.type) {
         case "expire": {
-          const next = yield* persist(NTBS.toExpired(state, now));
-          return transitionedTo(next);
+          return yield* expire(state, now);
         }
 
         case "plan": {
           // Planning creates nothing in T3, so there is nothing to observe first: plan, then record the outcome.
-          const planned = yield* t3
-            .planCoordinates(state.target.projectId, state.target.startBranchName)
-            .pipe(
-              Effect.map((coordinates) => NTBS.toWorkPlanned(state, coordinates, now)),
-              Effect.catchTag("FatalError", (rejection) =>
-                Effect.succeed(NTBS.toRejected(state, rejection, now)),
-              ),
-              orFail("Failed to plan the T3 work"),
-            );
-          const next = yield* persist(planned);
+          const outcome = yield* act(
+            state,
+            t3.planCoordinates(state.target.projectId, state.target.startBranchName),
+            PLAN_COORDINATES_TIMEOUT,
+          ).pipe(Effect.result);
+          const completedAt = yield* Clock.currentTimeMillis;
+          if (Result.isFailure(outcome)) {
+            if (outcome.failure._tag !== "FatalError") {
+              return yield* new NTBSProcessorError({
+                reason: "Failed to plan the T3 work",
+                cause: outcome.failure,
+              });
+            }
+            const next = yield* persist(NTBS.toRejected(state, outcome.failure, completedAt));
+            return transitionedTo(next);
+          }
+          const next = yield* persist(NTBS.toWorkPlanned(state, outcome.success, completedAt));
           return transitionedTo(next);
         }
       }
@@ -187,28 +263,39 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const processWorkPlanned = Effect.fn("NTBSProcessor.processWorkPlanned")(function* (
       state: NTBS.WorkPlanned,
     ) {
+      const observation = yield* observeWithTimeout(state, t3.getThreadStatus(state));
       const now = yield* Clock.currentTimeMillis;
-      const context = yield* t3
-        .getThreadStatus(state)
-        .pipe(orFail("Failed to get the T3 thread status"));
+      const context: NTBS.WorkPlannedContext = Result.isFailure(observation)
+        ? { thread: "unknown" }
+        : observation.success;
+      if (Result.isFailure(observation)) {
+        yield* Effect.logWarning("Could not check whether the NTBS thread exists", {
+          sourceUri: state.sourceUri,
+          cause: observation.failure,
+        });
+      }
       const decision = NTBS.fromWorkPlanned(state, context, now);
 
       switch (decision.type) {
         case "expire": {
-          const next = yield* persist(NTBS.toExpired(state, now));
-          return transitionedTo(next);
+          return yield* expire(state, now);
         }
 
         case "provision-thread": {
           // TODO: Quite sure there's low hanging fruits here
-          const rejection = yield* t3.provisionThread(state).pipe(
+          const rejection = yield* act(
+            state,
+            t3.provisionThread(state),
+            PROVISION_THREAD_TIMEOUT,
+          ).pipe(
             Effect.as(null),
             Effect.catchTag("FatalError", (error) => Effect.succeed(error)),
             orFail("Failed to provision the T3 thread"),
           );
 
           if (rejection !== null) {
-            const next = yield* persist(NTBS.toRejected(state, rejection, now));
+            const completedAt = yield* Clock.currentTimeMillis;
+            const next = yield* persist(NTBS.toRejected(state, rejection, completedAt));
             return transitionedTo(next);
           }
 
@@ -217,10 +304,15 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
         case "record-thread-created":
           break;
+
+        case "wait":
+          return unchanged;
       }
 
-      const threadCreated = yield* persist(NTBS.toThreadCreated(state, now));
+      const completedAt = yield* Clock.currentTimeMillis;
+      const threadCreated = yield* persist(NTBS.toThreadCreated(state, completedAt));
       yield* adapter.acknowledge(threadCreated).pipe(
+        Effect.timeout(ACKNOWLEDGE_TIMEOUT),
         Effect.catch((cause) =>
           Effect.logWarning("Failed to post the NTBS acknowledgement", {
             sourceUri: threadCreated.sourceUri,
@@ -235,27 +327,34 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const processThreadCreated = Effect.fn("NTBSProcessor.processThreadCreated")(function* (
       state: NTBS.ThreadCreated,
     ) {
+      const observation = yield* observeWithTimeout(state, t3.getTurnStatus(state));
       const now = yield* Clock.currentTimeMillis;
-      const context = yield* t3
-        .getTurnStatus(state)
-        .pipe(orFail("Failed to get the T3 turn status"));
+      const context: NTBS.ThreadCreatedContext = Result.isFailure(observation)
+        ? { turn: "unknown" }
+        : observation.success;
+      if (Result.isFailure(observation)) {
+        yield* Effect.logWarning("Could not check the NTBS turn", {
+          sourceUri: state.sourceUri,
+          cause: observation.failure,
+        });
+      }
       const decision = NTBS.fromThreadCreated(state, context, now);
 
       switch (decision.type) {
         case "expire": {
-          const next = yield* persist(NTBS.toExpired(state, now));
-          return transitionedTo(next);
+          return yield* expire(state, now);
         }
 
         case "start-turn": {
-          const rejection = yield* t3.startTurn(state).pipe(
+          const rejection = yield* act(state, t3.startTurn(state), START_TURN_TIMEOUT).pipe(
             Effect.as(null),
             Effect.catchTag("FatalError", (error) => Effect.succeed(error)),
             orFail("Failed to start the T3 turn"),
           );
 
           if (rejection !== null) {
-            const replyPending = yield* persist(NTBS.toRejected(state, rejection, now));
+            const completedAt = yield* Clock.currentTimeMillis;
+            const replyPending = yield* persist(NTBS.toRejected(state, rejection, completedAt));
             return transitionedTo(replyPending);
           }
 
@@ -275,30 +374,28 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const processReplyPending = Effect.fn("NTBSProcessor.processReplyPending")(function* (
       state: NTBS.ReplyPending,
     ) {
+      const observation = yield* observeWithTimeout(state, adapter.findPostedReply(state));
       const now = yield* Clock.currentTimeMillis;
-      const replySourceUri = yield* adapter
-        .findPostedReply(state)
-        .pipe(orFail("Failed to find the posted platform reply"));
-      const context: NTBS.ReplyPendingContext =
-        replySourceUri === null
+      const context: NTBS.ReplyPendingContext = Result.isFailure(observation)
+        ? { platformReply: "unknown" }
+        : observation.success === null
           ? { platformReply: "missing" }
-          : { platformReply: "posted", replySourceUri };
+          : { platformReply: "posted", replySourceUri: observation.success };
+      if (Result.isFailure(observation)) {
+        yield* Effect.logWarning("Could not check whether the NTBS reply was posted", {
+          sourceUri: state.sourceUri,
+          cause: observation.failure,
+        });
+      }
       const decision = NTBS.fromReplyPending(state, context, now);
 
       switch (decision.type) {
         case "expire": {
-          const next = yield* persist(
-            NTBS.toUndeliverable(
-              state,
-              { message: "The platform did not accept the reply in time." },
-              now,
-            ),
-          );
-          return transitionedTo(next);
+          return yield* expire(state, now);
         }
 
         case "post-reply": {
-          const delivery = yield* adapter.postReply(state).pipe(
+          const delivery = yield* act(state, adapter.postReply(state), POST_REPLY_TIMEOUT).pipe(
             Effect.map((postedReplySourceUri) => ({
               type: "posted" as const,
               replySourceUri: postedReplySourceUri,
@@ -309,13 +406,17 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
             orFail("Failed to post the platform reply"),
           );
 
+          const completedAt = yield* Clock.currentTimeMillis;
           const next = yield* persist(
             delivery.type === "posted"
-              ? NTBS.toReplyPosted(state, delivery.replySourceUri, now)
-              : NTBS.toUndeliverable(state, delivery.cause, now),
+              ? NTBS.toReplyPosted(state, delivery.replySourceUri, completedAt)
+              : NTBS.toUndeliverable(state, delivery.cause, completedAt),
           );
           return transitionedTo(next);
         }
+
+        case "wait":
+          return unchanged;
 
         case "record-reply-posted": {
           const next = yield* persist(NTBS.toReplyPosted(state, decision.replySourceUri, now));
@@ -419,7 +520,11 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     });
 
     const subscribeToThreadActivity = Stream.runForEach(t3.threadActivity, (threadId) =>
-      processThreadActivity(threadId).pipe(Effect.orDie),
+      processThreadActivity(threadId).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to process NTBS thread activity", { threadId, cause }),
+        ),
+      ),
     );
 
     const resumeNonTerminalExchanges = repo.findNonTerminalExchanges.pipe(
@@ -427,11 +532,21 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       Effect.flatMap((exchanges) =>
         Effect.forEach(
           exchanges,
-          (exchange) => advanceSavedExchange(exchange.sourceUri).pipe(Effect.orDie),
+          (exchange) =>
+            advanceSavedExchange(exchange.sourceUri).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Failed to resume the NTBS exchange", {
+                  sourceUri: exchange.sourceUri,
+                  cause,
+                }),
+              ),
+            ),
           { discard: true },
         ),
       ),
-      Effect.orDie,
+      Effect.catch((cause) =>
+        Effect.logWarning("Failed to load NTBS exchanges for recovery", { cause }),
+      ),
     );
 
     /*

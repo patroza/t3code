@@ -2,22 +2,6 @@
 
 The exchange model, ports, processor, and T3 gateway are implemented under `apps/server/src/ntbs/`. This file tracks only what is still open. Findings referenced by id are in `review-01-09.md`.
 
-## Classify provisioning failures and bound calls (M2, M3)
-
-Per-state deadlines are implemented and checked during reconciliation; they do not interrupt a hung call. Backoff was left out on purpose. Deleted thread IDs can now be recreated, so M2's original permanent rejection scenario no longer applies.
-
-- [ ] `provisionThread`: preserve the recovery check after dispatch failure, but keep a failed lookup retryable instead of treating it as confirmed absence. If absence is confirmed, classify an invariant rejection as `FatalError` and infrastructure failures as `RetryableError`.
-- [ ] Bound adapter and gateway calls (shared with H5) and ensure repeated status-read failures cannot bypass the existing deadline checks. A timed-out dispatch may still commit later; recovery must observe the result before retrying.
-
-M2: if thread.create is rejected because the project vanished after we read it, NTBS currently
-turns that definite “no” into a retry; it waits for the 15-minute deadline instead of recording a
-failure reply immediately. It also treats a failed “does the thread exist?” lookup as if the
-thread definitely does not exist, which loses useful uncertainty.
-
-M3: the deadline only runs after NTBS has successfully checked the current state. If that check,
-dispatch, or adapter call hangs or keeps failing, execution never reaches the deadline decision,
-so the exchange can remain stuck despite having a configured expiry.
-
 ## Durable readiness marker (H3, H4)
 
 Provisioning today is worktree → `thread.create` with the final path → fire-and-forget setup script. `getThreadStatus` reports `present` from the thread shell alone, so a crash between `thread.create` and setup skips setup permanently, and a fatal cleanup leaves a thread pointing at a removed worktree.
@@ -30,12 +14,11 @@ Provisioning today is worktree → `thread.create` with the final path → fire-
 
 ## Other review items
 
-- [ ] H5: narrow `threadActivity` to session/turn lifecycle events; `Effect.timeout` on every adapter and gateway call.
+- [ ] H5: narrow `threadActivity` to session/turn lifecycle events.
 - [ ] L3: worktree branch uses the full thread UUID with a non-temporary prefix so T3 does not rename it.
 
 ## Tests
 
-- [ ] Sweeper via `TestClock`.
 - [ ] One real-engine integration test for `startTurn` → `getTurnStatus`.
 - [ ] Injectable failing repository in the processor harness.
 - [ ] `startTurn` fatal → `ReplyPending`.

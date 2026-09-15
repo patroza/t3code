@@ -283,9 +283,12 @@ const deadlines: { readonly [Tag in NonTerminalExchange["tag"]]: number } = {
   "reply-pending": Duration.toMillis(Duration.hours(1)),
 };
 
-/** Whether the current state is older than its deadline. */
+export const expiresAt = (state: NonTerminalExchange): number =>
+  state.updatedAt + deadlines[state.tag];
+
+/** Whether the current state has reached its deadline. */
 export const isExpired = (state: NonTerminalExchange, now: number): boolean =>
-  now - state.updatedAt > deadlines[state.tag];
+  now >= expiresAt(state);
 
 const getThreadIdFromFailure = (cause: FailureCause): ThreadId | null => {
   switch (cause.type) {
@@ -358,16 +361,24 @@ The reconciliation flow is:
 4. execute decision                            effect
 5. construct the transition from its result    pure, then persist as an effect
 
-Every decider also receives the current time. When the observation shows the state's action is still needed and the state is past its deadline, the decision is to expire instead. An observation that completes the state wins over expiry, so a late result is still recorded (TODO: Verify?)
-RequestAccepted observes nothing but the clock: planning creates nothing in T3, so there is nothing else to check before doing it (TODO: Is this needed here?)
+Each exchange state has a time limit for completing its work. The decider uses the current time to decide whether to keep trying or give up. If the observation confirms the work already succeeded, it records that success even after the time limit. If the observation is unknown, it waits for another attempt while time remains and gives up afterward.
+RequestAccepted only needs the current time to decide whether to plan or give up: planning creates no thread or turn, so there is no earlier result in T3 to check.
+
+A note on "unknown"s.
+
+`unknown` represents a failed observation where the failure is generally retryable and not fatal.
 */
 
-export type WorkPlannedContext = { readonly thread: "missing" } | { readonly thread: "present" };
+export type WorkPlannedContext =
+  | { readonly thread: "missing" }
+  | { readonly thread: "present" }
+  | { readonly thread: "unknown" };
 
 export type ThreadCreatedContext =
   | {
       readonly turn: "missing";
     }
+  | { readonly turn: "unknown" }
   | { readonly turn: "active" }
   | { readonly turn: "completed"; readonly reply: Reply };
 
@@ -375,6 +386,7 @@ export type ReplyPendingContext =
   | {
       readonly platformReply: "missing";
     }
+  | { readonly platformReply: "unknown" }
   | {
       readonly platformReply: "posted";
       readonly replySourceUri: string;
@@ -500,6 +512,7 @@ export type RequestAcceptedDecision = { readonly type: "plan" } | { readonly typ
 export type WorkPlannedDecision =
   | { readonly type: "provision-thread" }
   | { readonly type: "record-thread-created" }
+  | { readonly type: "wait" }
   | { readonly type: "expire" };
 
 export type ThreadCreatedDecision =
@@ -513,6 +526,7 @@ export type ThreadCreatedDecision =
 
 export type ReplyPendingDecision =
   | { readonly type: "post-reply" }
+  | { readonly type: "wait" }
   | {
       readonly type: "record-reply-posted";
       readonly replySourceUri: string;
@@ -535,6 +549,9 @@ export const fromWorkPlanned = (
 
     case "present":
       return { type: "record-thread-created" };
+
+    case "unknown":
+      return isExpired(state, now) ? { type: "expire" } : { type: "wait" };
   }
 };
 
@@ -546,6 +563,9 @@ export const fromThreadCreated = (
   switch (context.turn) {
     case "missing":
       return isExpired(state, now) ? { type: "expire" } : { type: "start-turn" };
+
+    case "unknown":
+      return isExpired(state, now) ? { type: "expire" } : { type: "wait" };
 
     case "active":
       return isExpired(state, now) ? { type: "expire" } : { type: "wait" };
@@ -566,6 +586,9 @@ export const fromReplyPending = (
   switch (context.platformReply) {
     case "missing":
       return isExpired(state, now) ? { type: "expire" } : { type: "post-reply" };
+
+    case "unknown":
+      return isExpired(state, now) ? { type: "expire" } : { type: "wait" };
 
     case "posted":
       return {

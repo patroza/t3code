@@ -120,12 +120,14 @@ describe("RequestAccepted", () => {
 });
 
 describe("WorkPlanned", () => {
-  // missing thread -> provision it, unless expired; present thread -> record it, even when expired
+  // missing thread -> provision it, unless expired; present thread -> record it, even when expired; unknown thread -> wait, unless expired
   it.each([
     [{ thread: "missing" }, now, { type: "provision-thread" }],
     [{ thread: "present" }, now, { type: "record-thread-created" }],
+    [{ thread: "unknown" }, now, { type: "wait" }],
     [{ thread: "missing" }, later, { type: "expire" }],
     [{ thread: "present" }, later, { type: "record-thread-created" }],
+    [{ thread: "unknown" }, later, { type: "expire" }],
   ] as const)("decides %j at %d -> %j", (context, at, expected) => {
     expect(fromWorkPlanned(planned, context, at)).toEqual(expected);
   });
@@ -160,13 +162,15 @@ describe("WorkPlanned", () => {
 });
 
 describe("ThreadCreated", () => {
-  // missing turn -> start it; active turn -> wait; both expire; completed turn -> record its reply, even when expired
+  // missing turn -> start it; active or unknown turn -> wait; all three expire; completed turn -> record its reply, even when expired
   it.each([
     [{ turn: "missing" }, now, { type: "start-turn" }],
     [{ turn: "active" }, now, { type: "wait" }],
+    [{ turn: "unknown" }, now, { type: "wait" }],
     [{ turn: "completed", reply: answer }, now, { type: "record-reply-pending", reply: answer }],
     [{ turn: "missing" }, later, { type: "expire" }],
     [{ turn: "active" }, later, { type: "expire" }],
+    [{ turn: "unknown" }, later, { type: "expire" }],
     [{ turn: "completed", reply: answer }, later, { type: "record-reply-pending", reply: answer }],
   ] as const)("decides %j at %d -> %j", (context, at, expected) => {
     expect(fromThreadCreated(threadCreated, context, at)).toEqual(expected);
@@ -204,15 +208,17 @@ describe("ThreadCreated", () => {
 describe("ReplyPending", () => {
   const replyPending = toReplyPending(threadCreated, answer, now);
 
-  // missing platform reply -> post it, unless expired; posted -> record its message id, even when expired
+  // missing platform reply -> post it, unless expired; posted -> record its message id, even when expired; unknown -> wait, unless expired
   it.each([
     [{ platformReply: "missing" }, now, { type: "post-reply" }],
+    [{ platformReply: "unknown" }, now, { type: "wait" }],
     [
       { platformReply: "posted", replySourceUri: "test://exchange/reply" },
       now,
       { type: "record-reply-posted", replySourceUri: "test://exchange/reply" },
     ],
     [{ platformReply: "missing" }, later, { type: "expire" }],
+    [{ platformReply: "unknown" }, later, { type: "expire" }],
     [
       { platformReply: "posted", replySourceUri: "test://exchange/reply" },
       later,
