@@ -583,14 +583,14 @@ describe("NTBSProcessor", () => {
   });
 
   /*
-    T3 refusing the target for good (a branch that is not on origin, say) is found out at planning, before anything from T3 exists.
+    T3 refusing the target for good (a project repository with no origin remote, say) is found out at planning, before anything from T3 exists.
     The request was already recorded, so the rejection becomes a failure reply like any other and is posted; the stored record never carries T3 coordinates.
   */
   it.effect("posts a failure reply when T3 rejects the request at planning", () => {
     const rejection = new FatalError({
-      reason: "Branch 'nope' does not exist on origin",
+      reason: "Remote 'origin' does not exist",
       cause: null,
-      method: "gitWorkflowService.resolveRemoteTrackingCommit",
+      method: "gitWorkflowService.remoteExists",
     });
 
     return withProcessor(

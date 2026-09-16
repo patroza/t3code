@@ -232,7 +232,7 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
      *
      * Fetches first, so the answer reflects the current remote tip even when the local copy is behind. Only `origin` is consulted: local state is never a fallback, because two requests naming the same branch must start from the same commit.
      *
-     * Rejects when the project has no `origin`, or when `branchName` is not a branch on it.
+     * Rejects when the project has no `origin`. A `branchName` that does not resolve is retried until the exchange's deadline instead, because a missing branch cannot be told apart from a repository that merely failed to read.
      */
     const resolveRemoteBranchTip = (
       cwd: string,
@@ -273,11 +273,9 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
           Reads the local `refs/remotes/origin/*` namespace the fetch above just refreshed;
           no network is involved.
 
-          A missing branch is permanent, but git can also fail here for reasons that are not:
-          the command timing out behind the git process semaphore, or the process failing to
-          spawn. Only a non-zero exit means git ran and rejected the ref, so only that becomes
-          a rejection. Everything else is retried, because a wrong rejection is unrecoverable
-          while a wrong retry is merely noisy.
+          A missing branch and a repository read failure both surface here as a failed
+          command, and nothing in the error tells them apart. Everything is retried instead:
+          the state's deadline ends the attempts, while a wrong rejection is permanent.
         */
         return yield* gitWorkflowService
           .resolveRemoteTrackingCommit({
@@ -290,18 +288,13 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
               branchName: startBranchName,
               commitSha: resolved.commitSha,
             })),
-            Effect.mapError((cause) =>
-              cause.exitCode === undefined
-                ? new RetryableError({
-                    method: "gitWorkflowService.resolveRemoteTrackingCommit",
-                    reason: "Could not read the tip of '" + startBranchName + "' on origin",
-                    cause,
-                  })
-                : new FatalError({
-                    method: "gitWorkflowService.resolveRemoteTrackingCommit",
-                    reason: "Branch '" + startBranchName + "' does not exist on origin",
-                    cause,
-                  }),
+            Effect.mapError(
+              (cause) =>
+                new RetryableError({
+                  method: "gitWorkflowService.resolveRemoteTrackingCommit",
+                  reason: "Could not resolve branch '" + startBranchName + "' on origin",
+                  cause,
+                }),
             ),
           );
       });

@@ -353,7 +353,7 @@ const createProjectionTurnRepositoryMock = (
 type GitLayerInput = {
   createdWorktreePath?: string;
   createWorkreeFails?: boolean | { detail: string };
-  failsBranchResolutionWith?: "retryable" | "fatal";
+  failBranchResolution?: "non-zero-exit" | "no-exit-code";
   fetchRemoteFails?: boolean;
   remoteExists?: boolean;
   remoteExistsFails?: boolean;
@@ -460,8 +460,8 @@ const createGitWorkflowServiceMock = (
         remoteRefName: "remoteRefName",
       }).pipe(
         Effect.flatMap((val) =>
-          input && input.failsBranchResolutionWith
-            ? createGitCommandError(input.failsBranchResolutionWith === "fatal" ? 1 : undefined)
+          input?.failBranchResolution
+            ? createGitCommandError(input.failBranchResolution === "non-zero-exit" ? 1 : undefined)
             : Effect.succeed(val),
         ),
       ),
@@ -717,36 +717,6 @@ describe("T3Gateway", () => {
           expect(result.method).toBe("gitWorkflowService.remoteExists");
         }).pipe(Effect.provide(layer));
       });
-
-      it.effect(
-        "rejects a selected branch that is absent after a successful fetch without performing provisioning work",
-        () => {
-          const { layer, calls } = createT3Gateway({
-            gwfs: { failsBranchResolutionWith: "fatal", remoteExists: true },
-          });
-
-          const projectId = ProjectId.make("projectId");
-
-          return Effect.gen(function* () {
-            const t3Gateway = yield* T3Gateway;
-
-            const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
-
-            expect(result._tag).toBe("FatalError");
-
-            expect(result.method).toBe("gitWorkflowService.resolveRemoteTrackingCommit");
-
-            const methods = calls.map((call) => call.method);
-
-            expect(methods).toEqual([
-              "getProjectShellById",
-              "remoteExists",
-              "fetchRemote",
-              "resolveRemoteTrackingCommit",
-            ]);
-          }).pipe(Effect.provide(layer));
-        },
-      );
     });
 
     describe("operational failures", () => {
@@ -823,12 +793,44 @@ describe("T3Gateway", () => {
       });
 
       /*
-        A git failure carrying no exit code means git never ran to completion (timeout, spawn failure) rather than that the branch is missing.
+        A non-zero exit could mean the branch is missing, but also a repository read failure; the error does not distinguish them, so the request is retried until its deadline instead of rejected on a guess. Nothing is minted for work that may still run.
+      */
+      it.effect("fails retryably when resolving the branch tip exits non-zero", () => {
+        const { layer, calls } = createT3Gateway({
+          gwfs: {
+            failBranchResolution: "non-zero-exit",
+          },
+        });
+
+        const projectId = ProjectId.make("projectId");
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.planCoordinates(projectId, "main").pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("gitWorkflowService.resolveRemoteTrackingCommit");
+          expect(result.reason).toContain("Could not resolve branch");
+
+          const methods = calls.map((call) => call.method);
+
+          expect(methods).toEqual([
+            "getProjectShellById",
+            "remoteExists",
+            "fetchRemote",
+            "resolveRemoteTrackingCommit",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        A git failure carrying no exit code means git never ran to completion (timeout, spawn failure).
       */
       it.effect("fails retryably when reading the branch tip fails without a git exit code", () => {
         const { layer, calls } = createT3Gateway({
           gwfs: {
-            failsBranchResolutionWith: "retryable",
+            failBranchResolution: "no-exit-code",
           },
         });
 

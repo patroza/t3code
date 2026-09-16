@@ -8,21 +8,11 @@
 
 ### LOW
 
-**L4. `resolveRemoteTrackingCommit` fatal classification is broader than "branch missing".** `t3gateway.ts:306-318`: any non-zero git exit (index.lock, corrupt ref) becomes "Branch does not exist on origin". Acceptable, but say so in the comment.
-
 **L5. `runtimeMode: "full-access"` for externally-triggered work.** It is already the engine default and bypasses nothing extra, but it is the one place a policy hook for untrusted input would go. Note it; do not solve it now.
 
 ### Deferred
 
 **Setup recovery.** A crash between thread creation and setup launch can cause recovery to skip setup. Revisit when T3 exposes setup completion; NTBS will not introduce a separate setup lifecycle.
-
-### Verified sound
-
-- `withExchangeLock` under interruption: waiter cleanup, `callers` bookkeeping, and the `get(sourceUri) === lock` guard are correct; no deadlock path exists. Wake-up is not FIFO but every caller is idempotent.
-- Claim idempotency, concurrent-delivery serialization, forward-only constructors, `ReplyRejected` → `Undeliverable`, ack posted once after `ThreadCreated` is persisted.
-- Read-your-writes at activity time holds: the engine publishes to the pubsub strictly after the SQL transaction that appends events and projects (`OrchestrationEngine.ts:174-218`). `pendingMessageId` survives completed/error/interrupted transitions on the happy path via the `...existingTurn.value` spreads.
-- Sweeper never overlaps itself; sweep and activity on the same exchange serialize under the lock.
-- `createWorktree` argument mapping, `deriveWorktreePath`, `localStatus().refName`, `listRefs` substring semantics compensated by the exact `some(...)` check.
 
 ## Part 2 — Test suite
 
