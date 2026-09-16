@@ -1121,6 +1121,7 @@ describe("composer and pull request shortcuts", () => {
     ["l", "composer.previousWorktree"],
     ["c", "thread.copyReference"],
     ["k", "pullRequest.copyNumber"],
+    ["Enter", "thread.steerQueuedMessage"],
   ] as const;
 
   for (const platform of ["MacIntel", "Win32", "Linux"]) {

@@ -26,11 +26,13 @@ export interface DisplayQueuedMessage {
 export const QueuedMessageChips = memo(function QueuedMessageChips({
   queuedMessages,
   disabled,
+  steerShortcutLabel = null,
   onSteer,
   onEdit,
 }: {
   readonly queuedMessages: ReadonlyArray<DisplayQueuedMessage>;
   readonly disabled?: boolean;
+  readonly steerShortcutLabel?: string | null;
   readonly onSteer: (messageId: MessageId) => void;
   readonly onEdit: (messageId: MessageId) => void;
 }) {
@@ -38,49 +40,59 @@ export const QueuedMessageChips = memo(function QueuedMessageChips({
     return null;
   }
 
+  const nextSteerIndex = queuedMessages.findIndex((queuedMessage) => !queuedMessage.pending);
+
   return (
     <div className="mx-auto mb-2 flex max-w-3xl flex-col gap-1.5">
-      {queuedMessages.map((queuedMessage) => (
-        <div
-          key={queuedMessage.messageId}
-          className={cn(
-            "flex items-center gap-2.5 rounded-xl border border-border/60 bg-card/95 py-1.5 pr-1.5 pl-3.5 shadow-sm backdrop-blur",
-            queuedMessage.pending && "opacity-60",
-          )}
-          data-queued-message-pending={queuedMessage.pending ? "true" : "false"}
-        >
-          <ListEndIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-          <span
-            className="min-w-0 flex-1 truncate text-sm text-foreground/90"
-            aria-label={queuedMessage.text}
+      {queuedMessages.map((queuedMessage, index) => {
+        const isNextSteer = index === nextSteerIndex;
+        const sendNowTitle =
+          isNextSteer && steerShortcutLabel
+            ? `Send now, interrupting the current step (${steerShortcutLabel})`
+            : "Send now, interrupting the current step";
+        return (
+          <div
+            key={queuedMessage.messageId}
+            className={cn(
+              "flex items-center gap-2.5 rounded-xl border border-border/60 bg-card/95 py-1.5 pr-1.5 pl-3.5 shadow-sm backdrop-blur",
+              queuedMessage.pending && "opacity-60",
+            )}
+            data-queued-message-pending={queuedMessage.pending ? "true" : "false"}
           >
-            {queuedMessage.text.length > 0
-              ? queuedMessage.text
-              : `${queuedMessage.attachmentCount} attachment(s)`}
-          </span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={disabled || queuedMessage.pending}
-            aria-label="Send queued message now"
-            title="Send now, interrupting the current step"
-            onClick={() => onSteer(queuedMessage.messageId)}
-          >
-            <CornerDownRightIcon className="size-3.5" />
-            Send now
-          </Button>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            disabled={disabled || queuedMessage.pending}
-            aria-label="Edit queued message"
-            title="Remove from queue and edit in composer"
-            onClick={() => onEdit(queuedMessage.messageId)}
-          >
-            <PencilIcon className="size-3.5" />
-          </Button>
-        </div>
-      ))}
+            <ListEndIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <span
+              className="min-w-0 flex-1 truncate text-sm text-foreground/90"
+              aria-label={queuedMessage.text}
+            >
+              {queuedMessage.text.length > 0
+                ? queuedMessage.text
+                : `${queuedMessage.attachmentCount} attachment(s)`}
+            </span>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={disabled || queuedMessage.pending}
+              aria-label="Send queued message now"
+              title={sendNowTitle}
+              onClick={() => onSteer(queuedMessage.messageId)}
+            >
+              <CornerDownRightIcon className="size-3.5" />
+              Send now
+              {isNextSteer && steerShortcutLabel ? ` (${steerShortcutLabel})` : null}
+            </Button>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              disabled={disabled || queuedMessage.pending}
+              aria-label="Edit queued message"
+              title="Remove from queue and edit in composer"
+              onClick={() => onEdit(queuedMessage.messageId)}
+            >
+              <PencilIcon className="size-3.5" />
+            </Button>
+          </div>
+        );
+      })}
     </div>
   );
 });

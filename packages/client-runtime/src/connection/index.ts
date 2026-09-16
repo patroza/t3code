@@ -37,3 +37,4 @@ export {
   type FormatDisconnectDetailInput,
   type SocketCloseCapture,
 } from "./disconnectDetail.ts";
+export { orchestrationProtocolCompatibilityError } from "./compatibility.ts";

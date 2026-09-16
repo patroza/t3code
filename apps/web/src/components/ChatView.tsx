@@ -306,6 +306,7 @@ import {
   type DraftThreadEnvMode,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
+  restoreFailedBackgroundDraftThread,
   useComposerDraftStore,
   DraftId,
 } from "../composerDraftStore";
@@ -1865,6 +1866,7 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
+  const onSteerQueuedMessageRef = useRef<(messageId: MessageId) => void>(() => {});
   const queuedTurnDrainInFlightRef = useRef(false);
   const environmentUnavailableSendToastSlotRef = useRef(0);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
@@ -3839,7 +3841,9 @@ export default function ChatView(props: ChatViewProps) {
     live: liveWorktreeSetup,
     recorded: recordedWorktreeSetup,
     turnStarted: activeThread?.latestTurn?.startedAt != null,
-    isWorking,
+    // Counts the optimistic send too, so the row retires the moment the
+    // follow-up is on screen rather than when the server echoes it back.
+    followUpSent: timelineMessages.filter((message) => message.role === "user").length > 1,
   });
   // Sends wait for the agent handoff, not for the setup script: an async
   // script keeps the snapshot running while the agent already works, and a
@@ -7267,6 +7271,15 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.steerQueuedMessage") {
+        const message = displayQueuedMessages.find((queued) => !queued.pending);
+        if (!message) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) onSteerQueuedMessageRef.current(message.messageId);
+        return;
+      }
+
       if (command === "thread.stop") {
         // An unavailable command should not shadow contextual shortcuts such as Escape to close a dialog.
         if (!canInterruptRunningThread) return;
@@ -7296,6 +7309,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadPinned,
     activeThreadSettled,
     canInterruptRunningThread,
+    activeThreadKey,
     terminalUiState.terminalOpen,
     terminalUiState.activeTerminalId,
     activeThreadId,
@@ -7323,6 +7337,7 @@ export default function ChatView(props: ChatViewProps) {
     toggleRightPanelMaximized,
     toggleTerminalVisibility,
     composerRef,
+    displayQueuedMessages,
   ]);
 
   // Paste-to-focus: the resting composer blurs on a click into the timeline,
@@ -8102,14 +8117,15 @@ export default function ChatView(props: ChatViewProps) {
       );
       // A send the server will hold in the steering queue belongs in the queue
       // chips, not the timeline — so it neither renders a row nor moves the
-      // viewport. Anything else opens a turn and takes the live edge.
-      if (
-        sendEntersSteeringQueue({
-          hasBootstrap: isLocalDraftThread || baseBranchForWorktree !== null,
-          sessionStatus: activeThread.session?.status,
-          hasPendingTurnStart: activeThread.pendingTurnStart !== null,
-        })
-      ) {
+      // viewport. Steer-now follow-ups take the live edge and inject via
+      // `thread.queue.steer` after the send, because the decider still queues
+      // `thread.turn.start` while a turn is active.
+      const followUpWouldQueue = sendEntersSteeringQueue({
+        hasBootstrap: isLocalDraftThread || baseBranchForWorktree !== null,
+        sessionStatus: activeThread.session?.status,
+        hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+      });
+      if (settings.followUpBehavior === "queue" && followUpWouldQueue) {
         setOptimisticQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
       } else {
         // Sending always returns to the live edge. The new row becomes the
@@ -8371,6 +8387,19 @@ export default function ChatView(props: ChatViewProps) {
             console.warn("[thread-turn-outbox] failed to remove delivered turn", error);
           });
           turnStartSucceeded = true;
+          if (settings.followUpBehavior === "steer" && followUpWouldQueue) {
+            setSteeringQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
+            const steerResult = await steerQueuedThreadMessage({
+              environmentId,
+              input: { threadId: threadIdForSend, messageId: messageIdForSend },
+            });
+            if (steerResult._tag === "Failure") {
+              setSteeringQueuedMessageIds((existing) =>
+                pruneOptimisticQueuedMessageIds(existing, new Set([messageIdForSend])),
+              );
+              setOptimisticQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
+            }
+          }
           // The turn is under way and will spend quota, so that thread's limits
           // snapshot is stale. Uploads may have outlasted a navigation, so only
           // the sending thread's panel clears.
@@ -8586,6 +8615,9 @@ export default function ChatView(props: ChatViewProps) {
         error instanceof Error ? error.message : "Failed to send the queued message now.",
       );
     }
+  };
+  onSteerQueuedMessageRef.current = (messageId) => {
+    void onSteerQueuedMessage(messageId);
   };
 
   const onEditQueuedMessage = async (messageId: MessageId) => {
@@ -8958,13 +8990,13 @@ export default function ChatView(props: ChatViewProps) {
 
       // A follow-up submitted while the plan turn is still running is held in
       // the steering queue, so it becomes a chip rather than a positioned row.
-      if (
-        sendEntersSteeringQueue({
-          hasBootstrap: false,
-          sessionStatus: activeThread.session?.status,
-          hasPendingTurnStart: activeThread.pendingTurnStart !== null,
-        })
-      ) {
+      // Steer-now follow-ups take the live edge and inject via `thread.queue.steer`.
+      const followUpWouldQueue = sendEntersSteeringQueue({
+        hasBootstrap: false,
+        sessionStatus: activeThread.session?.status,
+        hasPendingTurnStart: activeThread.pendingTurnStart !== null,
+      });
+      if (settings.followUpBehavior === "queue" && followUpWouldQueue) {
         setOptimisticQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
       } else {
         // Position this sent row once LegendList has measured the anchored tail.
@@ -9058,6 +9090,19 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       if (failure === null) {
+        if (settings.followUpBehavior === "steer" && followUpWouldQueue) {
+          setSteeringQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
+          const steerResult = await steerQueuedThreadMessage({
+            environmentId,
+            input: { threadId: threadIdForSend, messageId: messageIdForSend },
+          });
+          if (steerResult._tag === "Failure") {
+            setSteeringQueuedMessageIds((existing) =>
+              pruneOptimisticQueuedMessageIds(existing, new Set([messageIdForSend])),
+            );
+            setOptimisticQueuedMessageIds((existing) => new Set(existing).add(messageIdForSend));
+          }
+        }
         clearUsageLimitsFor(routeThreadKey);
         acknowledgeActiveThreadWoke();
         sendInFlightRef.current = false;
@@ -9101,6 +9146,8 @@ export default function ChatView(props: ChatViewProps) {
       composerRef,
       clearUsageLimitsFor,
       routeThreadKey,
+      settings.followUpBehavior,
+      steerQueuedThreadMessage,
     ],
   );
 
@@ -10061,6 +10108,11 @@ export default function ChatView(props: ChatViewProps) {
                     <QueuedMessageChips
                       queuedMessages={displayQueuedMessages}
                       disabled={Boolean(activeEnvironmentUnavailableState)}
+                      steerShortcutLabel={shortcutLabelForCommand(
+                        keybindings,
+                        "thread.steerQueuedMessage",
+                        { context: { terminalFocus: false } },
+                      )}
                       onSteer={(messageId) => void onSteerQueuedMessage(messageId)}
                       onEdit={(messageId) => void onEditQueuedMessage(messageId)}
                     />

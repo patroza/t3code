@@ -36,6 +36,16 @@ chip above the composer. The queue drains in order when the turn finishes.
 Use **Send now** to steer the queued message into the current turn, or **Edit**
 to pull it back into the composer.
 
+In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
+behavior or **Steer** to send new messages immediately into the current turn.
+This setting applies to the current client. Messages already queued keep their
+place on the server.
+
+Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to
+send the oldest queued chip now. Change `thread.steerQueuedMessage` in
+**Settings → Keybindings** to use another shortcut. It leaves the current draft
+in the composer and waits if the agent needs an approval or an answer.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
