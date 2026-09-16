@@ -6,10 +6,6 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 
 - [ ] Review user-facing error messages.
 
-## Tests
-
-- [ ] `ensureWorktree` remaining error branches: `fs.exists`, `localStatus`, and `listRefs` failures; `removeWorktree` with its `fs.remove` fallback also failing; the `locked` stale-registration variant; "isRepo but wrong ref".
-
 ## Next
 
 - [ ] Jira port as the first real adapter, replacing the legacy bridge path.

@@ -355,13 +355,15 @@ type GitLayerInput = {
   createWorkreeFails?: boolean | { detail: string };
   failBranchResolution?: "non-zero-exit" | "no-exit-code";
   fetchRemoteFails?: boolean;
+  listRefsFails?: boolean;
+  localStatus?: { isRepo?: boolean; refName?: string };
+  localStatusFails?: boolean;
   remoteExists?: boolean;
   remoteExistsFails?: boolean;
   resolvedRemoteSha?: string;
   removeWorkTreeFails?: boolean;
   worktreeBranchExists?: boolean;
   worktreeBranchPath?: string;
-  localStatus?: { isRepo?: boolean; refName?: string };
 };
 
 // TODO: Can't we simplify it by leveraging default values in params?
@@ -424,6 +426,11 @@ const createGitWorkflowServiceMock = (
           hasWorkingTreeChanges: false,
           workingTree: { files: [], insertions: 0, deletions: 0 },
         }),
+      ).pipe(
+        Effect.filterOrFail(
+          () => !input?.localStatusFails,
+          () => createGitCommandError(),
+        ),
       ),
     listRefs: (callInput) =>
       recordGit(
@@ -445,6 +452,11 @@ const createGitWorkflowServiceMock = (
           nextCursor: null,
           totalCount: input?.worktreeBranchExists ? 1 : 0,
         }),
+      ).pipe(
+        Effect.filterOrFail(
+          () => !input?.listRefsFails,
+          () => createGitCommandError(),
+        ),
       ),
     removeWorktree: (callInput) =>
       record("removeWorktree", callInput).pipe(
@@ -1297,6 +1309,43 @@ describe("T3Gateway", () => {
         }).pipe(Effect.provide(layer));
       });
 
+      it.effect("replaces a registered worktree checked out on another branch", () => {
+        const { calls, layer } = createT3Gateway({
+          fileSystem: { worktreePathExists: true },
+          gwfs: {
+            worktreeBranchExists: true,
+            worktreeBranchPath: "/existing/worktree",
+            localStatus: { isRepo: true, refName: "some-other-branch" },
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          yield* t3Gateway.provisionThread(workPlanned);
+
+          // Being a repo is not enough: the ref has to be the minted branch, so this checkout is cleared and recreated like any other debris.
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "exists",
+            "localStatus",
+            "removeWorktree",
+            "createWorktree",
+            "randomUUIDv4",
+            "dispatch",
+            "runForThread",
+          ]);
+
+          const createInput = calls.find((call) => call.method === "createWorktree")?.input;
+          expect(createInput).toMatchObject({
+            path: null,
+            refName: coordinates.worktreeBranchName,
+          });
+          expect(createInput).not.toHaveProperty("newRefName");
+        }).pipe(Effect.provide(layer));
+      });
+
       it.effect("prunes a missing registered checkout and recreates it from its branch", () => {
         const { calls, layer } = createT3Gateway({
           gwfs: {
@@ -1361,6 +1410,25 @@ describe("T3Gateway", () => {
     });
 
     describe("failures", () => {
+      /*
+        The project is refetched here because planning's snapshot may be stale or the project may have been deleted since. A failed lookup is operational, so the pass retries before touching Git or T3.
+      */
+      it.effect("fails retryably when re-fetching the project fails", () => {
+        const { calls, layer } = createT3Gateway({
+          pqsm: { getProjectShellById: { failure: "no project resolving" } },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("projectionSnapshotQuery.getProjectShellById");
+          expect(calls.map((call) => call.method)).toEqual(["getProjectShellById"]);
+        }).pipe(Effect.provide(layer));
+      });
+
       it.effect(
         "fails retryably when dispatch fails operationally and the thread is genuinely missing",
         () => {
@@ -1562,6 +1630,33 @@ describe("T3Gateway", () => {
         },
       );
 
+      /*
+        The same stale registration, reported by Git as locked rather than already registered: still not ours to clean up safely.
+      */
+      it.effect("fails fatally when worktree creation finds a locked stale registration", () => {
+        const { calls, layer } = createT3Gateway({
+          gwfs: { createWorkreeFails: { detail: "'/worktreesDir/x' is missing but locked" } },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(result._tag).toBe("FatalError");
+          expect(result.method).toBe("gitWorkflowService.createWorktree");
+          expect(result.reason).toBe(
+            "The worktree path is still registered to a deleted checkout and needs `git worktree prune`",
+          );
+
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "createWorktree",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
       it.effect("fails retryably when worktree creation fails for any other reason", () => {
         const { calls, layer } = createT3Gateway({
           gwfs: { createWorkreeFails: true },
@@ -1580,6 +1675,99 @@ describe("T3Gateway", () => {
             "getProjectShellById",
             "listRefs",
             "createWorktree",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      /*
+        The ensureWorktree walk: every read can fail operationally, and each failure is retryable — nothing was changed yet, so the next pass re-derives the same facts.
+      */
+      it.effect("fails retryably when checking for a surviving worktree branch fails", () => {
+        const { calls, layer } = createT3Gateway({ gwfs: { listRefsFails: true } });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("gitWorkflowService.listRefs");
+          expect(calls.map((call) => call.method)).toEqual(["getProjectShellById", "listRefs"]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("fails retryably when inspecting the worktree path fails", () => {
+        const { calls, layer } = createT3Gateway({
+          fileSystem: { existsFails: true },
+          gwfs: { worktreeBranchExists: true, worktreeBranchPath: "/existing/worktree" },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("fileSystem.exists");
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "exists",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("fails retryably when inspecting the existing worktree fails", () => {
+        const { calls, layer } = createT3Gateway({
+          fileSystem: { worktreePathExists: true },
+          gwfs: {
+            worktreeBranchExists: true,
+            worktreeBranchPath: "/existing/worktree",
+            localStatusFails: true,
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("gitWorkflowService.localStatus");
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "exists",
+            "localStatus",
+          ]);
+        }).pipe(Effect.provide(layer));
+      });
+
+      it.effect("fails retryably when clearing the leftover path fails both ways", () => {
+        const { calls, layer } = createT3Gateway({
+          fileSystem: { worktreePathExists: true, removeFails: true },
+          gwfs: {
+            worktreeBranchExists: true,
+            worktreeBranchPath: "/existing/worktree",
+            removeWorkTreeFails: true,
+          },
+        });
+
+        return Effect.gen(function* () {
+          const t3Gateway = yield* T3Gateway;
+
+          const result = yield* t3Gateway.provisionThread(workPlanned).pipe(Effect.flip);
+
+          expect(result._tag).toBe("RetryableError");
+          expect(result.method).toBe("gitWorkflowService.removeWorktree");
+          expect(calls.map((call) => call.method)).toEqual([
+            "getProjectShellById",
+            "listRefs",
+            "exists",
+            "localStatus",
+            // Git refused, and the filesystem fallback failed with it.
+            "removeWorktree",
+            "remove",
           ]);
         }).pipe(Effect.provide(layer));
       });
@@ -2215,6 +2403,7 @@ describe("T3Gateway", () => {
 
     /*
       Only the identity relationships are asserted, not the full command payload: the userMessageId linkage is what makes the turn findable by `getTurnStatus`, and minting a fresh id here instead would deadlock every exchange without any error surfacing.
+      The command `type` is part of the assertion too, so a `thread.create` carrying a message cannot pass as a turn start.
     */
     it.effect(
       "dispatches the turn start for our thread carrying the snapshot under the exchange's userMessageId",
@@ -2228,6 +2417,7 @@ describe("T3Gateway", () => {
 
           const dispatch = calls.find((call) => call.method === "dispatch");
           expect(dispatch?.input).toMatchObject({
+            type: "thread.turn.start",
             threadId: threadCreated.t3.threadId,
             message: {
               messageId: threadCreated.t3.userMessageId,

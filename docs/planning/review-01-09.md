@@ -6,10 +6,6 @@
 
 ## Part 2 — Test suite
 
-### Gaps that matter
-
-1. **Uncovered gateway branches:** `getProject` failing inside `provisionThread`; `deriveWorktreePath` output is never asserted; `ensureWorktree` remaining error branches (`fs.exists`, `localStatus`, and `listRefs` failures, `removeWorktree` with its `fs.remove` fallback also failing, the `locked` stale-registration variant, "isRepo but wrong ref"); `startTurn` payload test omits `type`, so a `thread.create` carrying a message would pass.
-
 ### Weak tests
 
 - `processor.test.ts:300-350`: "no further calls" guarded by a single `Effect.yieldNow`; passes if the wrong call is one scheduler tick late. Same pattern at `:508, 577, 649, 723, 780, 796, 1025, 1241, 1304`. Works because every mock is synchronous; the first `Effect.sleep` in the processor path makes these vacuous.
@@ -32,4 +28,4 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 
 ## Recommended order
 
-1. Gateway branch tests (gap 1), then the weak tests and the two harness risks above.
+1. The weak tests, then the two harness risks above.
