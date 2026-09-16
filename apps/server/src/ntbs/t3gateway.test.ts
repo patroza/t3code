@@ -32,7 +32,7 @@ import {
   VcsListRefsResult,
   VcsStatusLocalResult,
 } from "@t3tools/contracts";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
 import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
 import { PlatformError, SystemError } from "effect/PlatformError";
@@ -628,14 +628,13 @@ describe("T3Gateway", () => {
 
           /*
             The identifiers are whatever the crypto mock hands out, so asserting exact values
-            would only restate the mock. What matters is the two relationships the gateway owns:
-            the thread and its first message are distinct, and the worktree branch is cut from
-            the thread so a stray branch traces back to it.
+            would only restate the mock. What matters are the relationships the gateway owns:
+            the thread and its first message are distinct, and the worktree branch carries the
+            full thread id under a prefix T3 does not rename.
           */
           expect(coordinates.threadId).not.toEqual(coordinates.userMessageId);
-          expect(coordinates.worktreeBranchName).toEqual(
-            buildTemporaryWorktreeBranchName(() => coordinates.threadId),
-          );
+          expect(coordinates.worktreeBranchName).toEqual(`ntbs/${coordinates.threadId}`);
+          expect(isTemporaryWorktreeBranch(coordinates.worktreeBranchName)).toBe(false);
 
           /*
             Order matters as much as the arguments. The tip is only current because the fetch

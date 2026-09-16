@@ -29,7 +29,6 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
 import { ProjectSetupScriptRunner } from "../project/ProjectSetupScriptRunner.ts";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { DEFAULT_THREAD_TITLE } from "@t3tools/shared/threadTitle";
 import { ServerSettingsService } from "../serverSettings.ts";
 
@@ -453,8 +452,12 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
 
         const userMessageId = MessageId.make(yield* randomUUID);
 
-        // Derived from the thread UUID so a stray branch points back at its thread.
-        const worktreeBranchName = buildTemporaryWorktreeBranchName(() => threadUUID);
+        /*
+          The branch carries the full thread UUID so a stray branch identifies its thread
+          without truncating its identifier. The `ntbs/` prefix keeps T3 from treating it as
+          one of its temporary placeholders (`t3code/<token>`), which it renames on the first turn.
+        */
+        const worktreeBranchName = `ntbs/${threadUUID}`;
 
         const coordinates: NTBS.WorkCoordinates = {
           projectId,

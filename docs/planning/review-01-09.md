@@ -8,8 +8,6 @@
 
 ### LOW
 
-**L3. Worktree branch token is 8 hex chars and T3 renames it on the first turn.** `buildTemporaryWorktreeBranchName` (`packages/shared/src/git.ts:95-105`) slices to 8 chars, and `ProviderCommandReactor.ts:928-960` renames temporary branches. The comment at `t3gateway.ts:464` ("a stray branch points back at its thread") is false, and a collision would make `ensureWorktree` adopt another thread's branch. Use the full UUID with a non-temporary prefix.
-
 **L4. `resolveRemoteTrackingCommit` fatal classification is broader than "branch missing".** `t3gateway.ts:306-318`: any non-zero git exit (index.lock, corrupt ref) becomes "Branch does not exist on origin". Acceptable, but say so in the comment.
 
 **L5. `runtimeMode: "full-access"` for externally-triggered work.** It is already the engine default and bypasses nothing extra, but it is the one place a policy hook for untrusted input would go. Note it; do not solve it now.
