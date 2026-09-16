@@ -5,13 +5,14 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 ## Other review items
 
 - [ ] L3: worktree branch uses the full thread UUID with a non-temporary prefix so T3 does not rename it.
+- [ ] M4: separate user-facing rejection text from diagnostics before a real adapter posts it.
 
 ## Tests
 
 - [ ] One real-engine integration test for `startTurn` → `getTurnStatus`.
-- [ ] Injectable failing repository in the processor harness.
+- [ ] Injectable repository in the processor harness (failures and gates; would also cover `persist` failures and the exchange-lock duplicate re-check, which is otherwise reachable only through a concurrent-first-delivery race).
 - [ ] `startTurn` fatal → `ReplyPending`.
-- [ ] Bound `awaitStoredTag` with a timeout.
+- [ ] Bound `awaitStoredTag`/`awaitCalls` with a diagnostic timeout.
 - [ ] `ensureWorktree` error branches: `fs.exists`, `localStatus`, `removeWorktree` fallback, `listRefs`, "isRepo but wrong ref", stale locked registration.
 
 ## Next
@@ -34,3 +35,11 @@ Keep NTBS-created T3 threads after their responses are posted for now. Once the 
 - [ ] Define when an edit counts as a first invocation and which snapshot is accepted when deliveries arrive late or out of order. `sourceUri` deduplicates accepted requests; platform-specific inbound code must decide which events to submit.
 - [ ] Decide reply placement for each platform so final delivery works even if acknowledgement fails. For Discord, replying to the invoking message fits the current contract; replying to the acknowledgement requires locating a message whose ID NTBS does not retain.
 - [ ] Investigate provider requests for user input: NTBS forwards settled outcomes, so a turn waiting for input may remain active until timeout. Decide how to handle this without relying on interactive platform controls.
+
+## Concurrency choreography
+
+We've got lots of code that does locking, queueing, concurrency bonding for exchanges, etc, etc that is now a bit spread over the whole processor and hard to follow.
+
+Activity handling has since collapsed into one queue-and-worker pipeline inside `run`; what remains spread out is the per-exchange lock and the pass helpers (`resumeExchange`, `tryResumeExchange`, `advanceSavedExchange`).
+
+We need to investigate whether it can be simplified or abstracted to its own module so processor stays as simple as possible and concurrency logic is easier to test and verify.

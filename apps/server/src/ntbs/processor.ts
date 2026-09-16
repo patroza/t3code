@@ -29,11 +29,11 @@ The processor is the executor and orchestrator of non-turn-based surfaces: it ap
 - the exchange repository: durable link between the two, stores the exchange state
 
 It exposes two public APIs:
-1. `process` takes an incoming message and starts the work for it.
-2. `run` subscribes to T3 activity and resumes the exchanges a previous run left unfinished.
+1. `process` records an incoming message as an exchange and wakes `run` to work on it.
+2. `run` subscribes to T3 activity and to recorded requests, and resumes the exchanges a previous run left unfinished.
 
 `run` also owns an internal sweeper: a periodic pass that re-drives every non-terminal exchange, the same thing startup recovery does but on an interval.
-Thread activity is the primary wake signal, but it is a fire-and-forget ping: without the sweeper one missed event would leave an exchange stuck until the next restart.
+Activity and recorded requests are fire-and-forget wakes: without the sweeper one missed wake-up would leave an exchange stuck until the next restart.
 Sweeping is cheap and safe because the cycle observes before acting: re-driving an exchange whose context has not moved just answers "wait" and stops.
 
 Both drive an exchange through the same cycle, repeated until it reaches a terminal state:
@@ -119,8 +119,8 @@ export interface NTBSProcessor {
    *
    * Does no filtering: the caller decides whether a request deserves T3 work, and everything passed here starts it.
    *
-   * Returns once the request is recorded, not once it is answered: the reply is posted later, when T3 reports the turn finished.
-   * Fails with a typed error only when the repository does. Anything that fails after the record dies; `run` retries the recorded exchange.
+   * Returns once the request is recorded, not once it is answered: the record is where NTBS accepts responsibility, and `run` picks it up from there. The reply is posted later, when T3 reports the turn finished.
+   * Fails with a typed error only when the repository does. A failure after the record is the exchange's to keep: the record survives, and `run` retries it.
    *
    * Idempotent per `sourceUri`: a redelivery of an already-recorded request is a no-op, whatever state that exchange has reached. Concurrent deliveries of the same request are serialized, so only the first records it.
    */
@@ -131,9 +131,9 @@ export interface NTBSProcessor {
 
   /**
    * The main loop of the processor.
-   * Subscribes to T3 activity, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange moves when its T3 thread does, with a periodic sweep re-driving every non-terminal exchange as the backstop for missed activity pings.
+   * Subscribes to T3 activity and to the requests `process` records, then resumes every non-terminal exchange. Subscribing first means nothing is missed while recovery runs. After that, an exchange moves when its T3 thread does or when a request is recorded, with a periodic sweep re-driving every non-terminal exchange as the backstop for missed wake-ups.
    *
-   * Expected failures are logged without stopping subsequent activity or sweeps.
+   * Expected failures are logged without stopping subsequent activity, requests or sweeps.
    */
   readonly run: Effect.Effect<void>;
 }
@@ -148,6 +148,13 @@ type TransitionResult =
   | {
       readonly type: "unchanged";
     };
+
+/**
+ * What the activity workers take from their queue: a thread whose T3 state may have moved, or a request that was just recorded.
+ */
+type ActivityPing =
+  | { readonly type: "thread"; readonly threadId: ThreadId }
+  | { readonly type: "recorded-request"; readonly sourceUri: string };
 
 type NTBSProcessorRequirements =
   /*
@@ -182,6 +189,11 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
     const adapter = yield* NTBSAdapter;
     const t3 = yield* T3Gateway;
     const repo = yield* ExchangeRepository;
+
+    /*
+      Source URIs of requests `process` records. The queue lives outside `run`, so a wake offered before `run` starts or while it is down is not lost; if it is, startup recovery and the sweep advance the exchange anyway.
+    */
+    const recordedRequests = yield* Queue.unbounded<string>();
 
     const orFail = (reason: string) =>
       Effect.mapError((cause: unknown) => new NTBSProcessorError({ reason, cause }));
@@ -550,27 +562,37 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       request: NTBS.Request,
       t3Target: NTBS.T3Target,
     ) {
+      /*
+        1. Check whether an Exchange exists for this source URI.
+        2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
+        The read happens before the lock: otherwise a redelivery would park behind whatever background pass holds the lock for an exchange that is already recorded.
+        3. If there isn't, take the lock and check again: a concurrent delivery may have recorded it meanwhile, and only the first one may win.
+        4. Record the request as accepted and wake the background processor.
+        From the record on, a failure is the exchange's to keep, not the caller's: it is left for `run` to retry.
+      */
+
+      const existing = yield* repo
+        .findBySourceUri(request.sourceUri)
+        .pipe(orFail("Failed to find the exchange for the platform request"));
+
+      if (existing !== null) {
+        return;
+      }
+
       return yield* withExchangeLock(
         request.sourceUri,
         Effect.gen(function* () {
-          /*
-            1. Check whether an Exchange exists for this source URI.
-            2. If there is already - we can return. We treat duplicate deliveries of requests with the same sourceUri as duplicates. No ops.
-            3. If there isn't we record the request as accepted and advance the exchange.
-            From the record on, a failure is the exchange's to keep, not the caller's: it is left for `run` to retry.
-          */
-
-          const existing = yield* repo
+          const recorded = yield* repo
             .findBySourceUri(request.sourceUri)
             .pipe(orFail("Failed to find the exchange for the platform request"));
 
-          if (existing !== null) {
+          if (recorded !== null) {
             return;
           }
 
           const now = yield* Clock.currentTimeMillis;
           const accepted = yield* persist(NTBS.makeRequestAccepted(request, t3Target, now));
-          yield* advanceExchange(accepted).pipe(Effect.orDie);
+          yield* Queue.offer(recordedRequests, accepted.sourceUri);
         }),
       );
     });
@@ -611,7 +633,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
     /*
       The sweeper: the same pass as startup recovery, repeated on an interval for the whole life of `run`.
-      Thread activity is the primary wake signal; the sweeper checks exchanges even when no activity event reaches them.
+      Activity and recorded requests are fire-and-forget wakes; the sweeper checks exchanges even when none of them arrives.
       Redundant sweeps are safe and cheap because the cycle observes before acting: an exchange whose context has not moved answers "wait" and stops.
       The interval is a judgment call, low enough that a stranded exchange recovers within a tolerable wait for whoever asked, high enough that the periodic query stays negligible.
       Delay first: `run` has just swept via startup recovery, so an immediate first pass would be pure noise.
@@ -632,7 +654,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
           The queue and the tracking map live inside `run`: when a run is interrupted mid-pass, nothing survives that would mark a thread as still being processed and swallow its next events.
         */
-        const activityQueue = yield* Queue.unbounded<ThreadId>();
+        const activityQueue = yield* Queue.unbounded<ActivityPing>();
         const pendingThreads = yield* Ref.make(
           HashMap.empty<ThreadId, "waiting" | "running" | "checkAgain">(),
         );
@@ -654,29 +676,48 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
             });
 
             if (action === "enqueue") {
-              yield* Queue.offer(activityQueue, threadId);
+              yield* Queue.offer(activityQueue, { type: "thread", threadId });
             }
           });
 
+        /*
+          A failed pass is logged and dropped: the next event or the sweeper runs the exchange again. Defects get the same treatment, so one cannot kill a worker; only interruption ends a worker.
+        */
+        const logPassFailure =
+          (message: string, context: Record<string, unknown>) =>
+          <A, R>(pass: Effect.Effect<A, NTBSProcessorError, R>) =>
+            pass.pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning(message, { ...context, cause }),
+              ),
+            );
+
         const activityWorker = Effect.gen(function* () {
           while (true) {
-            const threadId = yield* Queue.take(activityQueue);
+            const ping = yield* Queue.take(activityQueue);
+
+            if (ping.type === "recorded-request") {
+              /*
+                A request `process` just recorded. One wake per request, so there is nothing to collapse; a pass that is already running reloaded the record after taking the exchange lock, so skipping it loses nothing.
+              */
+              yield* logPassFailure("Failed to process a recorded NTBS request", {
+                sourceUri: ping.sourceUri,
+              })(tryResumeExchange(ping.sourceUri));
+              continue;
+            }
+
+            const threadId = ping.threadId;
             yield* Ref.update(pendingThreads, (threads) =>
               HashMap.set(threads, threadId, "running"),
             );
 
             /*
-              A failed pass is logged. The thread is queued again only if an event asked for another pass while it ran; otherwise its entry is dropped and the next event or the sweeper runs it again. Defects are treated the same way, so one cannot kill the worker and leave its thread marked as running; only interruption ends a worker.
+              The thread is queued again only if an event asked for another pass while it ran; otherwise its entry is dropped and the next event or the sweeper runs it again.
             */
-            yield* processThreadActivity(threadId).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterrupts(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logWarning("Failed to process NTBS thread activity", {
-                      threadId,
-                      cause,
-                    }),
-              ),
+            yield* logPassFailure("Failed to process NTBS thread activity", { threadId })(
+              processThreadActivity(threadId),
             );
 
             const anotherCheck = yield* Ref.modify(pendingThreads, (threads) => {
@@ -689,7 +730,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
             });
 
             if (anotherCheck) {
-              yield* Queue.offer(activityQueue, threadId);
+              yield* Queue.offer(activityQueue, { type: "thread", threadId });
             }
           }
         });
@@ -697,6 +738,10 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         yield* Stream.runForEach(t3.threadActivity, enqueueThreadActivity).pipe(
           Effect.forkScoped({ startImmediately: true }),
         );
+
+        yield* Stream.runForEach(Stream.fromQueue(recordedRequests), (sourceUri) =>
+          Queue.offer(activityQueue, { type: "recorded-request", sourceUri }),
+        ).pipe(Effect.forkScoped({ startImmediately: true }));
 
         yield* Effect.forEach(
           Array.from({ length: MAX_CONCURRENT_ACTIVITY_HANDLERS }),
