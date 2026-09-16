@@ -51,18 +51,26 @@ export const ExchangeRepository = Context.Service<ExchangeRepository>(
   "t3code/ntbs/ExchangeRepository",
 );
 
-const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
-  const exchanges: Ref.Ref<HashMap.HashMap<string, Exchange>> = yield* Ref.make(
-    HashMap.empty<string, Exchange>(),
-  );
+/** The in-memory store: every exchange by its `sourceUri`, plus the thread index. */
+type StoredExchanges = {
+  readonly bySourceUri: HashMap.HashMap<string, Exchange>;
+  readonly byThreadId: HashMap.HashMap<ThreadId, Exchange>;
+};
 
-  /** Whether `exchange` may be written into `map`, with the reason when it may not. */
+const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
+  const state = yield* Ref.make<StoredExchanges>({
+    bySourceUri: HashMap.empty<string, Exchange>(),
+    // An index over the same exchanges: rule 2 of `validate` keeps at most one per thread.
+    byThreadId: HashMap.empty<ThreadId, Exchange>(),
+  });
+
+  /** Whether `exchange` may be written into `state`, with the reason when it may not. */
   const validate = (
-    map: HashMap.HashMap<string, Exchange>,
+    state: StoredExchanges,
     exchange: Exchange,
   ): Result.Result<void, ExchangeRepositoryError> => {
     // Rule 1: a stored exchange may only be replaced by an update of itself.
-    const previous = HashMap.get(map, exchange.sourceUri);
+    const previous = HashMap.get(state.bySourceUri, exchange.sourceUri);
 
     if (isSome(previous) && !isUpdateOf(exchange, previous.value)) {
       return Result.fail(
@@ -80,19 +88,15 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
       return Result.void;
     }
 
-    const owner = HashMap.findFirst(
-      map,
-      (existing, sourceUri) =>
-        sourceUri !== exchange.sourceUri && getThreadId(existing) === threadId,
-    );
+    const owner = HashMap.get(state.byThreadId, threadId);
 
-    if (isSome(owner)) {
+    if (isSome(owner) && owner.value.sourceUri !== exchange.sourceUri) {
       return Result.fail(
         new ExchangeRepositoryError({
-          reason: `Thread ${threadId} already belongs to exchange ${owner.value[0]}`,
+          reason: `Thread ${threadId} already belongs to exchange ${owner.value.sourceUri}`,
           cause: {
             threadId,
-            existingSourceUri: owner.value[0],
+            existingSourceUri: owner.value.sourceUri,
             incomingSourceUri: exchange.sourceUri,
           },
         }),
@@ -104,48 +108,57 @@ const inMemoryER: Effect.Effect<ExchangeRepository> = Effect.gen(function* () {
 
   // Validating and writing share one modify, so concurrent upserts cannot both pass.
   const upsert = Effect.fn("ExchangeRepository.upsert")((exchange: Exchange) =>
-    exchanges.pipe(
-      Ref.modify((map) => {
-        const result = validate(map, exchange);
-        return [
-          result,
-          Result.isSuccess(result) ? HashMap.set(map, exchange.sourceUri, exchange) : map,
-        ];
-      }),
+    state.pipe(
+      Ref.modify(
+        (current): readonly [Result.Result<void, ExchangeRepositoryError>, StoredExchanges] => {
+          const result = validate(current, exchange);
+
+          if (Result.isFailure(result)) {
+            return [result, current];
+          }
+
+          const previous = HashMap.get(current.bySourceUri, exchange.sourceUri);
+          const previousThreadId = isSome(previous) ? getThreadId(previous.value) : null;
+          const threadId = getThreadId(exchange);
+
+          let byThreadId = current.byThreadId;
+
+          if (previousThreadId !== null && previousThreadId !== threadId) {
+            byThreadId = HashMap.remove(byThreadId, previousThreadId);
+          }
+
+          if (threadId !== null) {
+            byThreadId = HashMap.set(byThreadId, threadId, exchange);
+          }
+
+          return [
+            result,
+            {
+              bySourceUri: HashMap.set(current.bySourceUri, exchange.sourceUri, exchange),
+              byThreadId,
+            },
+          ];
+        },
+      ),
       Effect.flatMap(Effect.fromResult),
     ),
   );
 
   const findBySourceUri = (uri: string) =>
-    Ref.get(exchanges).pipe(
-      Effect.map((map) => HashMap.get(map, uri)),
+    Ref.get(state).pipe(
+      Effect.map(({ bySourceUri }) => HashMap.get(bySourceUri, uri)),
       Effect.map((o) => (isSome(o) ? o.value : null)),
     );
 
   const findByThreadId = (threadId: ThreadId) =>
-    Ref.get(exchanges).pipe(
-      Effect.map((map) => HashMap.filter(map, (val) => getThreadId(val) === threadId)),
-      // if we get more than one Exchange in the HashMap, something's wrong
-      Effect.andThen((map) =>
-        HashMap.size(map) > 1
-          ? new ExchangeRepositoryError({
-              reason: "Exchange Repository contains more than one entry for thredId: " + threadId,
-              cause: map,
-            })
-          : Effect.succeed(Array.fromIterable(HashMap.entries(map))).pipe(
-              Effect.map((arr) => (arr.length === 1 ? arr[0]![1] : null)),
-            ),
-      ),
+    Ref.get(state).pipe(
+      Effect.map(({ byThreadId }) => HashMap.get(byThreadId, threadId)),
+      Effect.map((o) => (isSome(o) ? o.value : null)),
     );
 
-  const findNonTerminalExchanges = Ref.get(exchanges).pipe(
-    Effect.map((map) => Array.fromIterable(HashMap.entries(map))),
-    Effect.map((arr) =>
-      Array.filter(
-        arr.map((el) => el[1]),
-        isNonTerminal,
-      ),
-    ),
+  const findNonTerminalExchanges = Ref.get(state).pipe(
+    Effect.map(({ bySourceUri }) => Array.fromIterable(HashMap.values(bySourceUri))),
+    Effect.map(Array.filter(isNonTerminal)),
   );
 
   return { upsert, findBySourceUri, findByThreadId, findNonTerminalExchanges };

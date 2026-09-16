@@ -145,12 +145,40 @@ describe("inMemoryExchangeRepository", () => {
     it.effect("finds an exchange by threadId", () =>
       Effect.gen(function* () {
         const repository = yield* ExchangeRepository;
-        const exchange = makeExchange("test://request/1", "thread-1");
+        const planned = makeExchange("test://request/1", "thread-1");
+        const threadCreated = toThreadCreated(planned, now);
+        const replyPending = toReplyPending(
+          threadCreated,
+          answerFrom("thread-1", "posted reply"),
+          now,
+        );
+        const posted = toReplyPosted(replyPending, "test://reply/1", now);
 
-        yield* repository.upsert(exchange);
+        yield* repository.upsert(planned);
 
-        expect(yield* repository.findByThreadId(exchange.t3.threadId)).toEqual(exchange);
+        expect(yield* repository.findByThreadId(planned.t3.threadId)).toEqual(planned);
         expect(yield* repository.findByThreadId(ThreadId.make("unknown-thread"))).toBeNull();
+
+        yield* repository.upsert(threadCreated);
+        yield* repository.upsert(replyPending);
+        yield* repository.upsert(posted);
+
+        expect(yield* repository.findByThreadId(planned.t3.threadId)).toEqual(posted);
+      }),
+    );
+  });
+
+  it.layer(inMemoryExchangeRepository)((it) => {
+    it.effect("finds a thread only once its exchange has been planned", () =>
+      Effect.gen(function* () {
+        const repository = yield* ExchangeRepository;
+        const planned = makeExchange("test://request/1", "thread-1");
+
+        yield* repository.upsert(makeAccepted(planned.sourceUri));
+        expect(yield* repository.findByThreadId(planned.t3.threadId)).toBeNull();
+
+        yield* repository.upsert(planned);
+        expect(yield* repository.findByThreadId(planned.t3.threadId)).toEqual(planned);
       }),
     );
   });
@@ -229,6 +257,22 @@ describe("inMemoryExchangeRepository", () => {
         expect(yield* repository.findBySourceUri(second.sourceUri)).toEqual(second);
         expect(yield* repository.findByThreadId(first.t3.threadId)).toEqual(first);
         expect(yield* repository.findByThreadId(second.t3.threadId)).toEqual(second);
+      }),
+    );
+  });
+
+  it.layer(inMemoryExchangeRepository)((it) => {
+    it.effect("moves its thread index when a replacement names a different thread", () =>
+      Effect.gen(function* () {
+        const repository = yield* ExchangeRepository;
+        const original = makeExchange("test://request/1", "thread-1");
+        const replacement = makeExchange("test://request/1", "thread-2");
+
+        yield* repository.upsert(original);
+        yield* repository.upsert(replacement);
+
+        expect(yield* repository.findByThreadId(original.t3.threadId)).toBeNull();
+        expect(yield* repository.findByThreadId(replacement.t3.threadId)).toEqual(replacement);
       }),
     );
   });

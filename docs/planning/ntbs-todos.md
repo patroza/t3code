@@ -18,7 +18,7 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 ## Next
 
 - [ ] Jira port as the first real adapter, replacing the legacy bridge path.
-- [ ] SQL `ExchangeRepository` with an index on `threadId` and unique constraints on both keys.
+- [ ] SQL `ExchangeRepository`: `sourceUri` primary key, unique `threadId` index (NULLs allowed) — one exchange per thread, both lookups indexed.
 - [ ] Wire `makeNTBSProcessor` into the server with a real adapter and SQL repository; verify persistence and recovery across restarts.
 
 ## Review fork-specific provenance after the NTBS migration
