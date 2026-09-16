@@ -54,6 +54,8 @@ type ProcessorTestContext = {
   readonly repository: ExchangeRepository;
   /** The shared ordered call log. We know what has been dispatched and with which arguments. This is not testing internals but actual business-logic. */
   readonly calls: ReadonlyArray<Call>;
+  /** How many times the processor asked the repository to resolve a thread id, the lookup a busy retry loop would repeat. */
+  readonly findByThreadIdCalls: () => number;
   /** Pushes a threadId to the `threadActivity` stream, waking up the processor. */
   readonly pingActivity: (threadId: ThreadId) => Effect.Effect<void>;
   /**
@@ -195,6 +197,23 @@ const withProcessor = <A, E>(
     const t3 = { ...defaultT3Gateway, ...servicesInput.t3Gateway };
     const adapter = { ...defaultAdapter, ...servicesInput.adapter };
 
+    let findByThreadIdCalls = 0;
+
+    /*
+      The repository is the real in-memory one, wrapped only to count `findByThreadId`: a worker re-resolving a thread over and over shows up here, even while it is not reaching `getTurnStatus`.
+    */
+    const repositoryLayer = Layer.effect(
+      ExchangeRepository,
+      Effect.map(ExchangeRepository, (repository) => ({
+        ...repository,
+        findByThreadId: (threadId: ThreadId) =>
+          Effect.suspend(() => {
+            findByThreadIdCalls += 1;
+            return repository.findByThreadId(threadId);
+          }),
+      })),
+    ).pipe(Layer.provide(inMemoryExchangeRepository));
+
     const layer = Layer.mergeAll(
       Layer.mock(T3Gateway, {
         planCoordinates: wrapT3("planCoordinates", t3.planCoordinates),
@@ -209,7 +228,7 @@ const withProcessor = <A, E>(
         findPostedReply: wrapAdapter("findPostedReply", adapter.findPostedReply),
         postReply: wrapAdapter("postReply", adapter.postReply),
       }),
-      inMemoryExchangeRepository,
+      repositoryLayer,
     );
 
     return yield* Effect.gen(function* () {
@@ -220,6 +239,7 @@ const withProcessor = <A, E>(
         processor,
         repository,
         calls,
+        findByThreadIdCalls: () => findByThreadIdCalls,
         pingActivity: (threadId) => Queue.offer(activity, threadId).pipe(Effect.asVoid),
         awaitStoredTag: (sourceUri, tag) =>
           Effect.gen(function* () {
@@ -368,144 +388,142 @@ describe("NTBSProcessor", () => {
   /*
     Activity pings are handled per exchange: one exchange waiting on a slow T3 read must not hold up another exchange's ping.
 
-    Both stored exchanges are ThreadCreated, so handling a ping is one `getTurnStatus` read. A's read records where it started, signals, and parks until the clock advances; B's read records nothing but returns at once. Handling the exchanges on one line would record A's completion before B was ever read, so the recorded order is the assertion.
+    Both stored exchanges are ThreadCreated, so handling a ping is one `getTurnStatus` read. A's read signals and then waits until the clock advances; B's read records and returns at once. If the processor handled one ping at a time, A's completion would be recorded before B was read, so the order of the recorded events is the assertion.
   */
-  it.effect.fails(
-    "reads another exchange while one exchange's observation is still pending",
-    () => {
-      const events: string[] = [];
-      const aRead = Deferred.makeUnsafe<void>();
-      const bRead = Deferred.makeUnsafe<void>();
-      const recovered = Deferred.makeUnsafe<void>();
-      let recoveryReads = 0;
-      let slow = false;
+  it.effect("reads another exchange while one exchange's observation is still pending", () => {
+    const events: string[] = [];
+    const aRead = Deferred.makeUnsafe<void>();
+    const bRead = Deferred.makeUnsafe<void>();
+    const recovered = Deferred.makeUnsafe<void>();
+    let recoveryReads = 0;
+    let slow = false;
 
-      return withProcessor(
-        {
-          t3Gateway: {
-            getTurnStatus: (state) =>
-              Effect.gen(function* () {
-                if (!slow) {
-                  recoveryReads += 1;
-                  if (recoveryReads === 2) {
-                    yield* Deferred.succeed(recovered, undefined);
-                  }
-                } else if (state.t3.threadId === defaultThreadId) {
-                  events.push("a:start");
-                  yield* Deferred.succeed(aRead, undefined);
-                  yield* Effect.sleep("1 second");
-                  events.push("a:end");
-                } else {
-                  events.push("b:read");
-                  yield* Deferred.succeed(bRead, undefined);
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: (state) =>
+            Effect.gen(function* () {
+              if (!slow) {
+                recoveryReads += 1;
+                if (recoveryReads === 2) {
+                  yield* Deferred.succeed(recovered, undefined);
                 }
-                return { turn: "active" as const };
-              }),
-          },
+              } else if (state.t3.threadId === defaultThreadId) {
+                events.push("a:start");
+                yield* Deferred.succeed(aRead, undefined);
+                yield* Effect.sleep("1 second");
+                events.push("a:end");
+              } else {
+                events.push("b:read");
+                yield* Deferred.succeed(bRead, undefined);
+              }
+              return { turn: "active" as const };
+            }),
         },
-        ({ processor, repository, pingActivity }) =>
-          Effect.gen(function* () {
-            yield* repository.upsert(threadCreated);
-            yield* repository.upsert(secondThreadCreated);
+      },
+      ({ processor, repository, pingActivity }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+          yield* repository.upsert(secondThreadCreated);
 
-            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
-            yield* Deferred.await(recovered);
-            yield* Effect.yieldNow;
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(recovered);
+          yield* Effect.yieldNow;
 
-            slow = true;
-            yield* pingActivity(defaultThreadId);
-            yield* Deferred.await(aRead);
-            yield* pingActivity(secondThreadId);
+          slow = true;
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(aRead);
+          yield* pingActivity(secondThreadId);
 
-            // B is read before the clock releases A only if the processor does not handle the two exchanges on one line. Advancing the clock also settles the serialized world, so both worlds finish before the assertion; the order is what differs.
-            const bReadWait = yield* Deferred.await(bRead).pipe(
-              Effect.forkChild({ startImmediately: true }),
-            );
-            yield* TestClock.adjust("1 second");
-            yield* Fiber.join(bReadWait);
+          // Advancing the clock lets A finish in both cases; the recorded order shows whether B was read before that.
+          const bReadWait = yield* Deferred.await(bRead).pipe(
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* TestClock.adjust("1 second");
+          yield* Fiber.join(bReadWait);
 
-            expect(events).toEqual(["a:start", "b:read", "a:end"]);
+          expect(events).toEqual(["a:start", "b:read", "a:end"]);
 
-            yield* Fiber.interrupt(run);
-          }),
-      );
-    },
-  );
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
 
   /*
     A burst of pings for one exchange is a demand to look again once, not one read per ping.
 
-    An observation is parked, the burst arrives, and then a fence ping for the other exchange is offered behind the burst: its read only lands once everything queued ahead of it has been handled, which settles the count in both worlds. One read per ping records 51 reads; the collapsed behavior records the parked read plus the one extra pass it owes the pings that arrived while it was running.
+    A's first read waits until the clock advances. While it waits, the burst arrives and B's ping is read too — B is not waiting for A. The test then advances the clock and waits for A's repeated check itself before counting, because B finishing proves nothing about what A still has queued. Reading once per ping would record 51 reads; here it records A's waiting read plus that one check.
   */
-  it.effect.fails(
-    "collapses a burst of pings for one exchange into a single extra observation",
-    () => {
-      const aRead = Deferred.makeUnsafe<void>();
-      const bRead = Deferred.makeUnsafe<void>();
-      const recovered = Deferred.makeUnsafe<void>();
-      const burst = 50;
-      let recoveryReads = 0;
-      let reads = 0;
-      let slow = false;
+  it.effect("collapses a burst of pings for one exchange into a single extra observation", () => {
+    const aRead = Deferred.makeUnsafe<void>();
+    const bRead = Deferred.makeUnsafe<void>();
+    const checkedAgain = Deferred.makeUnsafe<void>();
+    const recovered = Deferred.makeUnsafe<void>();
+    const burst = 50;
+    let recoveryReads = 0;
+    let reads = 0;
+    let slow = false;
 
-      return withProcessor(
-        {
-          t3Gateway: {
-            getTurnStatus: (state) =>
-              Effect.gen(function* () {
-                if (!slow) {
-                  recoveryReads += 1;
-                  if (recoveryReads === 2) {
-                    yield* Deferred.succeed(recovered, undefined);
-                  }
-                } else if (state.t3.threadId === defaultThreadId) {
-                  reads += 1;
-                  if (reads === 1) {
-                    yield* Deferred.succeed(aRead, undefined);
-                    yield* Effect.sleep("1 second");
-                  }
-                } else {
-                  yield* Deferred.succeed(bRead, undefined);
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: (state) =>
+            Effect.gen(function* () {
+              if (!slow) {
+                recoveryReads += 1;
+                if (recoveryReads === 2) {
+                  yield* Deferred.succeed(recovered, undefined);
                 }
-                return { turn: "active" as const };
-              }),
-          },
+              } else if (state.t3.threadId === defaultThreadId) {
+                reads += 1;
+                if (reads === 1) {
+                  yield* Deferred.succeed(aRead, undefined);
+                  yield* Effect.sleep("1 second");
+                } else if (reads === 2) {
+                  yield* Deferred.succeed(checkedAgain, undefined);
+                }
+              } else {
+                yield* Deferred.succeed(bRead, undefined);
+              }
+              return { turn: "active" as const };
+            }),
         },
-        ({ processor, repository, pingActivity }) =>
-          Effect.gen(function* () {
-            yield* repository.upsert(threadCreated);
-            yield* repository.upsert(secondThreadCreated);
+      },
+      ({ processor, repository, pingActivity }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+          yield* repository.upsert(secondThreadCreated);
 
-            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
-            yield* Deferred.await(recovered);
-            yield* Effect.yieldNow;
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(recovered);
+          yield* Effect.yieldNow;
 
-            slow = true;
-            reads = 0;
-            yield* pingActivity(defaultThreadId);
-            yield* Deferred.await(aRead);
-            yield* Effect.forEach(
-              Array.from({ length: burst }),
-              () => pingActivity(defaultThreadId),
-              {
-                discard: true,
-              },
-            );
+          slow = true;
+          reads = 0;
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(aRead);
+          yield* Effect.forEach(
+            Array.from({ length: burst }),
+            () => pingActivity(defaultThreadId),
+            {
+              discard: true,
+            },
+          );
 
-            yield* pingActivity(secondThreadId);
-            const fenceRead = yield* Deferred.await(bRead).pipe(
-              Effect.forkChild({ startImmediately: true }),
-            );
-            yield* TestClock.adjust("1 second");
-            yield* Fiber.join(fenceRead);
+          yield* pingActivity(secondThreadId);
+          // B's read completes while the clock has not advanced, so it happens while A is still waiting on its first read.
+          yield* Deferred.await(bRead);
 
-            expect(reads).toBe(2);
+          yield* TestClock.adjust("1 second");
+          yield* Deferred.await(checkedAgain);
+          yield* Effect.yieldNow;
 
-            yield* Fiber.interrupt(run);
-          }),
-      );
-    },
-  );
+          expect(reads).toBe(2);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
 
   /*
     T3 refusing the target for good (a branch that is not on origin, say) is found out at planning, before anything from T3 exists.
@@ -2592,6 +2610,120 @@ describe("NTBSProcessor", () => {
 
         yield* Fiber.interrupt(run);
       }),
+    );
+  });
+
+  /*
+    A run interrupted while a worker is mid-pass must not leave its thread marked as busy: the run that replaces it has to process that thread's events again, not swallow them.
+  */
+  it.effect("processes a thread again after a run is interrupted mid-pass", () => {
+    const firstRecovery = Deferred.makeUnsafe<void>();
+    const parked = Deferred.makeUnsafe<void>();
+    const secondRecovery = Deferred.makeUnsafe<void>();
+    const reprocessed = Deferred.makeUnsafe<void>();
+    let reads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () =>
+            Effect.gen(function* () {
+              reads += 1;
+
+              if (reads === 1) {
+                yield* Deferred.succeed(firstRecovery, undefined);
+              } else if (reads === 2) {
+                yield* Deferred.succeed(parked, undefined);
+                yield* Effect.sleep("1 hour");
+              } else if (reads === 3) {
+                yield* Deferred.succeed(secondRecovery, undefined);
+              } else if (reads === 4) {
+                yield* Deferred.succeed(reprocessed, undefined);
+              }
+
+              return { turn: "active" as const };
+            }),
+        },
+      },
+      ({ processor, repository, pingActivity }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          // First run: recovery reads (1), then a ping's pass parks mid-read (2).
+          const firstRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(firstRecovery);
+          yield* Effect.yieldNow;
+
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(parked);
+
+          yield* Fiber.interrupt(firstRun);
+
+          // Second run: recovery reads (3), and the same ping has to be processed again (4).
+          const secondRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(secondRecovery);
+          yield* Effect.yieldNow;
+
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(reprocessed);
+
+          expect(reads).toBe(4);
+
+          yield* Fiber.interrupt(secondRun);
+        }),
+    );
+  });
+
+  /*
+    Activity that arrives for an exchange while recovery is reading it has to be read again after that pass: the event arrived during the pass, so folding it in would miss it.
+  */
+  it.effect("waits for an in-flight recovery pass before checking the same exchange", () => {
+    const recoveryRead = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const checkedAgain = Deferred.makeUnsafe<void>();
+    let reads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () =>
+            Effect.gen(function* () {
+              reads += 1;
+
+              if (reads === 1) {
+                yield* Deferred.succeed(recoveryRead, undefined);
+                yield* Deferred.await(release);
+              } else if (reads === 2) {
+                yield* Deferred.succeed(checkedAgain, undefined);
+              }
+
+              return { turn: "active" as const };
+            }),
+        },
+      },
+      ({ processor, repository, pingActivity, findByThreadIdCalls }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(recoveryRead);
+
+          yield* pingActivity(defaultThreadId);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+
+          // Recovery is still reading: no further read can have happened, and the waiting pass must not be re-resolving the thread in a retry loop.
+          expect(reads).toBe(1);
+          expect(findByThreadIdCalls()).toBe(1);
+
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(checkedAgain);
+
+          expect(reads).toBe(2);
+          expect(findByThreadIdCalls()).toBe(1);
+
+          yield* Fiber.interrupt(run);
+        }),
     );
   });
 

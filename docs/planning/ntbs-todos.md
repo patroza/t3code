@@ -4,7 +4,6 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 
 ## Other review items
 
-- [ ] H5: narrow `threadActivity` to session/turn lifecycle events.
 - [ ] L3: worktree branch uses the full thread UUID with a non-temporary prefix so T3 does not rename it.
 
 ## Tests

@@ -1,6 +1,22 @@
 import { type ThreadId } from "@t3tools/contracts";
 import * as NTBS from "./exchange.ts";
-import { Cause, Clock, Context, Data, Duration, Effect, Result, Semaphore, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Data,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  HashMap,
+  Option,
+  Queue,
+  Ref,
+  Result,
+  Semaphore,
+  Stream,
+} from "effect";
 import { NTBSAdapter } from "./adapter.ts";
 import { T3Gateway } from "./t3gateway.ts";
 import { ExchangeRepository } from "./ExchangeRepository.ts";
@@ -37,6 +53,11 @@ export class NTBSProcessorError extends Data.TaggedError("NTBSProcessorError")<{
 }> {}
 
 const SWEEP_INTERVAL = "1 minute";
+
+/*
+  Process several exchanges at once so one slow call does not block the others. Limit concurrent handlers to keep resource usage bounded.
+*/
+const MAX_CONCURRENT_ACTIVITY_HANDLERS = 8;
 
 /*
   The following timeouts limit how long the NTBS processor waits for specific external events.
@@ -478,6 +499,53 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
       );
     });
 
+    /*
+      One pass over an exchange, called by the activity workers.
+
+      A call that arrives while a pass is already running waits for it and then runs its own: the event that woke the worker arrived during that pass, so it has to be read after it. Waiting is also what keeps the thread from being requeued over and over while the pass is still in flight.
+
+      `advanceSavedExchange` keeps the exchange lock, so this still serializes against `process`.
+    */
+    const runningExchanges = new Map<string, Deferred.Deferred<void>>();
+
+    const startExchangePass = (sourceUri: string): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.suspend(() => {
+        const finished = Deferred.makeUnsafe<void>();
+        runningExchanges.set(sourceUri, finished);
+
+        return advanceSavedExchange(sourceUri).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              runningExchanges.delete(sourceUri);
+              Deferred.doneUnsafe(finished, Exit.void);
+            }),
+          ),
+        );
+      });
+
+    const resumeExchange = (sourceUri: string): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.suspend(() => {
+        const running = runningExchanges.get(sourceUri);
+
+        if (running === undefined) {
+          return startExchangePass(sourceUri);
+        }
+
+        return Deferred.await(running).pipe(Effect.andThen(resumeExchange(sourceUri)));
+      });
+
+    /*
+      The pass the sweeper and startup recovery use, where a call is only a poke: an exchange that is already being processed is skipped. Activity for that exchange requests its own follow-up pass, and the next sweep provides recovery; waiting here would let one busy exchange stall the sequential sweep.
+    */
+    const tryResumeExchange = (sourceUri: string): Effect.Effect<void, NTBSProcessorError> =>
+      Effect.suspend(() => {
+        if (runningExchanges.has(sourceUri)) {
+          return Effect.void;
+        }
+
+        return startExchangePass(sourceUri);
+      });
+
     const process = Effect.fn("NTBSProcessor.process")(function* (
       request: NTBS.Request,
       t3Target: NTBS.T3Target,
@@ -515,17 +583,9 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         .pipe(orFail("Failed to find the exchange for the active T3 thread"));
 
       if (exchange !== null) {
-        yield* advanceSavedExchange(exchange.sourceUri);
+        yield* resumeExchange(exchange.sourceUri);
       }
     });
-
-    const subscribeToThreadActivity = Stream.runForEach(t3.threadActivity, (threadId) =>
-      processThreadActivity(threadId).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Failed to process NTBS thread activity", { threadId, cause }),
-        ),
-      ),
-    );
 
     const resumeNonTerminalExchanges = repo.findNonTerminalExchanges.pipe(
       orFail("Failed to load non-terminal exchanges"),
@@ -533,7 +593,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
         Effect.forEach(
           exchanges,
           (exchange) =>
-            advanceSavedExchange(exchange.sourceUri).pipe(
+            tryResumeExchange(exchange.sourceUri).pipe(
               Effect.catch((cause) =>
                 Effect.logWarning("Failed to resume the NTBS exchange", {
                   sourceUri: exchange.sourceUri,
@@ -551,7 +611,7 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
     /*
       The sweeper: the same pass as startup recovery, repeated on an interval for the whole life of `run`.
-      Thread activity is the primary wake signal but it is fire-and-forget: a ping missed while the process is up would otherwise strand its exchange until the next restart.
+      Thread activity is the primary wake signal; the sweeper checks exchanges even when no activity event reaches them.
       Redundant sweeps are safe and cheap because the cycle observes before acting: an exchange whose context has not moved answers "wait" and stops.
       The interval is a judgment call, low enough that a stranded exchange recovers within a tolerable wait for whoever asked, high enough that the periodic query stays negligible.
       Delay first: `run` has just swept via startup recovery, so an immediate first pass would be pure noise.
@@ -563,7 +623,87 @@ export const makeNTBSProcessor: Effect.Effect<NTBSProcessor, never, NTBSProcesso
 
     const run = Effect.scoped(
       Effect.gen(function* () {
-        yield* subscribeToThreadActivity.pipe(Effect.forkScoped({ startImmediately: true }));
+        /*
+          Thread activity is collapsed before the workers, so pending work grows with the number of threads that need a check, not with the number of events they emit.
+
+          A thread is either waiting in the queue, being processed, or being processed with another check requested. An event for a waiting thread changes nothing: the pass that is about to start reads the state the event wrote. An event for a thread being processed asks for one more pass.
+
+          A worker that must check its thread again puts it back at the end of the queue, so a busy thread cannot hold a worker while others wait.
+
+          The queue and the tracking map live inside `run`: when a run is interrupted mid-pass, nothing survives that would mark a thread as still being processed and swallow its next events.
+        */
+        const activityQueue = yield* Queue.unbounded<ThreadId>();
+        const pendingThreads = yield* Ref.make(
+          HashMap.empty<ThreadId, "waiting" | "running" | "checkAgain">(),
+        );
+
+        const enqueueThreadActivity = (threadId: ThreadId): Effect.Effect<void> =>
+          Effect.gen(function* () {
+            const action = yield* Ref.modify(pendingThreads, (threads) => {
+              const state = HashMap.get(threads, threadId);
+
+              if (Option.isNone(state)) {
+                return ["enqueue", HashMap.set(threads, threadId, "waiting")] as const;
+              }
+
+              if (state.value === "running") {
+                return ["skip", HashMap.set(threads, threadId, "checkAgain")] as const;
+              }
+
+              return ["skip", threads] as const;
+            });
+
+            if (action === "enqueue") {
+              yield* Queue.offer(activityQueue, threadId);
+            }
+          });
+
+        const activityWorker = Effect.gen(function* () {
+          while (true) {
+            const threadId = yield* Queue.take(activityQueue);
+            yield* Ref.update(pendingThreads, (threads) =>
+              HashMap.set(threads, threadId, "running"),
+            );
+
+            /*
+              A failed pass is logged. The thread is queued again only if an event asked for another pass while it ran; otherwise its entry is dropped and the next event or the sweeper runs it again. Defects are treated the same way, so one cannot kill the worker and leave its thread marked as running; only interruption ends a worker.
+            */
+            yield* processThreadActivity(threadId).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning("Failed to process NTBS thread activity", {
+                      threadId,
+                      cause,
+                    }),
+              ),
+            );
+
+            const anotherCheck = yield* Ref.modify(pendingThreads, (threads) => {
+              const requested =
+                Option.getOrUndefined(HashMap.get(threads, threadId)) === "checkAgain";
+
+              return requested
+                ? ([true, HashMap.set(threads, threadId, "waiting")] as const)
+                : ([false, HashMap.remove(threads, threadId)] as const);
+            });
+
+            if (anotherCheck) {
+              yield* Queue.offer(activityQueue, threadId);
+            }
+          }
+        });
+
+        yield* Stream.runForEach(t3.threadActivity, enqueueThreadActivity).pipe(
+          Effect.forkScoped({ startImmediately: true }),
+        );
+
+        yield* Effect.forEach(
+          Array.from({ length: MAX_CONCURRENT_ACTIVITY_HANDLERS }),
+          () => Effect.forkScoped(activityWorker),
+          { discard: true },
+        );
+
         yield* resumeNonTerminalExchanges;
         return yield* sweepNonTerminalExchanges;
       }),

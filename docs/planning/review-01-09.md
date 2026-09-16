@@ -6,12 +6,6 @@
 
 ## Part 1 — Implementation soundness
 
-### HIGH
-
-**H5. The activity loop processes every thread event sequentially.**
-`threadActivity` in `t3gateway.ts` forwards every thread event system-wide, including token deltas. `Stream.runForEach` in `processor.ts` handles these pings sequentially, taking the source lock and advancing the exchange inline. Adapter and gateway calls now have timeouts, but a slow call or a wait for another attempt's lock still delays other exchanges' pings while events accumulate in the unbounded buffer.
-Fix: narrow the filter to events that change the status reads: thread existence (`thread.created`, `thread.deleted`), turn state (`thread.turn-start-requested`, `thread.turn-interrupt-requested`, `thread.turn-diff-completed`, `thread.session-set`), the user message and final reply (non-streaming `thread.message-sent`), message rows (`thread.messages-resynced`, `thread.reverted`), and the two `thread.activity-appended` kinds that delete pending turn starts (`context-compaction`, `provider.turn.start.failed`). Thread metadata (`thread.meta-updated`) changes none of these reads. If measured latency warrants it, coalesce pending pings or avoid waiting on occupied source locks while ensuring the exchange is driven again.
-
 ### MEDIUM
 
 **M1. `process` can fail after the claim and the caller cannot tell.** `processor.ts:375-376`: `persist(claimed)` succeeds, `advanceExchange` fails transiently, `process` returns an error. The doc says it "returns once the exchange is claimed". A webhook handler will post its own error while the sweeper later posts the real reply. Also heavy provisioning runs inside the webhook request fiber. Fix: after the claim, log-and-succeed (as `run` does) or fork the advance into `run`'s scope.
@@ -24,7 +18,7 @@ Fix: narrow the filter to events that change the status reads: thread existence 
 
 **L1. A defect in the activity subscription kills it silently.** `processor.ts:395-401` catches typed errors only; a defect in `findByThreadId` ends the forked fiber and `run` keeps sweeping, so failures show as one-minute latency with no log. Fix: `Effect.catchCause` + log, and restart the subscription.
 
-**L2. In-memory repository is O(n) per event** (`ExchangeRepository.ts:52-62`, `82-96`) and, per H5, that is every token delta. Fine for tests; the SQL repository needs an index on `threadId` and unique constraints on both keys.
+**L2. In-memory repository lookup by thread is O(n)** (`ExchangeRepository.ts:52-62`, `82-96`). Fine for tests; the SQL repository needs an index on `threadId` and unique constraints on both keys.
 
 **L3. Worktree branch token is 8 hex chars and T3 renames it on the first turn.** `buildTemporaryWorktreeBranchName` (`packages/shared/src/git.ts:95-105`) slices to 8 chars, and `ProviderCommandReactor.ts:928-960` renames temporary branches. The comment at `t3gateway.ts:464` ("a stray branch points back at its thread") is false, and a collision would make `ensureWorktree` adopt another thread's branch. Use the full UUID with a non-temporary prefix.
 
@@ -78,6 +72,5 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 ## Recommended order
 
 1. M1: decide how `process` should return after recording a request when subsequent work fails, and whether that work belongs in the caller's fiber.
-2. H5: narrow the activity filter. Non-blocking pings can wait until the platform adapter exists and shows real latency.
-3. Tests: one real-engine integration test, injectable failing repository, `startTurn` fatal path, sweep racing activity, and bound `awaitStoredTag`.
-4. M4: separate user-facing rejection messages from diagnostics before a real adapter posts them.
+2. Tests: one real-engine integration test, injectable failing repository, `startTurn` fatal path, sweep racing activity, and bound `awaitStoredTag`.
+3. M4: separate user-facing rejection messages from diagnostics before a real adapter posts them.

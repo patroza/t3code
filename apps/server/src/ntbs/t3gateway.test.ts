@@ -2563,7 +2563,7 @@ describe("T3Gateway", () => {
     /*
       A streaming turn is the loudest thing in the engine: every token is a `thread.message-sent` and every tool call appends an activity. None of it can change an exchange: the processor reacts to turns settling, not to turns progressing. This activity's kind has no projection arm at all, unlike the two exceptional kinds the kept test pins.
     */
-    it.effect.fails("drops streaming deltas and ordinary activity appends", () => {
+    it.effect("drops streaming deltas and ordinary activity appends", () => {
       const { layer } = createT3Gateway({
         orchestrationEngine: {
           domainEvents: [

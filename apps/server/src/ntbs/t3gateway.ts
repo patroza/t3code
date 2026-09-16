@@ -680,16 +680,45 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       });
 
     /*
-      This pings on every thread event — token deltas, message streams, all of it, for all threads in the system, not just NTBS ones.
-      The processor's lookup makes that correct but it's a per-event exchange-repository hit while any turn is streaming.
-      If that ever shows up in profiles, the fix is a narrower filter (turn/session lifecycle event types) — the generous filter is the right starting point, not necessarily the endpoint.
+      This forwards the events that can change what the gateway's status queries answer about a thread, so its consumers are only signalled about changes that may require further action.
+
+      The filter has to move with those queries: when one of them starts reading a different field, the events that write it belong here, or a consumer sees the change only on its next sweep.
+
+      Ordinary activity appends change nothing the queries answer, but `context-compaction` and `provider.turn.start.failed` do, because both delete the pending turn start. Streaming deltas are `thread.message-sent` with `streaming: true`: the bulk of a live turn, and none of them change what the queries answer before the turn settles.
     */
     const threadActivity = orchestrationEngine.streamDomainEvents.pipe(
-      Stream.filterMap((event) =>
-        event.aggregateKind === "thread"
-          ? Result.succeed(event.aggregateId as ThreadId) // safe to cast as filtered the aggregate
-          : Result.failVoid,
-      ),
+      Stream.filterMap((event) => {
+        if (event.aggregateKind !== "thread") {
+          return Result.failVoid;
+        }
+
+        const threadId = event.aggregateId as ThreadId; // safe to cast as filtered the aggregate
+
+        switch (event.type) {
+          case "thread.created":
+          case "thread.deleted":
+          case "thread.turn-start-requested":
+          case "thread.turn-interrupt-requested":
+          case "thread.turn-diff-completed":
+          case "thread.session-set":
+          case "thread.messages-resynced":
+          case "thread.reverted":
+            return Result.succeed(threadId);
+
+          case "thread.message-sent":
+            return event.payload.streaming ? Result.failVoid : Result.succeed(threadId);
+
+          case "thread.activity-appended": {
+            const kind = event.payload.activity.kind;
+            return kind === "context-compaction" || kind === "provider.turn.start.failed"
+              ? Result.succeed(threadId)
+              : Result.failVoid;
+          }
+
+          default:
+            return Result.failVoid;
+        }
+      }),
     );
 
     /**
