@@ -14,6 +14,7 @@ import {
 } from "../project/ProjectSetupScriptRunner.ts";
 import { Crypto } from "effect/Crypto";
 import {
+  CheckpointRef,
   EventId,
   GitCommandError,
   MessageId,
@@ -2278,7 +2279,13 @@ describe("T3Gateway", () => {
 
     What does `threadActivity` does in practice then and how does it work? Apparently, it should just subscribe to the main t3 event emitter, filter events for those that related to thread changes and merely stream the threadId of those events. There is no "who's listening" gap here: a `Stream` is a lazy description, and nobody subscribes until someone runs it. `OrchestrationEngineService` exposes `streamDomainEvents`, a `Stream.fromPubSub` that creates a fresh subscription each time it is run, so `threadActivity` is just that stream piped through a filter mapping events to their threadId. The subscription to the engine's PubSub is established exactly when the processor's Stream.runForEach starts, with no separate "start listening" step for `T3Gateway` to perform.
 
-    The filter should be generous: emit the threadId of any event whose payload carries one, rather than betting on which specific event types signal a turn settling. The trade off is redundant pings, and we accept it because a ping is answered by observe-before-act, so a redundant ping costs one listByThreadId, while a missed ping strands an exchange until restart.
+    The filter is an allow-list derived from the projection fields the processor reads, not a guess at which events look important.
+
+    `getThreadStatus` only asks whether the thread row exists: `thread.created` and `thread.deleted`. `getTurnStatus` reads the thread's turns, its session, and its messages: `thread.turn-start-requested`, `thread.turn-interrupt-requested`, `thread.turn-diff-completed`, and `thread.session-set` can change turn state; non-streaming `thread.message-sent` adds the user message used to recognize a failed start or the assistant's final reply; `thread.messages-resynced` and `thread.reverted` rewrite the message rows it scans. Thread metadata (`thread.meta-updated`) is out because it changes none of this data. If a read grows a new dependency, this list grows with it — a field an event writes but the filter drops strands the exchange until the next sweep.
+
+    Activity is the one payload-dependent exception. Ordinary `thread.activity-appended` events are noise, but two kinds mutate turn rows: `context-compaction` and `provider.turn.start.failed` both delete the pending turn start, which `listByThreadId` answers from.
+
+    The excluded noise is the bulk of a live turn: streaming deltas are `thread.message-sent` too, with `streaming: true`, and ordinary activity fires as the agent works. Forwarded, they wake the processor for every token, and each wake costs a repository read and a T3 status read to learn nothing — an exchange being observed mid-turn has not moved until its turn settles.
 
     A ping never arrives "too early". When the engine dispatches a command, everything happens inside one SQL transaction: events appended, projection rows written, receipt stored. Only after that transaction commits does the engine publish the event to the PubSub feeding this stream. So by the time the processor receives a ping for a thread, the database already contains whatever that event changed: when the ping wakes the processor and it calls getTurnStatus, the turn row it queries is guaranteed to reflect the event that caused the ping. There is no window where we get pinged "turn completed", read the projection, and still see the turn as running. Without this ordering we would need retry-until-visible logic; with it, ping then read is safe as-is.
 
@@ -2326,6 +2333,219 @@ describe("T3Gateway", () => {
       payload: { projectId, deletedAt: "2026-01-01T00:00:00.000Z" },
     };
 
+    const messageSentEvent = (
+      eventId: string,
+      messageId: MessageId,
+      streaming: boolean,
+      role: "assistant" | "user" = "assistant",
+    ): OrchestrationEvent => ({
+      ...baseEventFields,
+      type: "thread.message-sent",
+      eventId: EventId.make(eventId),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      payload: {
+        threadId,
+        messageId,
+        role,
+        text: role === "user" ? "the request" : streaming ? "partial ans" : "the answer",
+        turnId: role === "user" ? null : TurnId.make("turn-1"),
+        streaming,
+        createdAt: baseEventFields.occurredAt,
+        updatedAt: baseEventFields.occurredAt,
+      },
+    });
+
+    const activityEvent: OrchestrationEvent = {
+      ...baseEventFields,
+      type: "thread.activity-appended",
+      eventId: EventId.make("activity-event"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      payload: {
+        threadId,
+        activity: {
+          id: EventId.make("activity-1"),
+          tone: "tool",
+          kind: "command",
+          summary: "ran a command",
+          payload: null,
+          turnId: null,
+          createdAt: baseEventFields.occurredAt,
+        },
+      },
+    };
+
+    /*
+      One event per field group the processor's reads depend on: thread existence, turn state, session state, the user message and final reply, message resync and revert, and the two activity kinds that delete a pending turn start.
+    */
+    const keptEvents: ReadonlyArray<OrchestrationEvent> = [
+      {
+        ...baseEventFields,
+        type: "thread.created",
+        eventId: EventId.make("created-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          projectId,
+          title: "activity thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("instanceId"),
+            model: "custom",
+            options: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: "/tmp/activity-thread",
+          createdAt: baseEventFields.occurredAt,
+          updatedAt: baseEventFields.occurredAt,
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("turn-start-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          messageId: MessageId.make("turn-message"),
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: baseEventFields.occurredAt,
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.turn-interrupt-requested",
+        eventId: EventId.make("turn-interrupt-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          turnId: TurnId.make("turn-1"),
+          createdAt: baseEventFields.occurredAt,
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("turn-diff-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          turnId: TurnId.make("turn-1"),
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/activity-thread/turn/1"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("complete-message"),
+          completedAt: baseEventFields.occurredAt,
+        },
+      },
+      messageSentEvent("user-event", MessageId.make("turn-message"), false, "user"),
+      messageSentEvent("complete-event", MessageId.make("complete-message"), false),
+      {
+        ...baseEventFields,
+        type: "thread.messages-resynced",
+        eventId: EventId.make("resynced-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          afterMessageId: null,
+          messages: [
+            {
+              id: MessageId.make("resynced-message"),
+              role: "assistant",
+              text: "resynced answer",
+              turnId: null,
+              streaming: false,
+              createdAt: baseEventFields.occurredAt,
+              updatedAt: baseEventFields.occurredAt,
+            },
+          ],
+          reason: "provider stream dropped updates",
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.reverted",
+        eventId: EventId.make("reverted-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: { threadId, turnCount: 1 },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.activity-appended",
+        eventId: EventId.make("failed-turn-start-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.make("failed-turn-start-activity"),
+            tone: "error",
+            kind: "provider.turn.start.failed",
+            summary: "Provider turn start failed",
+            payload: null,
+            turnId: null,
+            createdAt: baseEventFields.occurredAt,
+          },
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.activity-appended",
+        eventId: EventId.make("compaction-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.make("compaction-activity"),
+            tone: "info",
+            kind: "context-compaction",
+            summary: "Context compacted",
+            payload: { requestId: "turn-message", state: "completed" },
+            turnId: null,
+            createdAt: baseEventFields.occurredAt,
+          },
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.session-set",
+        eventId: EventId.make("session-set-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: null,
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: baseEventFields.occurredAt,
+          },
+        },
+      },
+      {
+        ...baseEventFields,
+        type: "thread.deleted",
+        eventId: EventId.make("deleted-event"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        payload: { threadId, deletedAt: baseEventFields.occurredAt },
+      },
+    ];
+
     it.effect("emits the threadId of thread events and drops project events", () => {
       const { layer } = createT3Gateway({
         orchestrationEngine: { domainEvents: [projectEvent, threadEvent] },
@@ -2337,6 +2557,45 @@ describe("T3Gateway", () => {
         const emitted = yield* Stream.runCollect(t3Gateway.threadActivity);
 
         expect(emitted).toEqual([threadId]);
+      }).pipe(Effect.provide(layer));
+    });
+
+    /*
+      A streaming turn is the loudest thing in the engine: every token is a `thread.message-sent` and every tool call appends an activity. None of it can change an exchange: the processor reacts to turns settling, not to turns progressing. This activity's kind has no projection arm at all, unlike the two exceptional kinds the kept test pins.
+    */
+    it.effect.fails("drops streaming deltas and ordinary activity appends", () => {
+      const { layer } = createT3Gateway({
+        orchestrationEngine: {
+          domainEvents: [
+            messageSentEvent("delta-event", MessageId.make("delta-message"), true),
+            activityEvent,
+          ],
+        },
+      });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const emitted = yield* Stream.runCollect(t3Gateway.threadActivity);
+
+        expect(emitted).toEqual([]);
+      }).pipe(Effect.provide(layer));
+    });
+
+    /*
+      The counterpart to the drop test: everything the processor's reads can answer differently on has to come through, or an exchange waits for the next one-minute sweep instead of reacting to T3.
+    */
+    it.effect("emits every event the status reads can change on", () => {
+      const { layer } = createT3Gateway({
+        orchestrationEngine: { domainEvents: keptEvents },
+      });
+
+      return Effect.gen(function* () {
+        const t3Gateway = yield* T3Gateway;
+
+        const emitted = yield* Stream.runCollect(t3Gateway.threadActivity);
+
+        expect(emitted).toEqual(keptEvents.map(() => threadId));
       }).pipe(Effect.provide(layer));
     });
   });

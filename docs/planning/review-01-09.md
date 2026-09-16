@@ -10,7 +10,7 @@
 
 **H5. The activity loop processes every thread event sequentially.**
 `threadActivity` in `t3gateway.ts` forwards every thread event system-wide, including token deltas. `Stream.runForEach` in `processor.ts` handles these pings sequentially, taking the source lock and advancing the exchange inline. Adapter and gateway calls now have timeouts, but a slow call or a wait for another attempt's lock still delays other exchanges' pings while events accumulate in the unbounded buffer.
-Fix: narrow the filter to session/turn lifecycle events. If measured latency warrants it, coalesce pending pings or avoid waiting on occupied source locks while ensuring the exchange is driven again.
+Fix: narrow the filter to events that change the status reads: thread existence (`thread.created`, `thread.deleted`), turn state (`thread.turn-start-requested`, `thread.turn-interrupt-requested`, `thread.turn-diff-completed`, `thread.session-set`), the user message and final reply (non-streaming `thread.message-sent`), message rows (`thread.messages-resynced`, `thread.reverted`), and the two `thread.activity-appended` kinds that delete pending turn starts (`context-compaction`, `provider.turn.start.failed`). Thread metadata (`thread.meta-updated`) changes none of these reads. If measured latency warrants it, coalesce pending pings or avoid waiting on occupied source locks while ensuring the exchange is driven again.
 
 ### MEDIUM
 

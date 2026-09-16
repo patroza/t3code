@@ -366,6 +366,148 @@ describe("NTBSProcessor", () => {
   });
 
   /*
+    Activity pings are handled per exchange: one exchange waiting on a slow T3 read must not hold up another exchange's ping.
+
+    Both stored exchanges are ThreadCreated, so handling a ping is one `getTurnStatus` read. A's read records where it started, signals, and parks until the clock advances; B's read records nothing but returns at once. Handling the exchanges on one line would record A's completion before B was ever read, so the recorded order is the assertion.
+  */
+  it.effect.fails(
+    "reads another exchange while one exchange's observation is still pending",
+    () => {
+      const events: string[] = [];
+      const aRead = Deferred.makeUnsafe<void>();
+      const bRead = Deferred.makeUnsafe<void>();
+      const recovered = Deferred.makeUnsafe<void>();
+      let recoveryReads = 0;
+      let slow = false;
+
+      return withProcessor(
+        {
+          t3Gateway: {
+            getTurnStatus: (state) =>
+              Effect.gen(function* () {
+                if (!slow) {
+                  recoveryReads += 1;
+                  if (recoveryReads === 2) {
+                    yield* Deferred.succeed(recovered, undefined);
+                  }
+                } else if (state.t3.threadId === defaultThreadId) {
+                  events.push("a:start");
+                  yield* Deferred.succeed(aRead, undefined);
+                  yield* Effect.sleep("1 second");
+                  events.push("a:end");
+                } else {
+                  events.push("b:read");
+                  yield* Deferred.succeed(bRead, undefined);
+                }
+                return { turn: "active" as const };
+              }),
+          },
+        },
+        ({ processor, repository, pingActivity }) =>
+          Effect.gen(function* () {
+            yield* repository.upsert(threadCreated);
+            yield* repository.upsert(secondThreadCreated);
+
+            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.await(recovered);
+            yield* Effect.yieldNow;
+
+            slow = true;
+            yield* pingActivity(defaultThreadId);
+            yield* Deferred.await(aRead);
+            yield* pingActivity(secondThreadId);
+
+            // B is read before the clock releases A only if the processor does not handle the two exchanges on one line. Advancing the clock also settles the serialized world, so both worlds finish before the assertion; the order is what differs.
+            const bReadWait = yield* Deferred.await(bRead).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* TestClock.adjust("1 second");
+            yield* Fiber.join(bReadWait);
+
+            expect(events).toEqual(["a:start", "b:read", "a:end"]);
+
+            yield* Fiber.interrupt(run);
+          }),
+      );
+    },
+  );
+
+  /*
+    A burst of pings for one exchange is a demand to look again once, not one read per ping.
+
+    An observation is parked, the burst arrives, and then a fence ping for the other exchange is offered behind the burst: its read only lands once everything queued ahead of it has been handled, which settles the count in both worlds. One read per ping records 51 reads; the collapsed behavior records the parked read plus the one extra pass it owes the pings that arrived while it was running.
+  */
+  it.effect.fails(
+    "collapses a burst of pings for one exchange into a single extra observation",
+    () => {
+      const aRead = Deferred.makeUnsafe<void>();
+      const bRead = Deferred.makeUnsafe<void>();
+      const recovered = Deferred.makeUnsafe<void>();
+      const burst = 50;
+      let recoveryReads = 0;
+      let reads = 0;
+      let slow = false;
+
+      return withProcessor(
+        {
+          t3Gateway: {
+            getTurnStatus: (state) =>
+              Effect.gen(function* () {
+                if (!slow) {
+                  recoveryReads += 1;
+                  if (recoveryReads === 2) {
+                    yield* Deferred.succeed(recovered, undefined);
+                  }
+                } else if (state.t3.threadId === defaultThreadId) {
+                  reads += 1;
+                  if (reads === 1) {
+                    yield* Deferred.succeed(aRead, undefined);
+                    yield* Effect.sleep("1 second");
+                  }
+                } else {
+                  yield* Deferred.succeed(bRead, undefined);
+                }
+                return { turn: "active" as const };
+              }),
+          },
+        },
+        ({ processor, repository, pingActivity }) =>
+          Effect.gen(function* () {
+            yield* repository.upsert(threadCreated);
+            yield* repository.upsert(secondThreadCreated);
+
+            const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.await(recovered);
+            yield* Effect.yieldNow;
+
+            slow = true;
+            reads = 0;
+            yield* pingActivity(defaultThreadId);
+            yield* Deferred.await(aRead);
+            yield* Effect.forEach(
+              Array.from({ length: burst }),
+              () => pingActivity(defaultThreadId),
+              {
+                discard: true,
+              },
+            );
+
+            yield* pingActivity(secondThreadId);
+            const fenceRead = yield* Deferred.await(bRead).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* TestClock.adjust("1 second");
+            yield* Fiber.join(fenceRead);
+
+            expect(reads).toBe(2);
+
+            yield* Fiber.interrupt(run);
+          }),
+      );
+    },
+  );
+
+  /*
     T3 refusing the target for good (a branch that is not on origin, say) is found out at planning, before anything from T3 exists.
     The request was already recorded, so the rejection becomes a failure reply like any other and is posted; the stored record never carries T3 coordinates.
   */
