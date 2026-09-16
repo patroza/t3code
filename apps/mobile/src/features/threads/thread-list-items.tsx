@@ -502,6 +502,7 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
 
 const THREAD_ROW_LEGACY_MENU_ACTIONS: MenuAction[] = [
   { id: "archive", title: "Archive", image: "archivebox" },
+  { id: "rename", title: "Rename", image: "square.and.pencil" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -517,8 +518,9 @@ function buildThreadRowMenuActions(input: {
     return [
       ...input.newThreadOnBranch,
       THREAD_ROW_LEGACY_MENU_ACTIONS[0]!,
+      THREAD_ROW_LEGACY_MENU_ACTIONS[1]!,
       ...input.titleRegeneration,
-      ...THREAD_ROW_LEGACY_MENU_ACTIONS.slice(1),
+      THREAD_ROW_LEGACY_MENU_ACTIONS[2]!,
     ];
   }
   return [
@@ -527,8 +529,9 @@ function buildThreadRowMenuActions(input: {
       ? { id: "unsettle", title: "Unsettle", image: "pin" }
       : { id: "settle", title: "Settle", image: "checkmark.circle" },
     ...input.titleRegeneration,
-    { id: "archive", title: "Archive", image: "archivebox" },
-    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+    THREAD_ROW_LEGACY_MENU_ACTIONS[0]!,
+    THREAD_ROW_LEGACY_MENU_ACTIONS[1]!,
+    THREAD_ROW_LEGACY_MENU_ACTIONS[2]!,
   ];
 }
 
@@ -561,6 +564,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSettleThread?: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread?: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly titleRegenerationSupported: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
@@ -593,6 +597,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     onDeleteThread,
     onSettleThread,
     onUnsettleThread,
+    onRenameThread,
     onRegenerateThreadTitle,
     onNewThreadOnBranch,
   } = props;
@@ -666,6 +671,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
   const handleSettle = useCallback(() => onSettleThread?.(thread), [onSettleThread, thread]);
   const handleUnsettle = useCallback(() => onUnsettleThread?.(thread), [onUnsettleThread, thread]);
+  const handleRename = useCallback(() => onRenameThread(thread), [onRenameThread, thread]);
   const handleRegenerateTitle = useCallback(
     () => onRegenerateThreadTitle(thread),
     [onRegenerateThreadTitle, thread],
@@ -713,6 +719,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
     },
@@ -720,6 +727,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       handleArchive,
       handleDelete,
       handleRegenerateTitle,
+      handleRename,
       handleSettle,
       handleUnsettle,
       onNewThreadOnBranch,

@@ -37,6 +37,25 @@ describe("QueuedMessageChips", () => {
     expect(html).not.toContain('disabled=""');
   });
 
+  it("labels Send now on the oldest ready chip with the steer shortcut", () => {
+    const html = renderToStaticMarkup(
+      <QueuedMessageChips
+        queuedMessages={[
+          makeQueued({ pending: true, text: "still landing" }),
+          makeQueued({ messageId: MessageId.make("msg-queued-2"), text: "oldest ready" }),
+          makeQueued({ messageId: MessageId.make("msg-queued-3"), text: "later" }),
+        ]}
+        steerShortcutLabel="⌘⇧Enter"
+        onSteer={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Send now (⌘⇧Enter)");
+    expect(html).toContain("Send now, interrupting the current step (⌘⇧Enter)");
+    expect(html.match(/Send now \(⌘⇧Enter\)/g)).toHaveLength(1);
+  });
+
   it("labels attachment-only queued messages", () => {
     const html = renderToStaticMarkup(
       <QueuedMessageChips

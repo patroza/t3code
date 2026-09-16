@@ -10,6 +10,17 @@ name: Mobile EAS Production
 # native rebuild is needed but blocked (e.g. Expo Free plan monthly iOS quota),
 # it falls back to OTA against the latest finished production binary runtime so
 # pure-JS fixes still reach installed TestFlight clients.
+#
+# Manual store builds: if the latest production build's version differs from
+# app.config.ts, cut a new build and submit it (TestFlight + Play internal
+# track). Bumping `version` starts the next release train — the first build of
+# a version enters external-TestFlight beta review immediately, and later
+# builds of the same version auto-approve until that version is released.
+# After App Store approval, Apple closes the release train and `version` must
+# be bumped before another iOS build can be submitted. Releasing to the App
+# Store stays a manual App Store Connect step.
+# Manual v2-preview builds keep the production app identity and disable OTA.
+# Select the v2 branch when dispatching a preview build.
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +33,14 @@ on:
           - auto
           - build
           - update
+      profile:
+        description: "Store build profile (v2-preview supports build mode only)"
+        required: true
+        type: choice
+        default: production
+        options:
+          - production
+          - v2-preview
       platform:
         description: "Target platform"
         required: true
@@ -59,7 +78,7 @@ concurrency:
 
 jobs:
   production:
-    name: EAS Production ${{ inputs.mode }}
+    name: EAS ${{ inputs.profile || 'production' }} ${{ inputs.mode }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -71,6 +90,12 @@ jobs:
       T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER: ${{ vars.T3CODE_MOBILE_IOS_BUNDLE_IDENTIFIER }}
       T3CODE_MOBILE_IOS_TEAM_ID: ${{ vars.T3CODE_MOBILE_IOS_TEAM_ID }}
     steps:
+      - name: Reject preview OTA updates
+        if: github.event_name == 'workflow_dispatch' && inputs.profile == 'v2-preview' && inputs.mode == 'update'
+        run: |
+          echo "::error::V2 previews use store builds only. Select mode=build."
+          exit 1
+
       - id: expo-token
         name: Check for EXPO_TOKEN
         env:
@@ -154,6 +179,16 @@ jobs:
             args:
               - --filter=@t3tools/mobile...
 
+      - name: Verify v2 preview source
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.profile == 'v2-preview'
+        run: |
+          node --input-type=module -e '
+            import * as environment from "./packages/contracts/src/environment.ts";
+            if (environment.ORCHESTRATION_PROTOCOL_VERSION !== 2) {
+              throw new Error("V2 previews require a v2 source branch. Select the v2 branch when running this workflow.");
+            }
+          '
+
       - name: Expose pnpm
         if: steps.expo-token.outputs.present == 'true'
         run: |
@@ -179,6 +214,67 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: eas env:pull production --non-interactive
+
+      - name: Apply manual version override
+        if: steps.version_app_token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.version_app_token.outputs.token }}
+          APP_SLUG: ${{ steps.version_app_token.outputs.app-slug }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != "branch" ]; then
+            echo "Version overrides require dispatching this workflow from a branch; received $GITHUB_REF_TYPE '$GITHUB_REF_NAME'." >&2
+            exit 1
+          fi
+          if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+            echo "Version override must contain two or three dot-separated integers; received '$RELEASE_VERSION'." >&2
+            exit 1
+          fi
+
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const path = "apps/mobile/app.config.ts";
+            const source = fs.readFileSync(path, "utf8");
+            const next = source.replace(
+              /^(  version: ")[^"]+(".*)$/m,
+              `$1${process.env.RELEASE_VERSION}$2`,
+            );
+            if (next === source && !source.includes(`  version: "${process.env.RELEASE_VERSION}"`)) {
+              throw new Error("Could not update app version");
+            }
+            fs.writeFileSync(path, next);
+          '
+          vp fmt apps/mobile/app.config.ts
+
+          if git diff --quiet -- apps/mobile/app.config.ts; then
+            echo "app.config.ts is already at $RELEASE_VERSION; no version commit needed."
+            exit 0
+          fi
+
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git add apps/mobile/app.config.ts
+          git commit \
+            -m "chore(mobile): bump app version to $RELEASE_VERSION" \
+            -m "Co-authored-by: codex <codex@users.noreply.github.com>"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
+
+      - name: Summarize manual build version
+        if: steps.expo-token.outputs.present == 'true' && github.event_name == 'workflow_dispatch' && inputs.mode == 'build'
+        working-directory: apps/mobile
+        env:
+          MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
+        run: |
+          version="$(npx expo config --json --type public | jq -r '.version')"
+          {
+            echo "## Manual $MOBILE_BUILD_PROFILE build"
+            echo
+            echo "- App version: \`$version\`"
+            echo "- Platform: \`${{ inputs.platform }}\`"
+            echo
+            echo "> Apple closes an iOS release train after App Store approval. Before building iOS, confirm \`$version\` is newer than the approved App Store version."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deploy with fingerprint check (auto)
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'auto'
@@ -206,9 +302,10 @@ jobs:
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          MOBILE_BUILD_PROFILE: ${{ inputs.profile || 'production' }}
         run: |
           set -o pipefail
-          eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait 2>&1 | tee /tmp/eas-build.log
+          eas build --platform ${{ inputs.platform }} --profile "$MOBILE_BUILD_PROFILE" --auto-submit --non-interactive --no-wait 2>&1 | tee /tmp/eas-build.log
           if grep -q 'used its iOS builds from the Free plan' /tmp/eas-build.log; then
             echo "::error::Expo Free plan iOS build quota exhausted. Upgrade at https://expo.dev/accounts/patroza/settings/billing or wait for the monthly reset, then re-run mode=build. Pure-JS fixes can still ship via mode=auto (fallback OTA) or mode=update with runtime_version."
           fi

@@ -607,7 +607,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       // authoritative route forever: every later tool call is queued to the
       // same dead stream and pays another full timeout. Closing the stream
       // makes the client subscription reconnect and lets the replacement host
-      // register with a fresh connection id.
+      // register with a fresh connection id. Do not replay actions: the
+      // client may have applied them before becoming unreachable.
       yield* disconnect(connection.clientId, connection.queue);
       return yield* new PreviewAutomationTimeoutError(requestContext);
     });

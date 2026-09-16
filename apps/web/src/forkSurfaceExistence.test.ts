@@ -177,12 +177,18 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chatView.match(/sendEntersSteeringQueue\(\{/g)).toHaveLength(2);
     expect(chatView).toContain("hasPendingTurnStart: activeThread.pendingTurnStart !== null");
     expect(
+      chatView.match(/if \(settings\.followUpBehavior === "queue" && followUpWouldQueue\)/g),
+    ).toHaveLength(2);
+    expect(
       chatView.match(
         /setOptimisticQueuedMessageIds\(\(existing\) => new Set\(existing\)\.add\(messageIdForSend\)\)/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
     // The chips render the merged list, never the raw server queue.
     expect(chatView).toContain("queuedMessages={displayQueuedMessages}");
+    expect(chatView).not.toContain("queuedMessageStore");
+    expect(chatView).toContain('command === "thread.steerQueuedMessage"');
+    expect(chatView).toContain("displayQueuedMessages.find((queued) => !queued.pending)");
   });
 
   it("queued message chips keep edit + send-now labels", () => {
@@ -190,6 +196,7 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(chips).toContain('aria-label="Edit queued message"');
     expect(chips).toContain('aria-label="Send queued message now"');
     expect(chips).toContain("Remove from queue and edit in composer");
+    expect(chips).toContain("steerShortcutLabel");
   });
 
   it("git action menu keeps the GitHub pull request list link", () => {

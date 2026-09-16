@@ -7,7 +7,7 @@ import {
   resolveLockedWorkspaceLabel,
   type WorkspaceTarget,
 } from "./BranchToolbar.logic";
-import { composerFloatingLayerProps } from "./chat/composerEventScope";
+import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
   Select,
   SelectGroup,
@@ -37,6 +37,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   previousWorktreeLabel,
   onUsePreviousWorktree,
 }: BranchToolbarEnvModeSelectorProps) {
+  const composerFloatingLayerProps = useComposerMenuProps();
   const showPreviousWorktree = Boolean(previousWorktreeLabel && onUsePreviousWorktree);
   const envModeItems = useMemo(() => {
     const items: Array<{ value: string; label: string }> = [

@@ -5,10 +5,10 @@ import { runArchiveWithWorktreeCleanup } from "@t3tools/client-runtime/state/wor
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 
 import { withThreadDismissal } from "./thread-dismissal";
-import { showConfirmDialog } from "../../components/ConfirmDialogHost";
+import { showConfirmDialog, showTextInputDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThreadSnapshots";
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
@@ -29,6 +29,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 import {
   actionFailureMessage,
   actionFailureTitle,
@@ -222,6 +223,7 @@ export function useThreadListActions(): {
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
   ) => Promise<boolean>;
+  readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
@@ -533,6 +535,50 @@ export function useThreadListActions(): {
     },
     [updateThreadMetadata],
   );
+  const renameThread = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      const commit = (title: string) => {
+        const resolution = resolveThreadTitleRename({ title, originalTitle: thread.title });
+        if (resolution.action === "reject-empty") {
+          Alert.alert("Could not rename thread", "Thread title cannot be empty.");
+          return;
+        }
+        if (resolution.action === "noop") return;
+        selectionHaptic();
+        void updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, title: resolution.title },
+        }).then((result) => {
+          if (result._tag === "Success") return;
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not rename thread",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread could not be renamed.",
+          );
+        });
+      };
+
+      if (Platform.OS === "ios") {
+        Alert.prompt(
+          "Rename thread",
+          undefined,
+          (title) => commit(title ?? ""),
+          "plain-text",
+          thread.title,
+        );
+        return;
+      }
+      showTextInputDialog({
+        title: "Rename thread",
+        initialValue: thread.title,
+        confirmText: "Rename",
+        onConfirm: commit,
+      });
+    },
+    [updateThreadMetadata],
+  );
 
   // Plan against the complete section so filtering does not change a move.
   const reorderPinnedMutation = useAtomCommand(threadEnvironment.reorderPin, {
@@ -712,6 +758,7 @@ export function useThreadListActions(): {
     pinThread,
     unpinThread,
     moveThread,
+    renameThread,
     regenerateThreadTitle,
   };
 }
