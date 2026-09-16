@@ -8,8 +8,7 @@
 
 ### Gaps that matter
 
-1. **Uncovered processor branches:** `startTurn` `FatalError` → `ReplyPending` (`processor.ts:241-246`); `persist` failure (reachable via two requests planned onto one `threadId`); `findByThreadId` / `findNonTerminalExchanges` failures (harness hard-wires the in-memory repo, so no failing repository can be injected); `findPostedReply` transient failure followed by a retry that repeats discovery; a burst of pings during an active turn proving no duplicate `postReply`.
-2. **Uncovered gateway branches:** `getProject` failing inside `provisionThread`; `deriveWorktreePath` output is never asserted; `ensureWorktree` remaining error branches (`fs.exists`, `localStatus`, and `listRefs` failures, `removeWorktree` with its `fs.remove` fallback also failing, the `locked` stale-registration variant, "isRepo but wrong ref"); `startTurn` payload test omits `type`, so a `thread.create` carrying a message would pass.
+1. **Uncovered gateway branches:** `getProject` failing inside `provisionThread`; `deriveWorktreePath` output is never asserted; `ensureWorktree` remaining error branches (`fs.exists`, `localStatus`, and `listRefs` failures, `removeWorktree` with its `fs.remove` fallback also failing, the `locked` stale-registration variant, "isRepo but wrong ref"); `startTurn` payload test omits `type`, so a `thread.create` carrying a message would pass.
 
 ### Weak tests
 
@@ -20,9 +19,8 @@
 
 ### Harness risks
 
-- `awaitStoredTag` and `awaitCalls` are unbounded `yieldNow` spins. On regression they never return and the only signal is vitest's 5 s timeout with no diagnostic. Wrap in `Effect.timeout`, or signal a `Deferred` from a repository wrapper's `upsert`.
 - `withProcessor` interrupts the `run` fiber after the expects, so a failing assertion leaks the fiber.
-- Recovery order over the HashMap is nondeterministic; tests correctly filter per source today, but `:1394` reads `calls[0]` and becomes order-sensitive the moment a second exchange is stored before `run`.
+- Recovery order over the HashMap is nondeterministic; tests correctly filter per source today, but "routes thread activity only for stored exchanges" asserts on `calls[0]` and becomes order-sensitive the moment a second exchange is stored before `run`.
 
 ### What is well covered
 
@@ -34,4 +32,4 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 
 ## Recommended order
 
-1. Tests: injectable (failing/gated) repository, `startTurn` fatal path, and bound `awaitStoredTag`/`awaitCalls`.
+1. Gateway branch tests (gap 1), then the weak tests and the two harness risks above.

@@ -34,6 +34,12 @@ import {
 type ServiceInput = {
   readonly t3Gateway?: Partial<T3Gateway>;
   readonly adapter?: Partial<NTBSAdapter>;
+  /**
+   * Overrides for the repository: the properties to replace, or a builder that receives the real in-memory repository so an override can gate a call and then delegate it. Everything not overridden stays the real in-memory repository.
+   */
+  readonly repository?:
+    | Partial<ExchangeRepository>
+    | ((base: ExchangeRepository) => Partial<ExchangeRepository>);
 };
 
 type Call = {
@@ -60,6 +66,8 @@ type ProcessorTestContext = {
    * Waits until the shared call log holds at least `count` entries. The mocks are synchronous, so the log is how the background pass's progress can be observed from the test.
    */
   readonly awaitCalls: (count: number) => Effect.Effect<void>;
+  /** Waits until the processor resolved threads at least `count` times. A recovered pass that keeps re-resolving a thread shows up here. */
+  readonly awaitThreadLookups: (count: number) => Effect.Effect<void>;
   /** Pushes a threadId to the `threadActivity` stream, waking up the processor. */
   readonly pingActivity: (threadId: ThreadId) => Effect.Effect<void>;
   /**
@@ -159,6 +167,11 @@ const defaultAdapter: NTBSAdapter = {
 };
 
 /**
+ * How many scheduler turns the harness waits below tolerate before failing with a diagnostic. A healthy wait resolves in a handful of turns; a stuck one names itself here instead of ending as the bare vitest timeout.
+ */
+const AWAIT_SPINS = 10_000;
+
+/**
  * The harness.
  *
  * The term "harness" comes from electrical engineering for describing hardware test benches: the wiring harness is the fixed rig that holds the device under test and connects it to instruments, so each experiment only varies the stimulus.
@@ -204,18 +217,26 @@ const withProcessor = <A, E>(
     let findByThreadIdCalls = 0;
 
     /*
-      The repository is the real in-memory one, wrapped only to count `findByThreadId`: a worker re-resolving a thread over and over shows up here, even while it is not reaching `getTurnStatus`.
+      The repository is the real in-memory one, with overrides applied on top and `findByThreadId` counted after them: a worker re-resolving a thread over and over shows up here, even while it is not reaching `getTurnStatus` and even when the lookup itself is what fails.
     */
     const repositoryLayer = Layer.effect(
       ExchangeRepository,
-      Effect.map(ExchangeRepository, (repository) => ({
-        ...repository,
-        findByThreadId: (threadId: ThreadId) =>
-          Effect.suspend(() => {
-            findByThreadIdCalls += 1;
-            return repository.findByThreadId(threadId);
-          }),
-      })),
+      Effect.map(ExchangeRepository, (base) => {
+        const overrides =
+          typeof servicesInput.repository === "function"
+            ? servicesInput.repository(base)
+            : servicesInput.repository;
+        const repository = { ...base, ...overrides };
+
+        return {
+          ...repository,
+          findByThreadId: (threadId: ThreadId) =>
+            Effect.suspend(() => {
+              findByThreadIdCalls += 1;
+              return repository.findByThreadId(threadId);
+            }),
+        };
+      }),
     ).pipe(Layer.provide(inMemoryExchangeRepository));
 
     const layer = Layer.mergeAll(
@@ -244,20 +265,63 @@ const withProcessor = <A, E>(
         repository,
         calls,
         findByThreadIdCalls: () => findByThreadIdCalls,
-        awaitCalls: (count) =>
-          Effect.gen(function* () {
-            while (calls.length < count) {
+        awaitCalls: (count) => {
+          const arrived = () => calls.length >= count;
+
+          return Effect.gen(function* () {
+            let spins = 0;
+
+            while (!arrived()) {
+              if (spins === AWAIT_SPINS) {
+                return yield* Effect.die(
+                  new Error(
+                    `awaitCalls(${count}) spun ${spins} times with ${calls.length} recorded calls`,
+                  ),
+                );
+              }
+              spins += 1;
               yield* Effect.yieldNow;
             }
-          }),
+          });
+        },
+        awaitThreadLookups: (count) => {
+          const arrived = () => findByThreadIdCalls >= count;
+
+          return Effect.gen(function* () {
+            let spins = 0;
+
+            while (!arrived()) {
+              if (spins === AWAIT_SPINS) {
+                return yield* Effect.die(
+                  new Error(
+                    `awaitThreadLookups(${count}) spun ${spins} times with ${findByThreadIdCalls} lookups`,
+                  ),
+                );
+              }
+              spins += 1;
+              yield* Effect.yieldNow;
+            }
+          });
+        },
         pingActivity: (threadId) => Queue.offer(activity, threadId).pipe(Effect.asVoid),
         awaitStoredTag: (sourceUri, tag) =>
           Effect.gen(function* () {
+            let spins = 0;
+
             while (true) {
               const state = yield* repository.findBySourceUri(sourceUri);
+
               if (state !== null && state.tag === tag) {
                 return state;
               }
+              if (spins === AWAIT_SPINS) {
+                return yield* Effect.die(
+                  new Error(
+                    `awaitStoredTag(${sourceUri}, ${tag}) spun ${spins} times, last seen ${state?.tag ?? "no record"}`,
+                  ),
+                );
+              }
+              spins += 1;
               yield* Effect.yieldNow;
             }
           }),
@@ -583,6 +647,68 @@ describe("NTBSProcessor", () => {
   });
 
   /*
+    A burst of pings while the reply is being posted asks for one more look, not a second delivery: the follow-up pass reloads the posted record and stops, so `postReply` runs exactly once.
+  */
+  it.effect("does not post the reply again for pings arriving while it posts", () => {
+    const reply = answer("Reply under a burst of pings");
+    const postStarted = Deferred.makeUnsafe<void>();
+    const releasePost = Deferred.makeUnsafe<void>();
+    const burst = 50;
+    let posts = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () => Effect.succeed({ turn: "completed" as const, reply }),
+        },
+        adapter: {
+          postReply: () =>
+            Effect.gen(function* () {
+              posts += 1;
+              yield* Deferred.succeed(postStarted, undefined);
+              yield* Deferred.await(releasePost);
+              return postedReplyUri;
+            }),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag, awaitThreadLookups }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(postStarted);
+
+          // One ping starts a worker, which has to wait for the posting pass; the burst behind it collapses into one queued re-check.
+          yield* pingActivity(defaultThreadId);
+          yield* awaitThreadLookups(1);
+
+          yield* Effect.forEach(
+            Array.from({ length: burst }),
+            () => pingActivity(defaultThreadId),
+            { discard: true },
+          );
+          yield* Effect.yieldNow;
+
+          yield* Deferred.succeed(releasePost, undefined);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          // The queued re-check runs its own pass and resolves the thread again: it reloads the posted exchange and stops, without another post.
+          yield* awaitThreadLookups(2);
+          yield* Effect.yieldNow;
+
+          expect(posts).toBe(1);
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
     T3 refusing the target for good (a project repository with no origin remote, say) is found out at planning, before anything from T3 exists.
     The request was already recorded, so the rejection becomes a failure reply like any other and is posted; the stored record never carries T3 coordinates.
   */
@@ -828,6 +954,245 @@ describe("NTBSProcessor", () => {
   });
 
   /*
+    A fatal turn-start rejection is the dead end of the planning rejection one step later: the thread exists, so the rejection becomes a failure reply on the recorded exchange and the pass carries it to delivery.
+  */
+  it.effect("turns a fatal turn start into a failure reply", () => {
+    const rejection = new FatalError({
+      reason: "T3 rejected the turn start",
+      cause: null,
+      method: "orchestrationEngine.dispatch",
+    });
+    const postStarted = Deferred.makeUnsafe<void>();
+    const releasePost = Deferred.makeUnsafe<void>();
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          startTurn: () => rejection,
+        },
+        adapter: {
+          postReply: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(postStarted, undefined);
+              yield* Deferred.await(releasePost);
+              return postedReplyUri;
+            }),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* processor.process(request, target);
+          // The post is held open so the record the fatal start produced can be read before the reply goes out.
+          yield* Deferred.await(postStarted);
+
+          const replyPending = toRejected(threadCreated, rejection, now);
+          expect(replyPending.reply).toEqual({
+            type: "failure",
+            text: rejection.reason,
+            cause: {
+              type: "rejected",
+              method: rejection.method,
+              state: { tag: "thread-created", t3: threadCreated.t3 },
+            },
+          });
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(replyPending);
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "T3Gateway.provisionThread",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          yield* Deferred.succeed(releasePost, undefined);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(
+            toReplyPosted(replyPending, postedReplyUri, now),
+          );
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    Failing to load the exchanges is not fatal to `run`: startup recovery logs it, and the sweeper — which reads the same list — retries a minute later and drives the stored exchange on.
+  */
+  it.effect("recovers from a failed recovery load on the next sweep", () => {
+    const recoveryFailed = Deferred.makeUnsafe<void>();
+    const reply = answer("Reply after a failed recovery load");
+    let loads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () => Effect.succeed({ turn: "completed" as const, reply }),
+        },
+        repository: {
+          findNonTerminalExchanges: Effect.gen(function* () {
+            loads += 1;
+            if (loads === 1) {
+              yield* Deferred.succeed(recoveryFailed, undefined);
+              return yield* new ExchangeRepositoryError({
+                reason: "The repository is unavailable",
+                cause: "test failure",
+              });
+            }
+            return [threadCreated];
+          }),
+        },
+      },
+      ({ processor, repository, calls, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(recoveryFailed);
+          yield* Effect.yieldNow;
+
+          // The failed load ended recovery before it could read or write anything about the exchange.
+          expect(calls).toEqual([]);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* TestClock.adjust("1 minute");
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(loads).toBe(2);
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    A failing thread lookup fails only that pass, logged and dropped like any other: the exchange keeps the record it had, and the next ping resolves the thread and runs it on — even the ping that arrives while the failing pass is still in flight.
+  */
+  it.effect("survives a failed lookup for thread activity", () => {
+    const recoveryTurnStarted = Deferred.makeUnsafe<void>();
+    const lookupParked = Deferred.makeUnsafe<void>();
+    const releaseLookup = Deferred.makeUnsafe<void>();
+    const reply = answer("Reply after a failed lookup");
+    let lookups = 0;
+    let turnStatusReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () =>
+            Effect.sync(() => {
+              turnStatusReads += 1;
+              return turnStatusReads === 1
+                ? { turn: "missing" as const }
+                : { turn: "completed" as const, reply };
+            }),
+          startTurn: () => Deferred.succeed(recoveryTurnStarted, undefined),
+        },
+        repository: {
+          findByThreadId: (threadId: ThreadId) =>
+            Effect.gen(function* () {
+              lookups += 1;
+              if (lookups === 1) {
+                // Held open long enough that the next ping arrives while the pass is failing.
+                yield* Deferred.succeed(lookupParked, undefined);
+                yield* Deferred.await(releaseLookup);
+                return yield* new ExchangeRepositoryError({
+                  reason: "The repository is unavailable",
+                  cause: "test failure",
+                });
+              }
+              return threadId === defaultThreadId ? threadCreated : null;
+            }),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag, findByThreadIdCalls }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          // Recovery has read the turn and started it; the exchange settles at ThreadCreated for the pings that follow.
+          yield* Deferred.await(recoveryTurnStarted);
+          yield* Effect.yieldNow;
+
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(lookupParked);
+
+          // The failing lookup never reached the exchange; the ping that arrives while it fails must not be lost with it.
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+          yield* pingActivity(defaultThreadId);
+          // Let the activity subscription pick up the ping while the lookup is still parked, so its re-check is queued against a failing pass.
+          yield* Effect.yieldNow;
+
+          yield* Deferred.succeed(releaseLookup, undefined);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(findByThreadIdCalls()).toBe(2);
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "T3Gateway.getTurnStatus",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    `upsert` guards the thread index as well, and a plan already carries its thread: a second request planned onto a thread the first exchange owns cannot record that plan.
+    The pass fails at the record, the second exchange stays at its accepted request, and the first keeps the thread it reached.
+  */
+  it.effect(
+    "fails the pass when a second request plans onto a thread that already belongs to one",
+    () => {
+      const secondAccepted = makeRequestAccepted(secondRequest, target, now);
+
+      return withProcessor({}, ({ processor, repository, calls, awaitCalls }) =>
+        Effect.gen(function* () {
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+
+          yield* processor.process(request, target);
+          yield* awaitCalls(6);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          // The second request plans onto the same thread the first one already owns.
+          yield* processor.process(secondRequest, target);
+          yield* awaitCalls(7);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "T3Gateway.planCoordinates",
+            "T3Gateway.getThreadStatus",
+            "T3Gateway.provisionThread",
+            "NTBSAdapter.acknowledge",
+            "T3Gateway.getTurnStatus",
+            "T3Gateway.startTurn",
+            "T3Gateway.planCoordinates",
+          ]);
+          expect(yield* repository.findBySourceUri(secondRequest.sourceUri)).toEqual(
+            secondAccepted,
+          );
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
+
+          yield* Fiber.interrupt(run);
+        }),
+      );
+    },
+  );
+
+  /*
     Only the first delivery of a sourceUri records it; a redelivery reads the record without taking the exchange lock.
     The background pass is held inside planCoordinates, so the lock is busy while the exchange is mid-pipeline; the redelivery still returns immediately, and once released the log shows a single pipeline.
   */
@@ -881,6 +1246,49 @@ describe("NTBSProcessor", () => {
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    A delivery can read an empty repository and still find a record when it re-checks under the lock, because another delivery recorded it in between.
+    The first read is held open so the recording lands while it is in flight, which is the race itself; the redelivery then returns without recording anything.
+  */
+  it.effect("returns a delivery whose first read raced the recording", () => {
+    const firstReadParked = Deferred.makeUnsafe<void>();
+    const releaseFirstRead = Deferred.makeUnsafe<void>();
+    let reads = 0;
+
+    return withProcessor(
+      {
+        repository: (base) => ({
+          findBySourceUri: (sourceUri) =>
+            Effect.gen(function* () {
+              reads += 1;
+
+              if (reads === 1) {
+                // The first check read the empty repository; the gate holds it open until another delivery records the exchange.
+                yield* Deferred.succeed(firstReadParked, undefined);
+                yield* Deferred.await(releaseFirstRead);
+                return null;
+              }
+
+              return yield* base.findBySourceUri(sourceUri);
+            }),
+        }),
+      },
+      ({ processor, repository }) =>
+        Effect.gen(function* () {
+          const delivery = yield* processor.process(request, target).pipe(Effect.forkChild);
+          yield* Deferred.await(firstReadParked);
+
+          yield* repository.upsert(threadCreated);
+          yield* Deferred.succeed(releaseFirstRead, undefined);
+          yield* Fiber.join(delivery);
+
+          // The re-check found the recorded exchange: one record, and the redelivery persisted nothing.
+          expect(reads).toBe(2);
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
         }),
     );
   });
@@ -1488,6 +1896,61 @@ describe("NTBSProcessor", () => {
           expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, now));
 
           yield* Fiber.interrupt(secondRun);
+        }),
+    );
+  });
+
+  /*
+    Reply discovery can fail transiently too: an unobserved platform posts nothing, and the retry after the failed pass discovers again before delivering.
+  */
+  it.effect("repeats reply discovery after a transient failure", () => {
+    const reply = answer("Reply after a failed discovery");
+    const replyPending = toReplyPending(threadCreated, reply, now);
+    const discoveryFailed = Deferred.makeUnsafe<void>();
+    let discoveries = 0;
+
+    return withProcessor(
+      {
+        adapter: {
+          findPostedReply: () =>
+            Effect.gen(function* () {
+              discoveries += 1;
+              if (discoveries === 1) {
+                yield* Deferred.succeed(discoveryFailed, undefined);
+                return yield* new AdapterError({
+                  reason: "The platform is unavailable",
+                  cause: "test failure",
+                });
+              }
+              return null;
+            }),
+        },
+      },
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(replyPending);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(discoveryFailed);
+          yield* Effect.yieldNow;
+
+          // The failed discovery posts nothing; the record still waits for its reply.
+          expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(replyPending);
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+          ]);
+
+          yield* pingActivity(defaultThreadId);
+          yield* awaitStoredTag(request.sourceUri, "reply-posted");
+
+          expect(discoveries).toBe(2);
+          expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
+          ]);
+
+          yield* Fiber.interrupt(run);
         }),
     );
   });
