@@ -8,7 +8,6 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 
 ## Tests
 
-- [ ] One real-engine integration test for `startTurn` → `getTurnStatus`.
 - [ ] Injectable repository in the processor harness (failures and gates; would also cover `persist` failures and the exchange-lock duplicate re-check, which is otherwise reachable only through a concurrent-first-delivery race).
 - [ ] `startTurn` fatal → `ReplyPending`.
 - [ ] Bound `awaitStoredTag`/`awaitCalls` with a diagnostic timeout.
@@ -43,3 +42,7 @@ We've got lots of code that does locking, queueing, concurrency bonding for exch
 Activity handling has since collapsed into one queue-and-worker pipeline inside `run`; what remains spread out is the per-exchange lock and the pass helpers (`resumeExchange`, `tryResumeExchange`, `advanceSavedExchange`).
 
 We need to investigate whether it can be simplified or abstracted to its own module so processor stays as simple as possible and concurrency logic is easier to test and verify.
+
+## Integration tests
+
+- [ ] Against the real `OrchestrationEngine` + sqlite: dispatch `thread.turn.start` through the real engine, then read `getTurnStatus`. The whole design rests on dispatch being synchronous with projection, which `t3gateway.ts:184-186` notes no test in this package would notice if it broke; the test would also have caught the provider-failure retry loop fixed on 2026-09-02.

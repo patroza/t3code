@@ -8,9 +8,8 @@
 
 ### Gaps that matter
 
-1. **No integration test against the real `OrchestrationEngine` + sqlite.** The whole design rests on dispatch being synchronous with projection; `t3gateway.ts:184-186` says "no test in this package would notice" if that broke. One test that dispatches `thread.turn.start` through the real engine and reads `getTurnStatus` would pin it, and would have caught the provider-failure retry loop fixed on 2026-09-02 (see "Resolved").
-2. **Uncovered processor branches:** `startTurn` `FatalError` → `ReplyPending` (`processor.ts:241-246`); `persist` failure (reachable via two requests planned onto one `threadId`); `findByThreadId` / `findNonTerminalExchanges` failures (harness hard-wires the in-memory repo, so no failing repository can be injected); `findPostedReply` transient failure followed by a retry that repeats discovery; a burst of pings during an active turn proving no duplicate `postReply`.
-3. **Uncovered gateway branches:** `getProject` failing inside `provisionThread`; `deriveWorktreePath` output is never asserted; `ensureWorktree` remaining error branches (`fs.exists`, `localStatus`, and `listRefs` failures, `removeWorktree` with its `fs.remove` fallback also failing, the `locked` stale-registration variant, "isRepo but wrong ref"); `startTurn` payload test omits `type`, so a `thread.create` carrying a message would pass.
+1. **Uncovered processor branches:** `startTurn` `FatalError` → `ReplyPending` (`processor.ts:241-246`); `persist` failure (reachable via two requests planned onto one `threadId`); `findByThreadId` / `findNonTerminalExchanges` failures (harness hard-wires the in-memory repo, so no failing repository can be injected); `findPostedReply` transient failure followed by a retry that repeats discovery; a burst of pings during an active turn proving no duplicate `postReply`.
+2. **Uncovered gateway branches:** `getProject` failing inside `provisionThread`; `deriveWorktreePath` output is never asserted; `ensureWorktree` remaining error branches (`fs.exists`, `localStatus`, and `listRefs` failures, `removeWorktree` with its `fs.remove` fallback also failing, the `locked` stale-registration variant, "isRepo but wrong ref"); `startTurn` payload test omits `type`, so a `thread.create` carrying a message would pass.
 
 ### Weak tests
 
@@ -35,4 +34,4 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 
 ## Recommended order
 
-1. Tests: one real-engine integration test, injectable (failing/gated) repository, `startTurn` fatal path, and bound `awaitStoredTag`/`awaitCalls`.
+1. Tests: injectable (failing/gated) repository, `startTurn` fatal path, and bound `awaitStoredTag`/`awaitCalls`.
