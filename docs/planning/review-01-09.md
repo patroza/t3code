@@ -6,12 +6,6 @@
 
 ## Part 1 — Implementation soundness
 
-### MEDIUM
-
-**M4. Failure replies expose internal wording.** Stored failure causes are now structured rather than raw errors, but `toRejected` still copies `rejection.reason` into the platform reply. Gateway reasons can contain implementation details such as thread UUIDs. Fix: separate user-facing failure text from diagnostic wording.
-
-**M5. Nothing is wired.** No SQL `ExchangeRepository`, no real adapter, no consumer of `makeNTBSProcessor` outside tests. The "durable" in the design is the in-memory HashMap today. Not a defect, but it bounds what this review can say: SQL persistence and the index needs in L2 are untested.
-
 ### LOW
 
 **L2. In-memory repository lookup by thread is O(n)** (`ExchangeRepository.ts:52-62`, `82-96`). Fine for tests; the SQL repository needs an index on `threadId` and unique constraints on both keys.
@@ -67,4 +61,3 @@ Exchange deciders and transitions (exhaustively enumerated); repository conflict
 ## Recommended order
 
 1. Tests: one real-engine integration test, injectable (failing/gated) repository, `startTurn` fatal path, sweep racing activity, and bound `awaitStoredTag`/`awaitCalls`.
-2. M4: separate user-facing rejection messages from diagnostics before a real adapter posts them.

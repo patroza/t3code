@@ -5,7 +5,7 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 ## Other review items
 
 - [ ] L3: worktree branch uses the full thread UUID with a non-temporary prefix so T3 does not rename it.
-- [ ] M4: separate user-facing rejection text from diagnostics before a real adapter posts it.
+- [ ] Review user-facing error messages.
 
 ## Tests
 
@@ -19,6 +19,7 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 
 - [ ] Jira port as the first real adapter, replacing the legacy bridge path.
 - [ ] SQL `ExchangeRepository` with an index on `threadId` and unique constraints on both keys.
+- [ ] Wire `makeNTBSProcessor` into the server with a real adapter and SQL repository; verify persistence and recovery across restarts.
 
 ## Review fork-specific provenance after the NTBS migration
 
