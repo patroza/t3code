@@ -621,8 +621,19 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       }
       // The mock writes "mock" after prompt_complete on the same stdout
       // burst. Under CI load the JSON-RPC reader can lag the settlement
-      // fiber; wait live so that last chunk is applied before we assert.
-      yield* Effect.sleep("50 millis").pipe(TestClock.withLive);
+      // fiber; poll live until that last chunk is applied.
+      const contentFromEvents = () =>
+        runtimeEvents
+          .filter(
+            (event): event is Extract<ProviderRuntimeEvent, { type: "content.delta" }> =>
+              event.type === "content.delta" && String(event.threadId) === String(threadId),
+          )
+          .map((event) => event.payload.delta)
+          .join("");
+      for (let pollAttempt = 0; pollAttempt < 100 && contentFromEvents() !== "hello from mock";) {
+        pollAttempt += 1;
+        yield* Effect.sleep("20 millis").pipe(TestClock.withLive);
+      }
       const readySessions = yield* adapter.listSessions();
       const readySession = readySessions.find((session) => session.threadId === threadId);
       const turnCompletedEvent = runtimeEvents.find(
