@@ -2703,6 +2703,144 @@ describe("NTBSProcessor", () => {
   });
 
   /*
+    Activity that arrives for an exchange while the sweeper is reading it has to be read again after that pass, exactly as behind startup recovery: the sweeper drives the exchange through the same pass, so folding the ping into a pass that already observed the state would miss its event.
+  */
+  it.effect("waits for an in-flight sweep pass before checking the same exchange", () => {
+    const release = Deferred.makeUnsafe<void>();
+    const checkedAgain = Deferred.makeUnsafe<void>();
+    let reads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getTurnStatus: () =>
+            Effect.gen(function* () {
+              reads += 1;
+
+              if (reads === 2) {
+                yield* Deferred.await(release);
+              } else if (reads === 3) {
+                yield* Deferred.succeed(checkedAgain, undefined);
+              }
+
+              return { turn: "active" as const };
+            }),
+        },
+      },
+      ({ processor, repository, pingActivity, findByThreadIdCalls }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(threadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+
+          const sweepTookOver = () => reads >= 2;
+          // Read 1 is startup recovery. The sweeper's delay starts once that pass ends, so keep advancing until the sweep takes read 2 and parks there.
+          while (!sweepTookOver()) {
+            yield* TestClock.adjust("1 minute");
+            yield* Effect.yieldNow;
+          }
+
+          yield* pingActivity(defaultThreadId);
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+
+          // The sweep still owns the exchange: the ping waits without re-resolving the thread.
+          expect(reads).toBe(2);
+          expect(findByThreadIdCalls()).toBe(1);
+
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(checkedAgain);
+
+          expect(reads).toBe(3);
+          expect(findByThreadIdCalls()).toBe(1);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
+    A sweep that reaches an exchange whose activity pass is in flight skips it and moves on: waiting for that pass would let one busy exchange stall every later exchange, and every later sweep.
+  */
+  it.effect("skips an exchange whose pass is in flight when sweeping", () => {
+    const recovered = Deferred.makeUnsafe<void>();
+    const parked = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const otherThreadSweptAgain = Deferred.makeUnsafe<void>();
+    let threadStatusReads = 0;
+    let provisions = 0;
+    let otherThreadReads = 0;
+
+    return withProcessor(
+      {
+        t3Gateway: {
+          getThreadStatus: () =>
+            Effect.gen(function* () {
+              threadStatusReads += 1;
+
+              if (threadStatusReads === 1) {
+                yield* Deferred.succeed(recovered, undefined);
+                // Startup recovery leaves the planned exchange alone; the ping's pass then provisions it.
+                return { thread: "unknown" as const };
+              }
+
+              return { thread: "missing" as const };
+            }),
+          getTurnStatus: () =>
+            Effect.gen(function* () {
+              otherThreadReads += 1;
+
+              if (otherThreadReads === 3) {
+                yield* Deferred.succeed(otherThreadSweptAgain, undefined);
+              }
+
+              return { turn: "active" as const };
+            }),
+          provisionThread: () =>
+            Effect.gen(function* () {
+              provisions += 1;
+              yield* Deferred.succeed(parked, undefined);
+              // Long enough that the pass is still in flight when the sweeps run.
+              yield* Deferred.await(release);
+            }),
+        },
+      },
+      ({ processor, repository, pingActivity, findByThreadIdCalls }) =>
+        Effect.gen(function* () {
+          yield* repository.upsert(planned);
+          yield* repository.upsert(secondThreadCreated);
+
+          const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
+
+          // Startup recovery reads the planned exchange first; the ping's pass then parks inside provisioning, owning the exchange across several sweep intervals.
+          yield* Deferred.await(recovered);
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(parked);
+
+          const otherThreadWasSwept = () => otherThreadReads >= 2;
+          // The sweep's delay starts once recovery ends; each adjustment polls the sweep on.
+          while (!otherThreadWasSwept()) {
+            yield* TestClock.adjust("1 minute");
+            yield* Effect.yieldNow;
+          }
+
+          // The other exchange was swept while the parked one was skipped, not waited on.
+          expect(threadStatusReads).toBe(2);
+          expect(provisions).toBe(1);
+
+          yield* TestClock.adjust("1 minute");
+          yield* Deferred.await(otherThreadSweptAgain);
+
+          expect(threadStatusReads).toBe(2);
+          expect(provisions).toBe(1);
+          expect(findByThreadIdCalls()).toBe(1);
+
+          yield* Fiber.interrupt(run);
+        }),
+    );
+  });
+
+  /*
     The sweeper is the backstop for a timeout nothing else wakes. After the timed-out attempt
     leaves the exchange untouched, the next sweep re-drives it and a fresh observation finishes it.
   */
