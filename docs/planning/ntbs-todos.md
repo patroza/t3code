@@ -5,6 +5,7 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 ## Other review items
 
 - [ ] Review user-facing error messages.
+- [ ] In `processor.test.ts`, replace `settle()` with an explicit completion signal where assertions require a finished pass, especially before interrupting after a failed reply post. Quiet call logs do not prove completion: a pass waiting on a timer or Deferred also looks quiet, so these tests can pass before the behavior they mean to check occurs.
 
 ## Next
 

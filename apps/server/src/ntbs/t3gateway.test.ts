@@ -633,19 +633,15 @@ describe("T3Gateway", () => {
             projectId,
             startBranchName: "main",
             startCommitSha: "sha123",
-            threadId: expect.any(String),
-            userMessageId: expect.any(String),
-            worktreeBranchName: expect.any(String),
+            threadId: "randomUUID0",
+            userMessageId: "randomUUID1",
+            worktreeBranchName: "ntbs/randomUUID0",
           });
 
           /*
-            The identifiers are whatever the crypto mock hands out, so asserting exact values
-            would only restate the mock. What matters are the relationships the gateway owns:
-            the thread and its first message are distinct, and the worktree branch carries the
-            full thread id under a prefix T3 does not rename.
+            The crypto mock hands out a deterministic sequence, so the ids are pinned exactly rather than matched loosely: the thread is minted before its first message, and the branch carries the thread's id, not the message's.
+            `expect.any(String)` would let a swapped or reused identifier through.
           */
-          expect(coordinates.threadId).not.toEqual(coordinates.userMessageId);
-          expect(coordinates.worktreeBranchName).toEqual(`ntbs/${coordinates.threadId}`);
           expect(isTemporaryWorktreeBranch(coordinates.worktreeBranchName)).toBe(false);
 
           /*
@@ -915,9 +911,35 @@ describe("T3Gateway", () => {
      *
      * It can only fail with a RetryableError.
      */
+    /*
+      Built from fixed coordinates on purpose: the subject is the lookup, so minting identifiers through `planCoordinates` would only add an unrelated pipeline to the test's setup and its call log.
+    */
+    const coordinates: WorkCoordinates = {
+      projectId: ProjectId.make("projectId"),
+      startBranchName: "startBranchName",
+      startCommitSha: "startCommitSha",
+      threadId: ThreadId.make("threadId"),
+      userMessageId: MessageId.make("userMessageId"),
+      worktreeBranchName: "worktreeBranchName",
+    };
+
+    const workPlanned = toWorkPlanned(
+      makeRequestAccepted(
+        {
+          attachments: [],
+          snapshot: "getThreadStatus snapshot",
+          sourceUri: "test://get-thread-status",
+        },
+        { projectId: coordinates.projectId, startBranchName: coordinates.startBranchName },
+        now,
+      ),
+      coordinates,
+      now,
+    );
+
     describe("happy cases", () => {
       it.effect("it returns that the  missing thread", () => {
-        const { layer } = createT3Gateway({
+        const { calls, layer } = createT3Gateway({
           pqsm: {
             isThreadMissing: true,
           },
@@ -925,32 +947,18 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const projectId = ProjectId.make("happy cases - missing thread");
-
-          const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
-
-          const state = toWorkPlanned(
-            makeRequestAccepted(
-              {
-                attachments: [],
-                snapshot: "happy cases - missing thread - snapshot",
-                sourceUri: "test://happy-cases-missing-thread-1",
-              },
-              { projectId, startBranchName: "main" },
-              now,
-            ),
-            coordinates,
-            now,
-          );
-
-          const result = yield* t3Gateway.getThreadStatus(state);
+          const result = yield* t3Gateway.getThreadStatus(workPlanned);
 
           expect(result.thread).toBe("missing");
+          // The lookup is for the thread the exchange recorded, not a freshly minted id.
+          expect(calls.find((call) => call.method === "getThreadShellById")?.input).toBe(
+            workPlanned.t3.threadId,
+          );
         }).pipe(Effect.provide(layer));
       });
 
       it.effect("it returns that the thread is present", () => {
-        const { layer } = createT3Gateway({
+        const { calls, layer } = createT3Gateway({
           pqsm: {
             isThreadMissing: false,
           },
@@ -958,27 +966,12 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const projectId = ProjectId.make("happy cases - missing thread");
-
-          const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
-
-          const state = toWorkPlanned(
-            makeRequestAccepted(
-              {
-                attachments: [],
-                snapshot: "happy cases - missing thread - snapshot",
-                sourceUri: "test://happy-cases-missing-thread-1",
-              },
-              { projectId, startBranchName: "main" },
-              now,
-            ),
-            coordinates,
-            now,
-          );
-
-          const result = yield* t3Gateway.getThreadStatus(state);
+          const result = yield* t3Gateway.getThreadStatus(workPlanned);
 
           expect(result.thread).toBe("present");
+          expect(calls.find((call) => call.method === "getThreadShellById")?.input).toBe(
+            workPlanned.t3.threadId,
+          );
         }).pipe(Effect.provide(layer));
       });
     });
@@ -987,7 +980,7 @@ describe("T3Gateway", () => {
       // Note: we're really not caring _why_.
       // Albeit, as of writing there's only retryable errors?
       it.effect("cannot get the thread", () => {
-        const { layer } = createT3Gateway({
+        const { calls, layer } = createT3Gateway({
           pqsm: {
             isGetThreadShellByIdError: true,
           },
@@ -995,27 +988,12 @@ describe("T3Gateway", () => {
         return Effect.gen(function* () {
           const t3Gateway = yield* T3Gateway;
 
-          const projectId = ProjectId.make("happy cases - missing thread");
-
-          const coordinates = yield* t3Gateway.planCoordinates(projectId, "main");
-
-          const state = toWorkPlanned(
-            makeRequestAccepted(
-              {
-                attachments: [],
-                snapshot: "happy cases - missing thread - snapshot",
-                sourceUri: "test://happy-cases-missing-thread-1",
-              },
-              { projectId, startBranchName: "main" },
-              now,
-            ),
-            coordinates,
-            now,
-          );
-
-          const result = yield* t3Gateway.getThreadStatus(state).pipe(Effect.flip);
+          const result = yield* t3Gateway.getThreadStatus(workPlanned).pipe(Effect.flip);
 
           expect(result._tag).toBe("RetryableError");
+          expect(calls.find((call) => call.method === "getThreadShellById")?.input).toBe(
+            workPlanned.t3.threadId,
+          );
         }).pipe(Effect.provide(layer));
       });
     });

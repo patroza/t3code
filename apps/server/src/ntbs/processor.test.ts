@@ -66,6 +66,10 @@ type ProcessorTestContext = {
    * Waits until the shared call log holds at least `count` entries. The mocks are synchronous, so the log is how the background pass's progress can be observed from the test.
    */
   readonly awaitCalls: (count: number) => Effect.Effect<void>;
+  /**
+   * Yields until neither the service-call log nor the repository's thread lookups have changed for `SETTLE_TICKS` consecutive turns. Use it before asserting that something did *not* happen: a single `yieldNow` can be outrun by a wrongly scheduled call, which would let the assertion pass vacuously.
+   */
+  readonly settle: () => Effect.Effect<void>;
   /** Waits until the processor resolved threads at least `count` times. A recovered pass that keeps re-resolving a thread shows up here. */
   readonly awaitThreadLookups: (count: number) => Effect.Effect<void>;
   /** Pushes a threadId to the `threadActivity` stream, waking up the processor. */
@@ -170,6 +174,15 @@ const defaultAdapter: NTBSAdapter = {
  * How many scheduler turns the harness waits below tolerate before failing with a diagnostic. A healthy wait resolves in a handful of turns; a stuck one names itself here instead of ending as the bare vitest timeout.
  */
 const AWAIT_SPINS = 10_000;
+
+/**
+ * How many consecutive quiet scheduler turns `settle` requires before it trusts that nothing else is going on.
+ *
+ * Every mock here is synchronous, so anything a regression adds lands within a turn or two; a window this wide cannot be crossed by a call that is merely late, while a single yield can be.
+ *
+ * What it does *not* prove: that a pass finished. Work parked on a Deferred or a timer looks exactly as quiet, so an assertion made under `settle` still misses anything that would resume after that park. When the claim is that something completed, wait for an observable consequence of the next step instead (the exchange lock only lets a later pass run once the previous one released it).
+ */
+const SETTLE_TICKS = 50;
 
 /**
  * The harness.
@@ -303,6 +316,33 @@ const withProcessor = <A, E>(
             }
           });
         },
+        settle: () =>
+          Effect.gen(function* () {
+            let lastCalls = calls.length;
+            let lastLookups = findByThreadIdCalls;
+            let quiet = 0;
+            let spins = 0;
+
+            while (quiet < SETTLE_TICKS) {
+              if (spins === AWAIT_SPINS) {
+                return yield* Effect.die(
+                  new Error(
+                    `settle() spun ${spins} times while the log kept changing (${calls.length} calls, ${findByThreadIdCalls} lookups)`,
+                  ),
+                );
+              }
+              spins += 1;
+              yield* Effect.yieldNow;
+
+              if (calls.length === lastCalls && findByThreadIdCalls === lastLookups) {
+                quiet += 1;
+              } else {
+                quiet = 0;
+                lastCalls = calls.length;
+                lastLookups = findByThreadIdCalls;
+              }
+            }
+          }),
         pingActivity: (threadId) => Queue.offer(activity, threadId).pipe(Effect.asVoid),
         awaitStoredTag: (sourceUri, tag) =>
           Effect.gen(function* () {
@@ -396,7 +436,7 @@ describe("NTBSProcessor", () => {
     The smoke test above pins the exact pipeline, so here we check the log length twice: once after the background pass ran the request to prove it actually did the work, once after the second delivery to prove it added nothing — the log is append-only, so an unchanged length means zero service calls.
   */
   it.effect("starts a new request and ignores its sequential redelivery", () =>
-    withProcessor({}, ({ processor, repository, calls, awaitCalls }) =>
+    withProcessor({}, ({ processor, repository, calls, awaitCalls, settle }) =>
       Effect.gen(function* () {
         const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
         yield* processor.process(request, target);
@@ -406,7 +446,7 @@ describe("NTBSProcessor", () => {
         expect(calls.length).toBe(6);
 
         yield* processor.process(request, target);
-        yield* Effect.yieldNow;
+        yield* settle();
 
         expect(calls.length).toBe(6);
 
@@ -478,13 +518,13 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, calls, pingActivity }) =>
+      ({ processor, repository, calls, pingActivity, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(recoveryStatusRead);
-          yield* Effect.yieldNow;
+          yield* settle();
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.getTurnStatus",
@@ -492,8 +532,7 @@ describe("NTBSProcessor", () => {
 
           yield* pingActivity(defaultThreadId);
           yield* Deferred.await(activityStatusRead);
-          // Give the processor a chance to do anything else it might wrongly want to do after the status reads.
-          yield* Effect.yieldNow;
+          yield* settle();
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.getTurnStatus",
@@ -610,7 +649,7 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, pingActivity }) =>
+      ({ processor, repository, pingActivity, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
           yield* repository.upsert(secondThreadCreated);
@@ -637,7 +676,7 @@ describe("NTBSProcessor", () => {
 
           yield* TestClock.adjust("1 second");
           yield* Deferred.await(checkedAgain);
-          yield* Effect.yieldNow;
+          yield* settle();
 
           expect(reads).toBe(2);
 
@@ -671,7 +710,15 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, calls, pingActivity, awaitStoredTag, awaitThreadLookups }) =>
+      ({
+        processor,
+        repository,
+        calls,
+        pingActivity,
+        awaitStoredTag,
+        awaitThreadLookups,
+        settle,
+      }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -687,14 +734,14 @@ describe("NTBSProcessor", () => {
             () => pingActivity(defaultThreadId),
             { discard: true },
           );
-          yield* Effect.yieldNow;
+          yield* settle();
 
           yield* Deferred.succeed(releasePost, undefined);
           yield* awaitStoredTag(request.sourceUri, "reply-posted");
 
           // The queued re-check runs its own pass and resolves the thread again: it reloads the posted exchange and stops, without another post.
           yield* awaitThreadLookups(2);
-          yield* Effect.yieldNow;
+          yield* settle();
 
           expect(posts).toBe(1);
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
@@ -785,7 +832,7 @@ describe("NTBSProcessor", () => {
             startTurn: () => Deferred.succeed(turnStarted, undefined),
           },
         },
-        ({ processor, repository, calls, awaitCalls }) =>
+        ({ processor, repository, calls, awaitCalls, settle }) =>
           Effect.gen(function* () {
             // Started first so that the sweep, not startup recovery, is what re-plans.
             const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
@@ -799,7 +846,7 @@ describe("NTBSProcessor", () => {
 
             // Redelivery after acceptance does no planning.
             yield* processor.process(request, target);
-            yield* Effect.yieldNow;
+            yield* settle();
             expect(calls.length).toBe(1);
 
             yield* TestClock.adjust("1 minute");
@@ -1047,13 +1094,13 @@ describe("NTBSProcessor", () => {
           }),
         },
       },
-      ({ processor, repository, calls, awaitStoredTag }) =>
+      ({ processor, repository, calls, awaitStoredTag, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(recoveryFailed);
-          yield* Effect.yieldNow;
+          yield* settle();
 
           // The failed load ended recovery before it could read or write anything about the exchange.
           expect(calls).toEqual([]);
@@ -1114,14 +1161,22 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, calls, pingActivity, awaitStoredTag, findByThreadIdCalls }) =>
+      ({
+        processor,
+        repository,
+        calls,
+        pingActivity,
+        awaitStoredTag,
+        findByThreadIdCalls,
+        settle,
+      }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           // Recovery has read the turn and started it; the exchange settles at ThreadCreated for the pings that follow.
           yield* Deferred.await(recoveryTurnStarted);
-          yield* Effect.yieldNow;
+          yield* settle();
 
           yield* pingActivity(defaultThreadId);
           yield* Deferred.await(lookupParked);
@@ -1130,7 +1185,7 @@ describe("NTBSProcessor", () => {
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
           yield* pingActivity(defaultThreadId);
           // Let the activity subscription pick up the ping while the lookup is still parked, so its re-check is queued against a failing pass.
-          yield* Effect.yieldNow;
+          yield* settle();
 
           yield* Deferred.succeed(releaseLookup, undefined);
           yield* awaitStoredTag(request.sourceUri, "reply-posted");
@@ -1158,7 +1213,7 @@ describe("NTBSProcessor", () => {
     () => {
       const secondAccepted = makeRequestAccepted(secondRequest, target, now);
 
-      return withProcessor({}, ({ processor, repository, calls, awaitCalls }) =>
+      return withProcessor({}, ({ processor, repository, calls, awaitCalls, settle }) =>
         Effect.gen(function* () {
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
 
@@ -1169,8 +1224,7 @@ describe("NTBSProcessor", () => {
           // The second request plans onto the same thread the first one already owns.
           yield* processor.process(secondRequest, target);
           yield* awaitCalls(7);
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+          yield* settle();
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "T3Gateway.planCoordinates",
@@ -1848,6 +1902,8 @@ describe("NTBSProcessor", () => {
   */
   it.effect("retries a transient reply-posting failure during later recovery", () => {
     const firstPostAttempted = Deferred.makeUnsafe<void>();
+    const retryReachedPost = Deferred.makeUnsafe<void>();
+    const releaseRetry = Deferred.makeUnsafe<void>();
     const reply = answer("Reply after a transient posting failure");
     let postAttempts = 0;
 
@@ -1864,36 +1920,55 @@ describe("NTBSProcessor", () => {
                   cause: "test failure",
                 });
               }
+              if (postAttempts === 2) {
+                yield* Deferred.succeed(retryReachedPost, undefined);
+                yield* Deferred.await(releaseRetry);
+              }
               return postedReplyUri;
             }),
         },
       },
-      ({ processor, repository, calls, awaitStoredTag }) =>
+      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
         Effect.gen(function* () {
           const replyPending = toReplyPending(threadCreated, reply, now);
           yield* repository.upsert(replyPending);
 
           const firstRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(firstPostAttempted);
-          yield* Effect.yieldNow;
-          yield* Fiber.interrupt(firstRun);
 
+          /*
+            The failed pass leaves no trace of its own, so quiet is not evidence that it ended: the retry below is the evidence.
+            A ping's pass cannot reach `postReply` while the failed one still owns the exchange — `resumeExchange` waits for it — so `retryReachedPost` proves the failure was fully handled, not merely silent.
+          */
+          yield* pingActivity(defaultThreadId);
+          yield* Deferred.await(retryReachedPost);
+
+          // The retry is the only extra attempt, and the record is untouched: the failure was kept, nothing terminal was written.
+          expect(postAttempts).toBe(2);
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
             "NTBSAdapter.findPostedReply",
             "NTBSAdapter.postReply",
           ]);
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(replyPending);
 
+          // A crash while the retry is in flight leaves the record retryable still: startup recovery picks it up and posts.
+          yield* Fiber.interrupt(firstRun);
+
           const secondRun = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           const posted = yield* awaitStoredTag(request.sourceUri, "reply-posted");
 
+          expect(postAttempts).toBe(3);
+          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, now));
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
             "NTBSAdapter.findPostedReply",
             "NTBSAdapter.postReply",
             "NTBSAdapter.findPostedReply",
             "NTBSAdapter.postReply",
+            "NTBSAdapter.findPostedReply",
+            "NTBSAdapter.postReply",
           ]);
-          expect(posted).toEqual(toReplyPosted(replyPending, postedReplyUri, now));
 
           yield* Fiber.interrupt(secondRun);
         }),
@@ -1926,13 +2001,13 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+      ({ processor, repository, calls, pingActivity, awaitStoredTag, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(replyPending);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(discoveryFailed);
-          yield* Effect.yieldNow;
+          yield* settle();
 
           // The failed discovery posts nothing; the record still waits for its reply.
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(replyPending);
@@ -2938,7 +3013,7 @@ describe("NTBSProcessor", () => {
             ),
         },
       },
-      ({ processor, repository, calls }) =>
+      ({ processor, repository, calls, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -2950,12 +3025,12 @@ describe("NTBSProcessor", () => {
 
           // One second short of the deadline: the action is still running, uncut.
           yield* TestClock.adjust("9 seconds");
-          yield* Effect.yieldNow;
+          yield* settle();
           expect(Deferred.isDoneUnsafe(startTurnInterrupted)).toBe(false);
 
           // At the deadline it is cut off, exactly as the state expires.
           yield* TestClock.adjust("1 second");
-          yield* Effect.yieldNow;
+          yield* settle();
           expect(Deferred.isDoneUnsafe(startTurnInterrupted)).toBe(true);
 
           expect(calls.map((call) => `${call.service}.${call.method}`)).toEqual([
@@ -2987,7 +3062,7 @@ describe("NTBSProcessor", () => {
             ),
         },
       },
-      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+      ({ processor, repository, calls, pingActivity, awaitStoredTag, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -2997,7 +3072,7 @@ describe("NTBSProcessor", () => {
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(startTurnStarted);
           yield* TestClock.adjust("10 seconds");
-          yield* Effect.yieldNow;
+          yield* settle();
 
           // The timeout wrote nothing: still the same non-terminal record, no reply.
           expect(Deferred.isDoneUnsafe(startTurnInterrupted)).toBe(true);
@@ -3139,7 +3214,7 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, pingActivity, findByThreadIdCalls }) =>
+      ({ processor, repository, pingActivity, findByThreadIdCalls, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -3147,8 +3222,7 @@ describe("NTBSProcessor", () => {
           yield* Deferred.await(recoveryRead);
 
           yield* pingActivity(defaultThreadId);
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+          yield* settle();
 
           // Recovery is still reading: no further read can have happened, and the waiting pass must not be re-resolving the thread in a retry loop.
           expect(reads).toBe(1);
@@ -3190,7 +3264,7 @@ describe("NTBSProcessor", () => {
             }),
         },
       },
-      ({ processor, repository, pingActivity, findByThreadIdCalls }) =>
+      ({ processor, repository, pingActivity, findByThreadIdCalls, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -3204,8 +3278,7 @@ describe("NTBSProcessor", () => {
           }
 
           yield* pingActivity(defaultThreadId);
-          yield* Effect.yieldNow;
-          yield* Effect.yieldNow;
+          yield* settle();
 
           // The sweep still owns the exchange: the ping waits without re-resolving the thread.
           expect(reads).toBe(2);
@@ -3327,7 +3400,7 @@ describe("NTBSProcessor", () => {
             Deferred.succeed(startTurnStarted, undefined).pipe(Effect.andThen(Effect.never)),
         },
       },
-      ({ processor, repository, calls, awaitStoredTag }) =>
+      ({ processor, repository, calls, awaitStoredTag, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -3336,7 +3409,7 @@ describe("NTBSProcessor", () => {
 
           // The attempt times out with the record untouched; nothing else wakes it.
           yield* TestClock.adjust("30 seconds");
-          yield* Effect.yieldNow;
+          yield* settle();
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           // One sweep interval after recovery finished, the sweeper picks it up again.
@@ -3384,14 +3457,14 @@ describe("NTBSProcessor", () => {
             Deferred.succeed(startTurnStarted, undefined).pipe(Effect.andThen(Effect.never)),
         },
       },
-      ({ processor, repository, calls, pingActivity, awaitStoredTag }) =>
+      ({ processor, repository, calls, pingActivity, awaitStoredTag, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
           const run = yield* processor.run.pipe(Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(startTurnStarted);
           yield* TestClock.adjust("30 seconds");
-          yield* Effect.yieldNow;
+          yield* settle();
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           yield* pingActivity(defaultThreadId);
@@ -3493,7 +3566,7 @@ describe("NTBSProcessor", () => {
           },
         },
       },
-      ({ processor, repository, awaitStoredTag }) =>
+      ({ processor, repository, awaitStoredTag, settle }) =>
         Effect.gen(function* () {
           yield* repository.upsert(threadCreated);
 
@@ -3502,7 +3575,7 @@ describe("NTBSProcessor", () => {
 
           // The stuck exchange times out during startup recovery, leaving the record untouched.
           yield* TestClock.adjust("30 seconds");
-          yield* Effect.yieldNow;
+          yield* settle();
           expect(yield* repository.findBySourceUri(request.sourceUri)).toEqual(threadCreated);
 
           // Stored only now, so the sweeper is the only thing that can reach it. That it arrives
