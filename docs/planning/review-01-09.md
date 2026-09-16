@@ -1,15 +1,5 @@
 # NTBS adversarial review — 2026-09-01
 
-**Scope:** `apps/server/src/ntbs/` (`exchange.ts`, `ExchangeRepository.ts`, `adapter.ts`, `t3gateway.ts`, `processor.ts`) and the four test files. Reviewed against the real T3 internals the gateway depends on (`ProjectionPipeline.ts`, `decider.ts`, `OrchestrationEngine.ts`, `ProjectSetupScriptRunner.ts`, git driver) and against `ntbs-architecture.md` / `ntbs-todos.md`.
-
-**Method:** one manual pass plus three independent adversarial reviewers with separate lenses (processor/exchange soundness, gateway vs T3 internals, test-suite adequacy). Findings below are deduplicated and ranked. Every claim was verified against source; line numbers are as of commit `c80ee1bb8`.
-
-## Part 1 — Implementation soundness
-
-### LOW
-
-**L5. `runtimeMode: "full-access"` for externally-triggered work.** It is already the engine default and bypasses nothing extra, but it is the one place a policy hook for untrusted input would go. Note it; do not solve it now.
-
 ### Deferred
 
 **Setup recovery.** A crash between thread creation and setup launch can cause recovery to skip setup. Revisit when T3 exposes setup completion; NTBS will not introduce a separate setup lifecycle.

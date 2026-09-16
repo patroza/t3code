@@ -12,7 +12,7 @@ The exchange model, ports, processor, and T3 gateway are implemented under `apps
 - [ ] Injectable repository in the processor harness (failures and gates; would also cover `persist` failures and the exchange-lock duplicate re-check, which is otherwise reachable only through a concurrent-first-delivery race).
 - [ ] `startTurn` fatal → `ReplyPending`.
 - [ ] Bound `awaitStoredTag`/`awaitCalls` with a diagnostic timeout.
-- [ ] `ensureWorktree` error branches: `fs.exists`, `localStatus`, `removeWorktree` fallback, `listRefs`, "isRepo but wrong ref", stale locked registration.
+- [ ] `ensureWorktree` remaining error branches: `fs.exists`, `localStatus`, and `listRefs` failures; `removeWorktree` with its `fs.remove` fallback also failing; "isRepo but wrong ref".
 
 ## Next
 
