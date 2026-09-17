@@ -319,6 +319,50 @@ describe("GitWorkflowService", () => {
       );
     });
 
+    it.effect("checks remotes and prunes worktrees in a bare repository", () => {
+      // The service builds driver effects eagerly, so execution has to be
+      // recorded from inside the effect rather than from a call count.
+      const ran: Array<string> = [];
+      const remoteExists = () =>
+        Effect.sync(() => {
+          ran.push("remoteExists");
+          return true;
+        });
+      const remoteBranchExists = () =>
+        Effect.sync(() => {
+          ran.push("remoteBranchExists");
+          return true;
+        });
+      const pruneWorktrees = () =>
+        Effect.sync(() => {
+          ran.push("pruneWorktrees");
+        });
+
+      return Effect.gen(function* () {
+        const workflow = yield* GitWorkflowService.GitWorkflowService;
+
+        assert.isTrue(yield* workflow.remoteExists({ cwd: "/bare-repo", remoteName: "origin" }));
+        assert.isTrue(
+          yield* workflow.remoteBranchExists({
+            cwd: "/bare-repo",
+            remoteName: "origin",
+            refName: "main",
+          }),
+        );
+        yield* workflow.pruneWorktrees({ cwd: "/bare-repo" });
+
+        assert.deepStrictEqual(ran, ["remoteExists", "remoteBranchExists", "pruneWorktrees"]);
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            detect: () => Effect.succeed(bareHandle("/bare-repo")),
+            resolve: () => Effect.succeed(bareHandle("/bare-repo")),
+            driver: { remoteExists, remoteBranchExists, pruneWorktrees },
+          }),
+        ),
+      );
+    });
+
     it.effect("rejects a checkout-dependent command with an actionable reason", () => {
       let ran = false;
       const switchRef = () =>
