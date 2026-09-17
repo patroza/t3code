@@ -168,9 +168,9 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
+  '/welcome': typeof WelcomeRoute
   '/board': typeof ChatBoardRoute
   '/jump': typeof ChatJumpRoute
-  '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -193,9 +193,9 @@ export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
+  '/welcome': typeof WelcomeRoute
   '/board': typeof ChatBoardRoute
   '/jump': typeof ChatJumpRoute
-  '/welcome': typeof WelcomeRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -221,9 +221,9 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
+  '/welcome': typeof WelcomeRoute
   '/_chat/board': typeof ChatBoardRoute
   '/_chat/jump': typeof ChatJumpRoute
-  '/welcome': typeof WelcomeRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -250,9 +250,9 @@ export interface FileRouteTypes {
     | '/pair'
     | '/settings'
     | '/usage'
+    | '/welcome'
     | '/board'
     | '/jump'
-    | '/welcome'
     | '/pull-requests'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -275,9 +275,9 @@ export interface FileRouteTypes {
     | '/pair'
     | '/settings'
     | '/usage'
+    | '/welcome'
     | '/board'
     | '/jump'
-    | '/welcome'
     | '/pull-requests'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -302,9 +302,9 @@ export interface FileRouteTypes {
     | '/pair'
     | '/settings'
     | '/usage'
+    | '/welcome'
     | '/_chat/board'
     | '/_chat/jump'
-    | '/welcome'
     | '/_chat/pull-requests'
     | '/projects/$projectKey'
     | '/settings/appearance'
