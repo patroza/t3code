@@ -241,8 +241,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
       Effect.gen(function* () {
         // Check if origin exist. If not, T3 will never be able to accept this work.
         // The lookup failing is operational; a definitive `false` is not.
-        // TODO: GitWorkflowService.remoteExists rejects bare repositories before Git runs,
-        // even though the underlying command supports them; fix the shared guard.
         yield* gitWorkflowService.remoteExists({ cwd, remoteName: "origin" }).pipe(
           orFail("retryable")(
             "gitWorkflowService.remoteExists",
@@ -380,7 +378,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                   cwd: input.workspaceRoot,
                   path: null,
                   refName: input.worktreeBranchName,
-                  deferDependencyInstall: true,
                 }
               : {
                   // First real attempt: branch off the commit pinned at claim.
@@ -389,7 +386,6 @@ const T3GatewayLive: Effect.Effect<T3Gateway, never, T3GatewayRequirements> = Ef
                   refName: input.startCommitSha,
                   newRefName: input.worktreeBranchName,
                   baseRefName: input.startBranchName,
-                  deferDependencyInstall: true,
                 },
           )
           .pipe(

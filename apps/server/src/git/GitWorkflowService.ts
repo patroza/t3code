@@ -399,13 +399,13 @@ export const make = Effect.gen(function* () {
         Effect.andThen(git.fetchRemote(input)),
       ),
     remoteExists: (input) =>
-      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.remoteExists", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.remoteExists(input)),
       ),
     remoteBranchExists: (input) =>
-      ensureGitCommand("GitWorkflowService.remoteBranchExists", input.cwd).pipe(
-        Effect.andThen(git.remoteBranchExists(input)),
-      ),
+      ensureGitCommand("GitWorkflowService.remoteBranchExists", input.cwd, {
+        allowBare: true,
+      }).pipe(Effect.andThen(git.remoteBranchExists(input))),
     resolveRemoteTrackingCommit: (input) =>
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd, {
         allowBare: true,
@@ -452,7 +452,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     pruneWorktrees: (input) =>
-      ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
+      ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd, { allowBare: true }).pipe(
         Effect.andThen(git.pruneWorktrees(input)),
       ),
     createRef: (input) =>

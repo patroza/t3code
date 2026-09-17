@@ -1176,12 +1176,15 @@ describe("T3Gateway", () => {
           ]);
 
           // Fresh-create arm, off the commit pinned at claim.
-          expect(calls.find((call) => call.method === "createWorktree")?.input).toMatchObject({
+          const createInput = calls.find((call) => call.method === "createWorktree")?.input;
+          expect(createInput).toMatchObject({
             path: null,
             refName: coordinates.startCommitSha,
             newRefName: coordinates.worktreeBranchName,
             baseRefName: coordinates.startBranchName,
           });
+          // Fork-only option; the adapter must stay portable to upstream.
+          expect(createInput).not.toHaveProperty("deferDependencyInstall");
           expect(calls.find((call) => call.method === "dispatch")?.input).toMatchObject({
             type: "thread.create",
             worktreePath: createdWorktreePath,
