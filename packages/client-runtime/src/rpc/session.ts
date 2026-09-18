@@ -113,7 +113,7 @@ function noteSocketError(sink: DisconnectCauseSink, error: Socket.SocketError): 
         return;
       }
       // WebSocket openTimeout (not keepalive) — leave cause empty so formatters use open wording.
-      if (reason.kind === "Timeout" && (lower.includes("open") || lower.includes("waiting"))) {
+      if (reason.kind === "Timeout") {
         sink.reason ??= "timeout";
         return;
       }
@@ -162,7 +162,7 @@ function tapSocketError<A, E, R>(
 
 function captureSocketFailures(socket: Socket.Socket, sink: DisconnectCauseSink): Socket.Socket {
   return Socket.make({
-    reader: socket.reader.pipe(
+    reader: tapSocketError(socket.reader, sink).pipe(
       Effect.map((reader) => ({
         ...reader,
         pull: tapSocketError(reader.pull, sink),
