@@ -12148,13 +12148,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      // create (failed duplicate) + meta.update + setup-script.requested/started + turn.start + settled setup
+      // meta.update + create (failed duplicate) + setup-script.requested/started + turn.start + settled setup
       assert.equal(response.sequence, 5);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         [
-          "thread.create",
           "thread.meta.update",
+          "thread.create",
           "thread.activity.append",
           "thread.activity.append",
           "thread.turn.start",
@@ -12171,7 +12171,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       assert.equal(runForThread.mock.calls.length, 1);
       assert.deepEqual(refreshStatus.mock.calls[0]?.[0], missingWorktreePath);
-      const metaUpdate = dispatchedCommands[1];
+      const metaUpdate = dispatchedCommands.find(
+        (command) => command.type === "thread.meta.update",
+      );
       assertTrue(metaUpdate?.type === "thread.meta.update");
       if (metaUpdate?.type === "thread.meta.update") {
         assert.equal(metaUpdate.branch, "t3code/recreate");
