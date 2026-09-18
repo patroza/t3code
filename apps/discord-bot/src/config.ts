@@ -87,79 +87,79 @@ const DEFAULT_BOT_MODEL = DEFAULT_MODEL;
 
 export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigError> = Effect.gen(
   function* () {
-    const discordToken = yield* Config.redacted("DISCORD_BOT_TOKEN").pipe(
+    const discordToken = yield* Config.Redacted("DISCORD_BOT_TOKEN").pipe(
       Config.option,
       Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
     );
-    const t3HttpBaseUrl = yield* Config.string("T3_HTTP_BASE_URL").pipe(
+    const t3HttpBaseUrl = yield* Config.String("T3_HTTP_BASE_URL").pipe(
       Config.withDefault("http://127.0.0.1:3773"),
     );
-    const t3BootstrapCredential = yield* Config.string("T3_BOOTSTRAP_CREDENTIAL").pipe(
+    const t3BootstrapCredential = yield* Config.String("T3_BOOTSTRAP_CREDENTIAL").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const t3BearerToken = yield* Config.string("T3_BEARER_TOKEN").pipe(
+    const t3BearerToken = yield* Config.String("T3_BEARER_TOKEN").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
     // Align with T3 web default unless operator pins another instance/model.
-    const t3DefaultInstanceId = yield* Config.string("T3_DEFAULT_INSTANCE_ID").pipe(
+    const t3DefaultInstanceId = yield* Config.String("T3_DEFAULT_INSTANCE_ID").pipe(
       Config.withDefault(DEFAULT_BOT_INSTANCE_ID),
     );
-    const t3DefaultModel = yield* Config.string("T3_DEFAULT_MODEL").pipe(
+    const t3DefaultModel = yield* Config.String("T3_DEFAULT_MODEL").pipe(
       Config.withDefault(DEFAULT_BOT_MODEL),
     );
-    const t3DefaultBaseBranch = yield* Config.string("T3_DEFAULT_BASE_BRANCH").pipe(
+    const t3DefaultBaseBranch = yield* Config.String("T3_DEFAULT_BASE_BRANCH").pipe(
       Config.withDefault("main"),
     );
     const t3DefaultRuntimeMode = yield* Config.schema(
       RuntimeModeConfig,
       "T3_DEFAULT_RUNTIME_MODE",
     ).pipe(Config.withDefault("full-access" as const));
-    const dataDir = yield* Config.string("T3_DISCORD_BOT_DATA_DIR").pipe(
+    const dataDir = yield* Config.String("T3_DISCORD_BOT_DATA_DIR").pipe(
       Config.withDefault("~/.t3/discord-bot"),
     );
-    const webUiBaseUrl = yield* Config.string("T3_WEB_UI_BASE_URL").pipe(
+    const webUiBaseUrl = yield* Config.String("T3_WEB_UI_BASE_URL").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const projectAliasesPath = yield* Config.string("T3_PROJECT_ALIASES_PATH").pipe(
+    const projectAliasesPath = yield* Config.String("T3_PROJECT_ALIASES_PATH").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const identityMapPath = yield* Config.string("T3_IDENTITY_MAP_PATH").pipe(
+    const identityMapPath = yield* Config.String("T3_IDENTITY_MAP_PATH").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const honeycombTraceUrlTemplate = yield* Config.string("T3_HONEYCOMB_TRACE_URL_TEMPLATE").pipe(
+    const honeycombTraceUrlTemplate = yield* Config.String("T3_HONEYCOMB_TRACE_URL_TEMPLATE").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const alertsChannelId = yield* Config.string("DISCORD_ALERTS_CHANNEL_ID").pipe(
+    const alertsChannelId = yield* Config.String("DISCORD_ALERTS_CHANNEL_ID").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const alertProcessRulesPath = yield* Config.string("T3_DISCORD_ALERT_PROCESS_RULES_PATH").pipe(
+    const alertProcessRulesPath = yield* Config.String("T3_DISCORD_ALERT_PROCESS_RULES_PATH").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const stateSqlitePath = yield* Config.string("T3_STATE_SQLITE_PATH").pipe(
+    const stateSqlitePath = yield* Config.String("T3_STATE_SQLITE_PATH").pipe(
       Config.withDefault("/var/lib/t3/userdata/state.sqlite"),
     );
-    const browserEnabled = yield* Config.boolean("T3_DISCORD_BROWSER_ENABLED").pipe(
+    const browserEnabled = yield* Config.Boolean("T3_DISCORD_BROWSER_ENABLED").pipe(
       Config.withDefault(false),
     );
-    const browserProfile = yield* Config.string("T3_DISCORD_BROWSER_PROFILE").pipe(
+    const browserProfile = yield* Config.String("T3_DISCORD_BROWSER_PROFILE").pipe(
       Config.withDefault("default"),
     );
-    const browserExecutablePath = yield* Config.string("T3_DISCORD_BROWSER_EXECUTABLE_PATH").pipe(
+    const browserExecutablePath = yield* Config.String("T3_DISCORD_BROWSER_EXECUTABLE_PATH").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const browserFfmpegPath = yield* Config.string("T3_DISCORD_BROWSER_FFMPEG_PATH").pipe(
+    const browserFfmpegPath = yield* Config.String("T3_DISCORD_BROWSER_FFMPEG_PATH").pipe(
       Config.withDefault("ffmpeg"),
     );
-    const browserAllowedOrigins = yield* Config.string("T3_DISCORD_BROWSER_ALLOWED_ORIGINS").pipe(
+    const browserAllowedOrigins = yield* Config.String("T3_DISCORD_BROWSER_ALLOWED_ORIGINS").pipe(
       Config.withDefault(""),
       Config.map((value) =>
         value
@@ -168,8 +168,8 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
           .filter(Boolean),
       ),
     );
-    const jiraBrowseBaseUrl = yield* Config.string("T3_JIRA_BROWSE_BASE_URL").pipe(
-      Config.orElse(() => Config.string("JIRA_BROWSE_BASE_URL")),
+    const jiraBrowseBaseUrl = yield* Config.String("T3_JIRA_BROWSE_BASE_URL").pipe(
+      Config.orElse(() => Config.String("JIRA_BROWSE_BASE_URL")),
       Config.option,
       Config.map((value) => {
         const raw = Option.getOrUndefined(value);
@@ -182,42 +182,42 @@ export const DiscordBotConfig: Effect.Effect<DiscordBotConfig, Config.ConfigErro
         return undefined;
       }),
     );
-    const teamsEnabled = yield* Config.boolean("TEAMS_ENABLED").pipe(Config.withDefault(false));
-    const teamsTenantId = yield* Config.string("TEAMS_TENANT_ID").pipe(
+    const teamsEnabled = yield* Config.Boolean("TEAMS_ENABLED").pipe(Config.withDefault(false));
+    const teamsTenantId = yield* Config.String("TEAMS_TENANT_ID").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const teamsClientId = yield* Config.string("TEAMS_CLIENT_ID").pipe(
+    const teamsClientId = yield* Config.String("TEAMS_CLIENT_ID").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const teamsClientSecret = yield* Config.redacted("TEAMS_CLIENT_SECRET").pipe(
+    const teamsClientSecret = yield* Config.Redacted("TEAMS_CLIENT_SECRET").pipe(
       Config.option,
       Config.map((value) => (Option.isSome(value) ? Redacted.value(value.value) : undefined)),
     );
-    const teamsChannelsPath = yield* Config.string("TEAMS_CHANNELS_PATH").pipe(
+    const teamsChannelsPath = yield* Config.String("TEAMS_CHANNELS_PATH").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const teamsPollIntervalSeconds = yield* Config.int("TEAMS_POLL_INTERVAL_SECONDS").pipe(
+    const teamsPollIntervalSeconds = yield* Config.Int("TEAMS_POLL_INTERVAL_SECONDS").pipe(
       Config.withDefault(60),
     );
-    const teamsBotDisplayName = yield* Config.string("TEAMS_BOT_DISPLAY_NAME").pipe(
+    const teamsBotDisplayName = yield* Config.String("TEAMS_BOT_DISPLAY_NAME").pipe(
       Config.option,
       Config.map(Option.getOrUndefined),
     );
-    const teamsNativeEnabled = yield* Config.boolean("TEAMS_NATIVE_ENABLED").pipe(
+    const teamsNativeEnabled = yield* Config.Boolean("TEAMS_NATIVE_ENABLED").pipe(
       Config.withDefault(false),
     );
-    const teamsPort = yield* Config.int("TEAMS_PORT").pipe(Config.withDefault(3978));
-    const teamsMessagingEndpoint = yield* Config.string("TEAMS_MESSAGING_ENDPOINT").pipe(
+    const teamsPort = yield* Config.Int("TEAMS_PORT").pipe(Config.withDefault(3978));
+    const teamsMessagingEndpoint = yield* Config.String("TEAMS_MESSAGING_ENDPOINT").pipe(
       Config.withDefault("/api/messages"),
       Config.map((value) => {
         const normalized = value.trim();
         return (normalized.startsWith("/") ? normalized : `/${normalized}`) as `/${string}`;
       }),
     );
-    const teamsDefaultProjectShortName = yield* Config.string(
+    const teamsDefaultProjectShortName = yield* Config.String(
       "TEAMS_DEFAULT_PROJECT_SHORT_NAME",
     ).pipe(Config.option, Config.map(Option.getOrUndefined));
 

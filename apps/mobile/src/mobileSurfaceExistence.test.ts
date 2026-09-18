@@ -23,10 +23,10 @@ describe("mobile surface existence (anti stack-drop)", () => {
       /testID="thread-conversation-surface"[\s\S]*?style=\{\{ flex: 1 \}\}/,
     );
     // Inner host stays a real flex container so the composer overlay still
-    // anchors to the true bottom. Material You adds a canvas class and
-    // rounded corners; the default branch is still flex-1.
+    // anchors to the true bottom. Android uses a canvas class and rounded
+    // corners; iOS stays flex-1.
     expect(threadRoute).toMatch(
-      /className=\{materialYouStyleLayoutActive \? "flex-1 bg-thread-canvas" : "flex-1"\}[\s\S]*?flex: 1[\s\S]*?<ThreadDetailScreen/,
+      /className=\{Platform\.OS === "android" \? "flex-1 bg-thread-canvas" : "flex-1"\}[\s\S]*?flex: 1[\s\S]*?<ThreadDetailScreen/,
     );
   });
 

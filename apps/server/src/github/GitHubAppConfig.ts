@@ -30,10 +30,10 @@ export class GitHubAppConfig extends Context.Service<GitHubAppConfig, GitHubAppC
 ) {}
 
 const optionalString = (name: string) =>
-  Config.string(name).pipe(Config.option, Config.map(Option.getOrUndefined));
+  Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined));
 
 const optionalSecret = (name: string) =>
-  Config.redacted(name).pipe(
+  Config.Redacted(name).pipe(
     Config.option,
     Config.map(Option.map(Redacted.value)),
     Config.map(Option.getOrUndefined),
@@ -45,14 +45,14 @@ const configEffect = Effect.gen(function* () {
     privateKeyPath: optionalString("T3CODE_GITHUB_APP_PRIVATE_KEY_PATH"),
     webhookSecret: optionalSecret("T3CODE_GITHUB_WEBHOOK_SECRET"),
     mention: optionalString("T3CODE_GITHUB_APP_MENTION"),
-    allowedRepositories: Config.string("T3CODE_GITHUB_ALLOWED_REPOSITORIES").pipe(
+    allowedRepositories: Config.String("T3CODE_GITHUB_ALLOWED_REPOSITORIES").pipe(
       Config.withDefault(""),
     ),
-    minimumPermission: Config.literals(
+    minimumPermission: Config.Literals(
       ["read", "triage", "write", "maintain", "admin"] as const,
       "T3CODE_GITHUB_MIN_PERMISSION",
     ).pipe(Config.withDefault("write" as const)),
-    turnTimeoutMs: Config.number("T3CODE_GITHUB_TURN_TIMEOUT_MS").pipe(
+    turnTimeoutMs: Config.Number("T3CODE_GITHUB_TURN_TIMEOUT_MS").pipe(
       Config.withDefault(30 * 60_000),
     ),
   });

@@ -9,42 +9,42 @@ import {
 } from "../externalSessions/backfillGrokSession.ts";
 import { baseDirFlag } from "./config.ts";
 
-const threadIdArgument = Argument.string("thread-id").pipe(
+const threadIdArgument = Argument.String("thread-id").pipe(
   Argument.withDescription("T3 thread id to backfill grok messages into."),
 );
-const sessionIdFlag = Flag.string("session-id").pipe(
+const sessionIdFlag = Flag.String("session-id").pipe(
   Flag.withDescription("Grok ACP session id (defaults to the thread's resume cursor)."),
   Flag.optional,
 );
-const historyFlag = Flag.string("history").pipe(
+const historyFlag = Flag.String("history").pipe(
   Flag.withDescription("Path to grok chat_history.jsonl (defaults to the session's on-disk file)."),
   Flag.optional,
 );
-const cwdFlag = Flag.string("cwd").pipe(
+const cwdFlag = Flag.String("cwd").pipe(
   Flag.withDescription("Session working directory (used to locate the grok history file)."),
   Flag.optional,
 );
-const dbFlag = Flag.string("db").pipe(
+const dbFlag = Flag.String("db").pipe(
   Flag.withDescription(
     "Path to the T3 state.sqlite (defaults to <base-dir>/userdata/state.sqlite).",
   ),
   Flag.optional,
 );
-const dryRunFlag = Flag.boolean("dry-run").pipe(
+const dryRunFlag = Flag.Boolean("dry-run").pipe(
   Flag.withDescription("Print the messages that would be added without writing."),
   Flag.withDefault(false),
 );
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Print the result as JSON."),
   Flag.withDefault(false),
 );
-const rebuildAllFlag = Flag.boolean("rebuild-all").pipe(
+const rebuildAllFlag = Flag.Boolean("rebuild-all").pipe(
   Flag.withDescription(
     "Rebuild the entire transcript from grok's log instead of only the tail (repairs wrong, not just missing, messages).",
   ),
   Flag.withDefault(false),
 );
-const forceFlag = Flag.boolean("force").pipe(
+const forceFlag = Flag.Boolean("force").pipe(
   Flag.withDescription(
     "Emit the resync event even when no messages are missing (re-syncs clients stuck on a stale cached transcript).",
   ),

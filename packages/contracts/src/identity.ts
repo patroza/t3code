@@ -38,9 +38,9 @@ const normalizeHandle = (value: string) => value.trim().toLowerCase();
 const IdentityHandleString = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(
     Schema.String,
-    SchemaTransformation.transformOrFail({
-      decode: (value) => Effect.succeed(normalizeHandle(value)),
-      encode: (value) => Effect.succeed(value),
+    SchemaTransformation.transform({
+      decode: (value) => normalizeHandle(value),
+      encode: (value) => value,
     }),
   ),
 ).check(

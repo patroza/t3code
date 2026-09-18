@@ -1,6 +1,4 @@
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
-import Constants from "expo-constants";
 import type { MenuAction } from "@react-native-menu/menu";
 import {
   NativeHeaderToolbar,
@@ -8,23 +6,10 @@ import {
   nativeHeaderScrollEdgeEffects,
 } from "../../native/StackHeader";
 import { useCallback, useMemo, useRef } from "react";
-import {
-  Platform,
-  Pressable,
-  Text as RNText,
-  TextInput,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { Platform, Text as RNText, useWindowDimensions } from "react-native";
 import type { SearchBarCommands } from "react-native-screens";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { ControlPillMenu } from "../../components/ControlPill";
-import { SymbolView } from "../../components/AppSymbol";
-import { T3Wordmark } from "../../components/T3Wordmark";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
-import { resolveMobileStageLabel } from "../../lib/mobileBranding";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
@@ -34,10 +19,8 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
-import {
-  getConnectionAwareBrandHeaderOptions,
-  WorkspaceConnectionTitle,
-} from "./WorkspaceConnectionTitle";
+import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
+import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
@@ -59,6 +42,7 @@ import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironm
 import {
   HOME_LIST_MODE_ICONS,
   HOME_LIST_MODE_LABELS,
+  HOME_LIST_MODES,
   HOME_LIST_MODE_TITLES,
   HOME_THREAD_GROUPING_LABELS,
   HOME_THREAD_GROUPINGS,
@@ -127,13 +111,9 @@ function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): bool
 }
 
 function AndroidHomeHeader(props: HomeHeaderProps) {
-  const { materialYouStyleLayoutActive } = useAppearancePreferences();
-  const insets = useSafeAreaInsets();
-  const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
   const threadListV2Enabled = useThreadListV2Enabled();
   const listOrganization =
     usesListOrganization(props.listMode, props.threadGrouping) && !threadListV2Enabled;
-  const alternateModes = otherHomeListModes(props.listMode);
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
@@ -155,6 +135,15 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
       }));
   const menuActions = useMemo<MenuAction[]>(
     () => [
+      {
+        id: "list-mode",
+        title: "View",
+        subactions: HOME_LIST_MODES.map((mode) => ({
+          id: `list-mode:${mode}`,
+          title: HOME_LIST_MODE_LABELS[mode],
+          state: checkedMenuState(mode === props.listMode),
+        })),
+      },
       {
         id: "environment",
         title: "Environment",
@@ -274,6 +263,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
+      if (id.startsWith("list-mode:")) {
+        const mode = id.slice("list-mode:".length);
+        if (mode === "threads" || mode === "board") {
+          props.onListModeChange(mode);
+        }
+        return;
+      }
+
       if (id === "environment:all") {
         props.onClearEnvironments();
         return;
@@ -347,136 +344,15 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions options={{ headerShown: false }} />
-      <View
-        className={
-          materialYouStyleLayoutActive
-            ? "bg-header pb-3"
-            : "border-b border-header-border bg-header pb-3"
-        }
-        style={{
-          paddingHorizontal: HOME_HORIZONTAL_INSET,
-          paddingTop: Math.max(insets.top, 12),
-        }}
-      >
-        <View className="w-full max-w-[720px] self-center gap-3">
-          <View className="flex-row items-center gap-2.5">
-            {/* Brand slot doubles as the connection status surface: while an
-                environment reconnects, the lockup fades to a status label in
-                place (no layout shift in the list below). */}
-            <WorkspaceConnectionTitle
-              grow
-              onPress={props.onOpenEnvironments}
-              brand={
-                <View className="flex-row items-center gap-2">
-                  {/* Mirrors the desktop SidebarBrand: T3 mark + muted "Code". */}
-                  <T3Wordmark colorClassName="accent-icon" height={15} />
-                  <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
-                    Code
-                  </RNText>
-                  <View className="rounded-full bg-subtle px-2 py-0.75">
-                    <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                      {stageLabel}
-                    </RNText>
-                  </View>
-                </View>
-              }
-            />
-
-            {alternateModes.map((mode) => (
-              <Pressable
-                key={mode}
-                accessibilityLabel={HOME_LIST_MODE_LABELS[mode]}
-                accessibilityRole="button"
-                onPress={() => props.onListModeChange(mode)}
-                className="size-11 items-center justify-center rounded-full bg-subtle"
-              >
-                <SymbolView
-                  name={HOME_LIST_MODE_ICONS[mode] as never}
-                  size={18}
-                  tintColorClassName={"accent-icon"}
-                  type="monochrome"
-                />
-              </Pressable>
-            ))}
-
-            <ControlPillMenu
-              actions={menuActions}
-              isAnchoredToRight
-              onPressAction={handleMenuAction}
-            >
-              <Pressable
-                accessibilityLabel="Filter and sort threads"
-                accessibilityRole="button"
-                className="size-11 items-center justify-center rounded-full bg-subtle"
-              >
-                <SymbolView
-                  name={
-                    hasCustomListOptions
-                      ? "line.3.horizontal.decrease.circle.fill"
-                      : "line.3.horizontal.decrease.circle"
-                  }
-                  size={16}
-                  tintColorClassName={"accent-icon"}
-                  type="monochrome"
-                />
-              </Pressable>
-            </ControlPillMenu>
-            <Pressable
-              accessibilityLabel="Open settings"
-              accessibilityRole="button"
-              onPress={props.onOpenSettings}
-              className="size-11 items-center justify-center rounded-full bg-subtle"
-            >
-              <SymbolView
-                name="gearshape"
-                size={18}
-                tintColorClassName={"accent-icon"}
-                type="monochrome"
-              />
-            </Pressable>
-          </View>
-
-          {props.listMode === "board" ? null : (
-            <View
-              className={
-                materialYouStyleLayoutActive
-                  ? "min-h-12 flex-row items-center gap-2.5 rounded-full border border-input-border bg-input px-3.5"
-                  : "min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5"
-              }
-            >
-              <SymbolView
-                name="magnifyingglass"
-                size={17}
-                tintColorClassName={"accent-foreground-muted"}
-                type="monochrome"
-              />
-              <TextInput
-                accessibilityLabel="Search threads"
-                autoCapitalize="none"
-                onChangeText={props.onSearchQueryChange}
-                placeholder="Search threads"
-                placeholderTextColorClassName="accent-placeholder"
-                className="flex-1 py-2.5 text-base font-sans text-foreground"
-                value={props.searchQuery}
-              />
-              {props.searchQuery.length > 0 ? (
-                <Pressable
-                  accessibilityLabel="Clear search"
-                  hitSlop={10}
-                  onPress={() => props.onSearchQueryChange("")}
-                >
-                  <SymbolView
-                    name="xmark.circle.fill"
-                    size={17}
-                    tintColorClassName={"accent-foreground-muted"}
-                    type="monochrome"
-                  />
-                </Pressable>
-              ) : null}
-            </View>
-          )}
-        </View>
-      </View>
+      <MaterialThreadListToolbar
+        searchQuery={props.searchQuery}
+        onSearchQueryChange={props.onSearchQueryChange}
+        filterActions={menuActions}
+        filterCustomized={hasCustomListOptions}
+        onFilterAction={handleMenuAction}
+        onOpenSettings={props.onOpenSettings}
+        onOpenEnvironments={props.onOpenEnvironments}
+      />
     </>
   );
 }

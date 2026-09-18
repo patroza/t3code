@@ -63,11 +63,14 @@ function socketHostFromUrl(socketUrl: string): string | undefined {
 }
 
 function captureSocketClose(
-  webSocketConstructor: (url: string, protocols?: string | string[]) => globalThis.WebSocket,
+  webSocketConstructor: (
+    url: string,
+    options?: Socket.WebSocketConstructorOptions,
+  ) => Socket.WebSocketLike,
   sink: { current: SocketCloseCapture },
-): (url: string, protocols?: string | string[]) => globalThis.WebSocket {
-  return (url, protocols) => {
-    const socket = webSocketConstructor(url, protocols);
+): (url: string, options?: Socket.WebSocketConstructorOptions) => Socket.WebSocketLike {
+  return (url, options) => {
+    const socket = webSocketConstructor(url, options);
     socket.addEventListener(
       "close",
       (event) => {
@@ -110,7 +113,7 @@ function noteSocketError(sink: DisconnectCauseSink, error: Socket.SocketError): 
         return;
       }
       // WebSocket openTimeout (not keepalive) — leave cause empty so formatters use open wording.
-      if (reason.kind === "Timeout" && (lower.includes("open") || lower.includes("waiting"))) {
+      if (reason.kind === "Timeout") {
         sink.reason ??= "timeout";
         return;
       }
@@ -142,19 +145,40 @@ function mergeCloseCapture(
  * onDisconnect alone only sees an empty close capture when the failure is a ping timeout
  * (socket still open; browser close event fires later/async).
  */
+function tapSocketError<A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  sink: DisconnectCauseSink,
+): Effect.Effect<A, E, R> {
+  return effect.pipe(
+    Effect.tapError((error) =>
+      Effect.sync(() => {
+        if (Socket.SocketError.is(error)) {
+          noteSocketError(sink, error);
+        }
+      }),
+    ),
+  );
+}
+
 function captureSocketFailures(socket: Socket.Socket, sink: DisconnectCauseSink): Socket.Socket {
   return Socket.make({
-    runRaw: (handler, options) =>
-      socket.runRaw(handler, options).pipe(
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            if (Socket.SocketError.is(error)) {
-              noteSocketError(sink, error);
-            }
-          }),
-        ),
-      ),
-    writer: socket.writer,
+    reader: tapSocketError(socket.reader, sink).pipe(
+      Effect.map((reader) => ({
+        ...reader,
+        pull: tapSocketError(reader.pull, sink),
+        upgrade: (options?: Parameters<typeof reader.upgrade>[0]) =>
+          tapSocketError(reader.upgrade(options), sink),
+      })),
+    ),
+    writer: socket.writer.pipe(
+      Effect.map((writer) => ({
+        ...writer,
+        write: (chunk: Parameters<typeof writer.write>[0]) =>
+          tapSocketError(writer.write(chunk), sink),
+        writeAll: (chunks: Parameters<typeof writer.writeAll>[0]) =>
+          tapSocketError(writer.writeAll(chunks), sink),
+      })),
+    ),
   });
 }
 

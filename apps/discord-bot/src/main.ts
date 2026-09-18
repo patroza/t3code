@@ -31,7 +31,7 @@ import { T3Session, layer as t3SessionLayer } from "./t3/T3Session.ts";
 
 const BotObservabilityLive = Layer.unwrap(
   Effect.gen(function* () {
-    const tracesUrl = yield* Config.option(Config.nonEmptyString("T3CODE_OTLP_TRACES_URL"));
+    const tracesUrl = yield* Config.option(Config.NonEmptyString("T3CODE_OTLP_TRACES_URL"));
     return Option.match(tracesUrl, {
       onNone: () => Layer.empty,
       onSome: (url) =>

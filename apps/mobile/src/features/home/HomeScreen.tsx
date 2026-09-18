@@ -23,23 +23,20 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
+import { ActivityIndicator, FlatList, Platform, Pressable, Text, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { cn } from "../../lib/cn";
-import { AppText as Text } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
+import { MaterialFloatingActionButton } from "../../components/MaterialFloatingActionButton";
 import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-
-const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { useThreadSearch } from "../../state/queries";
 import { environmentServerConfigsAtom } from "../../state/server";
-import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { usePendingThreadOrder } from "../../state/thread-order";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -56,6 +53,7 @@ import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
+  ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
 import { resolveThreadProviderInstance } from "../threads/thread-provider-instance";
@@ -95,6 +93,7 @@ import {
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
+import { useMaterialFabScroll } from "./MaterialFabScrollContext";
 
 /* ─── Types ──────────────────────────────────────────────────────────── */
 
@@ -162,6 +161,7 @@ interface HomeScreenProps {
 /* ─── Layout constants ───────────────────────────────────────────────── */
 
 const ESTIMATED_THREAD_ROW_HEIGHT = 72;
+const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
 /**
  * Top spacing between the list and the Android custom header. The Android
  * header (AndroidHomeHeader) is rendered in-flow above this screen and
@@ -243,7 +243,6 @@ function HomeTopContentSpacer() {
 /* ─── Main screen ────────────────────────────────────────────────────── */
 
 export function HomeScreen(props: HomeScreenProps) {
-  const { materialYouStyleLayoutActive } = useAppearancePreferences();
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
@@ -339,7 +338,9 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleScrollBeginDrag = useCallback(() => {
     openSwipeableRef.current?.close();
   }, []);
+  const onMaterialFabScroll = useMaterialFabScroll();
   const { swipeEnabled, scrollGateHandlers } = useSwipeableScrollGate({
+    onScroll: onMaterialFabScroll,
     onScrollBeginDrag: handleScrollBeginDrag,
   });
 
@@ -1391,11 +1392,11 @@ export function HomeScreen(props: HomeScreenProps) {
   // for Recent/Projects when the workspace has no threads at all.
   if (!hasAnyThreads && props.listMode !== "board") {
     return (
-      <View className={materialYouStyleLayoutActive ? "flex-1 bg-header" : "flex-1 bg-screen"}>
+      <View className={Platform.OS === "android" ? "flex-1 bg-header" : "flex-1 bg-screen"}>
         <View
           className={cn(
             "flex-1 items-center justify-center bg-screen px-8",
-            materialYouStyleLayoutActive && "overflow-hidden rounded-t-[28px]",
+            Platform.OS === "android" && "overflow-hidden rounded-t-[28px]",
           )}
           style={{
             paddingBottom: Math.max(insets.bottom, 24) + iosBottomToolbarClearance,
@@ -1408,11 +1409,22 @@ export function HomeScreen(props: HomeScreenProps) {
               detail={emptyState.detail}
               actionLabel={!props.catalogState.hasReadyEnvironment ? "Add environment" : undefined}
               onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
+              action={
+                Platform.OS === "android" && !props.catalogState.hasReadyEnvironment ? (
+                  <MaterialFloatingActionButton
+                    label="Add environment"
+                    icon="plus"
+                    variant="extended"
+                    tone="primary"
+                    onPress={props.onAddConnection}
+                  />
+                ) : undefined
+              }
               variant="plain"
             />
             {emptyState.loading ? (
               <View className="mt-4 items-center">
-                <ActivityIndicator colorClassName={"accent-icon-muted"} />
+                <ActivityIndicator colorClassName="accent-icon-muted" />
               </View>
             ) : null}
           </View>
@@ -1429,19 +1441,29 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const listEmpty = !hasResults ? (
     hasSearchQuery && threadSearch.isPending ? null : hasSearchQuery ? (
-      <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
+      <EmptyState
+        title="No results"
+        detail={`No threads matching "${props.searchQuery}".`}
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
     ) : selectedProjectScope !== null ? (
       <EmptyState
         title={`No threads in ${selectedProjectScope.title}`}
         detail="Choose another project or create a new task."
+        variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : selectedEnvironmentLabel ? (
       <EmptyState
         title={`No threads in ${selectedEnvironmentLabel}`}
         detail="Choose another environment or create a new task."
+        variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : (
-      <EmptyState title="No threads yet" detail="Create a task to start a new coding session." />
+      <EmptyState
+        title="No threads yet"
+        detail="Create a task to start a new coding session."
+        variant={Platform.OS === "android" ? "plain" : undefined}
+      />
     )
   ) : null;
   // Self-contained: v1's listEmpty keys off projectGroups, which ignores the
@@ -1453,7 +1475,8 @@ export function HomeScreen(props: HomeScreenProps) {
   // isn't empty in the user's eyes.
   const v2SnoozedCount = threadListV2Layout.snoozedCount;
   const v2ListEmpty =
-    v2PendingTasks.length > 0 ? null : hasSearchQuery ? (
+    v2PendingTasks.length > 0 ? null : hasSearchQuery &&
+      threadSearch.isPending ? null : hasSearchQuery ? (
       v2SnoozedCount > 0 ? (
         // The snoozed threads already passed this search filter: "No
         // results" would claim nothing matched when matches are merely
@@ -1463,19 +1486,26 @@ export function HomeScreen(props: HomeScreenProps) {
             v2SnoozedCount === 1 ? "1 matching thread snoozed" : `All matching threads snoozed`
           }
           detail={`Threads matching "${props.searchQuery}" are snoozed and return when their wake time passes.`}
+          variant={Platform.OS === "android" ? "plain" : undefined}
         />
       ) : (
-        <EmptyState title="No results" detail={`No threads matching "${props.searchQuery}".`} />
+        <EmptyState
+          title="No results"
+          detail={`No threads matching "${props.searchQuery}".`}
+          variant={Platform.OS === "android" ? "plain" : undefined}
+        />
       )
     ) : v2SnoozedCount > 0 ? (
       <EmptyState
         title={v2SnoozedCount === 1 ? "1 thread snoozed" : `${v2SnoozedCount} threads snoozed`}
         detail="Snoozed threads return when their wake time passes."
+        variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (
       <EmptyState
         title={`No threads in ${v2ScopedProjectGroup.title}`}
         detail="Choose another project or create a new task."
+        variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : (
       listEmpty
@@ -1506,12 +1536,28 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
+  if (
+    Platform.OS === "android" &&
+    (threadListV2Enabled ? threadListV2Items.length === 0 : listLayout.items.length === 0)
+  ) {
+    return (
+      <View className="flex-1 bg-header">
+        <View
+          className="flex-1 items-center justify-center overflow-hidden rounded-t-[28px] bg-screen px-4"
+          style={{ paddingBottom: insets.bottom }}
+        >
+          {threadListV2Enabled ? v2ListEmpty : listEmpty}
+        </View>
+      </View>
+    );
+  }
+
   if (threadListV2Enabled) {
     return (
-      <View className={materialYouStyleLayoutActive ? "flex-1 bg-header" : "flex-1 bg-screen"}>
+      <View className={Platform.OS === "android" ? "flex-1 bg-header" : "flex-1 bg-screen"}>
         <View
           className={
-            materialYouStyleLayoutActive
+            Platform.OS === "android"
               ? "flex-1 overflow-hidden rounded-t-[28px] bg-screen"
               : "flex-1 bg-screen"
           }
@@ -1525,17 +1571,10 @@ export function HomeScreen(props: HomeScreenProps) {
               ListHeaderComponent={v2ListHeader}
               ListFooterComponent={
                 settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+                  <ThreadListV2ShowMoreRow
+                    hiddenCount={threadListV2Layout.hiddenSettledCount}
                     onPress={showMoreSettled}
-                    className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
-                    style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-                  >
-                    <Text className="text-xs font-t3-medium text-foreground-muted">
-                      Show more ({threadListV2Layout.hiddenSettledCount} settled hidden)
-                    </Text>
-                  </Pressable>
+                  />
                 ) : null
               }
               ListEmptyComponent={v2ListEmpty}
@@ -1551,7 +1590,7 @@ export function HomeScreen(props: HomeScreenProps) {
                 paddingBottom:
                   Platform.OS === "ios"
                     ? Math.max(insets.bottom, 24) + 96 + iosBottomToolbarClearance
-                    : Math.max(insets.bottom, 16) + 88,
+                    : Math.max(insets.bottom, 16) + (Platform.OS === "android" ? 148 : 88),
               }}
             />
           </SwipeableScrollGateProvider>
@@ -1561,10 +1600,10 @@ export function HomeScreen(props: HomeScreenProps) {
   }
 
   return (
-    <View className={materialYouStyleLayoutActive ? "flex-1 bg-header" : "flex-1 bg-screen"}>
+    <View className={Platform.OS === "android" ? "flex-1 bg-header" : "flex-1 bg-screen"}>
       <View
         className={
-          materialYouStyleLayoutActive
+          Platform.OS === "android"
             ? "flex-1 overflow-hidden rounded-t-[28px] bg-screen"
             : "flex-1 bg-screen"
         }
@@ -1624,7 +1663,7 @@ export function HomeScreen(props: HomeScreenProps) {
               paddingBottom:
                 Platform.OS === "ios"
                   ? Math.max(insets.bottom, 24) + 24 + iosBottomToolbarClearance
-                  : Math.max(insets.bottom, 16) + 88,
+                  : Math.max(insets.bottom, 16) + (Platform.OS === "android" ? 148 : 88),
             }}
             scrollIndicatorInsets={
               Platform.OS === "ios"

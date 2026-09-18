@@ -16,6 +16,7 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -29,6 +30,8 @@ import { removePreviewThread } from "../previewStateStore";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useUiStateStore } from "../uiStateStore";
 import { terminalEnvironment } from "../state/terminal";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -532,8 +535,14 @@ export function useThreadActions() {
         canRemoveWorktree: canDeleteWorktree,
         confirmWorktreeRemoval,
       });
-      let shouldDeleteWorktree = worktreeRemovalAction === "remove";
-      if (worktreeRemovalAction === "confirm" && localApi) {
+      const environmentSettings = appAtomRegistry
+        .get(environmentServerConfigsAtom)
+        .get(threadRef.environmentId)?.settings;
+      const automaticWorktreeCleanup = environmentSettings
+        ? resolveWorktreeCleanup(environmentSettings, thread.projectId).worktreeOnDelete
+        : false;
+      let shouldDeleteWorktree = worktreeRemovalAction === "remove" && !automaticWorktreeCleanup;
+      if (worktreeRemovalAction === "confirm" && localApi && !automaticWorktreeCleanup) {
         const confirmationResult = await settlePromise(() =>
           localApi.dialogs.confirm(
             [
