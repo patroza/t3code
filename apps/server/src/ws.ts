@@ -1425,74 +1425,6 @@ const makeWsRpcLayer = (
               : false;
             let worktreeBaseRef = prepareWorktree?.baseBranch ?? null;
 
-            if (bootstrap?.createThread) {
-              const created = yield* dispatchFromClient({
-                type: "thread.create",
-                commandId: yield* serverCommandId("bootstrap-thread-create"),
-                threadId: command.threadId,
-                projectId: bootstrap.createThread.projectId,
-                title: bootstrap.createThread.title,
-                modelSelection: bootstrap.createThread.modelSelection,
-                runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
-                branch: bootstrap.createThread.branch,
-                worktreePath: bootstrap.createThread.worktreePath,
-                createdAt: bootstrap.createThread.createdAt,
-              }).pipe(
-                Effect.catch((createError) => {
-                  if (
-                    createError._tag !== "OrchestrationCommandInvariantError" ||
-                    !createError.detail.includes("already exists")
-                  ) {
-                    return Effect.fail(createError);
-                  }
-                  return projectionSnapshotQuery.getThreadShellById(command.threadId).pipe(
-                    Effect.matchEffect({
-                      onFailure: () => Effect.fail(createError),
-                      onSuccess: Option.match({
-                        // A reconnect can replay the bootstrap after its
-                        // thread.create committed but before the turn-start
-                        // response reached the client. Resume the remaining
-                        // bootstrap instead of rejecting the duplicate.
-                        onSome: () => Effect.succeed(null),
-                        onNone: () => Effect.fail(createError),
-                      }),
-                    }),
-                  );
-                }),
-              );
-              if (created !== null) {
-                // The successful create is a fence in the engine command queue:
-                // every delete for the prior incarnation committed before it.
-                // Drain through that event before setup or turn start can own
-                // terminals and provider sessions under the reused thread id.
-                yield* threadDeletionReactor.drainThrough(created.sequence);
-                createdThread = true;
-                // Persist the send now rather than with the turn: the thread is
-                // real from here on, so any client (or a reload) sees the message
-                // while the worktree is still being prepared. The turn start
-                // later references this id instead of re-sending the text.
-                yield* dispatchFromClient({
-                  type: "thread.message.user.append",
-                  commandId: yield* serverCommandId("bootstrap-thread-message"),
-                  threadId: command.threadId,
-                  message: {
-                    messageId: command.message.messageId,
-                    text: command.message.text,
-                    attachments: command.message.attachments,
-                    ...(command.message.context !== undefined
-                      ? { context: command.message.context }
-                      : {}),
-                  },
-                  createdAt: command.createdAt,
-                });
-                if (tracked) {
-                  const running = yield* worktreeSetupTracker.get(threadId);
-                  if (running) yield* recordWorktreeSetup(running);
-                }
-              }
-            }
-
             if (bootstrap?.prepareWorktree && !(bootstrap.createThread && createdThread)) {
               // A replayed bootstrap (reconnect or outbox retry) can reach
               // this point after the original already prepared the worktree;
@@ -1644,6 +1576,12 @@ const makeWsRpcLayer = (
               !worktreeAlreadyPrepared &&
               !worktreePathAlreadyMaterialized
             ) {
+              if (prepareWorktree.requireWorktree) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message:
+                    "A separate worktree requires a Git repository and a base branch with a commit.",
+                });
+              }
               // Not a git repo, or the base has no commit: the thread runs in
               // the project checkout instead. The card says so and moves on.
               yield* track(
@@ -1656,6 +1594,74 @@ const makeWsRpcLayer = (
                   ),
                 })),
               );
+            }
+
+            if (bootstrap?.createThread) {
+              const created = yield* dispatchFromClient({
+                type: "thread.create",
+                commandId: yield* serverCommandId("bootstrap-thread-create"),
+                threadId: command.threadId,
+                projectId: bootstrap.createThread.projectId,
+                title: bootstrap.createThread.title,
+                modelSelection: bootstrap.createThread.modelSelection,
+                runtimeMode: bootstrap.createThread.runtimeMode,
+                interactionMode: bootstrap.createThread.interactionMode,
+                branch: bootstrap.createThread.branch,
+                worktreePath: bootstrap.createThread.worktreePath,
+                createdAt: bootstrap.createThread.createdAt,
+              }).pipe(
+                Effect.catch((createError) => {
+                  if (
+                    createError._tag !== "OrchestrationCommandInvariantError" ||
+                    !createError.detail.includes("already exists")
+                  ) {
+                    return Effect.fail(createError);
+                  }
+                  return projectionSnapshotQuery.getThreadShellById(command.threadId).pipe(
+                    Effect.matchEffect({
+                      onFailure: () => Effect.fail(createError),
+                      onSuccess: Option.match({
+                        // A reconnect can replay the bootstrap after its
+                        // thread.create committed but before the turn-start
+                        // response reached the client. Resume the remaining
+                        // bootstrap instead of rejecting the duplicate.
+                        onSome: () => Effect.succeed(null),
+                        onNone: () => Effect.fail(createError),
+                      }),
+                    }),
+                  );
+                }),
+              );
+              if (created !== null) {
+                // The successful create is a fence in the engine command queue:
+                // every delete for the prior incarnation committed before it.
+                // Drain through that event before setup or turn start can own
+                // terminals and provider sessions under the reused thread id.
+                yield* threadDeletionReactor.drainThrough(created.sequence);
+                createdThread = true;
+                // Persist the send now rather than with the turn: the thread is
+                // real from here on, so any client (or a reload) sees the message
+                // while the worktree is still being prepared. The turn start
+                // later references this id instead of re-sending the text.
+                yield* dispatchFromClient({
+                  type: "thread.message.user.append",
+                  commandId: yield* serverCommandId("bootstrap-thread-message"),
+                  threadId: command.threadId,
+                  message: {
+                    messageId: command.message.messageId,
+                    text: command.message.text,
+                    attachments: command.message.attachments,
+                    ...(command.message.context !== undefined
+                      ? { context: command.message.context }
+                      : {}),
+                  },
+                  createdAt: command.createdAt,
+                });
+                if (tracked) {
+                  const running = yield* worktreeSetupTracker.get(threadId);
+                  if (running) yield* recordWorktreeSetup(running);
+                }
+              }
             }
 
             if (
@@ -1869,13 +1875,16 @@ const makeWsRpcLayer = (
                   ),
                 onSuccess: (threadDeleted) =>
                   Effect.fail(
-                    threadDeleted
+                    threadDeleted ||
+                      (bootstrap?.createThread &&
+                        bootstrap.prepareWorktree?.requireWorktree === true &&
+                        !createdThread)
                       ? new OrchestrationDispatchCommandError({
                           message: dispatchError.message,
                           ...(dispatchError.cause !== undefined
                             ? { cause: dispatchError.cause }
                             : {}),
-                          bootstrapThreadDisposition: "deleted",
+                          bootstrapThreadDisposition: threadDeleted ? "deleted" : "not-created",
                         })
                       : dispatchError,
                   ),
@@ -1883,6 +1892,7 @@ const makeWsRpcLayer = (
             );
 
           const settledBootstrapProgram = bootstrapProgram.pipe(
+            Effect.interruptible,
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
               if (Cause.hasInterruptsOnly(cause)) {
@@ -1950,6 +1960,8 @@ const makeWsRpcLayer = (
                   ),
               ).pipe(Effect.andThen(cleanupAndFail(cause, dispatchError)));
             }),
+            // Cancellation must finish recording and rollback after the bootstrap is interrupted.
+            Effect.uninterruptible,
           );
 
           // The bootstrap outlives the connection that asked for it: a reload
@@ -2070,6 +2082,7 @@ const makeWsRpcLayer = (
                 }),
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
+            reasoningMessages: true,
           };
         });
 
@@ -2481,7 +2494,7 @@ const makeWsRpcLayer = (
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event,
+                  event: projectActivityEvent(event, input.reasoningMessages === true),
                 })),
               );
 
@@ -2551,7 +2564,7 @@ const makeWsRpcLayer = (
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.map((event) => ({
                         kind: "event" as const,
-                        event: projectActivityEvent(event),
+                        event: projectActivityEvent(event, input.reasoningMessages === true),
                       })),
                       Stream.mapError(
                         (cause) =>
@@ -2642,7 +2655,10 @@ const makeWsRpcLayer = (
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
-                  snapshot: projectThreadDetailSnapshot(snapshot.value),
+                  snapshot: projectThreadDetailSnapshot(
+                    snapshot.value,
+                    input.reasoningMessages === true,
+                  ),
                 }),
                 afterSnapshot,
               );
@@ -3123,6 +3139,18 @@ const makeWsRpcLayer = (
             withPullRequestViewer(input, pullRequests.diffFileContents(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
+        [WS_METHODS.pullRequestsFilesViewed]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsFilesViewed,
+            withPullRequestViewer(input, pullRequests.filesViewed(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
+        [WS_METHODS.pullRequestsSetFilesViewed]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSetFilesViewed,
+            withPullRequestViewer(input, pullRequests.setFilesViewed(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsRunAction]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsRunAction,
@@ -3192,11 +3220,11 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsInvalidate,
-            pullRequests.invalidate(input).pipe(
+            pullRequests.invalidate(input, { notifyReaders: true }).pipe(
               // A reader asking for fresh host state also wants the thread badges it feeds to
               // catch up, including a merged link the sweep would otherwise never revisit.
               Effect.andThen(
-                input.reference === undefined
+                input.reference === undefined || input.filesViewedOnly === true
                   ? Effect.void
                   : resolvePullRequestSyncKey(input.reference).pipe(
                       Effect.flatMap((key) =>
@@ -3482,6 +3510,8 @@ const makeWsRpcLayer = (
               if (
                 input.resource._tag === "attachment" ||
                 input.resource._tag === "native-app-icon" ||
+                // GitHub media names the repository it authenticates through itself.
+                input.resource._tag === "github-media" ||
                 (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });

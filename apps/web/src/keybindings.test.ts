@@ -14,6 +14,7 @@ import {
 import {
   formatShortcutLabel,
   isDiffToggleShortcut,
+  isRichTextBoldShortcut,
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
   isOpenFavoriteEditorShortcut,
@@ -527,6 +528,43 @@ describe("thread navigation helpers", () => {
       }),
     );
   });
+
+  it("keeps default thread jumps off the web so the browser can switch tabs", () => {
+    const input = event({ key: "1", metaKey: true });
+    assert.isNull(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { isDesktop: false },
+      }),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { isDesktop: true },
+      }),
+      "thread.jump.1",
+    );
+    assert.isFalse(
+      shouldShowThreadJumpHintsForModifiers(
+        event({ metaKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        {
+          platform: "MacIntel",
+          context: { isDesktop: false },
+        },
+      ),
+    );
+    assert.isTrue(
+      shouldShowThreadJumpHintsForModifiers(
+        event({ metaKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        {
+          platform: "MacIntel",
+          context: { isDesktop: true },
+        },
+      ),
+    );
+  });
 });
 
 describe("model picker navigation helpers", () => {
@@ -537,6 +575,30 @@ describe("model picker navigation helpers", () => {
     assert.strictEqual(modelPickerJumpIndexFromCommand("modelPicker.jump.1"), 0);
     assert.strictEqual(modelPickerJumpIndexFromCommand("modelPicker.jump.3"), 2);
     assert.isNull(modelPickerJumpIndexFromCommand("thread.jump.1"));
+  });
+
+  it("keeps default model jumps off the web even while the picker is open", () => {
+    const input = event({ key: "3", metaKey: true });
+    assert.isNull(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { isDesktop: false, modelPickerOpen: true },
+      }),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { isDesktop: true, modelPickerOpen: true },
+      }),
+      "modelPicker.jump.3",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { isDesktop: true, modelPickerOpen: false },
+      }),
+      "thread.jump.3",
+    );
   });
 });
 
@@ -964,6 +1026,21 @@ describe("isTerminalClearShortcut", () => {
   });
 });
 
+describe("isRichTextBoldShortcut", () => {
+  it("matches Mod+B without extra modifiers", () => {
+    assert.isTrue(isRichTextBoldShortcut(event({ key: "b", metaKey: true })));
+    assert.isTrue(isRichTextBoldShortcut(event({ key: "B", ctrlKey: true })));
+  });
+
+  it("ignores shifted, alted, bare, and non-keydown presses", () => {
+    assert.isFalse(isRichTextBoldShortcut(event({ key: "b", metaKey: true, shiftKey: true })));
+    assert.isFalse(isRichTextBoldShortcut(event({ key: "b", metaKey: true, altKey: true })));
+    assert.isFalse(isRichTextBoldShortcut(event({ key: "b" })));
+    assert.isFalse(isRichTextBoldShortcut(event({ key: "i", metaKey: true })));
+    assert.isFalse(isRichTextBoldShortcut(event({ type: "keyup", key: "b", metaKey: true })));
+  });
+});
+
 describe("terminalDeleteShortcutData", () => {
   it("maps Cmd+Backspace on macOS to delete-to-line-start", () => {
     assert.strictEqual(
@@ -1092,7 +1169,7 @@ describe("composer and pull request shortcuts", () => {
     }
   });
 
-  it.each(["terminalOpen", "previewFocus", "previewOpen", "modelPickerOpen"])(
+  it.each(["terminalOpen", "previewFocus", "previewOpen", "modelPickerOpen", "isWeb", "isDesktop"])(
     "honors custom PR shortcut conditions for %s",
     (condition) => {
       const bindings = compileResolvedKeybindingsConfig([

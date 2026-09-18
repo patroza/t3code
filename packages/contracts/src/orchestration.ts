@@ -94,7 +94,7 @@ const ModelSelectionSource = Schema.Struct({
 export const ModelSelection = ModelSelectionSource.pipe(
   Schema.decodeTo(
     ModelSelectionWire,
-    SchemaTransformation.transformOrFail({
+    SchemaTransformation.transformEffect({
       decode: (raw) => {
         // Resolve the routing key: prefer an explicit `instanceId`; fall
         // back to promoting the legacy `provider` slug (the canonical
@@ -552,7 +552,15 @@ export const OrchestrationProject = Schema.Struct({
 });
 export type OrchestrationProject = typeof OrchestrationProject.Type;
 
-export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
+/** `reasoning` carries a provider's thinking trace: a reasoning summary, or
+ *  the raw chain of thought when the model exposes one. It is a sibling of the
+ *  assistant text it precedes, not a replacement for it. */
+export const OrchestrationMessageRole = Schema.Literals([
+  "user",
+  "assistant",
+  "system",
+  "reasoning",
+]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
 export const OrchestrationMessage = Schema.Struct({
@@ -1035,6 +1043,8 @@ export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShel
 
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  /** Opt in to reasoning roles; older clients receive system messages instead. */
+  reasoningMessages: Schema.optionalKey(Schema.Boolean),
   /**
    * When provided, the server skips the initial snapshot frame and instead
    * replays events after this sequence before streaming live events. Clients
@@ -1326,6 +1336,7 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   // Check out `baseBranch` in the worktree instead of creating a new branch
   // from it. Wins over `branch`/`startFromOrigin` when set.
   reuseBaseBranch: Schema.optional(Schema.Boolean),
+  requireWorktree: Schema.optional(Schema.Boolean),
 });
 
 const ThreadTurnStartBootstrap = Schema.Struct({
@@ -1597,6 +1608,25 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadMessageReasoningDeltaCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.reasoning.delta"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  delta: Schema.String,
+  turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
+const ThreadMessageReasoningCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.reasoning.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: Schema.optional(TurnId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadHistoryImportCommand = Schema.Struct({
   type: Schema.Literal("thread.history.import"),
   commandId: CommandId,
@@ -1756,6 +1786,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
+  ThreadMessageReasoningDeltaCommand,
+  ThreadMessageReasoningCompleteCommand,
   ThreadHistoryImportCommand,
   ThreadMessageUserAppendCommand,
   ThreadProposedPlanUpsertCommand,
@@ -2634,7 +2666,7 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedError<Orches
     /** Optional machine code (e.g. identity_claim_required) for client branching. */
     code: Schema.optionalKey(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
-    bootstrapThreadDisposition: Schema.optional(Schema.Literal("deleted")),
+    bootstrapThreadDisposition: Schema.optional(Schema.Literals(["deleted", "not-created"])),
   },
 ) {}
 
