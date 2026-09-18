@@ -67,6 +67,7 @@ describe("searchSettings", () => {
       searchSettings("work", [{ id: "word-wrap", title: "Word wrap", to: "/settings/appearance" }]),
     ).toEqual([]);
     expect(searchSettings("work").map((item) => item.id)).toEqual([
+      "storage-worktrees",
       "worktree-remove-confirmation",
       "network-access",
       "project-defaults",
@@ -75,6 +76,8 @@ describe("searchSettings", () => {
       "new-threads",
       "start-from-origin",
       "project-actions",
+      "keybinding-composer.previousWorktree",
+      "keybinding-composer.workspace",
     ]);
     expect(searchSettings("deploy").map((item) => item.id)).toContain(
       "continue-threads-after-server-update",

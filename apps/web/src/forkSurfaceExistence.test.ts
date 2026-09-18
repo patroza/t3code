@@ -176,9 +176,10 @@ describe("fork surface existence (anti stack-drop)", () => {
     // queue-bound sends become chips, everything else takes the live edge.
     expect(chatView.match(/sendEntersSteeringQueue\(\{/g)).toHaveLength(2);
     expect(chatView).toContain("hasPendingTurnStart: activeThread.pendingTurnStart !== null");
+    expect(chatView.match(/if \(followUpShouldQueue && followUpWouldQueue\)/g)).toHaveLength(1);
     expect(
       chatView.match(/if \(settings\.followUpBehavior === "queue" && followUpWouldQueue\)/g),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       chatView.match(
         /setOptimisticQueuedMessageIds\(\(existing\) => new Set\(existing\)\.add\(messageIdForSend\)\)/g,
