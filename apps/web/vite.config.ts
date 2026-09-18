@@ -202,6 +202,11 @@ const isolatedUnitTestFiles = [
   "src/components/files/AttachmentFilePreview.test.tsx",
   "src/components/files/fileEditorHighlight.test.ts",
   "src/components/permissions/usePermissionStatus.test.ts",
+  // react-test-renderer + Base UI Popover/Tooltip. Under isolate:false a
+  // sibling can bind the real floating-ui modules first, so the mocks never
+  // apply and CI dies with `Element is not defined` / `window is not defined`.
+  "src/components/pullRequest/PullRequestDetailPanel.test.tsx",
+  "src/components/pullRequest/PullRequestSummaryTab.test.tsx",
   "src/components/ThreadNotificationCoordinator.test.tsx",
   // Mocks `./vendor/ghostty-vt.wasm?url`; under isolate:false runtime.ts is
   // already bound to the real asset URL and fetch('/src/...wasm') is invalid.

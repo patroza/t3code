@@ -14,6 +14,11 @@ vi.mock("../ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: ReactNode }) => children,
   TooltipPopup: () => null,
 }));
+vi.mock("../ui/popover", () => ({
+  Popover: ({ children }: { children: ReactNode }) => children,
+  PopoverTrigger: ({ children }: { children: ReactNode }) => children,
+  PopoverPopup: ({ children }: { children: ReactNode }) => children,
+}));
 
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 

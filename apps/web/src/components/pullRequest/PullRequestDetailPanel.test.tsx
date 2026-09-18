@@ -72,6 +72,11 @@ vi.mock("../ui/tooltip", () => ({
   TooltipTrigger: Trigger,
   TooltipPopup: () => null,
 }));
+vi.mock("../ui/popover", () => ({
+  Popover: Wrapper,
+  PopoverPopup: Wrapper,
+  PopoverTrigger: Trigger,
+}));
 vi.mock("../ui/menu", () => ({
   Menu: Wrapper,
   MenuPopup: Wrapper,
