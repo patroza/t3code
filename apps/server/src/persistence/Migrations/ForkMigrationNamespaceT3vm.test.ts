@@ -29,12 +29,12 @@ layer("t3vm migration namespace repair", (it) => {
         SELECT migration_id, name FROM ${sql(upstreamMigrationTable)} ORDER BY migration_id
       `;
       assert.deepStrictEqual(upstream.slice(-6), [
-        { migration_id: 47, name: "ProjectionProjectIcon" },
         { migration_id: 48, name: "ProjectionThreadBranchPullRequest" },
         { migration_id: 49, name: "ProjectionThreadsActiveOrderKey" },
         { migration_id: 50, name: "ProjectionThreadPullRequests" },
         { migration_id: 51, name: "ProjectionThreadMessageContext" },
         { migration_id: 52, name: "ProjectionThreadTitleState" },
+        { migration_id: 53, name: "PullRequestFilesViewed" },
       ]);
       const fork = yield* sql<LedgerRow>`
         SELECT migration_id, name FROM ${sql(forkMigrationTable)} ORDER BY migration_id
