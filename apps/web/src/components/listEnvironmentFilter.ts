@@ -1,5 +1,4 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
@@ -167,10 +166,9 @@ const WebListModeStored = Schema.Literals(["threads", "board", "recent", "projec
 export const WebListModeSchema = WebListModeStored.pipe(
   Schema.decodeTo(
     Schema.Literals(["threads", "board"]),
-    SchemaTransformation.transformOrFail({
-      decode: (value) =>
-        Effect.succeed(value === "board" ? ("board" as const) : ("threads" as const)),
-      encode: (value) => Effect.succeed(value),
+    SchemaTransformation.transform({
+      decode: (value) => (value === "board" ? ("board" as const) : ("threads" as const)),
+      encode: (value) => value,
     }),
   ),
 );

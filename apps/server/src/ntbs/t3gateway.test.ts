@@ -90,7 +90,7 @@ const createCryptoMock = (recordResult: CallRecordResult, input?: CryptoInput) =
       const counter: Ref.Ref<number> = yield* Ref.make(0);
 
       return Layer.mock(Crypto, {
-        "~effect/platform/Crypto": "~effect/platform/Crypto",
+        "~effect/Crypto": "~effect/Crypto",
         randomUUIDv4:
           // recordCrypto("randomUUIDv4", undefined, )
 

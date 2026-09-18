@@ -58,10 +58,10 @@ export class JiraAppConfig extends Context.Service<JiraAppConfig, JiraAppConfigV
 ) {}
 
 const optionalString = (name: string) =>
-  Config.string(name).pipe(Config.option, Config.map(Option.getOrUndefined));
+  Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined));
 
 const optionalSecret = (name: string) =>
-  Config.redacted(name).pipe(
+  Config.Redacted(name).pipe(
     Config.option,
     Config.map(Option.map(Redacted.value)),
     Config.map(Option.getOrUndefined),
@@ -77,21 +77,21 @@ const configEffect = Effect.gen(function* () {
     legacyUsername: optionalString("JIRA_USERNAME"),
     apiToken: optionalSecret("T3CODE_JIRA_API_TOKEN"),
     legacyApiToken: optionalSecret("JIRA_API_TOKEN"),
-    authMode: Config.literals(["basic", "bearer"] as const, "T3CODE_JIRA_AUTH_MODE").pipe(
+    authMode: Config.Literals(["basic", "bearer"] as const, "T3CODE_JIRA_AUTH_MODE").pipe(
       Config.withDefault("basic" as const),
     ),
-    allowedProjects: Config.string("T3CODE_JIRA_ALLOWED_PROJECTS").pipe(Config.withDefault("")),
+    allowedProjects: Config.String("T3CODE_JIRA_ALLOWED_PROJECTS").pipe(Config.withDefault("")),
     discordLinksPath: optionalString("T3CODE_JIRA_DISCORD_LINKS_PATH"),
     botAccountId: optionalString("T3CODE_JIRA_BOT_ACCOUNT_ID"),
-    turnTimeoutMs: Config.number("T3CODE_JIRA_TURN_TIMEOUT_MS").pipe(
+    turnTimeoutMs: Config.Number("T3CODE_JIRA_TURN_TIMEOUT_MS").pipe(
       Config.withDefault(30 * 60_000),
     ),
     defaultProjectId: optionalString("T3CODE_JIRA_DEFAULT_PROJECT_ID"),
-    projectMap: Config.string("T3CODE_JIRA_PROJECT_MAP").pipe(Config.withDefault("")),
-    autoCreateThread: Config.boolean("T3CODE_JIRA_AUTO_CREATE_THREAD").pipe(
+    projectMap: Config.String("T3CODE_JIRA_PROJECT_MAP").pipe(Config.withDefault("")),
+    autoCreateThread: Config.Boolean("T3CODE_JIRA_AUTO_CREATE_THREAD").pipe(
       Config.withDefault(true),
     ),
-    baseBranch: Config.string("T3CODE_JIRA_BASE_BRANCH").pipe(Config.withDefault("main")),
+    baseBranch: Config.String("T3CODE_JIRA_BASE_BRANCH").pipe(Config.withDefault("main")),
     ackEmojiId: optionalString("T3CODE_JIRA_ACK_EMOJI_ID"),
   });
 

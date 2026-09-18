@@ -14,6 +14,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
+import { fromWireReadModel } from "./commandReadModel.ts";
 import { decideOrchestrationCommand } from "./decider.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -47,6 +48,8 @@ function makeReadModel(checkpoints: ReadonlyArray<OrchestrationCheckpointSummary
         pinOrderKey: null,
         deletedAt: null,
         messages: [],
+        queuedMessages: [],
+        pendingTurnStart: null,
         proposedPlans: [],
         activities: [],
         checkpoints,
@@ -55,6 +58,10 @@ function makeReadModel(checkpoints: ReadonlyArray<OrchestrationCheckpointSummary
     ],
     updatedAt: NOW,
   } satisfies OrchestrationReadModel;
+}
+
+function makeCommandReadModel(checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>) {
+  return fromWireReadModel(makeReadModel(checkpoints));
 }
 
 function makeCheckpoint(status: OrchestrationCheckpointSummary["status"]) {
@@ -91,7 +98,7 @@ it.layer(NodeServices.layer)("turn diff complete decider", (it) => {
       const exit = yield* Effect.exit(
         decideOrchestrationCommand({
           command: placeholderCommand(),
-          readModel: makeReadModel([makeCheckpoint("ready")]),
+          readModel: makeCommandReadModel([makeCheckpoint("ready")]),
         }),
       );
       expect(Exit.isFailure(exit)).toBe(true);
@@ -102,7 +109,7 @@ it.layer(NodeServices.layer)("turn diff complete decider", (it) => {
     Effect.gen(function* () {
       const event = yield* decideOrchestrationCommand({
         command: placeholderCommand(),
-        readModel: makeReadModel([makeCheckpoint("missing")]),
+        readModel: makeCommandReadModel([makeCheckpoint("missing")]),
       });
       const events = Array.isArray(event) ? event : [event];
       expect(events).toHaveLength(1);
@@ -118,7 +125,7 @@ it.layer(NodeServices.layer)("turn diff complete decider", (it) => {
           checkpointRef: CheckpointRef.make("refs/t3/checkpoints/turn-1"),
           status: "ready",
         },
-        readModel: makeReadModel([makeCheckpoint("missing")]),
+        readModel: makeCommandReadModel([makeCheckpoint("missing")]),
       });
       const events = Array.isArray(event) ? event : [event];
       expect(events[0]?.type).toBe("thread.turn-diff-completed");

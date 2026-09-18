@@ -2473,6 +2473,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         command: "git diff --numstat",
         detail: "Could not read complete diff statistics.",
         exitCode: result.exitCode,
+        failureKind: "unknown",
       });
     });
     const readTrackedDiff = Effect.fn("GitVcsDriver.getReviewDiffPreview.tracked")(function* (
@@ -2521,6 +2522,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
                 command: "git diff",
                 detail: "Could not prepare the review index.",
                 cause,
+                failureKind: "unknown",
               }),
             ),
         }),
