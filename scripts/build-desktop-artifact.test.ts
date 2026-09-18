@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -10,6 +11,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -507,6 +510,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         cpu: ["arm64", "x64"],
       },
     });
+  });
+
+  it("keeps repo allowBuilds entries as booleans", () => {
+    const text = NodeFS.readFileSync(
+      NodePath.join(import.meta.dirname, "..", "pnpm-workspace.yaml"),
+      "utf8",
+    );
+    const decoded = Schema.decodeUnknownSync(
+      fromYaml(
+        Schema.Struct({
+          allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+        }),
+      ),
+    )(text);
+    const allowBuilds = decoded.allowBuilds ?? {};
+    assert.ok(Object.keys(allowBuilds).length > 0);
+    assert.strictEqual(allowBuilds["msgpackr-extract"], true);
   });
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
