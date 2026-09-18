@@ -23,7 +23,7 @@ allowBuilds:
   workerd: false
 
 catalog:
-  dfx: 1.0.15
+  dfx: 1.0.16
   "@clerk/backend": 3.18.1
   "@clerk/clerk-js": 6.32.1
   "@clerk/electron": 0.0.44
