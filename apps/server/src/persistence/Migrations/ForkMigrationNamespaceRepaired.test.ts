@@ -10,7 +10,7 @@ import { makeMigrationLoader, runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import ProjectionQueuedMessages from "./037_ProjectionQueuedMessages.ts";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 const runLegacyMigrations = Migrator.make({});
 
 layer("fork migration namespace for a repaired database", (it) => {

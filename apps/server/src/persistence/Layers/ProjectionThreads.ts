@@ -39,7 +39,7 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
   }),
 );
 
-function toProjectionThread(row: ProjectionThreadDbRow): ProjectionThread {
+function toProjectionThread(row: typeof ProjectionThreadDbRow.Type): ProjectionThread {
   return {
     threadId: row.threadId,
     projectId: row.projectId,

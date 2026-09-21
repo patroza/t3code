@@ -8,7 +8,7 @@ import { upstreamMigrationTable } from "../MigrationBootstrap.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("fork migration namespace on a fresh database", (it) => {
   it.effect("runs equal numeric ids independently", () =>
