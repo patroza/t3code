@@ -398,7 +398,7 @@ export function useThreadActions() {
             environmentId: threadRef.environmentId,
             input: { threadId: threadRef.threadId },
           });
-          return previewResult._tag === "Success" ? previewResult.value.candidate : null;
+          return previewResult?._tag === "Success" ? previewResult.value.candidate : null;
         },
         removalPolicy: confirmWorktreeRemoval ? "confirm" : "remove",
         confirmRemoval: localApi

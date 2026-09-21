@@ -115,6 +115,12 @@ const isolatedUnitTestFiles = [
   // an earlier file can bind a real document/ReactDOM so hide/unhide never
   // closes the popup.
   "src/components/chat/useComposerMenuState.test.tsx",
+  // ComposerBanner uses buttonVariants. Under isolate:false a sibling's
+  // stub `../ui/button` mock (Button only) binds first and these tests die
+  // with "No buttonVariants export is defined on the mock".
+  "src/components/chat/ComposerBannerStack.test.tsx",
+  "src/components/chat/ComposerPendingUserInputPanel.test.tsx",
+  "src/components/chat/ComposerStashMenu.test.tsx",
   "src/components/files/projectFilesQueryState.test.ts",
   // Same react-hook mock as the .ts sibling; the .tsx refresh tests were added
   // upstream and fail under isolate:false when real React is already bound.
