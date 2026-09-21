@@ -81,8 +81,6 @@ export function resolveThreadStatus(
       label: "Plan Ready",
       pillClassName: "bg-adaptive-violet-500-a12-a16",
       textClassName: "text-adaptive-violet-700-300",
-      iconColor: "#bf5af2",
-      iconBackground: "rgba(191,90,242,0.22)",
       pulse: false,
     };
   }
