@@ -1,4 +1,4 @@
-import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import {
   NativeHeaderToolbar,
@@ -18,14 +18,9 @@ import {
   createNativeMailSearchToolbarItem,
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
-import type { HomeProjectSortOrder } from "./homeThreadList";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
 import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
-import {
-  buildHomeListFilterMenu,
-  type HomeListFilterMenuEnvironment,
-  type HomeListFilterMenuProject,
-} from "./home-list-filter-menu";
+import { buildHomeListFilterMenu } from "./home-list-filter-menu";
 import {
   DEFAULT_OWNERSHIP_FILTER,
   hasCustomHomeListOptions,
@@ -33,8 +28,6 @@ import {
   OWNERSHIP_FILTERS,
   OWNERSHIP_RELATION_LABELS,
   OWNERSHIP_RELATIONS,
-  type OwnershipFilter,
-  type OwnershipRelation,
   PROJECT_SORT_OPTIONS,
   THREAD_SORT_OPTIONS,
 } from "./home-list-options";
@@ -51,51 +44,19 @@ import {
   type HomeListMode,
   type HomeThreadGrouping,
 } from "./homeListMode";
+import type { HomeHeaderProps } from "./HomeHeader.types";
+
+export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
-export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
-
-export function HomeHeader(props: {
-  readonly environments: ReadonlyArray<HomeHeaderEnvironment>;
-  readonly projects: ReadonlyArray<HomeListFilterMenuProject>;
-  readonly searchQuery: string;
-  readonly listMode: HomeListMode;
-  readonly threadGrouping: HomeThreadGrouping;
-  readonly selectedEnvironmentIds: readonly EnvironmentId[];
-  readonly selectedProjectKey: string | null;
-  readonly ownershipFilter: OwnershipFilter;
-  readonly ownershipRelation: OwnershipRelation;
-  /**
-   * Hide settled from the main Threads inbox. Recency/none default on;
-   * project grouping defaults off at the call site.
-   */
-  readonly hideSettledThreads: boolean;
-  readonly projectSortOrder: HomeProjectSortOrder;
-  readonly threadSortOrder: SidebarThreadSortOrder;
-  readonly onSearchQueryChange: (query: string) => void;
-  readonly onListModeChange: (mode: HomeListMode) => void;
-  readonly onThreadGroupingChange: (grouping: HomeThreadGrouping) => void;
-  readonly onClearEnvironments: () => void;
-  readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
-  readonly onProjectChange: (projectKey: string | null) => void;
-  readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
-  readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
-  readonly onHideSettledThreadsChange: (hide: boolean) => void;
-  readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
-  readonly onOpenEnvironments: () => void;
-  readonly onOpenSettings: () => void;
-  readonly onStartNewTask: () => void;
-}) {
+export function HomeHeader(props: HomeHeaderProps) {
   if (Platform.OS === "android") {
     return <AndroidHomeHeader {...props} />;
   }
 
   return <IosHomeHeader {...props} />;
 }
-
-type HomeHeaderProps = Parameters<typeof HomeHeader>[0];
 
 function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
@@ -595,6 +556,42 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 </NativeHeaderToolbar.MenuAction>
               ))}
             </NativeHeaderToolbar.Menu>
+
+            <NativeHeaderToolbar.Menu title="Ownership">
+              <NativeHeaderToolbar.Label>Ownership</NativeHeaderToolbar.Label>
+              {OWNERSHIP_FILTERS.map((value) => (
+                <NativeHeaderToolbar.MenuAction
+                  key={value}
+                  isOn={value === props.ownershipFilter}
+                  onPress={() => props.onOwnershipFilterChange(value)}
+                >
+                  <NativeHeaderToolbar.Label>
+                    {OWNERSHIP_FILTER_LABELS[value]}
+                  </NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              ))}
+            </NativeHeaderToolbar.Menu>
+
+            {props.ownershipFilter === "mine" || props.ownershipFilter === "theirs" ? (
+              <NativeHeaderToolbar.Menu
+                title={props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+              >
+                <NativeHeaderToolbar.Label>
+                  {props.ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                </NativeHeaderToolbar.Label>
+                {OWNERSHIP_RELATIONS.map((value) => (
+                  <NativeHeaderToolbar.MenuAction
+                    key={value}
+                    isOn={value === props.ownershipRelation}
+                    onPress={() => props.onOwnershipRelationChange(value)}
+                  >
+                    <NativeHeaderToolbar.Label>
+                      {OWNERSHIP_RELATION_LABELS[value]}
+                    </NativeHeaderToolbar.Label>
+                  </NativeHeaderToolbar.MenuAction>
+                ))}
+              </NativeHeaderToolbar.Menu>
+            ) : null}
 
             {props.projects.length > 0 ? (
               <NativeHeaderToolbar.Menu title="Project">

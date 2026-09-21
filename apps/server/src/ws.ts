@@ -152,7 +152,7 @@ import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
+import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as IdentityService from "./identity/IdentityService.ts";
 import { stampOrchestrationCommandSource } from "./identity/stampSource.ts";
@@ -2071,6 +2071,8 @@ const makeWsRpcLayer = (
                 ? { otlpMetricsUrl: config.otlpMetricsUrl }
                 : {}),
               otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
+              ...(config.otlpLogsUrl !== undefined ? { otlpLogsUrl: config.otlpLogsUrl } : {}),
+              otlpLogsEnabled: config.otlpLogsUrl !== undefined,
             },
             settings,
             shellResumeCompletionMarker: true,
@@ -3117,6 +3119,12 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "pull-requests",
             },
           ),
+        [WS_METHODS.pullRequestsPreview]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsPreview,
+            withPullRequestViewer(input, pullRequests.preview(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsActivity]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsActivity,
@@ -3870,10 +3878,23 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.deviceTestHost, deviceService.testHost(input), {
             "rpc.aggregate": "device",
           }),
-        [WS_METHODS.deviceList]: (_input) =>
-          observeRpcEffect(WS_METHODS.deviceList, deviceService.list, {
-            "rpc.aggregate": "device",
-          }),
+        [WS_METHODS.deviceList]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.deviceList,
+            input.inspectOnly && !input.updateTool
+              ? deviceService.inspect
+              : authorizeEffect(
+                  requiredScopeForDeviceList(input),
+                  input.updateTool
+                    ? deviceService.updateTool(input.updateTool)
+                    : input.retryHostId
+                      ? deviceService.retryHost(input.retryHostId)
+                      : deviceService.list,
+                ),
+            {
+              "rpc.aggregate": "device",
+            },
+          ),
         [WS_METHODS.deviceOpen]: (input) =>
           observeRpcEffect(WS_METHODS.deviceOpen, deviceService.open(input), {
             "rpc.aggregate": "device",
