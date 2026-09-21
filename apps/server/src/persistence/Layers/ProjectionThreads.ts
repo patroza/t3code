@@ -38,9 +38,8 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
-type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
 
-function toProjectionThread(row: ProjectionThreadDbRow): ProjectionThread {
+function toProjectionThread(row: typeof ProjectionThreadDbRow.Type): ProjectionThread {
   return {
     threadId: row.threadId,
     projectId: row.projectId,

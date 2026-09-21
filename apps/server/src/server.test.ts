@@ -129,7 +129,6 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import {
   OrchestrationCommandInvariantError,
-  OrchestrationListenerCallbackError,
   OrchestrationThreadSettleBlockedError,
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -231,7 +230,7 @@ import {
   transferBudgetViolations,
 } from "../integration/TransferBudgetReport.integration.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
-import { otlpSerializationLayer } from "@t3tools/shared/observability";
+import { DEFAULT_SIGNAL_EXPORT, otlpSerializationLayer } from "@t3tools/shared/observability";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -593,10 +592,11 @@ const buildAppUnderTest = (options?: {
       traceMaxFiles: 10,
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
-      otlpExportIntervalMs: 10_000,
+      otlpLogsUrl: undefined,
+      otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+      otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+      otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
-      otlpHeaders: undefined,
-      otlpProtocol: "http/json",
       mode: "desktop",
       port: 0,
       host: "127.0.0.1",
@@ -1144,7 +1144,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.browserTraceCollector,
         }),
       ),
-      Layer.provide(otlpSerializationLayer(config.otlpProtocol)),
+      Layer.provide(otlpSerializationLayer(config.otlpTracesExport.protocol)),
       Layer.provide(
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
           publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
@@ -5452,7 +5452,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         config: {
           otlpTracesUrl: collector.url,
-          otlpProtocol: "http/protobuf",
+          otlpTracesExport: { ...DEFAULT_SIGNAL_EXPORT, protocol: "http/protobuf" },
         },
         layers: {
           browserTraceCollector: {
@@ -6444,6 +6444,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         config: {
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+          otlpLogsUrl: "http://localhost:4318/v1/logs",
         },
         layers: {
           keybindings: {
@@ -6479,6 +6480,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(first.config.observability.otlpTracesEnabled, true);
         assert.equal(first.config.observability.otlpMetricsUrl, "http://localhost:4318/v1/metrics");
         assert.equal(first.config.observability.otlpMetricsEnabled, true);
+        assert.equal(first.config.observability.otlpLogsUrl, "http://localhost:4318/v1/logs");
+        assert.equal(first.config.observability.otlpLogsEnabled, true);
         assert.deepEqual(first.config.settings, DEFAULT_SERVER_SETTINGS);
       }
       assert.deepEqual(second, {
@@ -7507,8 +7510,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 Effect.flatMap(() =>
                   command.commandId === failedCommandId
                     ? Effect.fail(
-                        new OrchestrationListenerCallbackError({
-                          listener: "domain-event",
+                        new PersistenceSqlError({
+                          operation: "OrchestrationEventStore.append:query",
                           detail: "thread creation failed",
                         }),
                       )
@@ -10982,8 +10985,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               effects.push(`dispatch:${command.type}`);
               if (command.type === "thread.session.stop") {
                 return Effect.fail(
-                  new OrchestrationListenerCallbackError({
-                    listener: "domain-event",
+                  new PersistenceSqlError({
+                    operation: "OrchestrationEventStore.append:query",
                     detail: "simulated archive stop failure",
                   }),
                 );
@@ -12628,8 +12631,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 setupActivityAppendAttempt += 1;
                 if (setupActivityAppendAttempt === 2) {
                   return Effect.fail(
-                    new OrchestrationListenerCallbackError({
-                      listener: "domain-event",
+                    new PersistenceSqlError({
+                      operation: "OrchestrationEventStore.append:query",
                       detail: "failed to append setup-script.started activity",
                     }),
                   );
@@ -13179,8 +13182,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               dispatchedCommands.push(command);
               if (command.type === "thread.delete") {
                 return Effect.fail(
-                  new OrchestrationListenerCallbackError({
-                    listener: "domain-event",
+                  new PersistenceSqlError({
+                    operation: "OrchestrationEventStore.append:query",
                     detail: "thread cleanup exploded",
                   }),
                 );

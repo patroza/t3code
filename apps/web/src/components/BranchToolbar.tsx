@@ -56,6 +56,7 @@ import {
 } from "./ui/menu";
 import { Separator } from "./ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { MiddleTruncate } from "./ui/middle-truncate";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import { measureRestingComposerControls } from "./chat/restingComposerControlsMeasurement";
@@ -239,6 +240,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                   <MenuRadioItem
                     value="auto"
                     disabled={envLocked}
+                    closeOnClick
                     onClick={() => {
                       if (autoEnvironmentLabel) onAutoEnvironment?.();
                     }}
@@ -256,6 +258,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                     key={env.environmentId}
                     disabled={envLocked}
                     value={env.environmentId}
+                    closeOnClick
                   >
                     <span className="flex min-w-0 items-center gap-1.5">
                       <EnvironmentMachineIcon kind={env.machine} className="size-3" />
@@ -280,33 +283,31 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
               onWorkspaceTargetChange(value as WorkspaceTarget);
             }}
           >
-            <MenuRadioItem disabled={envModeLocked || forceNewWorktree} value="local">
+            <MenuRadioItem disabled={envModeLocked || forceNewWorktree} value="local" closeOnClick>
               <span className="flex min-w-0 items-center gap-1.5">
                 <FolderIcon className="size-3" />
                 <span className="min-w-0 truncate">{resolveEnvModeLabel("local")}</span>
               </span>
             </MenuRadioItem>
             {activeWorktreePath ? (
-              <MenuRadioItem disabled={envModeLocked} value="current-worktree">
+              <MenuRadioItem disabled={envModeLocked} value="current-worktree" closeOnClick>
                 <span className="flex min-w-0 items-center gap-1.5">
                   <FolderGitIcon className="size-3" />
-                  <span className="min-w-0 truncate">
-                    {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-                  </span>
+                  <MiddleTruncate value={resolveCurrentWorkspaceLabel(activeWorktreePath)} />
                 </span>
               </MenuRadioItem>
             ) : null}
-            <MenuRadioItem disabled={envModeLocked} value="worktree">
+            <MenuRadioItem disabled={envModeLocked} value="worktree" closeOnClick>
               <span className="flex min-w-0 items-center gap-1.5">
                 <FolderGit2Icon className="size-3" />
                 <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
               </span>
             </MenuRadioItem>
             {previousWorktreeLabel ? (
-              <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+              <MenuRadioItem disabled={envModeLocked} value="previous-worktree" closeOnClick>
                 <span className="flex min-w-0 items-center gap-1.5">
                   <HistoryIcon className="size-3" />
-                  <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                  <MiddleTruncate value={previousWorktreeLabel} />
                 </span>
               </MenuRadioItem>
             ) : null}
