@@ -33,6 +33,18 @@ describe("T3 connect-wait queue", () => {
   });
 });
 
+describe("favorite slash command", () => {
+  it("registers top-level /favorite and posts the thread link to the rambling channel", () => {
+    expect(mentionRouterSource).toContain("Ix.guild(FAVORITE_SLASH_COMMAND");
+    expect(mentionRouterSource).toContain("favoriteChannels.set(requesterId, optionChannelId)");
+    expect(mentionRouterSource).toContain("resolveFavoriteDestination({");
+    expect(mentionRouterSource).toContain("formatFavoritePost({");
+    expect(mentionRouterSource).toContain("rest.createMessage(destination.channelId");
+    expect(mentionRouterSource).toContain(".add(favoriteSlashCommand)");
+    expect(mentionRouterSource).toContain("FAVORITE_SLASH_COMMAND_NAME");
+  });
+});
+
 describe("today-recap slash command", () => {
   it("registers /omegent today-recap and posts the recap in the invoking channel", () => {
     expect(mentionRouterSource).toContain('"today-recap": Effect.gen(function* () {');

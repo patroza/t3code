@@ -2,6 +2,8 @@ import { Discord } from "dfx";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  FAVORITE_SLASH_COMMAND,
+  FAVORITE_SLASH_COMMAND_NAME,
   formatAskSlashAck,
   isThreadTalkSlashAction,
   OMEGENT_SLASH_COMMAND,
@@ -38,6 +40,16 @@ describe("Omegent slash command definition", () => {
     const assign = OMEGENT_SLASH_COMMAND.options.find((option) => option.name === "assign");
     expect(assign?.options?.[0]?.name).toBe("github");
     expect(assign?.options?.[0]?.required).toBe(false);
+  });
+
+  it("registers top-level /favorite with an optional channel", () => {
+    expect(FAVORITE_SLASH_COMMAND_NAME).toBe("favorite");
+    expect(FAVORITE_SLASH_COMMAND.name).toBe("favorite");
+    expect(FAVORITE_SLASH_COMMAND.options[0]?.name).toBe("channel");
+    expect(FAVORITE_SLASH_COMMAND.options[0]?.required).toBe(false);
+    expect(FAVORITE_SLASH_COMMAND.options[0]?.type).toBe(
+      Discord.ApplicationCommandOptionType.CHANNEL,
+    );
   });
 
   it("uses Discord subcommand option types", () => {

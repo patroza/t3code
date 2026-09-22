@@ -213,6 +213,25 @@ export const OMEGENT_SLASH_COMMAND = {
   ],
 } as const;
 
+/**
+ * Top-level `/favorite` (not an `/omegent` subcommand) so saving a thread link
+ * is one short command. Optional `channel` sets the invoker's rambling channel.
+ */
+export const FAVORITE_SLASH_COMMAND_NAME = "favorite" as const;
+
+export const FAVORITE_SLASH_COMMAND = {
+  name: FAVORITE_SLASH_COMMAND_NAME,
+  description: "Send this thread's link to your rambling channel",
+  options: [
+    {
+      type: Discord.ApplicationCommandOptionType.CHANNEL,
+      name: "channel",
+      description: "Set or override your rambling channel",
+      required: false,
+    },
+  ],
+} as const;
+
 export type ThreadTalkSlashAction = "on" | "off" | "status";
 
 export function isThreadTalkSlashAction(value: string): value is ThreadTalkSlashAction {

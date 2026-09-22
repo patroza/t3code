@@ -50,6 +50,19 @@ describe("parseIdentityMapDocument", () => {
     expect(people[0]?.github?.id).toBe("12345");
   });
 
+  it("parses optional ramblingChannelId for /favorite", () => {
+    const people = parseIdentityMapDocument({
+      people: {
+        "593167616273809448": {
+          name: "Joshua Dimaunahan",
+          githubLogin: "MindfulLearner",
+          ramblingChannelId: "1402982606877757440",
+        },
+      },
+    });
+    expect(people[0]?.ramblingChannelId).toBe("1402982606877757440");
+  });
+
   it("parses top-level map keyed by discord id", () => {
     const people = parseIdentityMapDocument({
       "111": { name: "Davide", githubLogin: "davide", githubId: "9" },
@@ -86,6 +99,18 @@ people:
     expect(people[0]?.github?.login).toBe("patroza");
     expect(people[0]?.github?.id).toBe("12345");
     expect(people[0]?.jira?.accountId).toBe("712020:abc");
+  });
+
+  it("parses ramblingChannelId from YAML people block", () => {
+    const doc = parseSimpleIdentityYaml(`
+people:
+  "593167616273809448":
+    name: Joshua Dimaunahan
+    githubLogin: MindfulLearner
+    ramblingChannelId: "1402982606877757440"
+`);
+    const people = parseIdentityMapDocument(doc);
+    expect(people[0]?.ramblingChannelId).toBe("1402982606877757440");
   });
 });
 

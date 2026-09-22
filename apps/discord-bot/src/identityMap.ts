@@ -41,6 +41,11 @@ export interface PersonIdentity {
   readonly discord?: DiscordIdentityRef | undefined;
   readonly github?: GitHubIdentityRef | undefined;
   readonly jira?: JiraIdentityRef | undefined;
+  /**
+   * Optional Discord channel/thread id for `/favorite`.
+   * `/favorite channel:` overrides this per user in favorite-channels.json.
+   */
+  readonly ramblingChannelId?: string | undefined;
 }
 
 export class IdentityMapLoadError extends Schema.TaggedError<IdentityMapLoadError>()(
@@ -147,6 +152,10 @@ function parsePerson(raw: unknown, indexLabel: string): PersonIdentity {
     asNonEmptyString(jiraNested?.displayName) ??
     asNonEmptyString(raw.jiraDisplayName) ??
     asNonEmptyString(raw.jira_display_name);
+  const ramblingChannelId =
+    asDiscordSnowflake(raw.ramblingChannelId) ??
+    asDiscordSnowflake(raw.rambling_channel_id) ??
+    asDiscordSnowflake(discordNested?.ramblingChannelId);
 
   if (discordId === undefined && githubLogin === undefined && jiraAccountId === undefined) {
     throw new Error(
@@ -183,6 +192,7 @@ function parsePerson(raw: unknown, indexLabel: string): PersonIdentity {
           },
         }
       : {}),
+    ...(ramblingChannelId !== undefined ? { ramblingChannelId } : {}),
   };
 }
 
@@ -247,6 +257,7 @@ export function parseIdentityMapDocument(document: unknown): ReadonlyArray<Perso
  *     name: Alice
  *     githubLogin: alice
  *     githubId: "99"
+ *     ramblingChannelId: "456"
  * ```
  * and top-level keyed people without a `people:` wrapper.
  */

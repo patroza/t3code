@@ -141,6 +141,7 @@ function buildChannelInfoPinBody(input: {
     "/omegent link ref:<id|url>",
     "/omegent refresh-indicators",
     "/omegent assign [github:login]  Assign linked PR(s) (default: you)",
+    "/favorite [channel:#…]          Send this thread's link to your rambling channel",
     "@Omegent …                      Same actions (fallback)",
     "  flags: --plan --local --base <b> --provider <id> --model <slug>",
     "         --steer (inject now) --queue (park; default mid-turn)",

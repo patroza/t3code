@@ -148,6 +148,16 @@ import {
   hasNewContextCompaction,
 } from "../presentation/compactContext.ts";
 import {
+  FAVORITE_MISSING_DESTINATION_MESSAGE,
+  FAVORITE_NOT_IN_THREAD_MESSAGE,
+  formatFavoriteAck,
+  formatFavoritePost,
+  formatFavoritePostError,
+  resolveFavoriteDestination,
+} from "../presentation/favorite.ts";
+import {
+  FAVORITE_SLASH_COMMAND,
+  FAVORITE_SLASH_COMMAND_NAME,
   formatAskSlashAck,
   isThreadTalkSlashAction,
   OMEGENT_SLASH_COMMAND,
@@ -175,6 +185,7 @@ import {
   type DiscordMessageLike,
 } from "../presentation/threadContext.ts";
 import { classifyDiscordAgentAccess, IdentityMapStore } from "../identityMap.ts";
+import { FavoriteChannelStore } from "../store/FavoriteChannelStore.ts";
 import { discordSourceHint } from "../t3/sourceHint.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { type ThreadLink, ThreadLinkStore } from "../store/ThreadLinkStore.ts";
@@ -604,6 +615,7 @@ const make = (botConfig: DiscordBotConfig) =>
     const links = yield* ThreadLinkStore;
     const aliases = yield* ProjectAliasStore;
     const identityMap = yield* IdentityMapStore;
+    const favoriteChannels = yield* FavoriteChannelStore;
     const registry = yield* InteractionsRegistry;
     const bridgeHub = yield* BridgeHub;
     const turnCoordinator = yield* makeDiscordThreadTurnCoordinator;
@@ -4254,10 +4266,128 @@ const make = (botConfig: DiscordBotConfig) =>
     const omegentSlashCommand = makeSlashCommand(OMEGENT_SLASH_COMMAND_NAME);
     const agentSlashCommand = makeSlashCommand(OMEGENT_SLASH_COMMAND_ALIAS);
 
+    const favoriteSlashCommand = Ix.guild(FAVORITE_SLASH_COMMAND, (ix) =>
+      Effect.gen(function* () {
+        const interaction = yield* Ix.Interaction;
+        const channelId = interaction.channel_id;
+        if (channelId === undefined || channelId.length === 0) {
+          return slashReply("Favorite only works inside a server channel or thread.", {
+            ephemeral: true,
+          });
+        }
+
+        const user = interaction.member?.user ?? interaction.user;
+        const access = classifyDiscordAgentAccess({
+          people: identityMap.list(),
+          discordId: user?.id ?? null,
+          discordUsername: user?.username ?? null,
+          discordDisplayName:
+            interaction.member?.nick ?? user?.global_name ?? user?.username ?? null,
+        });
+        if (!access.allowed) {
+          return slashReply(access.userMessage, { ephemeral: true });
+        }
+
+        const requesterId = user?.id;
+        if (requesterId === undefined || requesterId.length === 0) {
+          return slashReply("Could not tell who ran `/favorite`.", { ephemeral: true });
+        }
+
+        const optionChannelRaw = Option.getOrUndefined(ix.optionValueOptional("channel"));
+        const optionChannelId =
+          typeof optionChannelRaw === "string" && optionChannelRaw.length > 0
+            ? optionChannelRaw
+            : null;
+        if (optionChannelId !== null) {
+          yield* favoriteChannels.set(requesterId, optionChannelId);
+        }
+
+        const storedChannelId = yield* favoriteChannels.get(requesterId);
+        const destination = resolveFavoriteDestination({
+          optionChannelId,
+          storedChannelId,
+          identityChannelId: identityMap.resolveByDiscordId(requesterId)?.ramblingChannelId ?? null,
+        });
+        if (destination.kind === "missing") {
+          return slashReply(FAVORITE_MISSING_DESTINATION_MESSAGE, { ephemeral: true });
+        }
+
+        const channel = yield* rest.getChannel(channelId);
+        const inThread = isThreadChannel(channel.type);
+        if (!inThread) {
+          if (optionChannelId !== null) {
+            return slashReply(
+              formatFavoriteAck({
+                destinationChannelId: destination.channelId,
+                saved: true,
+                posted: false,
+              }),
+              { ephemeral: true },
+            );
+          }
+          return slashReply(FAVORITE_NOT_IN_THREAD_MESSAGE, { ephemeral: true });
+        }
+
+        if (destination.channelId === channelId) {
+          return slashReply(
+            "That's this thread. Pick a different rambling channel with `/favorite channel:#your-channel`.",
+            { ephemeral: true },
+          );
+        }
+
+        const threadName =
+          "name" in channel && typeof channel.name === "string" ? channel.name : undefined;
+        const content = formatFavoritePost({
+          guildId: interaction.guild_id ?? null,
+          threadId: channelId,
+          threadName,
+        });
+        const posted = yield* rest.createMessage(destination.channelId, { content }).pipe(
+          Effect.as(true as const),
+          Effect.catch((error) =>
+            Effect.succeed(
+              slashReply(formatFavoritePostError(destination.channelId, error), {
+                ephemeral: true,
+              }),
+            ),
+          ),
+        );
+        if (posted !== true) {
+          return posted;
+        }
+
+        yield* Effect.logInfo("Discord slash favorite posted thread link", {
+          discordThreadId: channelId,
+          destinationChannelId: destination.channelId,
+          source: destination.kind,
+          actorId: requesterId,
+        });
+
+        return slashReply(
+          formatFavoriteAck({
+            destinationChannelId: destination.channelId,
+            saved: optionChannelId !== null,
+            posted: true,
+          }),
+          { ephemeral: true },
+        );
+      }).pipe(
+        Effect.catch((error: unknown) =>
+          Effect.succeed(
+            slashReply(
+              `Favorite failed: ${error instanceof Error ? error.message : String(error)}`,
+              { ephemeral: true },
+            ),
+          ),
+        ),
+      ),
+    );
+
     yield* registry.register(
       Ix.builder
         .add(omegentSlashCommand)
         .add(agentSlashCommand)
+        .add(favoriteSlashCommand)
         .add(approvalButton)
         .add(denyButton)
         .add(stopButton)
@@ -4266,7 +4396,11 @@ const make = (botConfig: DiscordBotConfig) =>
     );
 
     yield* Effect.logInfo("Registered Discord slash commands", {
-      commands: [OMEGENT_SLASH_COMMAND_NAME, OMEGENT_SLASH_COMMAND_ALIAS],
+      commands: [
+        OMEGENT_SLASH_COMMAND_NAME,
+        OMEGENT_SLASH_COMMAND_ALIAS,
+        FAVORITE_SLASH_COMMAND_NAME,
+      ],
       subcommands: OMEGENT_SLASH_COMMAND.options.map((option) => option.name),
       scope: "guild",
     });

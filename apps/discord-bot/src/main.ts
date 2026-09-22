@@ -24,6 +24,7 @@ import {
   layerFromOptionalPath as projectAliasStoreLayer,
   ProjectAliasStore,
 } from "./projectAliases.ts";
+import { layer as favoriteChannelStoreLayer } from "./store/FavoriteChannelStore.ts";
 import { layer as teamsSeenStoreLayer } from "./store/TeamsSeenStore.ts";
 import { layer as threadLinkStoreLayer } from "./store/ThreadLinkStore.ts";
 import { layer as threadWarmCacheStoreLayer } from "./store/ThreadWarmCacheStore.ts";
@@ -71,6 +72,7 @@ const MainLayer = Layer.unwrap(
       threadLinkStoreLayer(botConfig.dataDir),
       teamsSeenStoreLayer(botConfig.dataDir),
       threadWarmCacheStoreLayer(botConfig.dataDir),
+      favoriteChannelStoreLayer(botConfig.dataDir),
       projectAliasStoreLayer(botConfig.projectAliasesPath),
       identityMapStoreLayer(botConfig.identityMapPath),
       bridgeHub,
