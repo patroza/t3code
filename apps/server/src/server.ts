@@ -433,7 +433,7 @@ const JiraIssueBridgeLive = JiraIssueBridge.layer.pipe(
   Layer.provideMerge(JiraAppDependenciesLive),
   // Prefer the instance already provided by GitHubPrBridgeLive when merged below.
   Layer.provideMerge(ThreadWorkItemStoreLive),
-  // Closed-set map for trusted vs context-only Jira actors.
+  // Closed-set map: only mapped Jira accounts can start or continue threads.
   Layer.provideMerge(IdentityLayerLive),
 );
 

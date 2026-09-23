@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   IdentityMapParseError,
   normalizeJiraAccountId,
+  findPersonByTeamsActor,
   parseIdentityMapDocument,
   resolvePersonByJiraAccountId,
 } from "./identityMap.ts";
@@ -65,5 +66,22 @@ describe("parseIdentityMapDocument", () => {
     expect(normalizeJiraAccountId("accountid:712020:ABC")).toBe("712020:abc");
     expect(resolvePersonByJiraAccountId(people, "712020:abc")?.username).toBe("patroza");
     expect(resolvePersonByJiraAccountId(people, "nope")).toBeNull();
+  });
+
+  it("resolves people by Teams Azure AD object id", () => {
+    const people = parseIdentityMapDocument({
+      people: {
+        patroza: {
+          username: "patroza",
+          teamsAadObjectId: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+          teamsUserId: "29:patroza",
+        },
+      },
+    });
+    expect(
+      findPersonByTeamsActor(people, { userId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" })?.username,
+    ).toBe("patroza");
+    expect(findPersonByTeamsActor(people, { userId: "29:patroza" })?.username).toBe("patroza");
+    expect(findPersonByTeamsActor(people, { aadObjectId: "nope" })).toBeNull();
   });
 });

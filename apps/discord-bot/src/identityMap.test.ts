@@ -10,6 +10,7 @@ import {
   parseIdentityMapDocument,
   parseSimpleIdentityYaml,
   classifyDiscordAgentAccess,
+  classifyTeamsAgentAccess,
   resolveParticipantIdentity,
 } from "./identityMap.ts";
 
@@ -87,6 +88,22 @@ people:
     expect(people[0]?.github?.id).toBe("12345");
     expect(people[0]?.jira?.accountId).toBe("712020:abc");
   });
+
+  it("parses a flat Teams Azure AD object id", () => {
+    const doc = parseSimpleIdentityYaml(`
+people:
+  "95218063095377920":
+    name: Patrick Roza
+    githubLogin: patroza
+    teamsAadObjectId: "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
+    teamsUserId: "29:patroza"
+`);
+    const people = parseIdentityMapDocument(doc);
+    expect(people[0]?.teams).toEqual({
+      aadObjectId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      userId: "29:patroza",
+    });
+  });
 });
 
 describe("resolveParticipantIdentity", () => {
@@ -154,6 +171,52 @@ describe("resolveParticipantIdentity", () => {
     });
     expect(denied.allowed).toBe(false);
     if (!denied.allowed) expect(denied.reason).toBe("unmapped_discord_actor");
+  });
+});
+
+describe("classifyTeamsAgentAccess", () => {
+  const people = parseIdentityMapDocument({
+    people: [
+      {
+        name: "Patrick Roza",
+        teamsAadObjectId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        teamsUserId: "29:patroza",
+      },
+    ],
+  });
+
+  it("fail-closes when the map is empty", () => {
+    const denied = classifyTeamsAgentAccess({
+      people: [],
+      aadObjectId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    });
+    expect(denied.allowed).toBe(false);
+    if (!denied.allowed) expect(denied.reason).toBe("identity_map_empty");
+  });
+
+  it("allows a mapped Azure AD object id from Graph or Bot Framework", () => {
+    const fromGraph = classifyTeamsAgentAccess({
+      people,
+      userId: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+    });
+    expect(fromGraph.allowed).toBe(true);
+
+    const fromBot = classifyTeamsAgentAccess({
+      people,
+      aadObjectId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      userId: "29:patroza",
+    });
+    expect(fromBot.allowed).toBe(true);
+  });
+
+  it("denies unmapped Teams users", () => {
+    const denied = classifyTeamsAgentAccess({
+      people,
+      aadObjectId: "11111111-2222-3333-4444-555555555555",
+      userId: "29:stranger",
+    });
+    expect(denied.allowed).toBe(false);
+    if (!denied.allowed) expect(denied.reason).toBe("unmapped_teams_actor");
   });
 });
 

@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off tryCatchInEffectGen:off
 /**
- * Operator-maintained canonical map across Discord, Jira, and GitHub identities.
+ * Operator-maintained canonical map across Discord, GitHub, Jira, and Teams identities.
  *
- * Loaded once at bot startup from T3_IDENTITY_MAP_PATH (same delivery path as
- * project-aliases: staged secrets share). Absent path → empty map (feature off).
+ * Loaded from T3_IDENTITY_MAP_PATH (same delivery path as project aliases).
+ * Absent or empty map denies every Discord and Teams actor.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -35,12 +35,21 @@ export interface JiraIdentityRef {
   readonly displayName?: string | undefined;
 }
 
+export interface TeamsIdentityRef {
+  /** Azure AD object id (GUID). */
+  readonly aadObjectId?: string | undefined;
+  /** Bot Framework user id (`29:…`) when it differs from the Azure AD object id. */
+  readonly userId?: string | undefined;
+  readonly displayName?: string | undefined;
+}
+
 export interface PersonIdentity {
   /** Human display name. */
   readonly name: string;
   readonly discord?: DiscordIdentityRef | undefined;
   readonly github?: GitHubIdentityRef | undefined;
   readonly jira?: JiraIdentityRef | undefined;
+  readonly teams?: TeamsIdentityRef | undefined;
 }
 
 export class IdentityMapLoadError extends Schema.TaggedError<IdentityMapLoadError>()(
@@ -79,6 +88,77 @@ function asDiscordSnowflake(value: unknown): string | undefined {
   // Accept any pure digit id so fixtures and short local maps still load.
   if (!/^\d{1,32}$/u.test(raw)) return undefined;
   return raw;
+}
+
+const TEAMS_AAD_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+export function normalizeTeamsAadObjectId(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = value.trim().replace(/^\{|\}$/gu, "");
+  if (!TEAMS_AAD_OBJECT_ID.test(trimmed)) return null;
+  return trimmed.toLowerCase();
+}
+
+function parseTeamsRef(
+  raw: Record<string, unknown>,
+  indexLabel: string,
+): TeamsIdentityRef | undefined {
+  const teamsNested = isRecord(raw.teams) ? raw.teams : undefined;
+  const explicitAad =
+    asNonEmptyString(teamsNested?.aadObjectId) ??
+    asNonEmptyString(teamsNested?.aad_object_id) ??
+    asNonEmptyString(raw.teamsAadObjectId) ??
+    asNonEmptyString(raw.teams_aad_object_id);
+  if (explicitAad !== undefined && normalizeTeamsAadObjectId(explicitAad) === null) {
+    throw new Error(
+      `Identity map entry ${indexLabel} teams.aadObjectId must be an Azure AD object id (GUID).`,
+    );
+  }
+  let aadObjectId = normalizeTeamsAadObjectId(explicitAad) ?? undefined;
+  const userIdRaw =
+    asNonEmptyString(teamsNested?.userId) ??
+    asNonEmptyString(teamsNested?.user_id) ??
+    asNonEmptyString(raw.teamsUserId) ??
+    asNonEmptyString(raw.teams_user_id);
+  let userId = userIdRaw;
+  if (aadObjectId === undefined && userIdRaw !== undefined) {
+    const userAsAad = normalizeTeamsAadObjectId(userIdRaw);
+    if (userAsAad !== null) {
+      aadObjectId = userAsAad;
+      userId = undefined;
+    }
+  }
+  const displayName =
+    asNonEmptyString(teamsNested?.displayName) ??
+    asNonEmptyString(raw.teamsDisplayName) ??
+    asNonEmptyString(raw.teams_display_name);
+  if (aadObjectId === undefined && userId === undefined) return undefined;
+  return {
+    ...(aadObjectId !== undefined ? { aadObjectId } : {}),
+    ...(userId !== undefined ? { userId } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+  };
+}
+
+function personMatchesTeamsActor(
+  person: PersonIdentity,
+  input: {
+    readonly aadObjectId?: string | null | undefined;
+    readonly userId?: string | null | undefined;
+  },
+): boolean {
+  const aad = normalizeTeamsAadObjectId(input.aadObjectId);
+  const userId = input.userId?.trim().toLowerCase() ?? "";
+  const userAsAad = normalizeTeamsAadObjectId(input.userId);
+  const mappedAad = person.teams?.aadObjectId?.toLowerCase();
+  if (mappedAad !== undefined && mappedAad.length > 0) {
+    if (aad !== null && mappedAad === aad) return true;
+    if (userAsAad !== null && mappedAad === userAsAad) return true;
+  }
+  const mappedUser = person.teams?.userId?.trim().toLowerCase();
+  return (
+    mappedUser !== undefined && mappedUser.length > 0 && userId.length > 0 && mappedUser === userId
+  );
 }
 
 function normalizeLogin(value: unknown): string | undefined {
@@ -147,10 +227,16 @@ function parsePerson(raw: unknown, indexLabel: string): PersonIdentity {
     asNonEmptyString(jiraNested?.displayName) ??
     asNonEmptyString(raw.jiraDisplayName) ??
     asNonEmptyString(raw.jira_display_name);
+  const teams = parseTeamsRef(raw, indexLabel);
 
-  if (discordId === undefined && githubLogin === undefined && jiraAccountId === undefined) {
+  if (
+    discordId === undefined &&
+    githubLogin === undefined &&
+    jiraAccountId === undefined &&
+    teams === undefined
+  ) {
     throw new Error(
-      `Identity map entry ${indexLabel} ("${name}") needs at least one of discord.id, github.login, or jira.accountId.`,
+      `Identity map entry ${indexLabel} ("${name}") needs at least one of discord.id, github.login, jira.accountId, or teams.aadObjectId.`,
     );
   }
 
@@ -183,6 +269,7 @@ function parsePerson(raw: unknown, indexLabel: string): PersonIdentity {
           },
         }
       : {}),
+    ...(teams !== undefined ? { teams } : {}),
   };
 }
 
@@ -459,6 +546,55 @@ export function classifyDiscordAgentAccess(input: {
   return { allowed: true, person: resolved.person };
 }
 
+export type TeamsAgentAccessDecision =
+  | { readonly allowed: true; readonly person: PersonIdentity }
+  | {
+      readonly allowed: false;
+      readonly reason: "identity_map_empty" | "unmapped_teams_actor" | "missing_teams_actor";
+      readonly userMessage: string;
+    };
+
+/**
+ * Fail-closed agent gate for Teams requesters. Same closed set as Discord:
+ * empty map and unmapped actors cannot start, continue, stop, or approve a thread.
+ */
+export function classifyTeamsAgentAccess(input: {
+  readonly people: ReadonlyArray<PersonIdentity>;
+  readonly aadObjectId?: string | null | undefined;
+  readonly userId?: string | null | undefined;
+  readonly displayName?: string | null | undefined;
+}): TeamsAgentAccessDecision {
+  if (input.people.length === 0) {
+    return {
+      allowed: false,
+      reason: "identity_map_empty",
+      userMessage:
+        "You're not authorized to run agent work from Teams. An operator needs to configure the identity map before anyone can use the agent.",
+    };
+  }
+  const aad = input.aadObjectId?.trim() ?? "";
+  const userId = input.userId?.trim() ?? "";
+  if (aad.length === 0 && userId.length === 0) {
+    return {
+      allowed: false,
+      reason: "missing_teams_actor",
+      userMessage:
+        "You're not authorized to run agent work from Teams. Ask an operator to add your Teams account to the allowlist.",
+    };
+  }
+  const person =
+    input.people.find((candidate) => personMatchesTeamsActor(candidate, input)) ?? null;
+  if (person === null) {
+    return {
+      allowed: false,
+      reason: "unmapped_teams_actor",
+      userMessage:
+        "You're not authorized to run agent work from Teams. Ask an operator to add your Teams account to the allowlist.",
+    };
+  }
+  return { allowed: true, person };
+}
+
 export interface IdentityMapStoreService {
   readonly list: () => ReadonlyArray<PersonIdentity>;
   readonly resolveByDiscordId: (discordId: string) => PersonIdentity | null;
@@ -589,7 +725,7 @@ export const layerFromOptionalPath = (filePath: string | undefined) =>
     Effect.gen(function* () {
       if (filePath === undefined || filePath.trim().length === 0) {
         yield* Effect.logInfo(
-          "T3_IDENTITY_MAP_PATH is unset; Discord identity authorization is unavailable until configured.",
+          "T3_IDENTITY_MAP_PATH is unset; Discord and Teams identity authorization is unavailable until configured.",
         );
         return makeIdentityMapStore([]);
       }

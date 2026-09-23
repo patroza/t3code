@@ -236,6 +236,58 @@ export function hasInternalTagTrigger(input: {
   });
 }
 
+export type TeamsTriggerReason =
+  | "mention"
+  | "german-problem"
+  | "allowlisted-reaction"
+  | "internal-tag";
+
+function teamsAuthor(message: TeamsMessage): {
+  readonly userId: string | null;
+  readonly displayName: string | null;
+} {
+  const userId = message.from?.user?.id?.trim() || null;
+  const displayName = message.from?.user?.displayName?.trim() || null;
+  return {
+    userId: userId !== null && userId.length > 0 ? userId : null,
+    displayName: displayName !== null && displayName.length > 0 ? displayName : null,
+  };
+}
+
+/**
+ * The person whose action started or continued the thread.
+ * Reactions and internal tags attribute the reactor/tagger, not the quoted customer.
+ */
+export function resolveTeamsTriggerActor(input: {
+  readonly reason: TeamsTriggerReason;
+  readonly message: TeamsMessage;
+  readonly triggerMessage?: TeamsMessage | undefined;
+  readonly allowlistedUserIds?: ReadonlyArray<string> | undefined;
+  readonly reactionTriggerTypes?: ReadonlyArray<string> | undefined;
+}): { readonly userId: string | null; readonly displayName: string | null } {
+  if (input.reason === "internal-tag") {
+    return teamsAuthor(input.triggerMessage ?? input.message);
+  }
+  if (input.reason === "allowlisted-reaction") {
+    const reaction = (input.message.reactions ?? []).find((candidate) => {
+      const reactionType = normalizedText(candidate.reactionType);
+      const reactingUserId = normalizedText(candidate.user?.user?.id);
+      if (reactionType.length === 0 || reactingUserId.length === 0) return false;
+      const typeMatch = (input.reactionTriggerTypes ?? []).some(
+        (trigger) => normalizedText(trigger) === reactionType,
+      );
+      const userMatch = (input.allowlistedUserIds ?? []).some(
+        (userId) => normalizedText(userId) === reactingUserId,
+      );
+      return typeMatch && userMatch;
+    });
+    const userId = reaction?.user?.user?.id?.trim() || null;
+    const displayName = reaction?.user?.user?.displayName?.trim() || null;
+    return { userId, displayName };
+  }
+  return teamsAuthor(input.message);
+}
+
 export function buildTeamsIncidentTitle(input: {
   readonly company: string;
   readonly environment: string;

@@ -47,13 +47,8 @@ import {
   resolveT3ProjectIdForJiraKey,
 } from "./JiraAppConfig.ts";
 import { JiraDeliveryStore, type StoredJiraDelivery } from "./JiraDeliveryStore.ts";
-import { resolveDiscordLinkForJiraIssue, resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
+import { resolveThreadIdForJiraIssue } from "./JiraThreadLookup.ts";
 import { classifyJiraActorTrust, type JiraActorTrustDecision } from "./jiraActorTrust.ts";
-import {
-  formatDiscordJiraContextNote,
-  postDiscordChannelMessage,
-  resolveDiscordBotToken,
-} from "./jiraDiscordContext.ts";
 import { buildJiraTurnPrompt, type JiraIssueInvocation } from "./JiraWebhookPayload.ts";
 
 const NOT_LINKED_RESPONSE =
@@ -68,13 +63,9 @@ const EMPTY_PROMPT_RESPONSE =
   "Provide a prompt after the mention (for example: `@omegent investigate the packing failure`).";
 const CREATE_FAILED_RESPONSE =
   "T3 could not create a worktree thread for this Jira issue. Check server logs or link an existing thread.";
-/** Untrusted-actor replies: short, no product jargon; @-mention is applied separately in ADF. */
-const CONTEXT_UNAUTHORIZED_RESPONSE =
-  "You're not currently authorized to run agent work from Jira. Please ask a team member who is authorized to take this forward.";
-const CONTEXT_NOTED_RESPONSE =
-  "Thanks — noted for the team. You're not currently authorized to run agent work from Jira, so this was filed as context only. An authorized teammate can pick it up.";
-const CONTEXT_FAILED_RESPONSE =
-  "You're not currently authorized to run agent work from Jira, and I couldn't file this as context either. Please ping an authorized teammate.";
+/** Untrusted-actor reply: short, no product jargon; @-mention is applied separately in ADF. */
+const IDENTITY_DENIED_RESPONSE =
+  "You're not authorized to run agent work from Jira. Ask an operator to add your Jira account to the allowlist.";
 const MAX_JIRA_COMMENT_LENGTH = 32_000;
 
 function jiraSourceRef(
@@ -655,81 +646,20 @@ const make = Effect.gen(function* () {
       personId: trust.person?.personId ?? null,
     });
 
-    const link = yield* resolveLinkedThreadId(input.invocation.issueKey);
-    if (link._tag === "ambiguous") {
-      yield* finishDelivery(acknowledged, AMBIGUOUS_RESPONSE, "rejected");
+    if (trust.mode === "denied") {
+      yield* Effect.logWarning("Rejected Jira invocation from unmapped identity", {
+        deliveryId: input.deliveryId,
+        issueKey: input.invocation.issueKey,
+        actorAccountId: input.invocation.actorAccountId,
+        reason: trust.reason,
+      });
+      yield* finishDelivery(acknowledged, IDENTITY_DENIED_RESPONSE, "rejected");
       return;
     }
 
-    // Untrusted actors: optional chat context note only (no agent). Never auto-creates.
-    // Requires a unique chat-linked issue in links.json when filing context.
-    if (trust.mode === "context-only") {
-      const linksPath = config.discordLinksPath;
-      if (linksPath === null || linksPath.length === 0) {
-        yield* finishDelivery(acknowledged, CONTEXT_UNAUTHORIZED_RESPONSE, "rejected");
-        return;
-      }
-      const linksRaw = yield* fileSystem
-        .readFileString(linksPath)
-        .pipe(Effect.orElseSucceed(() => ""));
-      const discordLink = resolveDiscordLinkForJiraIssue({
-        issueKey: input.invocation.issueKey,
-        linksJson: linksRaw,
-      });
-      if (discordLink._tag === "unlinked" || discordLink._tag === "ambiguous") {
-        yield* finishDelivery(acknowledged, CONTEXT_UNAUTHORIZED_RESPONSE, "rejected");
-        return;
-      }
-
-      const token = yield* Effect.promise(() => resolveDiscordBotToken());
-      if (token === null) {
-        yield* finishDelivery(acknowledged, CONTEXT_FAILED_RESPONSE, "rejected");
-        return;
-      }
-
-      const requester =
-        input.invocation.actorDisplayName ?? input.invocation.actorAccountId ?? "unknown";
-      const content = formatDiscordJiraContextNote({
-        issueKey: input.invocation.issueKey,
-        requester,
-        prompt: input.invocation.prompt,
-        commentUrl: input.invocation.commentUrl,
-      });
-      const posted = yield* Effect.promise(() =>
-        postDiscordChannelMessage({
-          token,
-          channelId: discordLink.discordThreadId,
-          content,
-        })
-          .then((message) => ({ _tag: "ok" as const, message }))
-          .catch((cause) => ({ _tag: "err" as const, cause })),
-      );
-      if (posted._tag === "err") {
-        yield* Effect.logError("Failed to post Jira context-only note to Discord", {
-          deliveryId: input.deliveryId,
-          issueKey: input.invocation.issueKey,
-          discordThreadId: discordLink.discordThreadId,
-          cause: posted.cause,
-        });
-        yield* finishDelivery(acknowledged, CONTEXT_FAILED_RESPONSE, "rejected");
-        return;
-      }
-
-      yield* Effect.logInfo("Posted Jira context-only note to Discord (no agent run)", {
-        deliveryId: input.deliveryId,
-        issueKey: input.invocation.issueKey,
-        discordThreadId: discordLink.discordThreadId,
-        t3ThreadId: discordLink.t3ThreadId,
-        discordMessageId: posted.message.id,
-      });
-      const notedDelivery: StoredJiraDelivery = {
-        ...acknowledged,
-        threadId:
-          discordLink.t3ThreadId !== null
-            ? (discordLink.t3ThreadId as ThreadId)
-            : acknowledged.threadId,
-      };
-      yield* finishDelivery(notedDelivery, CONTEXT_NOTED_RESPONSE, "completed");
+    const link = yield* resolveLinkedThreadId(input.invocation.issueKey);
+    if (link._tag === "ambiguous") {
+      yield* finishDelivery(acknowledged, AMBIGUOUS_RESPONSE, "rejected");
       return;
     }
 
