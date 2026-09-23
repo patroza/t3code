@@ -174,7 +174,7 @@ describe("resolveAgentTurnRulesPath", () => {
     const body = NodeFS.readFileSync(path, "utf8");
     expect(body).not.toContain("cab");
     expect(body).toContain("PR footer");
-    expect(body).toContain("[(.)]");
+    expect(body).toContain("({t3app})");
     expect(body).toContain("t3code://");
     expect(body).toContain("Style:");
     expect(body).toContain("client overlay");

@@ -67,7 +67,7 @@ describe("formatDiscordPrAttributionFooter", () => {
         t3ThreadUrl: "https://t3vm.tail.example.ts.net/?thread=abc",
       }),
     ).toContain(
-      " · [T3](https://t3vm.tail.example.ts.net/?thread=abc) [(.)](t3code://t3vm/?thread=abc)",
+      " · [T3](https://t3vm.tail.example.ts.net/?thread=abc) (t3code://t3vm/?thread=abc)",
     );
   });
 });
@@ -110,15 +110,15 @@ describe("T3 thread URL helpers", () => {
     const base =
       "opened by [x](https://discord.com/users/1) in chat thread **Discord** · [t](https://discord.com/channels/1/2/3)";
     const once = withT3ThreadLink(base, "https://t3vm/?thread=1");
-    expect(once).toBe(`${base} · [T3](https://t3vm/?thread=1) [(.)](t3code://t3vm/?thread=1)`);
+    expect(once).toBe(`${base} · [T3](https://t3vm/?thread=1) (t3code://t3vm/?thread=1)`);
     expect(withT3ThreadLink(once, "https://t3vm/?thread=1")).toBe(once);
   });
 
-  it("upgrades a T3-only footer with the desktop (.) sibling", () => {
+  it("upgrades a T3-only footer with the desktop t3code:// sibling", () => {
     const base =
       "opened by [x](https://discord.com/users/1) in chat thread **Discord** · [t](https://discord.com/channels/1/2/3) · [T3](https://t3vm/?thread=1)";
     expect(withT3ThreadLink(base, "https://t3vm/?thread=1")).toBe(
-      `${base} [(.)](t3code://t3vm/?thread=1)`,
+      `${base} (t3code://t3vm/?thread=1)`,
     );
   });
 

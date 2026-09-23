@@ -203,7 +203,7 @@ export function formatDiscordPrFooterPromptBlock(input: {
 /**
  * Compact T3 thread link fields for PR footers.
  * Agents pick full (private GH repo) vs short host `t3vm` (public).
- * `app` is always the desktop `t3code://t3vm/?thread=…` sibling for `(.)`.
+ * `app` is always the desktop `t3code://t3vm/?thread=…` sibling (raw text).
  */
 export function formatT3PrLinkPromptBlock(input: {
   readonly t3ThreadId?: string | null | undefined;

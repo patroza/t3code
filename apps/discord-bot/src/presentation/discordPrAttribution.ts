@@ -35,7 +35,10 @@ export const DISCORD_PR_ATTRIBUTION_MARKER = "in chat thread **Discord** ·";
 export const T3_PR_THREAD_LINK_MARKER = " · [T3](";
 
 /** Marker for the desktop `t3code://` sibling next to `[T3]`. */
-export const T3_PR_DESKTOP_LINK_MARKER = " [(.)](t3code://";
+export const T3_PR_DESKTOP_LINK_MARKER = " (t3code://";
+
+/** Legacy markdown form GitHub strips (`[(.)](t3code://…)` → unlinked `(.)`). */
+const T3_PR_DESKTOP_MARKDOWN_LINK_MARKER = " [(.)](t3code://";
 
 export type DiscordPrAttributionInput = {
   /** Thread starter display name (fallback: username). */
@@ -150,8 +153,21 @@ export function toT3CodeDesktopThreadUrl(httpsThreadUrl: string): string {
   return short.replace(/^https?:\/\//u, "t3code://");
 }
 
+function formatT3DesktopSibling(t3ThreadUrl: string): string {
+  // GitHub's markdown sanitizer drops unknown-scheme hrefs, so `[(.)](t3code://…)`
+  // renders as unlinked `(.)`. Keep the desktop URL as visible text instead.
+  return `(${toT3CodeDesktopThreadUrl(t3ThreadUrl)})`;
+}
+
 function formatT3FooterLinks(t3ThreadUrl: string): string {
-  return `[T3](${t3ThreadUrl}) [(.)](${toT3CodeDesktopThreadUrl(t3ThreadUrl)})`;
+  return `[T3](${t3ThreadUrl}) ${formatT3DesktopSibling(t3ThreadUrl)}`;
+}
+
+function footerHasDesktopSibling(footer: string): boolean {
+  return (
+    footer.includes(T3_PR_DESKTOP_LINK_MARKER) ||
+    footer.includes(T3_PR_DESKTOP_MARKDOWN_LINK_MARKER)
+  );
 }
 
 /**
@@ -168,7 +184,7 @@ export function pickT3ThreadUrlForGithubRepo(input: {
   return toT3PublicShortThreadUrl(full);
 }
 
-/** Append ` · [T3](url) [(.)](t3code://…)` when missing. */
+/** Append ` · [T3](url) (t3code://…)` when missing. */
 export function withT3ThreadLink(
   discordFooter: string,
   t3ThreadUrl: string | null | undefined,
@@ -179,16 +195,16 @@ export function withT3ThreadLink(
   const links = formatT3FooterLinks(t3);
   if (base.length === 0) return links;
   const hasT3 = base.includes(T3_PR_THREAD_LINK_MARKER) || base.includes(`](${t3})`);
-  const hasApp = base.includes(T3_PR_DESKTOP_LINK_MARKER);
+  const hasApp = footerHasDesktopSibling(base);
   if (hasT3 && hasApp) return base;
-  if (hasT3) return `${base} [(.)](${toT3CodeDesktopThreadUrl(t3)})`;
+  if (hasT3) return `${base} ${formatT3DesktopSibling(t3)}`;
   return `${base} · ${links}`;
 }
 
 /**
  * Build the single-line attribution footer from thread starter + title.
  * User link uses Discord profile URL; thread link must be a full channel jump URL.
- * Optional T3 thread link is appended as ` · [T3](url) [(.)](t3code://…)`.
+ * Optional T3 thread link is appended as ` · [T3](url) (t3code://…)`.
  */
 export function formatDiscordPrAttributionFooter(input: DiscordPrAttributionInput): string {
   const displayName = input.starterDisplayName.trim() || "unknown";
@@ -302,9 +318,10 @@ export type EnsureDiscordPrAttributionResult = {
 
 /**
  * For each PR URL, append the Discord attribution footer when missing.
- * When `t3FullThreadUrl` is set, appends ` · [T3](…) [(.)](t3code://…)` using
- * the full host for private GitHub repos and the short `t3vm` host for
- * public/unknown repos. The `(.)` desktop link always uses `t3code://t3vm`.
+ * When `t3FullThreadUrl` is set, appends ` · [T3](…) (t3code://…)` using the
+ * full host for private GitHub repos and the short `t3vm` host for
+ * public/unknown repos. The desktop URL is raw text (`t3code://t3vm`) so
+ * GitHub's sanitizer cannot strip it.
  * Best-effort: failures are returned per-URL and never throw.
  */
 export async function ensureDiscordPrAttributionFooters(input: {

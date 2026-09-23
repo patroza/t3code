@@ -174,10 +174,10 @@ When opening or updating a PR from a Discord thread:
 1. **Discord footer (required in the PR description).** Append this exact footer form at the end of the PR body (use the **thread starter** when known, otherwise the current requester, and that thread’s real jump link):
 
 ```md
-opened by [<displayName>](https://discord.com/users/<discord_user_id>) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>) · [T3](t3url) [(.)](t3app)
+opened by [<displayName>](https://discord.com/users/<discord_user_id>) in chat thread **Discord** · [Thread Title](https://discord.com/channels/<guild_id>/<channel_or_thread_id>/<message_id>) · [T3](t3url) (t3app)
 ```
 
-URL forms only; never bare snowflakes. `[T3]` is the HTTPS thread link: full host on private GitHub repos, `https://t3vm/?thread=…` on public. `[(.)]` is always `t3code://t3vm/?thread=…` (desktop). Prefer turn `pr` + `t3` fields when present.
+URL forms only; never bare snowflakes. `[T3]` is the HTTPS thread link: full host on private GitHub repos, `https://t3vm/?thread=…` on public. `(t3app)` is the raw `t3code://t3vm/?thread=…` desktop URL as text — GitHub strips custom-scheme markdown hrefs, so do not wrap it as `[(.)](t3code://…)`. Prefer turn `pr` + `t3` fields when present.
 
 Prefer the thread starter’s Discord id/display name from turn context. Do not skip this because the bot _might_ patch the body later — still write it when you create the PR so the first revision is correct. The bot may also hard-append the footer when a PR URL is linked; that is a safety net, not a reason to omit it.
 

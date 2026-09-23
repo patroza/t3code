@@ -16,10 +16,10 @@ Don't mix up requester vs thread starter vs others.
 **PR lifecycle:** before push/handoff, check the linked PR is still **open** (`gh pr view --json state` or equivalent). If **merged** or **closed**, do **not** keep committing on that branch — branch fresh from `fork/dev`, re-apply unmerged work, open a **new** PR (draft if still iterating). One merged PR is not a free ticket for later commits.
 
 **PR footer** from turn `pr` + `t3` fields (paste at PR body end; bot may re-append):
-`opened by [{name}](https://discord.com/users/{uid}) in chat thread **Discord** · [{title}](https://discord.com/channels/{g}/{c}/{m}) · [T3]({t3url}) [(.)]({t3app})`
+`opened by [{name}](https://discord.com/users/{uid}) in chat thread **Discord** · [{title}](https://discord.com/channels/{g}/{c}/{m}) · [T3]({t3url}) ({t3app})`
 URL forms only; never bare snowflakes.
 **t3url:** private GitHub repo → turn `t3 full=…`; public repo → turn `t3 short=…` (host is always just `t3vm`). Prefer short when unsure (don't leak internal hosts on public PRs).
-**t3app:** turn `t3 app=…` (`t3code://t3vm/?thread=…`, desktop). Always pair with `[T3]`.
+**t3app:** turn `t3 app=…` (raw `t3code://t3vm/?thread=…` text in parens). GitHub strips custom-scheme markdown hrefs, so do **not** wrap it as `[(.)](t3code://…)`.
 
 **jira:** put turn keys in PR body (prefer primary in title/branch). Keys are
 context, not a request to comment on the issue.
