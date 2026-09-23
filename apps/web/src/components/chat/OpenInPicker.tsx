@@ -670,32 +670,29 @@ export const OpenInPicker = memo(function OpenInPicker({
               <MenuItem
                 density={presentation === "menu" ? "touch" : "default"}
                 key={`${reference.type}:${reference.id}`}
-                className="group data-highlighted:bg-transparent hover:bg-accent data-highlighted:hover:bg-accent"
                 onClick={() => void dispatch(option)}
               >
                 <OptionIcon option={option} />
-                <MenuItemLabel className={cn("truncate", unavailable && "text-muted-foreground")}>
-                  {optionLabel(option, navigator.platform)}
+                <MenuItemLabel>
+                  {unavailable ? (
+                    <span className="text-muted-foreground">
+                      {optionLabel(option, navigator.platform)}
+                    </span>
+                  ) : (
+                    optionLabel(option, navigator.platform)
+                  )}
                 </MenuItemLabel>
                 {unavailable && <TriangleAlertIcon className="ml-auto size-3.5 text-warning" />}
                 {option.type === "custom" ? (
                   <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
                     {isEffective && shortcutLabel && (
-                      <MenuShortcut
-                        className={
-                          presentation === "menu"
-                            ? "ms-0 mr-7"
-                            : "ms-0 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
-                        }
-                      >
-                        {shortcutLabel}
-                      </MenuShortcut>
+                      <MenuShortcut className="ms-0 mr-7">{shortcutLabel}</MenuShortcut>
                     )}
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon-xs"
-                      className={`absolute right-0 top-1/2 size-6 -translate-y-1/2 ${presentation === "menu" ? "" : "opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"}`}
+                      className="absolute right-0 top-1/2 -translate-y-1/2"
                       aria-label={`Edit ${option.entry.name}`}
                       onPointerDown={(event) => {
                         event.preventDefault();
@@ -721,7 +718,6 @@ export const OpenInPicker = memo(function OpenInPicker({
               {options.length > 0 && <MenuSeparator />}
               <MenuItem
                 density={presentation === "menu" ? "touch" : "default"}
-                className="hover:bg-accent"
                 onClick={openAddDialog}
               >
                 <PlusIcon className="size-4" />
@@ -970,7 +966,7 @@ export const OpenInPicker = memo(function OpenInPicker({
             onClick={() => void dispatch(preferredOption)}
           >
             <OptionIcon option={preferredOption} className="size-4" />
-            <MenuItemLabel className="truncate">
+            <MenuItemLabel>
               Open in {optionLabel(preferredOption, navigator.platform)}
             </MenuItemLabel>
             {shortcutLabel && <MenuShortcut>{shortcutLabel}</MenuShortcut>}
@@ -981,7 +977,7 @@ export const OpenInPicker = memo(function OpenInPicker({
             <SquareArrowOutUpRightIcon className="size-4" />
             <MenuItemLabel>Open in…</MenuItemLabel>
           </MenuSubTrigger>
-          <MenuSubPopup className="min-w-32 max-w-[calc(100vw-2rem)]">{editorItems}</MenuSubPopup>
+          <MenuSubPopup>{editorItems}</MenuSubPopup>
         </MenuSub>
         {openWithDialogs}
       </>
@@ -993,7 +989,6 @@ export const OpenInPicker = memo(function OpenInPicker({
       <Group aria-label="Open with application">
         <Button
           aria-label={compact ? "Open file in preferred editor" : "Open in preferred application"}
-          className="ps-[8.5px]"
           size="xs"
           variant="outline"
           disabled={!preferredOption || !openInCwd || remote.mode === "remote-unavailable"}
@@ -1011,7 +1006,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           </span>
         </Button>
         <GroupSeparator {...(!compact ? { className: "hidden @3xl/header-actions:block" } : {})} />
-        <Menu highlightItemOnHover={false}>
+        <Menu>
           <MenuTrigger
             render={<Button aria-label="Choose editor" size="icon-xs" variant="outline" />}
           >

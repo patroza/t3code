@@ -970,9 +970,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     </span>
                   }
                 />
-                <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
-                  {thread.title}
-                </TooltipPopup>
+                <TooltipPopup side="top">{thread.title}</TooltipPopup>
               </Tooltip>
               <ThreadIdentityMark
                 environmentId={thread.environmentId}
@@ -1257,7 +1255,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   return (
     <SidebarMenuSub
       ref={attachThreadListAutoAnimateRef}
-      className="mx-0.5 my-0 w-full translate-x-0 gap-0.5 overflow-hidden border-l-0 px-1 py-0 sm:mx-1 sm:px-1.5"
+      className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden sm:mx-1"
     >
       {shouldShowThreadPanel && showEmptyThreadState ? (
         <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
@@ -1310,7 +1308,6 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             render={showMoreButtonRender}
             data-thread-selection-safe
             size="sm"
-            className="h-8 w-full translate-x-0 justify-start px-2 text-left text-xs text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             onClick={() => {
               expandThreadListForProject(projectKey);
             }}
@@ -1328,7 +1325,6 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             render={showLessButtonRender}
             data-thread-selection-safe
             size="sm"
-            className="h-8 w-full translate-x-0 justify-start px-2 text-left text-xs text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
             onClick={() => {
               collapseThreadListForProject(projectKey);
             }}
@@ -2668,10 +2664,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       <div className="group/project-header relative">
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
-          size="sm"
-          className={`h-8 gap-2 rounded-md px-2 py-1.5 pr-8 text-left hover:bg-sidebar-row-hover group-hover/project-header:bg-sidebar-row-hover group-hover/project-header:text-sidebar-foreground max-sm:pr-14 ${
-            isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-          }`}
+          className={isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : undefined}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
           {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
           onPointerDownCapture={handleProjectButtonPointerDownCapture}
@@ -2720,6 +2713,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               </span>
             ) : null}
           </span>
+          {/* Keeps the name clear of the environment badge and new-thread button overlaid on
+              the row's end (two slots on touch, where both stay visible). */}
+          <span aria-hidden className="w-4 shrink-0 max-sm:w-10" />
         </SidebarMenuButton>
         {/* Environment badge – visible by default, crossfades with the
             "new thread" button on hover using the same pointer-events +
@@ -2824,7 +2820,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 : "Update the project title."}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
+          <DialogPanel>
             <div className="grid gap-1.5">
               <span className="text-xs font-medium text-foreground">Project title</span>
               <Input
@@ -2871,7 +2867,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 : "Choose how this project should be grouped in the sidebar."}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
+          <DialogPanel>
             <div className="grid gap-1.5">
               <span className="text-xs font-medium text-foreground">Grouping rule</span>
               <Select
@@ -2930,7 +2926,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
 const SidebarProjectListRow = memo(function SidebarProjectListRow(props: SidebarProjectItemProps) {
   return (
-    <SidebarMenuItem className="rounded-md" data-project-key={props.project.projectKey}>
+    <SidebarMenuItem data-project-key={props.project.projectKey}>
       <SidebarProjectItem {...props} />
     </SidebarMenuItem>
   );
@@ -2983,20 +2979,15 @@ function LocalSecondaryStatus() {
   }
 
   return (
-    <SidebarGroup className="px-2 pt-2 pb-0">
+    <SidebarGroup>
       {connecting.length > 0 ? (
-        <Alert
-          variant="default"
-          className="rounded-2xl border-border/40 bg-accent/40 text-muted-foreground"
-        >
+        <Alert variant="sidebar">
           <Spinner />
-          <AlertTitle className="text-xs font-medium text-foreground">
-            Connecting {connecting.join(", ")}
-          </AlertTitle>
+          <AlertTitle>Connecting {connecting.join(", ")}</AlertTitle>
         </Alert>
       ) : null}
       {failed.length > 0 ? (
-        <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
+        <Alert variant="warning">
           <TriangleAlertIcon />
           <AlertTitle>Couldn't connect {failed.map((entry) => entry.label).join(", ")}</AlertTitle>
           <AlertDescription>
@@ -3049,15 +3040,13 @@ function ProjectSortMenu({
     <Menu>
       <Tooltip>
         <TooltipTrigger
-          render={
-            <MenuTrigger className="inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] text-icon-muted transition-colors hover:bg-accent hover:text-foreground" />
-          }
+          render={<MenuTrigger render={<Button size="icon-xs" variant="ghost-muted" />} />}
         >
           <ArrowUpDownIcon className="size-3.5" />
         </TooltipTrigger>
         <TooltipPopup side="right">Sidebar options</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" side="bottom" className="min-w-52">
+      <MenuPopup align="end" side="bottom">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
             Sort projects
@@ -3070,7 +3059,7 @@ function ProjectSortMenu({
           >
             {(Object.entries(SIDEBAR_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>).map(
               ([value, label]) => (
-                <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+                <MenuRadioItem key={value} value={value}>
                   {label}
                 </MenuRadioItem>
               ),
@@ -3090,7 +3079,7 @@ function ProjectSortMenu({
             {(
               Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>
             ).map(([value, label]) => (
-              <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+              <MenuRadioItem key={value} value={value}>
                 {label}
               </MenuRadioItem>
             ))}
@@ -3103,7 +3092,7 @@ function ProjectSortMenu({
           <div className="px-2 py-1">
             <NumberField
               aria-label="Visible thread count"
-              className="w-28 gap-0"
+              className="w-28"
               max={MAX_SIDEBAR_THREAD_PREVIEW_COUNT}
               min={MIN_SIDEBAR_THREAD_PREVIEW_COUNT}
               onValueChange={handleThreadPreviewCountChange}
@@ -3111,14 +3100,13 @@ function ProjectSortMenu({
               step={1}
               value={threadPreviewCount}
             >
-              <NumberFieldGroup className="h-7 rounded-md sm:h-6.5">
+              <NumberFieldGroup>
                 <NumberFieldDecrement
                   aria-label="Decrease visible thread count"
-                  className="px-2 sm:px-2 [&_svg]:size-3.5"
+                  className="[&_svg]:size-3.5"
                 />
                 <NumberFieldInput
                   aria-label="Visible thread count"
-                  className="h-7 w-9 grow-0 px-0 text-xs leading-7 sm:h-6.5 sm:leading-6.5"
                   inputMode="numeric"
                   onKeyDownCapture={(event) => {
                     event.stopPropagation();
@@ -3126,7 +3114,7 @@ function ProjectSortMenu({
                 />
                 <NumberFieldIncrement
                   aria-label="Increase visible thread count"
-                  className="px-2 sm:px-2 [&_svg]:size-3.5"
+                  className="[&_svg]:size-3.5"
                 />
               </NumberFieldGroup>
             </NumberField>
@@ -4311,7 +4299,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
 
   if (props.recentThreads.length === 0) {
     return (
-      <SidebarGroup className="px-2 pt-4 pb-1">
+      <SidebarGroup>
         <div className="px-2 text-center text-xs text-muted-foreground/60">No threads</div>
       </SidebarGroup>
     );
@@ -4351,7 +4339,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
               <div className="mb-0.5 px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/45 first:pt-1">
                 {group.label}
               </div>
-              <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+              <SidebarMenuSub className="mx-0 w-full translate-x-0">
                 {group.threads.flatMap((thread) => {
                   const entry = settledEntryByThreadKey.get(
                     scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -4365,7 +4353,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
       );
     }
     return (
-      <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+      <SidebarMenuSub className="mx-0 w-full translate-x-0">
         {renderedSettledEntries.map(renderThreadRow)}
       </SidebarMenuSub>
     );
@@ -4378,8 +4366,8 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
 
     if (!props.groupByRecency) {
       return (
-        <SidebarGroup className="px-2 pt-1 pb-1">
-          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+        <SidebarGroup>
+          <SidebarMenuSub className="mx-0 w-full translate-x-0">
             {activeEntries.map(renderThreadRow)}
           </SidebarMenuSub>
         </SidebarGroup>
@@ -4398,8 +4386,8 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     // Single non-empty bucket: skip headers (e.g. everything is "Last Hour").
     if (!showSectionHeaders) {
       return (
-        <SidebarGroup className="px-2 pt-1 pb-1">
-          <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+        <SidebarGroup>
+          <SidebarMenuSub className="mx-0 w-full translate-x-0">
             {activeEntries.map(renderThreadRow)}
           </SidebarMenuSub>
         </SidebarGroup>
@@ -4409,11 +4397,11 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
     return (
       <>
         {recencyGroups.map((group) => (
-          <SidebarGroup key={group.id} className="px-2 pt-2 pb-1">
+          <SidebarGroup key={group.id}>
             <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-sidebar-muted-foreground/70">
               {group.label}
             </div>
-            <SidebarMenuSub className="mx-0 w-full translate-x-0 border-l-0 px-0">
+            <SidebarMenuSub className="mx-0 w-full translate-x-0">
               {group.threads.flatMap((thread) => {
                 const entry = entryByThreadKey.get(
                   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -4432,7 +4420,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
       return null;
     }
     return (
-      <SidebarGroup className="px-2 pt-1 pb-1">
+      <SidebarGroup>
         <button
           type="button"
           onClick={toggleSettledShelf}
@@ -4651,44 +4639,91 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     threadGrouping,
   ]);
 
-  const newThreadButtonClassName =
-    "relative inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
-
   return (
-    <SidebarContent className="gap-0">
-      <SidebarGroup className="px-2 pt-2 pb-1">
-        {/* Search + New thread on one row (Sidebar V2 layout). */}
-        <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <CommandDialogTrigger
-              render={
-                <SidebarMenuButton
-                  size="sm"
-                  className="h-8 w-full gap-2 rounded-md px-2 py-1.5 text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-0"
-                  data-testid="command-palette-trigger"
-                />
-              }
-            >
-              <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-              <span className="flex-1 truncate text-left text-sm font-medium">Search</span>
-              {commandPaletteShortcutLabel ? (
-                <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">
-                  {commandPaletteShortcutLabel}
-                </Kbd>
-              ) : null}
-            </CommandDialogTrigger>
-          </div>
-          {needsNewThreadProjectMenu ? (
-            <Menu>
+    <SidebarContent
+      fixedHeader={
+        // Lifted above the stage backdrop, whose fade bleeds below the
+        // header and would otherwise paint across the search row's outline.
+        <SidebarGroup className="z-[1]">
+          {/* Search + New thread on one row (Sidebar V2 layout). */}
+          <div className="flex items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <CommandDialogTrigger
+                render={<SidebarMenuButton data-testid="command-palette-trigger" />}
+              >
+                <SearchIcon className="size-4 shrink-0" />
+                <span className="flex-1 truncate text-left text-sm font-medium">Search</span>
+                {commandPaletteShortcutLabel ? <Kbd>{commandPaletteShortcutLabel}</Kbd> : null}
+              </CommandDialogTrigger>
+            </div>
+            {needsNewThreadProjectMenu ? (
+              <Menu>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <MenuTrigger
+                        render={
+                          <Button
+                            size="icon-xs"
+                            variant="ghost-muted"
+                            disabled={!canCreateThread}
+                            data-testid="sidebar-new-thread-trigger"
+                            aria-label="New thread"
+                          />
+                        }
+                      />
+                    }
+                  >
+                    <SquarePenIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">
+                    {newThreadShortcutLabel
+                      ? `New thread (${newThreadShortcutLabel})`
+                      : "New thread"}
+                  </TooltipPopup>
+                </Tooltip>
+                <MenuPopup align="end" side="bottom">
+                  <MenuGroup>
+                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                      New thread in
+                    </div>
+                    {sortedProjects.map((project) => (
+                      <MenuItem
+                        key={project.projectKey}
+                        closeOnClick
+                        data-testid={`sidebar-new-thread-${project.projectKey}`}
+                        onClick={() => createThreadInProject(project)}
+                      >
+                        <span className="inline-flex min-w-0 items-center gap-2">
+                          <ProjectFavicon project={project} className="size-3.5 shrink-0" />
+                          <span className="truncate">{project.displayName}</span>
+                        </span>
+                      </MenuItem>
+                    ))}
+                  </MenuGroup>
+                  <MenuSeparator />
+                  <MenuItem
+                    closeOnClick
+                    onClick={() => {
+                      if (isMobile) setOpenMobile(false);
+                      openCommandPalette({ open: "new-thread-in" });
+                    }}
+                  >
+                    Browse all…
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
+            ) : (
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <MenuTrigger
-                      type="button"
+                    <Button
+                      size="icon-xs"
+                      variant="ghost-muted"
                       disabled={!canCreateThread}
-                      className={newThreadButtonClassName}
                       data-testid="sidebar-new-thread-trigger"
                       aria-label="New thread"
+                      onClick={handleHeaderNewThreadClick}
                     />
                   }
                 >
@@ -4698,341 +4733,288 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
                 </TooltipPopup>
               </Tooltip>
-              <MenuPopup align="end" side="bottom" className="min-w-52">
-                <MenuGroup>
-                  <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                    New thread in
-                  </div>
-                  {sortedProjects.map((project) => (
-                    <MenuItem
-                      key={project.projectKey}
-                      closeOnClick
-                      className="min-h-7 py-1 sm:text-xs"
-                      data-testid={`sidebar-new-thread-${project.projectKey}`}
-                      onClick={() => createThreadInProject(project)}
-                    >
-                      <span className="inline-flex min-w-0 items-center gap-2">
-                        <ProjectFavicon project={project} className="size-3.5 shrink-0" />
-                        <span className="truncate">{project.displayName}</span>
-                      </span>
-                    </MenuItem>
-                  ))}
-                </MenuGroup>
-                <MenuSeparator />
-                <MenuItem
-                  closeOnClick
-                  className="min-h-7 py-1 sm:text-xs"
-                  onClick={() => {
-                    if (isMobile) setOpenMobile(false);
-                    openCommandPalette({ open: "new-thread-in" });
-                  }}
-                >
-                  Browse all…
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    disabled={!canCreateThread}
-                    className={newThreadButtonClassName}
-                    data-testid="sidebar-new-thread-trigger"
-                    aria-label="New thread"
-                    onClick={handleHeaderNewThreadClick}
-                  />
+            )}
+          </div>
+          {/* Compact chrome: Threads|Board + view/filter menu. */}
+          <div className="mt-1.5 flex items-center gap-1 px-0.5">
+            <ToggleGroup
+              className="min-w-0 flex-1"
+              variant="outline"
+              size="xs"
+              value={[listMode]}
+              onValueChange={(value) => {
+                const next = value[0];
+                if (isWebListMode(next)) {
+                  onListModeChange(next);
                 }
-              >
-                <SquarePenIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-              </TooltipTrigger>
-              <TooltipPopup side="bottom">
-                {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
-              </TooltipPopup>
-            </Tooltip>
-          )}
-        </div>
-        {/* Compact chrome: Threads|Board + view/filter menu. */}
-        <div className="mt-1.5 flex items-center gap-1 px-0.5">
-          <ToggleGroup
-            className="min-w-0 flex-1"
-            variant="outline"
-            size="xs"
-            value={[listMode]}
-            onValueChange={(value) => {
-              const next = value[0];
-              if (isWebListMode(next)) {
-                onListModeChange(next);
-              }
-            }}
-            data-testid="sidebar-list-mode-switcher"
-          >
-            {WEB_LIST_MODES.map((mode) => (
-              <Toggle
-                key={mode}
-                value={mode}
-                className="min-w-0 flex-1 px-1 text-[11px]"
-                aria-label={WEB_LIST_MODE_LABELS[mode]}
-              >
-                {WEB_LIST_MODE_LABELS[mode]}
-              </Toggle>
-            ))}
-          </ToggleGroup>
-          {showThreadListChrome ? (
-            <>
-              <Menu>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <MenuTrigger
-                        type="button"
-                        className={cn(
-                          "relative inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-input text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
-                          listOptionsActive && "border-primary/40 bg-primary/8 text-foreground",
-                        )}
-                        data-testid="sidebar-list-options-trigger"
-                        aria-label="List options"
-                      />
-                    }
-                  >
-                    <ListFilterIcon className="size-3.5" />
-                    {listOptionsActive ? (
-                      <span
-                        aria-hidden
-                        className="absolute top-1 right-1 size-1.5 rounded-full bg-primary"
-                      />
-                    ) : null}
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom">View & filters</TooltipPopup>
-                </Tooltip>
-                <MenuPopup align="end" side="bottom" className="min-w-56">
-                  <MenuGroup>
-                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                      Group threads
-                    </div>
-                    <MenuRadioGroup
-                      value={threadGrouping}
-                      onValueChange={(value) => {
-                        if (isWebThreadGrouping(value)) {
-                          onThreadGroupingChange(value);
-                        }
-                      }}
+              }}
+              data-testid="sidebar-list-mode-switcher"
+            >
+              {WEB_LIST_MODES.map((mode) => (
+                <Toggle
+                  key={mode}
+                  value={mode}
+                  className="min-w-0 flex-1"
+                  aria-label={WEB_LIST_MODE_LABELS[mode]}
+                >
+                  {WEB_LIST_MODE_LABELS[mode]}
+                </Toggle>
+              ))}
+            </ToggleGroup>
+            {showThreadListChrome ? (
+              <>
+                <Menu>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <MenuTrigger
+                          render={
+                            <Button
+                              size="icon-xs"
+                              variant="outline"
+                              className="relative"
+                              data-testid="sidebar-list-options-trigger"
+                              aria-label="List options"
+                            />
+                          }
+                        />
+                      }
                     >
-                      {WEB_THREAD_GROUPINGS.map((grouping) => (
-                        <MenuRadioItem
-                          key={grouping}
-                          value={grouping}
-                          closeOnClick
-                          className="min-h-7 py-1 sm:text-xs"
-                          data-testid={`sidebar-thread-grouping-${grouping}`}
-                        >
-                          <span className="inline-flex min-w-0 items-center gap-2">
-                            {grouping === "recency" ? (
-                              <LayersIcon className="size-3.5 shrink-0 opacity-70" />
-                            ) : grouping === "project" ? (
-                              <FolderIcon className="size-3.5 shrink-0 opacity-70" />
-                            ) : (
-                              <span className="size-3.5 shrink-0" />
-                            )}
-                            <span className="truncate">{WEB_THREAD_GROUPING_LABELS[grouping]}</span>
-                          </span>
-                        </MenuRadioItem>
-                      ))}
-                    </MenuRadioGroup>
-                  </MenuGroup>
-
-                  {projectFilterOptions.length > 0 ? (
-                    <>
-                      <MenuSeparator />
-                      <MenuGroup>
-                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                          Project
-                        </div>
-                        <MenuRadioGroup
-                          value={selectedProjectFilterValue}
-                          onValueChange={(value) => {
-                            onSelectedProjectFilterKeyChange(
-                              value === LIST_PROJECT_FILTER_ALL ? null : (value as string),
-                            );
-                          }}
-                        >
+                      <ListFilterIcon className="size-3.5" />
+                      {listOptionsActive ? (
+                        <span
+                          aria-hidden
+                          className="absolute top-1 right-1 size-1.5 rounded-full bg-primary"
+                        />
+                      ) : null}
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom">View & filters</TooltipPopup>
+                  </Tooltip>
+                  <MenuPopup align="end" side="bottom">
+                    <MenuGroup>
+                      <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                        Group threads
+                      </div>
+                      <MenuRadioGroup
+                        value={threadGrouping}
+                        onValueChange={(value) => {
+                          if (isWebThreadGrouping(value)) {
+                            onThreadGroupingChange(value);
+                          }
+                        }}
+                      >
+                        {WEB_THREAD_GROUPINGS.map((grouping) => (
                           <MenuRadioItem
-                            value={LIST_PROJECT_FILTER_ALL}
+                            key={grouping}
+                            value={grouping}
                             closeOnClick
-                            className="min-h-7 py-1 sm:text-xs"
-                            data-testid="sidebar-project-filter-all"
+                            data-testid={`sidebar-thread-grouping-${grouping}`}
                           >
                             <span className="inline-flex min-w-0 items-center gap-2">
-                              <ProjectFaviconFallback className="size-3.5" icon={FolderCodeIcon} />
-                              <span className="truncate">All projects</span>
+                              {grouping === "recency" ? (
+                                <LayersIcon className="size-3.5 shrink-0 opacity-70" />
+                              ) : grouping === "project" ? (
+                                <FolderIcon className="size-3.5 shrink-0 opacity-70" />
+                              ) : (
+                                <span className="size-3.5 shrink-0" />
+                              )}
+                              <span className="truncate">
+                                {WEB_THREAD_GROUPING_LABELS[grouping]}
+                              </span>
                             </span>
                           </MenuRadioItem>
-                          {projectFilterOptions.map((project) => (
-                            <MenuRadioItem
-                              key={project.projectKey}
-                              value={project.projectKey}
-                              closeOnClick
-                              className="min-h-7 py-1 sm:text-xs"
-                              data-testid={`sidebar-project-filter-${project.projectKey}`}
-                            >
-                              <span className="inline-flex min-w-0 items-center gap-2">
-                                <ProjectFavicon project={project} className="size-3.5 shrink-0" />
-                                <span className="truncate">{project.displayName}</span>
-                              </span>
-                            </MenuRadioItem>
-                          ))}
-                        </MenuRadioGroup>
-                      </MenuGroup>
-                    </>
-                  ) : null}
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuGroup>
 
-                  {environmentFilterOptions.length > 1 ? (
-                    <>
-                      <MenuSeparator />
-                      <MenuGroup>
-                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                          Environment
-                        </div>
-                        <MenuCheckboxItem
-                          checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
-                          closeOnClick={false}
-                          className="min-h-7 py-1 sm:text-xs"
-                          data-testid="sidebar-environment-filter-all"
-                          onCheckedChange={() => onSelectedEnvironmentIdsChange([])}
-                        >
-                          All environments
-                        </MenuCheckboxItem>
-                        {environmentFilterOptions.map((environment) => (
-                          <MenuCheckboxItem
-                            key={environment.environmentId}
-                            checked={isEnvironmentSelected(
-                              selectedEnvironmentIds,
-                              environment.environmentId,
-                            )}
-                            closeOnClick={false}
-                            className="min-h-7 py-1 sm:text-xs"
-                            data-testid={`sidebar-environment-filter-${environment.environmentId}`}
-                            onCheckedChange={() => {
-                              onSelectedEnvironmentIdsChange(
-                                toggleEnvironmentId(
-                                  selectedEnvironmentIds,
-                                  environment.environmentId,
-                                ),
+                    {projectFilterOptions.length > 0 ? (
+                      <>
+                        <MenuSeparator />
+                        <MenuGroup>
+                          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                            Project
+                          </div>
+                          <MenuRadioGroup
+                            value={selectedProjectFilterValue}
+                            onValueChange={(value) => {
+                              onSelectedProjectFilterKeyChange(
+                                value === LIST_PROJECT_FILTER_ALL ? null : (value as string),
                               );
                             }}
                           >
-                            {environment.label}
-                          </MenuCheckboxItem>
-                        ))}
-                      </MenuGroup>
-                    </>
-                  ) : null}
-
-                  <MenuSeparator />
-                  <MenuGroup>
-                    <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                      Ownership
-                    </div>
-                    <MenuRadioGroup
-                      value={ownershipFilter}
-                      onValueChange={(value) => {
-                        if (value !== "any" && value !== "mine" && value !== "theirs") return;
-                        onOwnershipFilterChange(value);
-                      }}
-                    >
-                      {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
-                        <MenuRadioItem
-                          key={value}
-                          value={value}
-                          closeOnClick={false}
-                          className="min-h-7 py-1 sm:text-xs"
-                          data-testid={`sidebar-v1-ownership-filter-${value}`}
-                        >
-                          {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
-                        </MenuRadioItem>
-                      ))}
-                    </MenuRadioGroup>
-                  </MenuGroup>
-                  {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
-                    <>
-                      <MenuSeparator />
-                      <MenuGroup>
-                        <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-                          {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
-                        </div>
-                        <MenuRadioGroup
-                          value={ownershipRelation}
-                          onValueChange={(value) => {
-                            if (!isOwnershipRelation(value)) return;
-                            onOwnershipRelationChange(value);
-                          }}
-                        >
-                          {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
                             <MenuRadioItem
-                              key={value}
-                              value={value}
-                              closeOnClick={false}
-                              className="min-h-7 py-1 sm:text-xs"
-                              data-testid={`sidebar-v1-ownership-relation-${value}`}
+                              value={LIST_PROJECT_FILTER_ALL}
+                              closeOnClick
+                              data-testid="sidebar-project-filter-all"
                             >
-                              {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
+                              <span className="inline-flex min-w-0 items-center gap-2">
+                                <ProjectFaviconFallback
+                                  className="size-3.5"
+                                  icon={FolderCodeIcon}
+                                />
+                                <span className="truncate">All projects</span>
+                              </span>
                             </MenuRadioItem>
+                            {projectFilterOptions.map((project) => (
+                              <MenuRadioItem
+                                key={project.projectKey}
+                                value={project.projectKey}
+                                closeOnClick
+                                data-testid={`sidebar-project-filter-${project.projectKey}`}
+                              >
+                                <span className="inline-flex min-w-0 items-center gap-2">
+                                  <ProjectFavicon project={project} className="size-3.5 shrink-0" />
+                                  <span className="truncate">{project.displayName}</span>
+                                </span>
+                              </MenuRadioItem>
+                            ))}
+                          </MenuRadioGroup>
+                        </MenuGroup>
+                      </>
+                    ) : null}
+
+                    {environmentFilterOptions.length > 1 ? (
+                      <>
+                        <MenuSeparator />
+                        <MenuGroup>
+                          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                            Environment
+                          </div>
+                          <MenuCheckboxItem
+                            checked={isAllEnvironmentsSelected(selectedEnvironmentIds)}
+                            closeOnClick={false}
+                            data-testid="sidebar-environment-filter-all"
+                            onCheckedChange={() => onSelectedEnvironmentIdsChange([])}
+                          >
+                            All environments
+                          </MenuCheckboxItem>
+                          {environmentFilterOptions.map((environment) => (
+                            <MenuCheckboxItem
+                              key={environment.environmentId}
+                              checked={isEnvironmentSelected(
+                                selectedEnvironmentIds,
+                                environment.environmentId,
+                              )}
+                              closeOnClick={false}
+                              data-testid={`sidebar-environment-filter-${environment.environmentId}`}
+                              onCheckedChange={() => {
+                                onSelectedEnvironmentIdsChange(
+                                  toggleEnvironmentId(
+                                    selectedEnvironmentIds,
+                                    environment.environmentId,
+                                  ),
+                                );
+                              }}
+                            >
+                              {environment.label}
+                            </MenuCheckboxItem>
                           ))}
-                        </MenuRadioGroup>
-                      </MenuGroup>
-                    </>
-                  ) : null}
-                  <MenuSeparator />
-                  <MenuCheckboxItem
-                    checked={hideSettledThreads}
-                    closeOnClick={false}
-                    className="min-h-7 py-1 sm:text-xs"
-                    data-testid="sidebar-hide-settled-toggle"
-                    onCheckedChange={(checked) => onHideSettledThreadsChange(checked === true)}
-                  >
-                    Hide settled
-                  </MenuCheckboxItem>
-                  {showFlatOrRecencyList && hideSettledThreads ? (
+                        </MenuGroup>
+                      </>
+                    ) : null}
+
+                    <MenuSeparator />
+                    <MenuGroup>
+                      <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                        Ownership
+                      </div>
+                      <MenuRadioGroup
+                        value={ownershipFilter}
+                        onValueChange={(value) => {
+                          if (value !== "any" && value !== "mine" && value !== "theirs") return;
+                          onOwnershipFilterChange(value);
+                        }}
+                      >
+                        {SIDEBAR_OWNERSHIP_FILTERS.map((value) => (
+                          <MenuRadioItem
+                            key={value}
+                            value={value}
+                            closeOnClick={false}
+                            data-testid={`sidebar-v1-ownership-filter-${value}`}
+                          >
+                            {SIDEBAR_OWNERSHIP_FILTER_LABELS[value]}
+                          </MenuRadioItem>
+                        ))}
+                      </MenuRadioGroup>
+                    </MenuGroup>
+                    {ownershipFilter === "mine" || ownershipFilter === "theirs" ? (
+                      <>
+                        <MenuSeparator />
+                        <MenuGroup>
+                          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+                            {ownershipFilter === "mine" ? "Mine includes" : "Theirs includes"}
+                          </div>
+                          <MenuRadioGroup
+                            value={ownershipRelation}
+                            onValueChange={(value) => {
+                              if (!isOwnershipRelation(value)) return;
+                              onOwnershipRelationChange(value);
+                            }}
+                          >
+                            {SIDEBAR_OWNERSHIP_RELATIONS.map((value) => (
+                              <MenuRadioItem
+                                key={value}
+                                value={value}
+                                closeOnClick={false}
+                                data-testid={`sidebar-v1-ownership-relation-${value}`}
+                              >
+                                {SIDEBAR_OWNERSHIP_RELATION_LABELS[value]}
+                              </MenuRadioItem>
+                            ))}
+                          </MenuRadioGroup>
+                        </MenuGroup>
+                      </>
+                    ) : null}
+                    <MenuSeparator />
                     <MenuCheckboxItem
-                      checked={settledRecencyHeadersEnabled}
+                      checked={hideSettledThreads}
                       closeOnClick={false}
-                      className="min-h-7 py-1 sm:text-xs"
-                      data-testid="sidebar-v1-settled-recency-headers"
-                      onCheckedChange={(checked) =>
-                        setSettledRecencyHeadersEnabled(checked === true)
+                      data-testid="sidebar-hide-settled-toggle"
+                      onCheckedChange={(checked) => onHideSettledThreadsChange(checked === true)}
+                    >
+                      Hide settled
+                    </MenuCheckboxItem>
+                    {showFlatOrRecencyList && hideSettledThreads ? (
+                      <MenuCheckboxItem
+                        checked={settledRecencyHeadersEnabled}
+                        closeOnClick={false}
+                        data-testid="sidebar-v1-settled-recency-headers"
+                        onCheckedChange={(checked) =>
+                          setSettledRecencyHeadersEnabled(checked === true)
+                        }
+                      >
+                        Date headers on settled
+                      </MenuCheckboxItem>
+                    ) : null}
+                  </MenuPopup>
+                </Menu>
+                {showFlatOrRecencyList ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon-xs"
+                          variant="outline"
+                          aria-label="Add project"
+                          data-testid="sidebar-add-project-trigger"
+                          onClick={openAddProject}
+                        />
                       }
                     >
-                      Date headers on settled
-                    </MenuCheckboxItem>
-                  ) : null}
-                </MenuPopup>
-              </Menu>
-              {showFlatOrRecencyList ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label="Add project"
-                        data-testid="sidebar-add-project-trigger"
-                        className="inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-input text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                        onClick={openAddProject}
-                      />
-                    }
-                  >
-                    <FolderPlusIcon className="size-3.5" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom">Add project</TooltipPopup>
-                </Tooltip>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      </SidebarGroup>
+                      <FolderPlusIcon className="size-3.5" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom">Add project</TooltipPopup>
+                  </Tooltip>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </SidebarGroup>
+      }
+    >
       {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
-        <SidebarGroup className="px-2 pt-2 pb-0">
-          <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
+        <SidebarGroup>
+          <Alert variant="warning">
             <TriangleAlertIcon />
             <AlertTitle>Intel build on Apple Silicon</AlertTitle>
             <AlertDescription>{arm64IntelBuildWarningDescription}</AlertDescription>
@@ -5073,7 +5055,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         />
       ) : null}
       {showProjectGroups ? (
-        <SidebarGroup className="px-2 py-2">
+        <SidebarGroup>
           <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
             <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
             <div className="flex items-center gap-1">
@@ -5093,7 +5075,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                       variant="ghost-muted"
                       aria-label="Add project"
                       data-testid="sidebar-add-project-trigger"
-                      className="size-6 [--control-icon-color:currentColor] text-icon-muted"
                       onClick={openAddProject}
                     />
                   }
@@ -5210,7 +5191,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       ) : null}
       {listMode === "board" ? (
-        <SidebarGroup className="px-2 pt-4 pb-1">
+        <SidebarGroup>
           <div className="px-2 text-center text-xs text-muted-foreground/60">
             Board view is open in the main panel
           </div>

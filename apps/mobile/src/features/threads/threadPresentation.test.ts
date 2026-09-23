@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveSettledRowTimestamp } from "./threadPresentation";
+import { resolveSettledRowTimestamp } from "./threadOrder";
 
 const base = {
   settledAt: null as string | null,

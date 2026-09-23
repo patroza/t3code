@@ -34,17 +34,14 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
-   * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
-   * no client-settings sync, so the legacy grouped thread list is opted into
-   * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
-   * opt-out): sanitizing drops the old key, so every device resets to the
-   * default flat list — see `resolveThreadListV2Enabled`.
-   */
-  /**
    * @deprecated Superseded by `legacyThreadListEnabled` when v2 became the
    * default (#5672). Kept so older device preference payloads still decode.
    */
   readonly threadListV2Enabled?: boolean;
+  /**
+   * @deprecated The grouped legacy thread list was retired. Kept so older
+   * device preference payloads still decode.
+   */
   readonly legacyThreadListEnabled?: boolean;
   /**
    * @deprecated Legacy toggle from Needs attention / Recent work UI (removed).

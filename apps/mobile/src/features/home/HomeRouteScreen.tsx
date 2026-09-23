@@ -96,8 +96,6 @@ export function HomeRouteScreen() {
     setOwnershipRelation,
     setListMode,
     setThreadGrouping,
-    setProjectSortOrder,
-    setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentIds = listOptions.selectedEnvironmentIds;
   const claimPersonIdByEnvironment = useAtomValue(identityClaimPersonIdByEnvironmentAtom);
@@ -126,7 +124,7 @@ export function HomeRouteScreen() {
   );
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  // Recency/none default to hide settled; project grouping defaults to show.
+  // Recency/none default to hide settled; default/project grouping defaults to show.
   const hideSettledOnRecent = AsyncResult.isSuccess(preferencesResult)
     ? resolveHideSettledOnRecent(preferencesResult.value)
     : true;
@@ -234,8 +232,6 @@ export function HomeRouteScreen() {
           ownershipFilter={listOptions.ownershipFilter}
           ownershipRelation={listOptions.ownershipRelation}
           hideSettledThreads={hideSettledThreads}
-          projectSortOrder={listOptions.projectSortOrder}
-          threadSortOrder={listOptions.threadSortOrder}
           onListModeChange={setListMode}
           onThreadGroupingChange={setThreadGrouping}
           onClearEnvironments={clearSelectedEnvironments}
@@ -256,10 +252,8 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
-          onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onThreadSortOrderChange={setThreadSortOrder}
         />
 
         <HomeScreen
@@ -267,7 +261,6 @@ export function HomeRouteScreen() {
           environments={environments}
           listMode={listOptions.listMode}
           threadGrouping={listOptions.threadGrouping}
-          hideSettledThreads={hideSettledThreads}
           onAddConnection={() =>
             navigation.navigate("SettingsSheet", {
               screen: "SettingsContent",
@@ -294,7 +287,6 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
-          onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
             // Settled threads are live shells: opening one is plain
@@ -329,7 +321,6 @@ export function HomeRouteScreen() {
             });
           }}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onThreadSortOrderChange={setThreadSortOrder}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}
@@ -339,7 +330,6 @@ export function HomeRouteScreen() {
           selectedEnvironmentIds={selectedEnvironmentIds}
           selectedProjectKey={selectedProjectKey}
           threads={ownershipFilteredThreads}
-          threadSortOrder={listOptions.threadSortOrder}
         />
       </>
     </AndroidHomeFabLayout>
