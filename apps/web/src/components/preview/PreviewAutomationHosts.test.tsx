@@ -14,7 +14,13 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { __resetClientSettingsPersistenceForTests } from "~/hooks/useSettings";
-import { readThreadPreviewState, resetPreviewStateForTests } from "~/previewStateStore";
+import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import {
+  applyPreviewDesktopState,
+  readThreadPreviewState,
+  reconcilePreviewServerSessions,
+  resetPreviewStateForTests,
+} from "~/previewStateStore";
 import { appAtomRegistry, AppAtomRegistryProvider } from "~/rpc/atomRegistry";
 
 import { PreviewAutomationHosts } from "./PreviewAutomationHosts";
@@ -32,6 +38,12 @@ const mocks = vi.hoisted(() => ({
       (target: { environmentId: EnvironmentId; input: PreviewAutomationResponse }) => Promise<void>
     >(),
   focus: vi.fn(async () => undefined),
+  bridge: {
+    automation: {
+      status: vi.fn(async (_tabId: string) => ({ available: true, loading: false })),
+      snapshot: vi.fn(async (_tabId: string) => ({ title: "Snapshot" })),
+    },
+  },
 }));
 
 vi.mock("~/localApi", () => ({
@@ -57,7 +69,7 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("~/state/use-atom-query-runner", () => ({
   useAtomQueryRunner: () => mocks.list,
 }));
-vi.mock("./previewBridge", () => ({ previewBridge: { automation: {} } }));
+vi.mock("./previewBridge", () => ({ previewBridge: mocks.bridge }));
 
 const environmentId = EnvironmentId.make("automation-environment");
 const threadId = ThreadId.make("automation-thread");
@@ -186,5 +198,54 @@ describe("PreviewAutomationHosts open", () => {
     expect(mocks.open).not.toHaveBeenCalled();
     expect(readThreadPreviewState(threadRef).snapshot).toBeNull();
     expect(mocks.setClientSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("PreviewAutomationHosts desktop operations", () => {
+  it("addresses the desktop tab by its runtime id, not the server tab id", async () => {
+    // The desktop registers webviews under previewRuntimeTabId. Passing the
+    // bare server tab id makes every operation after `status` fail with
+    // "Preview tab not found" in the desktop preview manager.
+    reconcilePreviewServerSessions(threadRef, {
+      sessions: [snapshot],
+      serverEpoch: "test-server",
+      revision: 1,
+    });
+    applyPreviewDesktopState(threadRef, snapshot.tabId, {} as never);
+    const runtimeTabId = previewRuntimeTabId(threadRef, "test-server", snapshot.tabId);
+    const wrapper = { getAttribute: () => "active" };
+    const webview = {
+      getAttribute: (name: string) => (name === "data-preview-tab" ? runtimeTabId : null),
+      closest: () => wrapper,
+      executeJavaScript: async () => null,
+    };
+    vi.stubGlobal("document", { hasFocus: () => false, querySelectorAll: () => [webview] });
+    const response = deferred<PreviewAutomationResponse>();
+    mocks.respond.mockImplementationOnce(async ({ input }) => response.resolve(input));
+
+    await act(async () => {
+      appAtomRegistry.set(
+        requestsAtom,
+        AsyncResult.success({
+          ...requestEvent,
+          request: {
+            requestId: "snapshot-request",
+            threadId,
+            tabId: snapshot.tabId,
+            operation: "snapshot",
+            input: {},
+            timeoutMs: 15_000,
+          },
+        }),
+      );
+      await response.promise;
+    });
+
+    await expect(response.promise).resolves.toMatchObject({
+      requestId: "snapshot-request",
+      ok: true,
+    });
+    expect(mocks.bridge.automation.snapshot).toHaveBeenCalledExactlyOnceWith(runtimeTabId);
+    expect(mocks.bridge.automation.status).toHaveBeenCalledWith(runtimeTabId);
   });
 });
