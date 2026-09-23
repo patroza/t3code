@@ -105,6 +105,10 @@ const isolatedUnitTestFiles = [
   // isolate:false those modules are already bound and citation Range/CSS
   // highlight fixtures never attach.
   "src/components/chat/AssistantCitationSource.test.ts",
+  // Mocks `@tanstack/react-router`; under isolate:false a sibling already
+  // bound the real Link, which throws reading `isServer` without a router
+  // (Fork CI on ce3ef6b4 failed all four source-disappearance tests).
+  "src/components/chat/AssistantCitationChip.test.tsx",
   "src/components/chat/MessagesTimeline.test.tsx",
   // Mocks `../assets/assetUrls` while ChatMarkdown is already bound to the
   // real module under isolate:false — useAssetUrlState then sees
