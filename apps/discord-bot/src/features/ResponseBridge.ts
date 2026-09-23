@@ -1247,6 +1247,18 @@ export function isInternalAgentScaffoldingUserText(text: string): boolean {
   if (/^Background task\s+"/iu.test(body) && /completed\s*\(exit code:/iu.test(body)) {
     return true;
   }
+  // Extra ACP prompt parts (Grok/Cursor/Antigravity) can persist as user-role
+  // text. A message that is only those envelopes is not a human client.
+  // Mixed bodies still echo; summarizeExternalUserInput strips the tags.
+  if (/<\s*(?:runtime_info|pull_request_linking)\b/iu.test(body)) {
+    const remainder = body
+      .replace(/<\s*runtime_info\b[^>]*>[\s\S]*?<\/\s*runtime_info\s*>/giu, "")
+      .replace(/<\s*pull_request_linking\b[^>]*>[\s\S]*?<\/\s*pull_request_linking\s*>/giu, "")
+      .trim();
+    if (remainder === "" || /<\s*(?:runtime_info|pull_request_linking)\b/iu.test(remainder)) {
+      return true;
+    }
+  }
   // Other harness / tool XML shells that sometimes land as user-role text.
   if (/<\s*system(?:-|\s)?(?:message|context|notification)\b/iu.test(body)) return true;
   if (/<\s*tool_(?:result|response|call)\b/iu.test(body)) return true;
@@ -1305,11 +1317,13 @@ export function externalUserMessagesToEcho(input: {
 }
 
 export function summarizeExternalUserInput(text: string): string {
-  // Drop HTML comment blocks (GitHub PR context) and system-reminder envelopes so
+  // Drop HTML comment blocks (GitHub PR context) and harness envelopes so
   // anything that still slips through the echo filter is less noisy.
   return text
     .replace(/<!--[\s\S]*?-->\s*/gu, "")
     .replace(/<\s*system-reminder\b[^>]*>[\s\S]*?<\/\s*system-reminder\s*>/giu, "")
+    .replace(/<\s*runtime_info\b[^>]*>[\s\S]*?<\/\s*runtime_info\s*>/giu, "")
+    .replace(/<\s*pull_request_linking\b[^>]*>[\s\S]*?<\/\s*pull_request_linking\s*>/giu, "")
     .replace(/\n{3,}/gu, "\n\n")
     .trim();
 }
