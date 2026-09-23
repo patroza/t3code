@@ -13,6 +13,7 @@ import {
   prBodyHasDiscordAttribution,
   starterDisplayName,
   starterUserId,
+  toT3CodeDesktopThreadUrl,
   toT3PublicShortThreadUrl,
   withT3ThreadLink,
 } from "./discordPrAttribution.ts";
@@ -65,7 +66,9 @@ describe("formatDiscordPrAttributionFooter", () => {
         threadJumpUrl: "https://discord.com/channels/1/2/3",
         t3ThreadUrl: "https://t3vm.tail.example.ts.net/?thread=abc",
       }),
-    ).toContain(" · [T3](https://t3vm.tail.example.ts.net/?thread=abc)");
+    ).toContain(
+      " · [T3](https://t3vm.tail.example.ts.net/?thread=abc) [(.)](t3code://t3vm/?thread=abc)",
+    );
   });
 });
 
@@ -76,6 +79,12 @@ describe("T3 thread URL helpers", () => {
     );
     expect(toT3PublicShortThreadUrl("https://t3vm.tail86038f.ts.net/?thread=tid-1")).toBe(
       "https://t3vm/?thread=tid-1",
+    );
+    expect(toT3CodeDesktopThreadUrl("https://t3vm.tail86038f.ts.net/?thread=tid-1")).toBe(
+      "t3code://t3vm/?thread=tid-1",
+    );
+    expect(toT3CodeDesktopThreadUrl("https://t3vm.tail86038f.ts.net/?thread=tid-1#message-m")).toBe(
+      "t3code://t3vm/?thread=tid-1",
     );
     expect(
       pickT3ThreadUrlForGithubRepo({
@@ -101,8 +110,16 @@ describe("T3 thread URL helpers", () => {
     const base =
       "opened by [x](https://discord.com/users/1) in chat thread **Discord** · [t](https://discord.com/channels/1/2/3)";
     const once = withT3ThreadLink(base, "https://t3vm/?thread=1");
-    expect(once).toBe(`${base} · [T3](https://t3vm/?thread=1)`);
+    expect(once).toBe(`${base} · [T3](https://t3vm/?thread=1) [(.)](t3code://t3vm/?thread=1)`);
     expect(withT3ThreadLink(once, "https://t3vm/?thread=1")).toBe(once);
+  });
+
+  it("upgrades a T3-only footer with the desktop (.) sibling", () => {
+    const base =
+      "opened by [x](https://discord.com/users/1) in chat thread **Discord** · [t](https://discord.com/channels/1/2/3) · [T3](https://t3vm/?thread=1)";
+    expect(withT3ThreadLink(base, "https://t3vm/?thread=1")).toBe(
+      `${base} [(.)](t3code://t3vm/?thread=1)`,
+    );
   });
 
   it("builds message deep links from the configured web UI base", () => {

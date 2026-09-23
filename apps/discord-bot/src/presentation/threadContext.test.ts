@@ -174,6 +174,8 @@ describe("resolveAgentTurnRulesPath", () => {
     const body = NodeFS.readFileSync(path, "utf8");
     expect(body).not.toContain("cab");
     expect(body).toContain("PR footer");
+    expect(body).toContain("[(.)]");
+    expect(body).toContain("t3code://");
     expect(body).toContain("Style:");
     expect(body).toContain("client overlay");
     expect(body).toContain("**sentry:**");
@@ -345,7 +347,7 @@ describe("buildDiscordTurnPrompt", () => {
     expect(prompt).toContain("title=Open Random PR Test");
     expect(prompt).not.toContain("https://discord.com/");
     expect(prompt).toContain(
-      "t3: full=https://t3vm.tail86038f.ts.net/?thread=t3-thread-1 short=https://t3vm/?thread=t3-thread-1",
+      "t3: full=https://t3vm.tail86038f.ts.net/?thread=t3-thread-1 short=https://t3vm/?thread=t3-thread-1 app=t3code://t3vm/?thread=t3-thread-1",
     );
   });
 

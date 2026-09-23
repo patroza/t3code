@@ -15,6 +15,7 @@ import {
   buildT3WebThreadUrl,
   starterDisplayName,
   starterUserId,
+  toT3CodeDesktopThreadUrl,
   toT3PublicShortThreadUrl,
 } from "./discordPrAttribution.ts";
 import { mergeJiraIssueKeys } from "./jiraLinks.ts";
@@ -202,6 +203,7 @@ export function formatDiscordPrFooterPromptBlock(input: {
 /**
  * Compact T3 thread link fields for PR footers.
  * Agents pick full (private GH repo) vs short host `t3vm` (public).
+ * `app` is always the desktop `t3code://t3vm/?thread=…` sibling for `(.)`.
  */
 export function formatT3PrLinkPromptBlock(input: {
   readonly t3ThreadId?: string | null | undefined;
@@ -212,9 +214,10 @@ export function formatT3PrLinkPromptBlock(input: {
 
   const full = buildT3WebThreadUrl(input.webUiBaseUrl, id);
   const short = full !== null ? toT3PublicShortThreadUrl(full) : `https://t3vm/?thread=${id}`;
+  const app = toT3CodeDesktopThreadUrl(short);
 
-  if (full !== null) return `t3: full=${full} short=${short}`;
-  return `t3: short=${short}`;
+  if (full !== null) return `t3: full=${full} short=${short} app=${app}`;
+  return `t3: short=${short} app=${app}`;
 }
 
 export function buildDiscordTurnPrompt(input: {
