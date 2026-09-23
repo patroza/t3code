@@ -153,13 +153,13 @@ export function BoardView() {
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         {bootstrapped ? (
           <BoardContent />
         ) : (
           <div className="flex flex-1 items-center justify-center">
-            <Spinner className="size-5 text-muted-foreground/60" />
+            <Spinner size="lg" tone="muted" />
           </div>
         )}
       </div>
@@ -1056,7 +1056,7 @@ function BoardContent() {
             <DialogTitle>Rename thread</DialogTitle>
             <DialogDescription>Update the title shown for this thread.</DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
+          <DialogPanel>
             <div className="grid gap-1.5">
               <span className="text-xs font-medium text-foreground">Thread title</span>
               <Input

@@ -215,7 +215,7 @@ function BoardCardBody({
           <span className="text-xs tabular-nums text-muted-foreground/60">↑{aheadCount}</span>
         ) : null}
         {gitStatusPending ? (
-          <Spinner className="size-3 text-muted-foreground/40" aria-label="Loading git status" />
+          <Spinner size="xs" tone="muted" aria-label="Loading git status" />
         ) : null}
         <span className="ml-auto inline-flex shrink-0 items-center gap-1.5">
           <ThreadPlanModeIndicator thread={thread} />

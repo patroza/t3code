@@ -62,7 +62,7 @@ function ProjectJumpRoute() {
   if (!bootstrapped || target !== null) return null;
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden">
       <Empty className="flex-1">
         <EmptyHeader>
           <EmptyTitle>Project not found</EmptyTitle>
