@@ -65,11 +65,7 @@ export function ListEnvironmentFilterControl(props: {
               type="button"
               variant="outline"
               size={size}
-              className={cn(
-                "min-w-0 justify-between gap-1.5 font-normal",
-                size === "xs" ? "h-7 px-2 text-xs" : "h-8 px-2.5 text-xs",
-                triggerClassName,
-              )}
+              className={cn("min-w-0 justify-between", triggerClassName)}
               aria-label="Filter by environment"
               data-testid={props["data-testid"] ?? "list-environment-filter"}
             />
@@ -78,7 +74,7 @@ export function ListEnvironmentFilterControl(props: {
           <span className="min-w-0 flex-1 truncate text-left">{triggerLabel}</span>
           <ChevronsUpDownIcon className="size-3.5 shrink-0 opacity-60" />
         </PopoverTrigger>
-        <PopoverPopup side="bottom" align="start" className="w-56" viewportClassName="p-1">
+        <PopoverPopup side="bottom" align="start" className="w-56" padding="compact">
           <button
             type="button"
             className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground/90 hover:bg-accent hover:text-foreground"
