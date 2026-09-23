@@ -2,8 +2,8 @@
  * Jira actor trust relative to the closed-set identity map.
  *
  * Fail-closed: no configured map (or empty map) is treated like an unmapped
- * actor. Only people with a mapped Jira accountId may start or continue a
- * thread. Unmapped accounts are denied outright — they do not append context.
+ * actor — no agent turns. Only people with a mapped Jira accountId may run the
+ * agent; everyone else may only append context to an already-linked thread.
  */
 import {
   normalizeJiraAccountId,
@@ -11,7 +11,7 @@ import {
   type IdentityMapPerson,
 } from "@t3tools/shared/identityMap";
 
-export type JiraActorTrustMode = "full" | "denied";
+export type JiraActorTrustMode = "full" | "context-only";
 
 export type JiraActorTrustDecision = {
   readonly mode: JiraActorTrustMode;
@@ -27,11 +27,11 @@ export type JiraActorTrustDecision = {
 export { normalizeJiraAccountId, resolvePersonByJiraAccountId };
 
 /**
- * Classify a Jira mention actor.
+ * Classify a Jira mention actor for agent execution.
  *
- * - Map off / empty → denied (same as unmapped)
+ * - Map off / empty → context-only (no agent; same as unmapped)
  * - Map on + accountId in map → full
- * - Map on + missing/unmapped accountId → denied
+ * - Map on + missing/unmapped accountId → context-only
  */
 export function classifyJiraActorTrust(input: {
   readonly identityMapEnabled: boolean;
@@ -39,15 +39,15 @@ export function classifyJiraActorTrust(input: {
   readonly people: ReadonlyArray<IdentityMapPerson>;
 }): JiraActorTrustDecision {
   if (!input.identityMapEnabled) {
-    return { mode: "denied", person: null, reason: "identity_map_disabled" };
+    return { mode: "context-only", person: null, reason: "identity_map_disabled" };
   }
   const normalized = normalizeJiraAccountId(input.actorAccountId);
   if (normalized === null) {
-    return { mode: "denied", person: null, reason: "missing_jira_account_id" };
+    return { mode: "context-only", person: null, reason: "missing_jira_account_id" };
   }
   const person = resolvePersonByJiraAccountId(input.people, input.actorAccountId);
   if (person === null) {
-    return { mode: "denied", person: null, reason: "unmapped_jira_account" };
+    return { mode: "context-only", person: null, reason: "unmapped_jira_account" };
   }
   return { mode: "full", person, reason: "mapped_jira_account" };
 }

@@ -54,7 +54,7 @@ describe("classifyJiraActorTrust", () => {
         actorAccountId: "stranger",
         people: [],
       }),
-    ).toEqual({ mode: "denied", person: null, reason: "identity_map_disabled" });
+    ).toEqual({ mode: "context-only", person: null, reason: "identity_map_disabled" });
   });
 
   it("trusts mapped Jira account ids for full agent turns", () => {
@@ -68,14 +68,14 @@ describe("classifyJiraActorTrust", () => {
     expect(decision.person?.username).toBe("patroza");
   });
 
-  it("denies unmapped and missing account ids", () => {
+  it("restricts unmapped and missing account ids to context-only", () => {
     expect(
       classifyJiraActorTrust({
         identityMapEnabled: true,
         actorAccountId: "712020:stranger",
         people,
       }),
-    ).toMatchObject({ mode: "denied", reason: "unmapped_jira_account", person: null });
+    ).toMatchObject({ mode: "context-only", reason: "unmapped_jira_account", person: null });
 
     expect(
       classifyJiraActorTrust({
@@ -83,6 +83,6 @@ describe("classifyJiraActorTrust", () => {
         actorAccountId: null,
         people,
       }),
-    ).toMatchObject({ mode: "denied", reason: "missing_jira_account_id", person: null });
+    ).toMatchObject({ mode: "context-only", reason: "missing_jira_account_id", person: null });
   });
 });
