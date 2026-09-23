@@ -133,6 +133,7 @@ export const IdentityPlatformLinkPublic = Schema.Struct({
   discordUsername: Schema.optionalKey(TrimmedNonEmptyString),
   githubLogin: Schema.optionalKey(TrimmedNonEmptyString),
   jiraAccountId: Schema.optionalKey(TrimmedNonEmptyString),
+  teamsAadObjectId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type IdentityPlatformLinkPublic = typeof IdentityPlatformLinkPublic.Type;
 

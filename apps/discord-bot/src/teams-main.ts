@@ -7,6 +7,7 @@ import * as Logger from "effect/Logger";
 
 import { DiscordBotConfig } from "./config.ts";
 import { runTeamsNativeApp } from "./features/TeamsNativeApp.ts";
+import { layerFromOptionalPath as identityMapStoreLayer } from "./identityMap.ts";
 import { layerFromOptionalPath as projectAliasStoreLayer } from "./projectAliases.ts";
 import { layer as threadLinkStoreLayer } from "./store/ThreadLinkStore.ts";
 import { T3Session, layer as t3SessionLayer } from "./t3/T3Session.ts";
@@ -18,6 +19,7 @@ const TeamsMainLayer = Layer.unwrap(
       t3SessionLayer(config),
       threadLinkStoreLayer(config.dataDir),
       projectAliasStoreLayer(config.projectAliasesPath),
+      identityMapStoreLayer(config.identityMapPath),
     ).pipe(
       Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv())),
       Layer.provideMerge(Logger.layer([Logger.consolePretty()])),

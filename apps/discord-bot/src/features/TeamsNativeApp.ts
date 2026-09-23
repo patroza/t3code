@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { classifyTeamsAgentAccess, IdentityMapStore, type PersonIdentity } from "../identityMap.ts";
 import { derivePendingInteractions } from "../presentation/pendingInteractions.ts";
 import { ProjectAliasStore } from "../projectAliases.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
@@ -48,6 +49,25 @@ function channelForCoordinates(
 
 export function sourceConversationKey(input: TeamsConversationCoordinates): string {
   return `native/${input.tenantId}/${input.teamId ?? "chat"}/${input.channelId ?? "chat"}/${input.conversationId}`;
+}
+
+function teamsActorAccess(
+  people: ReadonlyArray<PersonIdentity>,
+  from:
+    | {
+        readonly id?: string | undefined;
+        readonly name?: string | undefined;
+        readonly aadObjectId?: string | undefined;
+      }
+    | null
+    | undefined,
+) {
+  return classifyTeamsAgentAccess({
+    people,
+    aadObjectId: from?.aadObjectId ?? null,
+    userId: from?.id ?? null,
+    displayName: from?.name ?? null,
+  });
 }
 
 function settled(status: string | null | undefined): boolean {
@@ -220,6 +240,7 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
     config.teamsChannelsPath === undefined
       ? []
       : loadTeamsChannelConfigsFromFileSync(config.teamsChannelsPath);
+  const identityMap = yield* IdentityMapStore;
   const t3 = yield* T3Session;
   const links = yield* ThreadLinkStore;
   const services = yield* Effect.context<ProjectAliasStore | T3Session | ThreadLinkStore>();
@@ -236,6 +257,17 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
   app.on("message", async ({ activity, send, reply }) => {
     await run(
       Effect.gen(function* () {
+        const access = teamsActorAccess(identityMap.list(), activity.from);
+        if (!access.allowed) {
+          yield* Effect.logWarning("Rejected native Teams interaction from unmapped identity", {
+            reason: access.reason,
+            userId: activity.from?.id ?? null,
+            aadObjectId: activity.from?.aadObjectId ?? null,
+          });
+          yield* Effect.promise(() => reply(access.userMessage));
+          return;
+        }
+
         const location = coordinates(activity);
         const sourceKey = sourceConversationKey(location);
         const channel = channelForCoordinates(channels, location);
@@ -364,6 +396,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
   });
 
   app.on("message.ext.open", async ({ activity }) => {
+    const access = teamsActorAccess(identityMap.list(), activity.from);
+    if (!access.allowed) {
+      return { task: { type: "message" as const, value: access.userMessage } };
+    }
     const location = coordinates(activity);
     const channel = channelForCoordinates(channels, location);
     return {
@@ -380,6 +416,10 @@ export const runTeamsNativeApp = Effect.fn("runTeamsNativeApp")(function* (
   });
 
   app.on("message.ext.submit", async ({ activity }) => {
+    const access = teamsActorAccess(identityMap.list(), activity.from);
+    if (!access.allowed) {
+      return { task: { type: "message" as const, value: access.userMessage } };
+    }
     const data = activity.value.data as
       | { readonly projectShortName?: unknown; readonly instructions?: unknown }
       | undefined;

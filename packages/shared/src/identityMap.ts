@@ -24,6 +24,14 @@ export type IdentityMapJiraRef = {
   readonly displayName?: string | undefined;
 };
 
+export type IdentityMapTeamsRef = {
+  /** Azure AD object id (GUID). Graph `from.user.id` and Bot Framework `from.aadObjectId`. */
+  readonly aadObjectId?: string | undefined;
+  /** Bot Framework `from.id` when it is not the Azure AD object id (`29:…`). */
+  readonly userId?: string | undefined;
+  readonly displayName?: string | undefined;
+};
+
 export type IdentityMapPerson = {
   readonly personId: string;
   readonly username: string;
@@ -31,6 +39,7 @@ export type IdentityMapPerson = {
   readonly discord?: IdentityMapDiscordRef | undefined;
   readonly github?: IdentityMapGitHubRef | undefined;
   readonly jira?: IdentityMapJiraRef | undefined;
+  readonly teams?: IdentityMapTeamsRef | undefined;
 };
 
 export class IdentityMapParseError extends Error {
@@ -76,6 +85,58 @@ function asDiscordSnowflake(value: unknown): string | undefined {
   if (raw === undefined) return undefined;
   if (!/^\d{1,32}$/u.test(raw)) return undefined;
   return raw;
+}
+
+const TEAMS_AAD_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** Normalize an Azure AD object id. Returns null when the value is not a GUID. */
+export function normalizeTeamsAadObjectId(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const trimmed = value.trim().replace(/^\{|\}$/gu, "");
+  if (!TEAMS_AAD_OBJECT_ID.test(trimmed)) return null;
+  return trimmed.toLowerCase();
+}
+
+function parseTeamsRef(
+  raw: Record<string, unknown>,
+  indexLabel: string,
+): IdentityMapTeamsRef | undefined {
+  const teamsNested = isRecord(raw.teams) ? raw.teams : undefined;
+  const explicitAad =
+    asNonEmptyString(teamsNested?.aadObjectId) ??
+    asNonEmptyString(teamsNested?.aad_object_id) ??
+    asNonEmptyString(raw.teamsAadObjectId) ??
+    asNonEmptyString(raw.teams_aad_object_id);
+  if (explicitAad !== undefined && normalizeTeamsAadObjectId(explicitAad) === null) {
+    throw new IdentityMapParseError(
+      indexLabel,
+      "teams.aadObjectId must be an Azure AD object id (GUID)",
+    );
+  }
+  let aadObjectId = normalizeTeamsAadObjectId(explicitAad) ?? undefined;
+  const userIdRaw =
+    asNonEmptyString(teamsNested?.userId) ??
+    asNonEmptyString(teamsNested?.user_id) ??
+    asNonEmptyString(raw.teamsUserId) ??
+    asNonEmptyString(raw.teams_user_id);
+  let userId = userIdRaw;
+  if (aadObjectId === undefined && userIdRaw !== undefined) {
+    const userAsAad = normalizeTeamsAadObjectId(userIdRaw);
+    if (userAsAad !== null) {
+      aadObjectId = userAsAad;
+      userId = undefined;
+    }
+  }
+  const displayName =
+    asNonEmptyString(teamsNested?.displayName) ??
+    asNonEmptyString(raw.teamsDisplayName) ??
+    asNonEmptyString(raw.teams_display_name);
+  if (aadObjectId === undefined && userId === undefined) return undefined;
+  return {
+    ...(aadObjectId !== undefined ? { aadObjectId } : {}),
+    ...(userId !== undefined ? { userId } : {}),
+    ...(displayName !== undefined ? { displayName } : {}),
+  };
 }
 
 function normalizeLogin(value: unknown): string | undefined {
@@ -151,6 +212,7 @@ function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): Identi
     asNonEmptyString(jiraNested?.displayName) ??
     asNonEmptyString(raw.jiraDisplayName) ??
     asNonEmptyString(raw.jira_display_name);
+  const teams = parseTeamsRef(raw, indexLabel);
 
   return {
     personId,
@@ -183,6 +245,7 @@ function parsePerson(raw: unknown, indexLabel: string, keyHint?: string): Identi
           },
         }
       : {}),
+    ...(teams !== undefined ? { teams } : {}),
   };
 }
 
@@ -239,6 +302,9 @@ export function toIdentityPersonPublic(person: IdentityMapPerson) {
         : {}),
       ...(person.github?.login !== undefined ? { githubLogin: person.github.login } : {}),
       ...(person.jira?.accountId !== undefined ? { jiraAccountId: person.jira.accountId } : {}),
+      ...(person.teams?.aadObjectId !== undefined
+        ? { teamsAadObjectId: person.teams.aadObjectId }
+        : {}),
     },
   };
 }
@@ -328,6 +394,36 @@ export function findPersonByJiraAccountId(
   accountId: string,
 ): IdentityMapPerson | null {
   return resolvePersonByJiraAccountId(people, accountId);
+}
+
+/** Resolve a closed-set person by Teams Azure AD object id or Bot Framework user id. */
+export function findPersonByTeamsActor(
+  people: ReadonlyArray<IdentityMapPerson>,
+  input: {
+    readonly aadObjectId?: string | null | undefined;
+    readonly userId?: string | null | undefined;
+  },
+): IdentityMapPerson | null {
+  const aad = normalizeTeamsAadObjectId(input.aadObjectId);
+  const userId = input.userId?.trim().toLowerCase() ?? "";
+  const userAsAad = normalizeTeamsAadObjectId(input.userId);
+  for (const person of people) {
+    const mappedAad = person.teams?.aadObjectId?.toLowerCase();
+    if (mappedAad !== undefined && mappedAad.length > 0) {
+      if (aad !== null && mappedAad === aad) return person;
+      if (userAsAad !== null && mappedAad === userAsAad) return person;
+    }
+    const mappedUser = person.teams?.userId?.trim().toLowerCase();
+    if (
+      mappedUser !== undefined &&
+      mappedUser.length > 0 &&
+      userId.length > 0 &&
+      mappedUser === userId
+    ) {
+      return person;
+    }
+  }
+  return null;
 }
 
 export function findPersonByJiraEmail(

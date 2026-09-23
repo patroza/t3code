@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 
 import type { DiscordBotConfig } from "../config.ts";
+import { classifyTeamsAgentAccess, IdentityMapStore } from "../identityMap.ts";
 import { createMessageWithAttachments, DiscordUploadError } from "../presentation/discordFiles.ts";
 import { TeamsSeenStore } from "../store/TeamsSeenStore.ts";
 import { ThreadLinkStore } from "../store/ThreadLinkStore.ts";
@@ -22,6 +23,7 @@ import {
   isHumanTeamsMessage,
   looksLikeGermanProblemReport,
   mentionsTeamsBot,
+  resolveTeamsTriggerActor,
   rootTeamsMessageId,
   teamsMessageTimestamp,
   type TeamsMessage,
@@ -105,6 +107,7 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
   const discordConfig = yield* DiscordConfig.DiscordConfig;
   const seenStore = yield* TeamsSeenStore;
   const links = yield* ThreadLinkStore;
+  const identityMap = yield* IdentityMapStore;
 
   let cachedAccessToken: { readonly token: string; readonly expiresAt: number } | null = null;
 
@@ -462,6 +465,30 @@ export const runTeamsModule = Effect.fn("runTeamsModule")(function* (config: Dis
     }
 
     if (trigger === null) return;
+
+    const actor = resolveTeamsTriggerActor({
+      reason: trigger.reason,
+      message,
+      ...(trigger.triggerMessage === undefined ? {} : { triggerMessage: trigger.triggerMessage }),
+      allowlistedUserIds: channel.internalUserIds,
+      reactionTriggerTypes: channel.reactionTriggerTypes,
+    });
+    const access = classifyTeamsAgentAccess({
+      people: identityMap.list(),
+      userId: actor.userId,
+      displayName: actor.displayName,
+    });
+    if (!access.allowed) {
+      yield* Effect.logWarning("Rejected Teams intake from unmapped identity", {
+        teamId: channel.teamId,
+        channelId: channel.channelId,
+        messageId: message.id,
+        reason: trigger.reason,
+        actorUserId: actor.userId,
+        access: access.reason,
+      });
+      return;
+    }
 
     const rootMessageId = rootTeamsMessageId(trigger.targetMessage);
     const rootKey = sourceThreadKey(channel, rootMessageId);
