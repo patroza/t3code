@@ -100,6 +100,7 @@ import {
   decideAssistantDelivery,
   decideHeartbeat,
   initialDeliveryEpochState,
+  isDuplicateFinalizedText,
   retainUnfinalizedStreamText,
   shouldRecreateTip,
   unfinalizedPriorAssistantForCatchUp,
@@ -235,6 +236,9 @@ export function discordBridgeOwnedMessageIds(input: {
  */
 export function normalizeDiscordContentForIdempotency(content: string): string {
   return stripWorkingIndicator(content)
+    .replace(/\s*·\s*\[T3\]\([^)]+\)/giu, "")
+    .replace(/(?:\n\n)_`[^`\n]+`[^_\n]*_$/u, "")
+    .replace(/(?:\n\n)_[^_\n]* · [^_\n]*_$/u, "")
     .replace(/\u200b/gu, "")
     .replace(/\s+/gu, " ")
     .trim();
@@ -500,12 +504,16 @@ export function shouldReopenFinalizedDelivery(input: {
   readonly currentAssistantMessageId: string | null;
   readonly turnId: string | null;
   readonly nextAssistantMessageId: string;
+  readonly lastFinalizedText?: string | null;
+  readonly nextText?: string | null;
 }): boolean {
-  return (
-    input.finalizedTurnId !== null &&
-    (input.finalizedTurnId !== input.turnId ||
-      input.currentAssistantMessageId !== input.nextAssistantMessageId)
-  );
+  if (input.finalizedTurnId === null) return false;
+  if (input.finalizedTurnId !== input.turnId) return true;
+  if (input.currentAssistantMessageId === input.nextAssistantMessageId) return false;
+  const next = input.nextText ?? "";
+  const prior = input.lastFinalizedText ?? null;
+  if (isDuplicateFinalizedText(next, prior)) return false;
+  return true;
 }
 
 /**
@@ -3274,6 +3282,8 @@ export const runBridge = (
           currentAssistantMessageId: state.t3AssistantMessageId,
           turnId,
           nextAssistantMessageId: t3MessageId,
+          lastFinalizedText: state.delivery.lastFinalizedText,
+          nextText: text,
         });
 
         if (
@@ -3553,6 +3563,8 @@ export const runBridge = (
             currentAssistantMessageId: current.t3AssistantMessageId,
             turnId,
             nextAssistantMessageId: t3MessageId,
+            lastFinalizedText: current.delivery.lastFinalizedText,
+            nextText: text,
           });
           return {
             ...current,
