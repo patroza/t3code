@@ -1697,6 +1697,69 @@ Use get_command_or_subagent_output("call-caf23c75-09ca-4fc6-a98e-daa9bcaa8e80-41
     expect(messages.map((message) => message.id)).toEqual(["user-real-1"]);
   });
 
+  it("suppresses runtime_info / pull_request_linking scaffolding as external input", () => {
+    // Regression: Grok extra ACP prompt parts persist as user-role text and were
+    // mirrored as 💭 from **unknown@unknown** with the raw harness instructions.
+    const runtimeDump = `<runtime_info>In case you're asked: you are running in T3 Code through the Grok harness, as grok-4.6. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>
+
+<pull_request_linking>
+When the t3-code MCP server exposes link_pull_request, you must use it to register every pull request you create or work on for this thread.
+</pull_request_linking>`;
+    expect(isInternalAgentScaffoldingUserText(runtimeDump)).toBe(true);
+    expect(shouldSuppressExternalUserEcho(runtimeDump)).toBe(true);
+    expect(classifyUserMessageIngress(runtimeDump)).toBe("internal");
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: runtimeDump,
+        messageId: "user-runtime-1",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+      }),
+    ).toBe(false);
+    const messages = externalUserMessagesToEcho({
+      messages: [
+        {
+          id: MessageId.make("user-runtime-1"),
+          role: "user",
+          text: runtimeDump,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:00.000Z",
+          updatedAt: "2026-07-18T00:00:00.000Z",
+        },
+        {
+          id: MessageId.make("user-real-1"),
+          role: "user",
+          text: "please also check PR 42",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-07-18T00:00:01.000Z",
+          updatedAt: "2026-07-18T00:00:01.000Z",
+        },
+      ],
+      observedInitialUserSnapshot: true,
+      seenUserMessageIds: [],
+      sentDiscordUserMessageIds: [],
+    });
+    expect(messages.map((message) => message.id)).toEqual(["user-real-1"]);
+  });
+
+  it("still echoes t3-client text when harness envelopes are mixed into a real message", () => {
+    const mixed = `please also check PR 42
+<runtime_info>In case you're asked: you are running in T3 Code through the Grok harness, as grok-4.6.</runtime_info>`;
+    expect(isInternalAgentScaffoldingUserText(mixed)).toBe(false);
+    expect(classifyUserMessageIngress(mixed)).toBe("t3-client");
+    expect(
+      shouldEchoUserMessageToDiscord({
+        text: mixed,
+        messageId: "user-mixed-1",
+        seenUserMessageIds: [],
+        sentDiscordUserMessageIds: [],
+      }),
+    ).toBe(true);
+    expect(summarizeExternalUserInput(mixed)).toBe("please also check PR 42");
+  });
+
   it("whitelists github + t3-client only (never same-surface discord or internal)", () => {
     // Cross-surface policy: Discord echoes other surfaces, not its own ingress or harness.
     expect(DISCORD_EXTERNAL_ECHO_SURFACES).toEqual(new Set(["github", "t3-client"]));
@@ -2002,6 +2065,18 @@ Repository: acme/widgets
 <system-reminder>
 Background task "x" completed (exit code: 0).
 </system-reminder>
+suffix`),
+    ).toBe("prefix\n\nsuffix");
+  });
+
+  it("strips runtime_info and pull_request_linking envelopes from echoed text", () => {
+    expect(
+      summarizeExternalUserInput(`prefix
+<runtime_info>In case you're asked: you are running in T3 Code through the Grok harness, as grok-4.6.</runtime_info>
+
+<pull_request_linking>
+When the t3-code MCP server exposes link_pull_request, you must use it.
+</pull_request_linking>
 suffix`),
     ).toBe("prefix\n\nsuffix");
   });
