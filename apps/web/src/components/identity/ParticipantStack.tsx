@@ -88,30 +88,27 @@ export function ParticipantStack(props: {
   return (
     <Tooltip>
       <TooltipTrigger render={stack} />
-      <TooltipPopup
-        side="bottom"
-        align="start"
-        className="min-w-36 flex-col gap-1 p-1.5 text-xs"
-        data-testid="participant-stack-popup"
-      >
-        {people.map((person) => (
-          <span key={person.personId} className="flex items-center gap-1.5 px-0.5 py-0.5">
-            <IdentityAvatar
-              personId={person.personId}
-              username={person.username}
-              name={person.name}
-              size="micro"
-              title={null}
-              highlighted={person.personId === claimPersonId}
-            />
-            <span className="truncate text-foreground">
-              {participantDisplayLabel(person)}
-              {person.personId === claimPersonId ? (
-                <span className="text-primary"> · You</span>
-              ) : null}
+      <TooltipPopup side="bottom" align="start" data-testid="participant-stack-popup">
+        <div className="flex min-w-36 flex-col gap-1">
+          {people.map((person) => (
+            <span key={person.personId} className="flex items-center gap-1.5 px-0.5 py-0.5">
+              <IdentityAvatar
+                personId={person.personId}
+                username={person.username}
+                name={person.name}
+                size="micro"
+                title={null}
+                highlighted={person.personId === claimPersonId}
+              />
+              <span className="truncate text-foreground">
+                {participantDisplayLabel(person)}
+                {person.personId === claimPersonId ? (
+                  <span className="text-primary"> · You</span>
+                ) : null}
+              </span>
             </span>
-          </span>
-        ))}
+          ))}
+        </div>
       </TooltipPopup>
     </Tooltip>
   );

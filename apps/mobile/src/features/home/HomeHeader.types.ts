@@ -1,5 +1,4 @@
-import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
-import type { HomeProjectSortOrder } from "./homeThreadList";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type {
   HomeListFilterMenuEnvironment,
   HomeListFilterMenuProject,
@@ -21,11 +20,9 @@ export interface HomeHeaderProps {
   readonly ownershipRelation: OwnershipRelation;
   /**
    * Hide settled from the main Threads inbox. Recency/none default on;
-   * project grouping defaults off at the call site.
+   * default/project grouping defaults off at the call site.
    */
   readonly hideSettledThreads: boolean;
-  readonly projectSortOrder: HomeProjectSortOrder;
-  readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onListModeChange: (mode: HomeListMode) => void;
   readonly onThreadGroupingChange: (grouping: HomeThreadGrouping) => void;
@@ -35,8 +32,6 @@ export interface HomeHeaderProps {
   readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
   readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
   readonly onHideSettledThreadsChange: (hide: boolean) => void;
-  readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;

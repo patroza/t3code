@@ -74,6 +74,7 @@ describe("searchSettings", () => {
       "environment-identification",
       "continue-threads-after-server-update",
       "new-threads",
+      "worktree-submodules",
       "start-from-origin",
       "project-actions",
       "keybinding-composer.previousWorktree",

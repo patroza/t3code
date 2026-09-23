@@ -14,7 +14,7 @@ describe("mobile ownership filter surface", () => {
     const preferences = readSource("../../persistence/mobile-preferences.ts");
     const layout = readSource("../layout/AdaptiveWorkspaceLayout.tsx");
 
-    expect(homeHeader).toContain('title: "Ownership"');
+    expect(homeHeader).toMatch(/title:\s*"Ownership"|title="Ownership"/);
     expect(homeHeader).toContain("onOwnershipFilterChange");
     expect(homeHeader).toContain("onOwnershipRelationChange");
     expect(homeRoute).toContain("ownershipFilteredThreads");

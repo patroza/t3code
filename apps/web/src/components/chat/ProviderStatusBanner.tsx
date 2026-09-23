@@ -1,13 +1,27 @@
 import { type ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { memo } from "react";
 import { InfoIcon, XIcon } from "lucide-react";
-import { cn } from "~/lib/utils";
-import { Button } from "../ui/button";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
+import { Button, InlineButton } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
 import { ErrorDetailText } from "../ui/errorDetailText";
 
+/** Unsupported and broken versions fail mid-turn, so they warn even when ready. */
+function getIncompatibleVersion(status: ServerProvider) {
+  const compatibility = status.compatibilityAdvisory;
+  return compatibility?.status === "unsupported" || compatibility?.status === "broken"
+    ? compatibility
+    : null;
+}
+
 export function getProviderStatusBannerKey(status: ServerProvider | null): string | null {
-  if (!status || status.status === "ready" || status.status === "disabled") return null;
+  if (!status || status.status === "disabled") return null;
+  if (status.status === "ready") {
+    const incompatible = getIncompatibleVersion(status);
+    return incompatible
+      ? [status.instanceId, incompatible.status, status.version ?? ""].join("\u0000")
+      : null;
+  }
   // Antigravity checks saved credentials when a session starts. Its local
   // health check leaves auth unknown after a restart, which is not a failure.
   if (
@@ -76,52 +90,44 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
 
   const providerName = status.displayName?.trim() || formatProviderDriverKindLabel(status.driver);
   const isUnauthenticated = status.status === "error" && status.auth.status === "unauthenticated";
+  const incompatible = status.status === "ready" ? getIncompatibleVersion(status) : null;
   const title = isUnauthenticated
     ? `${providerName} is unauthenticated`
-    : `${providerName} provider status`;
-  const message = getProviderStatusMessage(status);
+    : incompatible
+      ? `${providerName} ${status.version ?? ""} is ${incompatible.status === "broken" ? "known to be broken" : "unsupported"}`
+      : `${providerName} provider status`;
+  const message = incompatible?.message ?? getProviderStatusMessage(status);
+  const isWarning = status.status === "warning" || incompatible !== null;
 
   return (
     <div className="pointer-events-auto mx-auto w-fit max-w-[calc(100%-2rem)] pt-3">
-      <div
-        className={cn(
-          "alert-glass relative inline-flex items-center gap-3 rounded-xl border py-3 ps-3.5 pe-10 text-card-foreground text-sm",
-          status.status === "warning"
-            ? "border-warning/32 [&_svg]:text-warning"
-            : "border-destructive/32 text-destructive-foreground [&_svg]:text-destructive",
-        )}
-        data-variant={status.status === "warning" ? "warning" : "error"}
-        role="alert"
+      <Alert
+        variant={isWarning ? "warning" : "error"}
+        role={incompatible && incompatible.status !== "broken" ? "status" : "alert"}
+        surface="glass"
+        controlAlignment="first-line"
       >
-        <InfoIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <div className="font-medium">{title}</div>
-          <ErrorDetailText
-            showCopy={status.status === "error"}
-            text={message}
-            textClassName="text-muted-foreground"
-          />
+        <InfoIcon />
+        <AlertTitle>{title}</AlertTitle>
+        <AlertDescription>
+          <ErrorDetailText showCopy={status.status === "error"} text={message} />
           {onOpenProviderSetup && hasProviderSetup(status) ? (
-            <Button
-              className="self-start px-0 text-foreground"
-              onClick={() => onOpenProviderSetup(status.instanceId)}
-              size="xs"
-              variant="link"
-            >
+            <InlineButton onClick={() => onOpenProviderSetup(status.instanceId)}>
               Open provider setup
-            </Button>
+            </InlineButton>
           ) : null}
-        </div>
-        <Button
-          aria-label={`Dismiss ${providerName} provider ${status.status}`}
-          className="absolute top-2 right-2 size-6 text-muted-foreground hover:text-foreground"
-          onClick={onDismiss}
-          size="icon-xs"
-          variant="ghost"
-        >
-          <XIcon aria-hidden className="size-3.5" />
-        </Button>
-      </div>
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            aria-label={`Dismiss ${providerName} provider ${status.status}`}
+            onClick={onDismiss}
+            size="icon-xs"
+            variant="ghost-muted"
+          >
+            <XIcon />
+          </Button>
+        </AlertAction>
+      </Alert>
     </div>
   );
 });

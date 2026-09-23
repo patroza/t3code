@@ -30,6 +30,7 @@ function ScrollArea({
   hideScrollbars = false,
   chainVerticalScroll = false,
   chainHorizontalScroll = false,
+  radius = "inherit",
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
   scrollFade?: boolean;
@@ -40,10 +41,16 @@ function ScrollArea({
   hideScrollbars?: boolean;
   chainVerticalScroll?: boolean;
   chainHorizontalScroll?: boolean;
+  /** The viewport clips to the parent's radius; "none" for a region flush to an edge. */
+  radius?: "inherit" | "none";
 }) {
   return (
     <ScrollAreaPrimitive.Root
-      className={cn("relative size-full min-h-0 overflow-hidden rounded-[inherit]", className)}
+      className={cn(
+        "relative size-full min-h-0 overflow-hidden",
+        radius === "none" ? "rounded-none" : "rounded-[inherit]",
+        className,
+      )}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport

@@ -2,17 +2,13 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo } from "react";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
 import {
   DEFAULT_OWNERSHIP_FILTER,
-  hasCustomHomeListOptions,
   OWNERSHIP_FILTER_LABELS,
   OWNERSHIP_FILTERS,
   OWNERSHIP_RELATION_LABELS,
   OWNERSHIP_RELATIONS,
-  PROJECT_SORT_OPTIONS,
-  THREAD_SORT_OPTIONS,
 } from "./home-list-options";
 import { isAllEnvironmentsSelected, isEnvironmentSelected } from "./homeEnvironmentFilter";
 import {
@@ -21,7 +17,6 @@ import {
   HOME_THREAD_GROUPING_LABELS,
   HOME_THREAD_GROUPINGS,
   usesProjectThreadGrouping,
-  type HomeListMode,
   type HomeThreadGrouping,
 } from "./homeListMode";
 import type { HomeHeaderProps } from "./HomeHeader.types";
@@ -32,19 +27,13 @@ function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
 }
 
-/** Sort projects/threads only apply when Threads are grouped by project. */
-function usesListOrganization(listMode: HomeListMode, threadGrouping: HomeThreadGrouping) {
-  return listMode === "threads" && usesProjectThreadGrouping(threadGrouping);
-}
-
 function defaultHideSettledForGrouping(threadGrouping: HomeThreadGrouping): boolean {
   return !usesProjectThreadGrouping(threadGrouping);
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
-  const threadListV2Enabled = useThreadListV2Enabled();
-  const listOrganization =
-    usesListOrganization(props.listMode, props.threadGrouping) && !threadListV2Enabled;
+  // v2 is the only Threads list. Sort/group-by-project menus would be ignored,
+  // so the customized icon keys off filters that still apply.
   const hasCustomListOptions =
     props.selectedEnvironmentIds.length > 0 ||
     props.ownershipFilter !== DEFAULT_OWNERSHIP_FILTER ||
@@ -52,18 +41,7 @@ export function HomeHeader(props: HomeHeaderProps) {
     props.selectedProjectKey !== null ||
     (props.listMode === "threads" &&
       props.hideSettledThreads !== defaultHideSettledForGrouping(props.threadGrouping)) ||
-    props.threadGrouping !== "project" ||
-    (listOrganization &&
-      hasCustomHomeListOptions({
-        selectedEnvironmentIds: props.selectedEnvironmentIds,
-        ownershipFilter: props.ownershipFilter,
-        ownershipRelation: props.ownershipRelation,
-        listMode: props.listMode,
-        threadGrouping: props.threadGrouping,
-        projectSortOrder: props.projectSortOrder,
-        threadSortOrder: props.threadSortOrder,
-        selectedProjectKey: props.selectedProjectKey,
-      }));
+    props.threadGrouping !== "project";
   const menuActions = useMemo<MenuAction[]>(
     () => [
       {
@@ -153,42 +131,17 @@ export function HomeHeader(props: HomeHeaderProps) {
             },
           ] satisfies MenuAction[])
         : []),
-      ...(listOrganization
-        ? ([
-            {
-              id: "project-sort",
-              title: "Sort projects",
-              subactions: PROJECT_SORT_OPTIONS.map((option) => ({
-                id: `project-sort:${option.value}`,
-                title: option.label,
-                state: checkedMenuState(props.projectSortOrder === option.value),
-              })),
-            },
-            {
-              id: "thread-sort",
-              title: "Sort threads",
-              subactions: THREAD_SORT_OPTIONS.map((option) => ({
-                id: `thread-sort:${option.value}`,
-                title: option.label,
-                state: checkedMenuState(props.threadSortOrder === option.value),
-              })),
-            },
-          ] satisfies MenuAction[])
-        : []),
     ],
     [
-      listOrganization,
       props.environments,
       props.hideSettledThreads,
       props.listMode,
       props.ownershipFilter,
       props.ownershipRelation,
-      props.projectSortOrder,
       props.projects,
       props.selectedEnvironmentIds,
       props.selectedProjectKey,
       props.threadGrouping,
-      props.threadSortOrder,
     ],
   );
   const handleMenuAction = useCallback(
@@ -252,21 +205,6 @@ export function HomeHeader(props: HomeHeaderProps) {
 
       if (id === "hide-settled") {
         props.onHideSettledThreadsChange(!props.hideSettledThreads);
-        return;
-      }
-
-      const projectSort = PROJECT_SORT_OPTIONS.find(
-        (option) => id === `project-sort:${option.value}`,
-      );
-      if (projectSort) {
-        props.onProjectSortOrderChange(projectSort.value);
-        return;
-      }
-
-      const threadSort = THREAD_SORT_OPTIONS.find((option) => id === `thread-sort:${option.value}`);
-      if (threadSort) {
-        props.onThreadSortOrderChange(threadSort.value);
-        return;
       }
     },
     [props],

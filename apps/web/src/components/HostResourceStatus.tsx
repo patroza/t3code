@@ -156,7 +156,7 @@ export function HostResourceStatus(props: {
       ) : null}
       <Tooltip>
         <TooltipTrigger render={summary} />
-        <TooltipPopup side="bottom" className="w-96 max-w-[calc(100vw-1rem)] p-2 text-xs">
+        <TooltipPopup side="bottom" className="w-96 max-w-[calc(100vw-1rem)]">
           <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-3 gap-y-1">
             <span className="text-muted-foreground">Host</span>
             <span className="whitespace-nowrap">{data.hostname ?? props.environmentLabel}</span>

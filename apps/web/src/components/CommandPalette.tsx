@@ -40,9 +40,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArchiveIcon,
-  ArrowDownIcon,
   ArrowLeftIcon,
-  ArrowUpIcon,
   ChartNoAxesColumnIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
@@ -168,6 +166,7 @@ import {
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
+import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon, ForgejoIcon } from "./Icons";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -186,15 +185,7 @@ import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusI
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import {
-  Command,
-  CommandDialog,
-  CommandDialogPopup,
-  CommandFooter,
-  CommandFooterAction,
-  CommandInput,
-  CommandPanel,
-} from "./ui/command";
+import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -651,7 +642,7 @@ function CommandPaletteDialog(props: {
     return (
       <CommandDialogPopup
         aria-label={props.mode === "files" ? "File picker" : "Search project contents"}
-        className={cn("overflow-hidden p-0", props.mode === "content" && "h-105")}
+        className={cn("overflow-hidden", props.mode === "content" && "h-105")}
         data-command-palette="true"
         data-palette-mode={props.mode}
         data-testid="command-palette"
@@ -1561,9 +1552,8 @@ function OpenCommandPaletteDialog(props: {
               <TooltipTrigger
                 render={
                   <Button
-                    variant="outline"
-                    size="xs"
-                    className="h-5 rounded-[.25rem] px-1.5 text-[10px] text-warning-foreground"
+                    variant="warning-outline"
+                    size="micro"
                     onClick={() => {
                       openSourceControlSettings();
                     }}
@@ -2891,7 +2881,7 @@ function OpenCommandPaletteDialog(props: {
               variant="outline"
               size="xs"
               tabIndex={-1}
-              className="absolute inset-e-2.5 top-1/2 gap-1.5 pe-1 ps-2 -translate-y-1/2"
+              className="absolute inset-e-2.5 top-1/2 -translate-y-1/2"
               aria-label={`${remoteProjectButtonLabel ?? "Continue"} (Enter)`}
               disabled={!canSubmitRemoteProjectFlow}
               onMouseDown={(event) => {
@@ -2904,7 +2894,7 @@ function OpenCommandPaletteDialog(props: {
           }
         >
           <span>{isRemoteProjectPending ? "Working" : remoteProjectButtonLabel}</span>
-          <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+          <KbdGroup className="pointer-events-none -me-0.5">
             <Kbd>Enter</Kbd>
           </KbdGroup>
         </TooltipTrigger>
@@ -2918,10 +2908,7 @@ function OpenCommandPaletteDialog(props: {
               variant="outline"
               size="xs"
               tabIndex={-1}
-              className={cn(
-                "absolute inset-e-2.5 top-1/2 pe-1 ps-2 -translate-y-1/2",
-                hasHighlightedBrowseItem ? "gap-1" : "gap-1.5",
-              )}
+              className="absolute inset-e-2.5 top-1/2 -translate-y-1/2"
               aria-label={`${submitActionLabel} (${addShortcutLabel})`}
               disabled={
                 !canCreateProjectInEnvironment(browseEnvironment?.connection.phase) ||
@@ -2947,7 +2934,7 @@ function OpenCommandPaletteDialog(props: {
           <span>
             {isCloneDestinationStep && isRemoteProjectPending ? "Cloning" : submitActionLabel}
           </span>
-          <KbdGroup className="pointer-events-none -me-0.5 items-center gap-1">
+          <KbdGroup className="pointer-events-none -me-0.5">
             <Kbd>{hasHighlightedBrowseItem ? `${submitModifierLabel} Enter` : "Enter"}</Kbd>
           </KbdGroup>
         </TooltipTrigger>
@@ -2963,7 +2950,7 @@ function OpenCommandPaletteDialog(props: {
               variant={includeArchived ? "default" : "outline"}
               size="xs"
               tabIndex={-1}
-              className="absolute inset-e-2.5 top-1/2 gap-1.5 -translate-y-1/2"
+              className="absolute inset-e-2.5 top-1/2 -translate-y-1/2"
               aria-label="Include archived threads"
               aria-pressed={includeArchived}
               onMouseDown={(event) => {
@@ -3007,7 +2994,7 @@ function OpenCommandPaletteDialog(props: {
   return (
     <CommandDialogPopup
       aria-label="Command palette"
-      className="overflow-hidden p-0"
+      className="overflow-hidden"
       data-command-palette="true"
       data-testid="command-palette"
       finalFocus={() => {
@@ -3018,136 +3005,98 @@ function OpenCommandPaletteDialog(props: {
         setOpen(false);
       }}
     >
-      <Command
+      <CommandPaletteContent
         key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
         aria-label="Command palette"
         autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
+        footerActionLabel={footerActionLabel}
+        footerTrailing={footerTrailing}
+        inputAccessory={inputAccessory}
+        inputProps={{
+          // The submit button is absolutely positioned over the field, so the
+          // inner input must reserve enough room for the full action label.
+          className:
+            addProjectCloneFlow?.step === "repository"
+              ? "*:data-[slot=autocomplete-input]:pe-32!"
+              : isBrowsing
+                ? browseInputEndPaddingClass({
+                    willCreateProjectPath,
+                    hasHighlightedBrowseItem,
+                  })
+                : !isSubmenu
+                  ? "pe-28"
+                  : undefined,
+          placeholder: inputPlaceholder,
+          ...(isSubmenu
+            ? {
+                startAddon: (
+                  <button
+                    type="button"
+                    className="flex cursor-pointer items-center"
+                    aria-label="Back"
+                    onClick={popView}
+                  >
+                    <ArrowLeftIcon />
+                  </button>
+                ),
+              }
+            : isBrowsing && !isSubmenu
+              ? { startAddon: <FolderPlusIcon /> }
+              : {}),
+          onKeyDown: handleKeyDown,
+        }}
         mode="none"
         onItemHighlighted={(value) => {
           setHighlightedItemValue(typeof value === "string" ? value : null);
         }}
         onValueChange={handleQueryChange}
+        panelClassName="max-h-[min(28rem,70vh)]"
+        showBackHint={isSubmenu}
         value={query}
       >
-        <div className="relative">
-          <CommandInput
-            className={
-              // The submit button is absolutely positioned over the field, so the
-              // inner input must reserve enough room for the full action label.
-              addProjectCloneFlow?.step === "repository"
-                ? "*:data-[slot=autocomplete-input]:pe-32!"
-                : isBrowsing
-                  ? browseInputEndPaddingClass({
-                      willCreateProjectPath,
-                      hasHighlightedBrowseItem,
-                    })
-                  : !isSubmenu
-                    ? "pe-28"
-                    : undefined
-            }
-            placeholder={inputPlaceholder}
-            wrapperClassName={
-              isSubmenu ? "[&_[data-slot=autocomplete-start-addon]]:pointer-events-auto" : undefined
-            }
-            {...(isSubmenu
-              ? {
-                  startAddon: (
-                    <button
-                      type="button"
-                      className="flex cursor-pointer items-center"
-                      aria-label="Back"
-                      onClick={popView}
-                    >
-                      <ArrowLeftIcon />
-                    </button>
-                  ),
-                }
-              : isBrowsing && !isSubmenu
-                ? {
-                    startAddon: <FolderPlusIcon />,
-                  }
-                : {})}
-            onKeyDown={handleKeyDown}
-          />
-          {inputAccessory}
-        </div>
-        <CommandPanel className="max-h-[min(28rem,70vh)]">
-          {remoteProjectContext ? (
-            <div className="p-2 pb-0">
-              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
-                Repository
-              </div>
-              <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
-                {remoteProjectContext.icon}
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-foreground text-sm">
-                    {remoteProjectContext.title}
-                  </span>
-                  <span className="truncate text-muted-foreground/85 text-xs">
-                    {remoteProjectContext.description}
-                  </span>
+        {remoteProjectContext ? (
+          <div className="p-2 pb-0">
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Repository</div>
+            <div className="flex min-h-8 items-center gap-2 rounded-sm px-2 py-1.5">
+              {remoteProjectContext.icon}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-foreground text-sm">
+                  {remoteProjectContext.title}
                 </span>
-              </div>
+                <span className="truncate text-muted-foreground/85 text-xs">
+                  {remoteProjectContext.description}
+                </span>
+              </span>
             </div>
-          ) : null}
-          <CommandPaletteResults
-            groups={displayedGroups}
-            highlightedItemValue={highlightedItemValue}
-            isActionsOnly={isActionsOnly}
-            keybindings={keybindings}
-            onExecuteItem={executeItem}
-            {...(addProjectCloneFlow?.step === "repository"
-              ? {
-                  emptyStateMessage:
-                    addProjectCloneFlow.source === "url"
-                      ? "Enter a Git clone URL and press Enter to continue."
-                      : "Enter a repository path and press Enter to look it up.",
-                }
-              : addProjectCloneFlow?.step === "confirm"
-                ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
-                : relativePathNeedsActiveProject
-                  ? { emptyStateMessage: "Relative paths require an active project." }
-                  : willCreateProjectPath
-                    ? {
-                        emptyStateMessage:
-                          "Press Enter to create this folder and add it as a project.",
-                      }
-                    : threadSearch.isPending
-                      ? { emptyStateMessage: "Searching thread messages…" }
-                      : {})}
-          />
-        </CommandPanel>
-        <CommandFooter className="gap-3 max-sm:flex-col max-sm:items-start">
-          <div className="flex items-center gap-3">
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>
-                <ArrowUpIcon />
-              </Kbd>
-              <Kbd>
-                <ArrowDownIcon />
-              </Kbd>
-              <span>Navigate</span>
-            </KbdGroup>
-            {footerActionLabel ? (
-              <KbdGroup className="items-center gap-1.5">
-                <Kbd>Enter</Kbd>
-                <span>{footerActionLabel}</span>
-              </KbdGroup>
-            ) : null}
-            {isSubmenu ? (
-              <KbdGroup className="items-center gap-1.5">
-                <Kbd>Backspace</Kbd>
-                <span>Back</span>
-              </KbdGroup>
-            ) : null}
-            <KbdGroup className="items-center gap-1.5">
-              <Kbd>Esc</Kbd>
-              <span>Close</span>
-            </KbdGroup>
           </div>
-          {footerTrailing}
-        </CommandFooter>
-      </Command>
+        ) : null}
+        <CommandPaletteResults
+          groups={displayedGroups}
+          highlightedItemValue={highlightedItemValue}
+          isActionsOnly={isActionsOnly}
+          keybindings={keybindings}
+          onExecuteItem={executeItem}
+          {...(addProjectCloneFlow?.step === "repository"
+            ? {
+                emptyStateMessage:
+                  addProjectCloneFlow.source === "url"
+                    ? "Enter a Git clone URL and press Enter to continue."
+                    : "Enter a repository path and press Enter to look it up.",
+              }
+            : addProjectCloneFlow?.step === "confirm"
+              ? { emptyStateMessage: "Choose a destination path and press Enter to clone." }
+              : relativePathNeedsActiveProject
+                ? { emptyStateMessage: "Relative paths require an active project." }
+                : willCreateProjectPath
+                  ? {
+                      emptyStateMessage:
+                        "Press Enter to create this folder and add it as a project.",
+                    }
+                  : threadSearch.isPending
+                    ? { emptyStateMessage: "Searching thread messages…" }
+                    : {})}
+        />
+      </CommandPaletteContent>
     </CommandDialogPopup>
   );
 }

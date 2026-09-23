@@ -54,18 +54,18 @@ export function buildHomeListFilterMenu(props: {
   readonly selectedProjectKey: string | null;
   readonly ownershipFilter: OwnershipFilter;
   readonly ownershipRelation: OwnershipRelation;
-  readonly projectSortOrder: HomeProjectSortOrder;
-  readonly threadSortOrder: SidebarThreadSortOrder;
+  readonly projectSortOrder?: HomeProjectSortOrder;
+  readonly threadSortOrder?: SidebarThreadSortOrder;
   readonly onClearEnvironments: () => void;
   readonly onToggleEnvironment: (environmentId: EnvironmentId) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onOwnershipFilterChange: (filter: OwnershipFilter) => void;
   readonly onOwnershipRelationChange: (relation: OwnershipRelation) => void;
-  readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly onProjectSortOrderChange?: (sortOrder: HomeProjectSortOrder) => void;
+  readonly onThreadSortOrderChange?: (sortOrder: SidebarThreadSortOrder) => void;
   /**
-   * False hides project/thread sort submenus. Flat recency, Board, and Thread
-   * List v2 use fixed layouts; the environment multi-filter still applies.
+   * True shows project/thread sort submenus (classic grouped list). v2 Home
+   * never sets this — its layout ignores those controls.
    */
   readonly listOrganization?: boolean;
   /** When false, hide the project scope submenu (Board uses its own control). */
@@ -175,7 +175,17 @@ export function buildHomeListFilterMenu(props: {
     });
   }
 
-  if (props.listOrganization !== false) {
+  if (
+    props.listOrganization === true &&
+    props.projectSortOrder !== undefined &&
+    props.threadSortOrder !== undefined &&
+    props.onProjectSortOrderChange !== undefined &&
+    props.onThreadSortOrderChange !== undefined
+  ) {
+    const projectSortOrder = props.projectSortOrder;
+    const threadSortOrder = props.threadSortOrder;
+    const onProjectSortOrderChange = props.onProjectSortOrderChange;
+    const onThreadSortOrderChange = props.onThreadSortOrderChange;
     items.push(
       {
         type: "submenu",
@@ -183,8 +193,8 @@ export function buildHomeListFilterMenu(props: {
         items: PROJECT_SORT_OPTIONS.map((option) => ({
           type: "action",
           title: option.label,
-          state: props.projectSortOrder === option.value ? "on" : "off",
-          onPress: () => props.onProjectSortOrderChange(option.value),
+          state: projectSortOrder === option.value ? "on" : "off",
+          onPress: () => onProjectSortOrderChange(option.value),
         })),
       },
       {
@@ -193,8 +203,8 @@ export function buildHomeListFilterMenu(props: {
         items: THREAD_SORT_OPTIONS.map((option) => ({
           type: "action",
           title: option.label,
-          state: props.threadSortOrder === option.value ? "on" : "off",
-          onPress: () => props.onThreadSortOrderChange(option.value),
+          state: threadSortOrder === option.value ? "on" : "off",
+          onPress: () => onThreadSortOrderChange(option.value),
         })),
       },
     );

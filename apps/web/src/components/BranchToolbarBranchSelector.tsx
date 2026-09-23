@@ -9,7 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { ContextMenuItem, EnvironmentId, VcsRef, ThreadId } from "@t3tools/contracts";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { ChevronDownIcon, GitBranchIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, GitBranchIcon, SearchIcon } from "lucide-react";
 import {
   useCallback,
   useDeferredValue,
@@ -59,6 +59,7 @@ import {
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
 import { Button } from "./ui/button";
+import { ComposerControl } from "./chat/ComposerControl";
 import { Switch } from "./ui/switch";
 import { getVirtualizedScrollFadeClassName } from "./ui/scroll-area";
 import {
@@ -709,7 +710,6 @@ export function BranchToolbarBranchSelector({
           key={itemValue}
           index={index}
           value={itemValue}
-          className="pe-2"
           onClick={() => selectPickerItem(itemValue)}
         >
           <div className="flex min-w-0 items-center gap-2 py-1">
@@ -731,7 +731,6 @@ export function BranchToolbarBranchSelector({
           key={itemValue}
           index={index}
           value={itemValue}
-          className="pe-1.5"
           onClick={() => selectPickerItem(itemValue)}
         >
           <span className="truncate">Create new ref &quot;{newRefName}&quot;</span>
@@ -759,7 +758,6 @@ export function BranchToolbarBranchSelector({
         key={itemValue}
         index={index}
         value={itemValue}
-        className="pe-1.5"
         onClick={() => selectPickerItem(itemValue)}
         onContextMenu={(event) => handleBranchContextMenu(event, itemValue)}
       >
@@ -796,7 +794,7 @@ export function BranchToolbarBranchSelector({
         data-composer-context-control
       >
         <ThreadPullRequestBadgeControl
-          variant="ghost"
+          render={<ComposerControl size="xs" />}
           badge={prBadge}
           number={prNumber}
           url={prUrl}
@@ -814,10 +812,10 @@ export function BranchToolbarBranchSelector({
           onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
         >
           <ComboboxTrigger
-            render={<Button variant="ghost" size="xs" />}
+            render={<ComposerControl size="xs" />}
             // No press-scale: the popup aligns live to this trigger, so a
             // momentary 0.97 shrink would drag the open popup ~3px sideways.
-            className="min-w-0 max-w-full font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80 active:scale-100"
+            className="min-w-0 max-w-full active:scale-100"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
           >
             <GitBranchIcon className="size-3 shrink-0 opacity-70" />
@@ -825,11 +823,12 @@ export function BranchToolbarBranchSelector({
               data-composer-label
               className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
             >
-              <MiddleTruncate
-                value={triggerLabel}
+              <span
                 data-composer-label-motion
                 className="flex w-full max-w-[240px] transition-opacity duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
-              />
+              >
+                <MiddleTruncate value={triggerLabel} />
+              </span>
             </span>
             <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
           </ComboboxTrigger>
@@ -867,7 +866,7 @@ export function BranchToolbarBranchSelector({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ComboboxEmpty>No refs found.</ComboboxEmpty>
           <div className="relative min-h-0 w-full max-h-56 flex-1 overflow-hidden">
-            <ComboboxListVirtualized className="size-full min-w-0 p-0">
+            <ComboboxListVirtualized>
               <LegendList<string>
                 ref={branchListRef}
                 data={filteredBranchPickerItems}
@@ -925,7 +924,7 @@ export function BranchToolbarBranchSelector({
                     </label>
                   }
                 />
-                <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
+                <TooltipPopup side="top">
                   Checks out the selected branch in the worktree instead of creating a new branch
                   from it.
                 </TooltipPopup>
@@ -941,7 +940,7 @@ export function BranchToolbarBranchSelector({
                       )}
                     >
                       <span className="flex min-w-0 items-center gap-1.5 font-medium text-muted-foreground">
-                        <RefreshCwIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+                        <RefreshIcon aria-hidden="true" size="xs" className="shrink-0" />
                         <span className="truncate">Start from origin</span>
                       </span>
                       <Switch
@@ -955,7 +954,7 @@ export function BranchToolbarBranchSelector({
                     </label>
                   }
                 />
-                <TooltipPopup side="top" className="max-w-72 whitespace-normal leading-tight">
+                <TooltipPopup side="top">
                   Creates the worktree from the latest matching branch on origin instead of your
                   local branch.
                 </TooltipPopup>

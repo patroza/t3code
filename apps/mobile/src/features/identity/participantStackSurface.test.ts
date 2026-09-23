@@ -9,7 +9,6 @@ function readSource(relativePath: string): string {
 describe("mobile participation indicator surface", () => {
   it("keeps the claimed-participant marker wired across mobile thread lists", () => {
     const stack = readSource("./ParticipantStack.tsx");
-    const listV1 = readSource("../threads/thread-list-items.tsx");
     const listV2 = readSource("../threads/thread-list-v2-items.tsx");
     const board = readSource("../board/BoardScreen.tsx");
 
@@ -27,13 +26,10 @@ describe("mobile participation indicator surface", () => {
     expect(stack).toContain(
       "<SourceChannelGlyph channel={props.channel ?? lead.firstChannel} overlay",
     );
-    expect(listV1).toContain("environmentId={thread.environmentId}");
     expect(listV2).toContain("environmentId={thread.environmentId}");
     expect(board).toContain("environmentId={props.thread.environmentId}");
-    expect(listV1).toContain("ThreadIdentityMark");
     expect(listV2).toContain("ThreadIdentityMark");
     expect(board).toContain("ThreadIdentityMark");
-    expect(listV1).not.toContain("ThreadIdentityLeading");
     expect(listV2).not.toContain("ThreadIdentityLeading");
     expect(board).not.toContain("ThreadIdentityLeading");
   });
