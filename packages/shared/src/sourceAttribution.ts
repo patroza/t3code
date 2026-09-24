@@ -8,6 +8,14 @@
  * See docs/architecture/source-and-identity.md
  */
 import type { AuthClientMetadataDeviceType, SourceChannel } from "@t3tools/contracts";
+import {
+  findPersonByDiscordId,
+  findPersonByGithubId,
+  findPersonByGithubLogin,
+  findPersonByJiraAccountId,
+  findPersonByJiraEmail,
+  type IdentityMapPerson,
+} from "./identityMap.ts";
 
 export type SourceRefLike = {
   readonly channel: SourceChannel;
@@ -173,4 +181,105 @@ export function nextOriginSource(input: {
   if (input.role !== "user") return input.current;
   if (input.current !== undefined && input.current !== null) return input.current;
   return input.messageSource ?? input.current ?? null;
+}
+
+/**
+ * Fill personId/username on a channel+actor stamp when the identity map
+ * knows that Discord/GitHub/Jira actor. Old Discord threads often stored
+ * `actor.platformId` without a person because the map was empty at create
+ * time; Mine then treated them as unattributed.
+ */
+export function resolvePersonForSource(
+  source: SourceRefLike,
+  people: ReadonlyArray<IdentityMapPerson>,
+): IdentityMapPerson | null {
+  if (people.length === 0) return null;
+  const platformId = source.actor?.platformId?.trim() ?? "";
+  const displayName = source.actor?.displayName?.trim() ?? "";
+  if (source.channel === "discord") {
+    if (platformId.length > 0) {
+      const byId = findPersonByDiscordId(people, platformId);
+      if (byId) return byId;
+    }
+    if (displayName.length > 0) {
+      const needle = displayName.toLowerCase();
+      return (
+        people.find((person) => person.discord?.username?.toLowerCase() === needle) ??
+        people.find((person) => person.username === needle) ??
+        null
+      );
+    }
+  }
+  if (source.channel === "github") {
+    if (platformId.length > 0) {
+      const byId = findPersonByGithubId(people, platformId);
+      if (byId) return byId;
+    }
+    if (displayName.length > 0) return findPersonByGithubLogin(people, displayName);
+  }
+  if (source.channel === "jira") {
+    if (platformId.length > 0) {
+      const byAccount = findPersonByJiraAccountId(people, platformId);
+      if (byAccount) return byAccount;
+    }
+    if (displayName.includes("@")) return findPersonByJiraEmail(people, displayName);
+  }
+  return null;
+}
+
+export function withMappedPerson(
+  source: SourceRefLike,
+  people: ReadonlyArray<IdentityMapPerson>,
+): SourceRefLike {
+  if (source.personId !== undefined && source.personId.length > 0) return source;
+  const person = resolvePersonForSource(source, people);
+  if (person === null) return source;
+  return {
+    ...source,
+    personId: person.personId,
+    username: person.username,
+  };
+}
+
+export function enrichThreadAttribution(input: {
+  readonly originSource?: SourceRefLike | null | undefined;
+  readonly participantSummaries?: ReadonlyArray<ParticipantSummaryLike> | null | undefined;
+  readonly messages?: ReadonlyArray<{
+    readonly role: string;
+    readonly createdAt: string;
+    readonly source?: SourceRefLike | undefined;
+  }>;
+  readonly createdAt: string;
+  readonly people: ReadonlyArray<IdentityMapPerson>;
+}): {
+  readonly originSource: SourceRefLike | null | undefined;
+  readonly participantSummaries: ReadonlyArray<ParticipantSummaryLike>;
+} {
+  const people = input.people;
+  let origin = input.originSource ?? null;
+  if (origin === null || origin === undefined) {
+    const firstUser = input.messages?.find(
+      (message) => message.role === "user" && message.source !== undefined,
+    );
+    origin = firstUser?.source ?? null;
+  }
+  origin = origin === null || origin === undefined ? origin : withMappedPerson(origin, people);
+
+  let participants = [...(input.participantSummaries ?? [])];
+  if (participants.length === 0 && origin?.personId && origin.username) {
+    participants = [
+      {
+        personId: origin.personId,
+        username: origin.username,
+        firstChannel: origin.channel,
+        channels: [origin.channel],
+        firstParticipatedAt: input.createdAt,
+      },
+    ];
+  }
+
+  return {
+    originSource: origin,
+    participantSummaries: participants,
+  };
 }

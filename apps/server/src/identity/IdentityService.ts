@@ -118,6 +118,11 @@ function parseMapDocument(path: string, raw: string): ReadonlyArray<IdentityMapP
   return parseIdentityMapDocument(document);
 }
 
+/** Read the on-disk map without constructing the service (projection backfill). */
+export function readIdentityMapPeopleFromEnv(): ReadonlyArray<IdentityMapPerson> {
+  return loadPeopleFromEnv();
+}
+
 function loadPeopleFromEnv(): ReadonlyArray<IdentityMapPerson> {
   const configured = process.env.T3_IDENTITY_MAP_PATH?.trim();
   if (configured === undefined || configured.length === 0) {

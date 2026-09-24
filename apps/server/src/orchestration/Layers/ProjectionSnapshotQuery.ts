@@ -41,6 +41,7 @@ import {
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { legacyLinkedPullRequestOf } from "@t3tools/shared/threadPullRequests";
+import { applyStoredThreadAttribution } from "../../identity/applyThreadAttribution.ts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -2655,12 +2656,12 @@ pending_approval_requests AS (
                 hasMoreActivities: false,
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
-                ...(row.originSource !== null && row.originSource !== undefined
-                  ? { originSource: row.originSource }
-                  : {}),
-                ...(row.participantSummaries !== null && row.participantSummaries !== undefined
-                  ? { participantSummaries: row.participantSummaries }
-                  : {}),
+                ...applyStoredThreadAttribution({
+                  originSource: row.originSource ?? null,
+                  participantSummaries: row.participantSummaries ?? null,
+                  createdAt: row.createdAt,
+                  messages: messagesByThread.get(row.threadId) ?? [],
+                }),
               }));
 
               const snapshot = {
@@ -3087,13 +3088,11 @@ pending_approval_requests AS (
                           row.projectId,
                           repositoryIdentities.get(row.projectId),
                         ),
-                        ...(row.originSource !== null && row.originSource !== undefined
-                          ? { originSource: row.originSource }
-                          : {}),
-                        ...(row.participantSummaries !== null &&
-                        row.participantSummaries !== undefined
-                          ? { participantSummaries: row.participantSummaries }
-                          : {}),
+                        ...applyStoredThreadAttribution({
+                          originSource: row.originSource ?? null,
+                          participantSummaries: row.participantSummaries ?? null,
+                          createdAt: row.createdAt,
+                        }),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         createdAt: row.createdAt,
                         updatedAt: row.updatedAt,
@@ -3257,12 +3256,11 @@ pending_approval_requests AS (
                     row.projectId,
                     repositoryIdentities.get(row.projectId),
                   ),
-                  ...(row.originSource !== null && row.originSource !== undefined
-                    ? { originSource: row.originSource }
-                    : {}),
-                  ...(row.participantSummaries !== null && row.participantSummaries !== undefined
-                    ? { participantSummaries: row.participantSummaries }
-                    : {}),
+                  ...applyStoredThreadAttribution({
+                    originSource: row.originSource ?? null,
+                    participantSummaries: row.participantSummaries ?? null,
+                    createdAt: row.createdAt,
+                  }),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -3669,13 +3667,11 @@ pending_approval_requests AS (
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
         hasActionableProposedPlan: threadRow.value.hasActionableProposedPlan > 0,
-        ...(threadRow.value.originSource !== null && threadRow.value.originSource !== undefined
-          ? { originSource: threadRow.value.originSource }
-          : {}),
-        ...(threadRow.value.participantSummaries !== null &&
-        threadRow.value.participantSummaries !== undefined
-          ? { participantSummaries: threadRow.value.participantSummaries }
-          : {}),
+        ...applyStoredThreadAttribution({
+          originSource: threadRow.value.originSource ?? null,
+          participantSummaries: threadRow.value.participantSummaries ?? null,
+          createdAt: threadRow.value.createdAt,
+        }),
         backgroundLiveness: threadBackgroundLiveness.getThreadBackgroundLiveness(
           threadRow.value.threadId,
         ),
@@ -4067,13 +4063,11 @@ pending_approval_requests AS (
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
-        ...(threadRow.value.originSource !== null && threadRow.value.originSource !== undefined
-          ? { originSource: threadRow.value.originSource }
-          : {}),
-        ...(threadRow.value.participantSummaries !== null &&
-        threadRow.value.participantSummaries !== undefined
-          ? { participantSummaries: threadRow.value.participantSummaries }
-          : {}),
+        ...applyStoredThreadAttribution({
+          originSource: threadRow.value.originSource ?? null,
+          participantSummaries: threadRow.value.participantSummaries ?? null,
+          createdAt: threadRow.value.createdAt,
+        }),
       };
 
       return Option.some(
