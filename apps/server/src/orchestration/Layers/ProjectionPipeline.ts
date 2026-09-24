@@ -1,6 +1,9 @@
 import {
   ApprovalRequestId,
+  IdentityUsername,
   isImportedAgentSessionMessageId,
+  PersonId,
+  type SourceRef,
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
   type OrchestrationEvent,
@@ -8,6 +11,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import { withMappedPerson } from "@t3tools/shared/sourceAttribution";
+import { readIdentityMapPeopleFromEnv } from "../../identity/IdentityService.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -611,33 +616,39 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       ]);
 
       // Rebuild origin + participants from projected user messages so shell stays
-      // consistent after resync/replay (not only first-write stamps).
+      // consistent after resync/replay (not only first-write stamps). Map Discord
+      // actor.platformId → personId when the identity map knows the snowflake —
+      // otherwise Mine keeps these threads as unattributed.
+      const identityPeople = readIdentityMapPeopleFromEnv();
       type ParticipantRow = NonNullable<(typeof existingRow.value)["participantSummaries"]>[number];
       const rebuiltParticipants: Array<ParticipantRow> = [];
-      let rebuiltOrigin = existingRow.value.originSource ?? null;
+      let rebuiltOrigin = existingRow.value.originSource
+        ? withMappedPerson(existingRow.value.originSource, identityPeople)
+        : null;
       for (const message of messages) {
         if (message.role !== "user" || message.source === undefined) {
           continue;
         }
+        const messageSource = withMappedPerson(message.source, identityPeople);
         if (rebuiltOrigin === null || rebuiltOrigin === undefined) {
-          rebuiltOrigin = message.source;
+          rebuiltOrigin = messageSource;
         }
-        if (message.source.personId !== undefined && message.source.username !== undefined) {
-          const personId = message.source.personId;
+        if (messageSource.personId !== undefined && messageSource.username !== undefined) {
+          const personId = messageSource.personId;
           const existingParticipantIndex = rebuiltParticipants.findIndex(
             (entry) => entry.personId === personId,
           );
           if (existingParticipantIndex === -1) {
             rebuiltParticipants.push({
-              personId,
-              username: message.source.username,
-              firstChannel: message.source.channel,
-              channels: [message.source.channel],
+              personId: PersonId.make(personId),
+              username: IdentityUsername.make(messageSource.username),
+              firstChannel: messageSource.channel,
+              channels: [messageSource.channel],
               firstParticipatedAt: message.createdAt,
             });
           } else {
             const existingParticipant = rebuiltParticipants[existingParticipantIndex]!;
-            if (!existingParticipant.channels?.includes(message.source.channel)) {
+            if (!existingParticipant.channels?.includes(messageSource.channel)) {
               rebuiltParticipants[existingParticipantIndex] = {
                 ...existingParticipant,
                 channels: [
@@ -645,7 +656,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                     (existingParticipant.firstChannel === undefined
                       ? []
                       : [existingParticipant.firstChannel])),
-                  message.source.channel,
+                  messageSource.channel,
                 ],
               };
             }
@@ -672,7 +683,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         pendingApprovalCount,
         pendingUserInputCount,
         hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
-        originSource: originSource ?? null,
+        originSource:
+          originSource === null
+            ? null
+            : ({
+                ...originSource,
+                ...(originSource.personId !== undefined
+                  ? { personId: PersonId.make(originSource.personId) }
+                  : {}),
+                ...(originSource.username !== undefined
+                  ? { username: IdentityUsername.make(originSource.username) }
+                  : {}),
+              } as SourceRef),
         participantSummaries,
       });
     });

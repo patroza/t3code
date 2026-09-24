@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { parseIdentityMapDocument } from "./identityMap.ts";
 import {
   buildSourceRefFromClaim,
+  enrichThreadAttribution,
   mergeParticipantSummaries,
   nextOriginSource,
   resolveSourceChannel,
   sourceChannelFromDeviceType,
+  withMappedPerson,
 } from "./sourceAttribution.ts";
 
 describe("sourceChannelFromDeviceType", () => {
@@ -66,6 +69,82 @@ describe("nextOriginSource", () => {
       first,
     );
     expect(nextOriginSource({ current: null, messageSource: first, role: "assistant" })).toBeNull();
+  });
+});
+
+describe("withMappedPerson", () => {
+  const people = parseIdentityMapDocument({
+    people: {
+      "147977704522645504": {
+        username: "enricopolanski",
+        name: "Enrico Polanski",
+      },
+    },
+  });
+
+  it("fills personId from a Discord snowflake actor on a channel-only stamp", () => {
+    const stamped = withMappedPerson(
+      {
+        channel: "discord",
+        actor: { platformId: "147977704522645504", displayName: "enricopolanski" },
+      },
+      people,
+    );
+    expect(stamped.personId).toBe("enricopolanski");
+    expect(stamped.username).toBe("enricopolanski");
+  });
+
+  it("leaves unmapped Discord actors without a person", () => {
+    const stamped = withMappedPerson(
+      { channel: "discord", actor: { platformId: "1", displayName: "stranger" } },
+      people,
+    );
+    expect(stamped.personId).toBeUndefined();
+  });
+});
+
+describe("enrichThreadAttribution", () => {
+  const people = parseIdentityMapDocument({
+    people: {
+      "147977704522645504": {
+        username: "enricopolanski",
+        name: "Enrico Polanski",
+      },
+    },
+  });
+
+  it("attributes a Discord-origin thread that stored actor.platformId without personId", () => {
+    const enriched = enrichThreadAttribution({
+      originSource: {
+        channel: "discord",
+        actor: { platformId: "147977704522645504", displayName: "enricopolanski" },
+      },
+      participantSummaries: [],
+      createdAt: "2026-09-18T00:00:00.000Z",
+      people,
+    });
+    expect(enriched.originSource?.personId).toBe("enricopolanski");
+    expect(enriched.participantSummaries[0]?.personId).toBe("enricopolanski");
+    expect(enriched.participantSummaries[0]?.firstChannel).toBe("discord");
+  });
+
+  it("recovers origin from the first user message when the thread row has none", () => {
+    const enriched = enrichThreadAttribution({
+      originSource: null,
+      messages: [
+        {
+          role: "user",
+          createdAt: "2026-09-18T00:00:00.000Z",
+          source: {
+            channel: "discord",
+            actor: { platformId: "147977704522645504" },
+          },
+        },
+      ],
+      createdAt: "2026-09-18T00:00:00.000Z",
+      people,
+    });
+    expect(enriched.originSource?.personId).toBe("enricopolanski");
   });
 });
 
