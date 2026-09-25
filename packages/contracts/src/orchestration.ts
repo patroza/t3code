@@ -1677,6 +1677,8 @@ const ThreadMessageUserAppendCommand = Schema.Struct({
     attachments: Schema.Array(ChatAttachment),
     context: Schema.optional(OrchestrationMessageContext),
   }),
+  /** Copied from the bootstrap turn.start stamp. Worktree creates skip message-sent. */
+  source: Schema.optional(SourceRef),
   createdAt: IsoDateTime,
 });
 

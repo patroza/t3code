@@ -6,6 +6,7 @@ import {
   enrichThreadAttribution,
   mergeParticipantSummaries,
   nextOriginSource,
+  parseDiscordConversationActor,
   resolveSourceChannel,
   sourceChannelFromDeviceType,
   withMappedPerson,
@@ -72,6 +73,14 @@ describe("nextOriginSource", () => {
   });
 });
 
+describe("parseDiscordConversationActor", () => {
+  it("reads req: snowflake@handle from the Discord overlay", () => {
+    expect(
+      parseDiscordConversationActor("req: 147977704522645504@enricopolanski\npr: name=x uid=1"),
+    ).toEqual({ platformId: "147977704522645504", displayName: "enricopolanski" });
+  });
+});
+
 describe("withMappedPerson", () => {
   const people = parseIdentityMapDocument({
     people: {
@@ -126,6 +135,28 @@ describe("enrichThreadAttribution", () => {
     expect(enriched.originSource?.personId).toBe("enricopolanski");
     expect(enriched.participantSummaries[0]?.personId).toBe("enricopolanski");
     expect(enriched.participantSummaries[0]?.firstChannel).toBe("discord");
+  });
+
+  it("recovers origin from the Discord overlay when the bootstrap message has no SourceRef", () => {
+    const enriched = enrichThreadAttribution({
+      originSource: null,
+      messages: [
+        {
+          role: "user",
+          createdAt: "2026-09-25T09:18:14.418Z",
+          text: `## Discord conversation context
+req: 147977704522645504@enricopolanski
+pr: name=enricopolanski uid=147977704522645504 g=1 c=2 m=3 title=Discord
+
+## User request
+Announce it once.`,
+        },
+      ],
+      createdAt: "2026-09-25T09:18:14.418Z",
+      people,
+    });
+    expect(enriched.originSource?.personId).toBe("enricopolanski");
+    expect(enriched.participantSummaries[0]?.personId).toBe("enricopolanski");
   });
 
   it("recovers origin from the first user message when the thread row has none", () => {

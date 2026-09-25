@@ -43,4 +43,34 @@ describe("applyStoredThreadAttribution", () => {
     expect(enriched.originSource?.username).toBe("enricopolanski");
     expect(enriched.participantSummaries?.[0]?.personId).toBe("enricopolanski");
   });
+
+  it("recovers origin from the Discord overlay when bootstrap stored no SourceRef", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-identity-"));
+    const mapPath = NodePath.join(dir, "identity-map.yaml");
+    NodeFS.writeFileSync(
+      mapPath,
+      `people:
+  "147977704522645504":
+    username: enricopolanski
+    name: Enrico Polanski
+`,
+    );
+    process.env.T3_IDENTITY_MAP_PATH = mapPath;
+
+    const enriched = applyStoredThreadAttribution({
+      originSource: null,
+      participantSummaries: [],
+      createdAt: "2026-09-25T09:18:14.418Z",
+      messages: [
+        {
+          role: "user",
+          createdAt: "2026-09-25T09:18:14.418Z",
+          text: "req: 147977704522645504@enricopolanski\n## User request\nHi",
+        },
+      ],
+    });
+
+    expect(enriched.originSource?.personId).toBe("enricopolanski");
+    expect(enriched.participantSummaries?.[0]?.personId).toBe("enricopolanski");
+  });
 });

@@ -17,6 +17,7 @@ export function applyStoredThreadAttribution(input: {
     | ReadonlyArray<{
         readonly role: string;
         readonly createdAt: string;
+        readonly text?: string | undefined;
         readonly source?: SourceRef | undefined;
       }>
     | undefined;

@@ -151,6 +151,7 @@ export default mergeConfig(
               "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
+              "src/orchestration/Layers/CheckpointReactor.test.ts",
               "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/Layers/GrokAdapter.test.ts",
               "src/provider/Layers/ProviderRegistry.test.ts",
@@ -176,6 +177,10 @@ export default mergeConfig(
               // real os module and the mock never applies — the CLI then
               // connects to the live Linux desktop socket.
               "src/cli/app.test.ts",
+              // Real git in a temp cwd. Under isolate:false a sibling can leave
+              // a .git / unparseable HEAD and `git: false` / init-between-turns
+              // fail on CI (`existsSync(.git)` true, `could not parse HEAD`).
+              "src/orchestration/Layers/CheckpointReactor.test.ts",
               // xAI prompt-complete can land after the assertion under
               // isolate:false CI load (`hello from ` vs `hello from mock`).
               "src/provider/Layers/GrokAdapter.test.ts",

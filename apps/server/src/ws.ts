@@ -1689,6 +1689,7 @@ const makeWsRpcLayer = (
                       ? { context: command.message.context }
                       : {}),
                   },
+                  ...(command.source !== undefined ? { source: command.source } : {}),
                   createdAt: command.createdAt,
                 });
                 if (tracked) {

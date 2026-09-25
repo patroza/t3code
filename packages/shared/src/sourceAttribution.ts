@@ -241,12 +241,34 @@ export function withMappedPerson(
   };
 }
 
+/**
+ * Discord bot prefixes the first user message with an overlay:
+ * `req: 147977704522645504@enricopolanski`
+ * Worktree bootstrap used to persist that message without SourceRef, so
+ * origin stayed empty. Recover the actor from the overlay for backfill.
+ */
+export function parseDiscordConversationActor(
+  text: string,
+): { readonly platformId: string; readonly displayName: string } | null {
+  const req = text.match(/^req:\s*(\d{5,32})@([a-z0-9][a-z0-9._-]*)/im);
+  if (req?.[1] !== undefined && req[2] !== undefined) {
+    return { platformId: req[1], displayName: req[2] };
+  }
+  const uid = text.match(/\buid=(\d{5,32})\b/i);
+  const name = text.match(/\bname=([a-z0-9][a-z0-9._-]*)\b/i);
+  if (uid?.[1] !== undefined) {
+    return { platformId: uid[1], displayName: name?.[1] ?? uid[1] };
+  }
+  return null;
+}
+
 export function enrichThreadAttribution(input: {
   readonly originSource?: SourceRefLike | null | undefined;
   readonly participantSummaries?: ReadonlyArray<ParticipantSummaryLike> | null | undefined;
   readonly messages?: ReadonlyArray<{
     readonly role: string;
     readonly createdAt: string;
+    readonly text?: string | undefined;
     readonly source?: SourceRefLike | undefined;
   }>;
   readonly createdAt: string;
@@ -258,10 +280,15 @@ export function enrichThreadAttribution(input: {
   const people = input.people;
   let origin = input.originSource ?? null;
   if (origin === null || origin === undefined) {
-    const firstUser = input.messages?.find(
-      (message) => message.role === "user" && message.source !== undefined,
-    );
-    origin = firstUser?.source ?? null;
+    const firstUser = input.messages?.find((message) => message.role === "user");
+    if (firstUser?.source !== undefined) {
+      origin = firstUser.source;
+    } else if (firstUser?.text !== undefined) {
+      const actor = parseDiscordConversationActor(firstUser.text);
+      if (actor !== null) {
+        origin = { channel: "discord", actor };
+      }
+    }
   }
   origin = origin === null || origin === undefined ? origin : withMappedPerson(origin, people);
 
