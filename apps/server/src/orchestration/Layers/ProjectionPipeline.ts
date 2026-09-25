@@ -11,7 +11,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
-import { withMappedPerson } from "@t3tools/shared/sourceAttribution";
+import { parseDiscordConversationActor, withMappedPerson } from "@t3tools/shared/sourceAttribution";
 import { readIdentityMapPeopleFromEnv } from "../../identity/IdentityService.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -626,10 +626,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         ? withMappedPerson(existingRow.value.originSource, identityPeople)
         : null;
       for (const message of messages) {
-        if (message.role !== "user" || message.source === undefined) {
+        if (message.role !== "user") {
           continue;
         }
-        const messageSource = withMappedPerson(message.source, identityPeople);
+        let rawSource = message.source;
+        if (rawSource === undefined) {
+          const actor = parseDiscordConversationActor(message.text);
+          if (actor === null) continue;
+          rawSource = { channel: "discord", actor };
+        }
+        const messageSource = withMappedPerson(rawSource, identityPeople);
         if (rebuiltOrigin === null || rebuiltOrigin === undefined) {
           rebuiltOrigin = messageSource;
         }
