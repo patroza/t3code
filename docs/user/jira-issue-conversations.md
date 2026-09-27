@@ -174,8 +174,19 @@ are logged and never block the turn.
 
 - Require a shared secret on every delivery (`Authorization: Bearer …` or `X-T3-Webhook-Secret`).
 - Cap body size at 1 MiB.
+  <<<<<<< HEAD:docs/user/jira-issue-conversations.md
 - Ignore events that are not `comment_created`.
-- Allowlist projects when configured.
+- # Allowlist projects when configured.
+- Ignore events that are not `comment_created` / `comment_updated`.
+- Allowlist projects when configured (`T3CODE_JIRA_ALLOWED_PROJECTS`).
+- **Identity map trust gate** (when `T3_IDENTITY_MAP_PATH` has people):
+  - **Trusted** — Jira `accountId` appears on a map person (`jira.accountId` / `jiraAccountId`) → full agent turn (same as today, including auto-create when enabled).
+  - **Untrusted** — map on but actor missing/unmapped → **context only** (no agent):
+    1. **Required:** post a note into the unique Discord thread linked to the issue (`links.json` + `DISCORD_BOT_TOKEN`).
+    2. **Best-effort:** when that link also has a live T3 thread id, append a transcript note via `thread.message.append` (no turn).
+       Requires exactly one active Discord link with that issue key; never auto-creates.
+  - Map **off** / empty → legacy full access for all mentioners (backward compatible).
+    > > > > > > > 9bc1befdc (feat(jira): mirror untrusted context notes into T3 transcript):docs/integrations/jira-issue-conversations.md
 - Do not put secrets in prompts, delivery logs, or git.
 - Prefer the free Atlassian **service account** for REST replies (see
   [atlassian-service-accounts](./atlassian-service-accounts.md) when present on the branch).
