@@ -47,6 +47,7 @@ describe("Omegent slash command definition", () => {
     const threadTalk = OMEGENT_SLASH_COMMAND.options.find(
       (option) => option.name === "thread-talk",
     );
+    expect(threadTalk?.description).toContain("replies still need @Omegent");
     expect(threadTalk?.options?.[0]?.name).toBe("action");
     expect(threadTalk?.options?.[0]?.choices?.map((choice) => choice.value)).toEqual([
       "on",
@@ -115,7 +116,12 @@ describe("slash reply helpers", () => {
     const onReply = threadTalkSlashReply({ action: "on", enabled: true });
     expect(onReply).toMatchObject({
       type: Discord.InteractionCallbackTypes.CHANNEL_MESSAGE_WITH_SOURCE,
-      data: { content: expect.stringContaining("Thread-talk is **on**") },
+      data: {
+        content: expect.stringContaining("Thread-talk is **on**"),
+      },
+    });
+    expect(onReply).toMatchObject({
+      data: { content: expect.stringContaining("Replies still need `@Omegent`") },
     });
     expect(onReply).not.toMatchObject({ data: { flags: Discord.MessageFlags.Ephemeral } });
 

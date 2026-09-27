@@ -164,7 +164,7 @@ export const OMEGENT_SLASH_COMMAND = {
     {
       type: Discord.ApplicationCommandOptionType.SUB_COMMAND,
       name: "thread-talk",
-      description: "Mention-free replies in this linked thread",
+      description: "Mention-free messages in this linked thread (replies still need @Omegent)",
       options: [
         {
           type: Discord.ApplicationCommandOptionType.STRING,
@@ -260,7 +260,7 @@ export function threadTalkSlashReply(input: {
   readonly enabled: boolean;
 }): ReturnType<typeof Ix.response> {
   const content = input.enabled
-    ? "Thread-talk is **on**. New human messages in this linked thread will be sent to Omegent without requiring a mention."
+    ? "Thread-talk is **on**. New human messages in this linked thread will be sent to Omegent without requiring a mention. Replies still need `@Omegent`."
     : "Thread-talk is **off**. Mention `@Omegent` or use `/omegent` to send a message to Omegent.";
   // on/off change shared thread policy → public; status is personal
   return slashReply(content, { ephemeral: input.action === "status" });
