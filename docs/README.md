@@ -59,5 +59,6 @@ source alone does not explain. Most code changes do not need an internal documen
 - [CI quality gates](./operations/ci.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
+- [Provider turn startup and recovery](./operations/provider-turn-recovery.md)
 - [Relay observability](./operations/relay-observability.md)
 - [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)
