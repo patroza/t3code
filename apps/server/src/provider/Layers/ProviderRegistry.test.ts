@@ -2295,6 +2295,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
               // `providerInstances` keys are branded `ProviderInstanceId`;
@@ -2405,6 +2406,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
             }),
@@ -2521,6 +2523,7 @@ it.layer(
                 claudeAgent: { enabled: false },
                 cursor: { enabled: false },
                 grok: { enabled: false },
+                kimi: { enabled: false },
                 opencode: { enabled: false },
               },
               providerInstances: {
@@ -2664,6 +2667,7 @@ it.layer(
               "codex",
               "cursor",
               "grok",
+              "kimi",
               "opencode",
             ]);
             assert.strictEqual(cursorProvider?.enabled, false);
