@@ -72,7 +72,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
         >
           {activeWorktreePath ? (
             <FolderGitIcon className="size-3 shrink-0" />
-          ) : effectiveEnvMode === "worktree" ? (
+          ) : workspaceTarget === "worktree" ? (
             <FolderGit2Icon className="size-3 shrink-0" />
           ) : (
             <FolderIcon className="size-3 shrink-0" />
@@ -85,14 +85,20 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
               data-composer-label-motion
               className="block w-full min-w-0 max-w-[240px] truncate transition-opacity duration-180 ease-drawer group-data-[compact]/composer-context:opacity-0 motion-reduce:transition-none"
             >
-              {resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)}
+              {resolveLockedWorkspaceLabel(
+                activeWorktreePath,
+                workspaceTarget === "local" ? "local" : "worktree",
+              )}
             </span>
           </span>
         </TooltipTrigger>
         <TooltipPopup>
           {forceNewWorktree
             ? "Each model starts in its own worktree."
-            : resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)}
+            : resolveLockedWorkspaceLabel(
+                activeWorktreePath,
+                workspaceTarget === "local" ? "local" : "worktree",
+              )}
         </TooltipPopup>
       </Tooltip>
     );

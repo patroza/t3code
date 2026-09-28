@@ -33,6 +33,7 @@ import {
   resolveWorkspaceTarget,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
+  resolveEffectiveEnvMode,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
 import {
@@ -144,7 +145,10 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   const workspaceLabel = forceNewWorktree
     ? resolveEnvModeLabel("worktree")
     : envModeLocked
-      ? resolveLockedWorkspaceLabel(activeWorktreePath, effectiveEnvMode)
+      ? resolveLockedWorkspaceLabel(
+          activeWorktreePath,
+          workspaceTarget === "local" ? "local" : "worktree",
+        )
       : workspaceTarget === "worktree"
         ? resolveEnvModeLabel("worktree")
         : workspaceTarget === "current-worktree"
