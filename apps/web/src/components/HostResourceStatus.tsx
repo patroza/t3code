@@ -85,10 +85,7 @@ export function HostResourceStatus(props: {
     if (!props.unavailableLabel) return null;
     return (
       <div
-        className={cn(
-          "flex items-center gap-1.5 text-[10px] text-muted-foreground",
-          props.className,
-        )}
+        className={cn("flex items-center gap-1.5 text-3xs text-muted-foreground", props.className)}
       >
         <span>{isPending ? "Reading host resources…" : "Host resources unavailable"}</span>
         {props.showRefresh ? (
@@ -108,7 +105,7 @@ export function HostResourceStatus(props: {
   const summary = (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] tabular-nums",
+        "inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-3xs tabular-nums",
         pressureClass(getHostResourcePressure(data)),
       )}
     >

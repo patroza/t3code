@@ -37,7 +37,7 @@ export function AiUsageStats(props: {
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium">{usageProviderLabel(item.provider)}</span>
         {item.plan ? (
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          <span className="text-3xs uppercase tracking-wide text-muted-foreground">
             {item.plan}
           </span>
         ) : null}
@@ -68,7 +68,7 @@ export function AiUsageStats(props: {
                   </div>
                 ) : null}
                 {showSubLine ? (
-                  <div className="text-[10px] text-muted-foreground">
+                  <div className="text-3xs text-muted-foreground">
                     {resets ? `resets in ${resets}` : null}
                     {resets && pace ? " · " : null}
                     {pace}
@@ -79,17 +79,17 @@ export function AiUsageStats(props: {
           })}
         </div>
       ) : (
-        <div className="text-[10px] text-muted-foreground">{item.error ?? "usage unavailable"}</div>
+        <div className="text-3xs text-muted-foreground">{item.error ?? "usage unavailable"}</div>
       )}
       {item.stale ? (
-        <div className="text-[10px] text-muted-foreground">stale — showing last known usage</div>
+        <div className="text-3xs text-muted-foreground">stale — showing last known usage</div>
       ) : null}
       {marker.fill === "critical" ? (
-        <div className="text-[10px] font-medium text-destructive">limit reached</div>
+        <div className="text-3xs font-medium text-destructive">limit reached</div>
       ) : marker.fill === "warn" ? (
-        <div className="text-[10px] font-medium text-warning">close to limit</div>
+        <div className="text-3xs font-medium text-warning">close to limit</div>
       ) : marker.outlookAtRisk ? (
-        <div className="text-[10px] font-medium text-warning">
+        <div className="text-3xs font-medium text-warning">
           usable now · weekly on track to overshoot
         </div>
       ) : null}

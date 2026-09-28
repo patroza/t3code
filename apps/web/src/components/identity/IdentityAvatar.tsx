@@ -18,10 +18,10 @@ export function IdentityAvatar(props: {
   });
   const sizeClass =
     props.size === "md"
-      ? "size-7 text-[11px]"
+      ? "size-7 text-2xs"
       : props.size === "sm"
-        ? "size-6 text-[10px]"
-        : "size-3.5 text-[8px]";
+        ? "size-6 text-3xs"
+        : "size-3.5 text-4xs";
 
   const title = props.title === null ? undefined : (props.title ?? model.label);
 

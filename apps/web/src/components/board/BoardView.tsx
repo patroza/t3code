@@ -868,18 +868,18 @@ function BoardContent() {
 
   return (
     <>
-      {/* .workspace-topbar pins the header to --workspace-topbar-height so the
-          floating sidebar toggle (absolutely positioned in that same band)
-          stays vertically aligned with the title at every breakpoint. */}
+      {/* Pin the header to --workspace-topbar-height so the floating sidebar
+          toggle (absolutely positioned in that same band) stays vertically
+          aligned with the title at every breakpoint. */}
       <header
         className={cn(
-          "workspace-topbar gap-2 border-b border-border px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
-          isElectron && "drag-region",
+          "flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center gap-2 border-b border-border px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
+          isElectron && "drag-region wco:pr-(--workspace-native-controls-inset)",
           COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
       >
         <span className="truncate text-sm font-medium text-foreground">Board</span>
-        <div className="ms-auto flex min-w-0 items-center gap-2 wco:pr-[var(--workspace-native-controls-inset)]">
+        <div className="ms-auto flex min-w-0 items-center gap-2">
           <ListEnvironmentFilterControl
             environments={environmentFilterOptions}
             selectedEnvironmentIds={selectedEnvironmentIds}
@@ -1006,7 +1006,7 @@ function BoardContent() {
                         type="button"
                         onClick={showMoreSettled}
                         data-testid="board-settled-show-more"
-                        className="mt-1 flex h-[30px] w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border font-mono text-[11px] text-muted-foreground transition-colors hover:border-solid hover:border-input hover:bg-background/45 hover:text-foreground dark:border-white/15 dark:hover:border-white/30 dark:hover:bg-transparent"
+                        className="mt-1 flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border font-mono text-2xs text-muted-foreground transition-colors hover:border-solid hover:border-input hover:bg-background/45 hover:text-foreground dark:border-white/15 dark:hover:border-white/30 dark:hover:bg-transparent"
                       >
                         Show {Math.min(settledTail.hiddenThreadCount, SETTLED_TAIL_PAGE_COUNT)} more
                         <span className="text-muted-foreground/50">

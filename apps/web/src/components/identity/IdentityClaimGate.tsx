@@ -271,7 +271,7 @@ function IdentityClaimGateForEnvironment(props: {
       aria-labelledby="identity-claim-title"
     >
       <section className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-2xl shadow-black/25">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        <p className="text-2xs font-semibold tracking-widest text-muted-foreground uppercase">
           Shared environment · {envLabel}
         </p>
         <h1 id="identity-claim-title" className="mt-2 text-xl font-semibold tracking-tight">

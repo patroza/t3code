@@ -56,7 +56,7 @@ export function BoardDropZones({ showRestoreZone }: { showRestoreZone: boolean }
           testId="board-restore-zone"
           label="Drop to restore"
           icon={ArchiveRestoreIcon}
-          activeClass="border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300/90"
+          activeClass="border-success bg-success/15 text-success"
         />
       ) : null}
       <BoardDropZone
@@ -64,7 +64,7 @@ export function BoardDropZones({ showRestoreZone }: { showRestoreZone: boolean }
         testId="board-archive-zone"
         label="Drop to archive"
         icon={ArchiveIcon}
-        activeClass="border-amber-500 bg-amber-500/15 text-amber-600 dark:text-amber-300/90"
+        activeClass="border-warning bg-warning/15 text-warning"
       />
       <BoardDropZone
         droppableId={BOARD_TRASH_DROPPABLE_ID}

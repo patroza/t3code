@@ -57,7 +57,7 @@ export function ListEnvironmentFilterControl(props: {
   }
 
   return (
-    <div className={className}>
+    <div className={cn(className, triggerClassName)}>
       <Popover>
         <PopoverTrigger
           render={
@@ -65,7 +65,7 @@ export function ListEnvironmentFilterControl(props: {
               type="button"
               variant="outline"
               size={size}
-              className={cn("min-w-0 justify-between", triggerClassName)}
+              className="min-w-0 w-full justify-between"
               aria-label="Filter by environment"
               data-testid={props["data-testid"] ?? "list-environment-filter"}
             />
