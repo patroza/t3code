@@ -57,6 +57,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import * as IdentityService from "../identity/IdentityService.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { TerminalManager } from "../terminal/Manager.ts";
 import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import { importRecentAgentThreads } from "./AgentSessionImporter.ts";
@@ -235,7 +236,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           upsert: (binding) => Effect.sync(() => void bindings.push(binding)),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.void,
-          getBinding: () => Effect.succeed(Option.none()),
+          getBinding: () => Effect.succeedNone,
           listThreadIds: () => Effect.die("unused"),
           listBindings: () => Effect.die("unused"),
         });
@@ -459,7 +460,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           upsert: () => Effect.die("must not replace an active binding"),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.void,
-          getBinding: () => Effect.succeed(Option.some(runningBinding)),
+          getBinding: () => Effect.succeedSome(runningBinding),
           listThreadIds: () => Effect.die("unused"),
           listBindings: () => Effect.die("unused"),
         });
@@ -514,7 +515,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           upsert: () => Effect.die("must not bind malformed or wrong-project sessions"),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.die("unused"),
-          getBinding: () => Effect.succeed(Option.none()),
+          getBinding: () => Effect.succeedNone,
           listThreadIds: () => Effect.die("unused"),
           listBindings: () => Effect.die("unused"),
         });
@@ -934,6 +935,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(Layer.mock(GitWorkflowService)({})),
           Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
           Layer.provide(Layer.mock(TextGeneration)({})),
+          Layer.provide(Layer.mock(TerminalManager)({ closeIdle: () => Effect.void })),
           Layer.provide(ServerSettingsService.layerTest()),
           Layer.provide(IdentityService.layerWithPeople([])),
         );

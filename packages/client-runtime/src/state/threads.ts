@@ -154,9 +154,16 @@ function terminalSnapshotReason(
   return undefined;
 }
 
+/**
+ * A starting or running session is mid-turn. Its detail can change many times
+ * per second, so the disk cache waits for it to settle.
+ */
+export function isThreadSessionRunning(session: OrchestrationThread["session"]): boolean {
+  return session?.status === "starting" || session?.status === "running";
+}
+
 function shouldPersistThread(thread: OrchestrationThread): boolean {
-  const status = thread.session?.status;
-  return status !== "starting" && status !== "running";
+  return !isThreadSessionRunning(thread.session);
 }
 
 interface ThreadResumeSnapshot {

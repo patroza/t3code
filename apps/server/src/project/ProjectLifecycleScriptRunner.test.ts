@@ -50,6 +50,7 @@ const makeProjectionSnapshotQueryLayer = (
     getSnapshot: () => Effect.die("unused"),
     listActivitiesByKind: () => Effect.die("unused"),
     getDeletedWorktreeThreads: () => Effect.die("unused"),
+    listThreadsWithPullRequests: () => Effect.die("unused"),
     getShellSnapshot: () =>
       Effect.succeed({
         snapshotSequence: 1,

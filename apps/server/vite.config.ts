@@ -151,6 +151,7 @@ export default mergeConfig(
               "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
+              "src/observability/HeapSnapshot.test.ts",
               "src/orchestration/Layers/CheckpointReactor.test.ts",
               "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/Layers/GrokAdapter.test.ts",
@@ -181,6 +182,10 @@ export default mergeConfig(
               // a .git / unparseable HEAD and `git: false` / init-between-turns
               // fail on CI (`existsSync(.git)` true, `could not parse HEAD`).
               "src/orchestration/Layers/CheckpointReactor.test.ts",
+              // Mocks `node:v8`.writeHeapSnapshot. Under isolate:false an
+              // earlier file binds the real v8 module and the partial-file
+              // cleanup assertion never sees the mocked path.
+              "src/observability/HeapSnapshot.test.ts",
               // xAI prompt-complete can land after the assertion under
               // isolate:false CI load (`hello from ` vs `hello from mock`).
               "src/provider/Layers/GrokAdapter.test.ts",

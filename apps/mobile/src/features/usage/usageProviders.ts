@@ -10,6 +10,9 @@ export const PROVIDER_ORDER = [
   "claude",
   "grok",
   "kimi",
+  "cursor",
+  "opencode",
+  "antigravity",
 ] as const satisfies readonly UsageProviderKind[];
 
 /**
@@ -30,13 +33,15 @@ export const PROVIDER_LABEL: Record<UsageProviderKind, string> = {
   codex: "Codex",
   grok: "Grok Build",
   kimi: "Kimi",
+  cursor: "Cursor",
+  opencode: "OpenCode",
+  antigravity: "Antigravity",
 };
 
 /**
  * Claude's and Kimi's brand oranges hold in both themes; Codex and Grok are
  * neutrals and must flip with the theme or their bars vanish against the
  * matching background.
-
  */
 export function useProviderColors(): Record<UsageProviderKind, string> {
   const { themeAppearance: scheme } = useAppearancePreferences();
@@ -46,5 +51,8 @@ export function useProviderColors(): Record<UsageProviderKind, string> {
     codex: dark ? "#e6e6e6" : "#3c3c43",
     grok: dark ? "#a1a1aa" : "#52525b",
     kimi: "#ff6a3d",
+    cursor: "#8b8b8b",
+    opencode: "#5b9bbd",
+    antigravity: "#8c7bd1",
   };
 }

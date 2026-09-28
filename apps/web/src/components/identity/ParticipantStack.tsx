@@ -70,7 +70,7 @@ export function ParticipantStack(props: {
       {extras.length > 0 ? (
         <span
           className={cn(
-            "inline-flex size-3.5 items-center justify-center rounded-full text-[8px] font-medium",
+            "inline-flex size-3.5 items-center justify-center rounded-full text-4xs font-medium",
             youParticipated
               ? "bg-primary/15 text-primary ring-1 ring-primary/35"
               : "bg-muted text-muted-foreground",
@@ -138,8 +138,8 @@ export function SourceChannelGlyph(props: {
     <span
       className={cn(
         props.overlay
-          ? "absolute -bottom-0.5 -right-0.5 inline-flex size-2.5 items-center justify-center rounded-full bg-sidebar text-[6px] font-semibold text-muted-foreground ring-1 ring-border/80"
-          : "inline-flex size-3.5 shrink-0 items-center justify-center rounded text-[8px] font-semibold text-muted-foreground/70 ring-1 ring-border/60",
+          ? "absolute -bottom-0.5 -right-0.5 inline-flex size-2.5 items-center justify-center rounded-full bg-sidebar text-5xs font-semibold text-muted-foreground ring-1 ring-border/80"
+          : "inline-flex size-3.5 shrink-0 items-center justify-center rounded text-4xs font-semibold text-muted-foreground/70 ring-1 ring-border/60",
         props.className,
       )}
       data-testid="source-channel-glyph"

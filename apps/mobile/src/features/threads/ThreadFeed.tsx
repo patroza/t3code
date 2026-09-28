@@ -2517,15 +2517,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // bare thread id: two environments can hold the same id. Count presented
   // rows (including pending outbox messages) so the first queued send is
   // treated as a filled timeline.
+  // The thinking row a running thread shows while its messages load is not
+  // content: the list must still remount, and so open at the end, when they
+  // arrive.
   // Seed the fresh instance synchronously with the current overlay height
   // before the scroll integration's next reaction; on Android the
   // declarative contentInset floor covers this same window.
+  const feedHasContent = presentedFeed.some((entry) => entry.type !== "thinking");
   const listMountThreadKeyRef = useRef(feedThreadKey);
-  const sawFilledFeedRef = useRef(presentedFeed.length > 0);
+  const sawFilledFeedRef = useRef(feedHasContent);
   if (listMountThreadKeyRef.current !== feedThreadKey) {
     listMountThreadKeyRef.current = feedThreadKey;
-    sawFilledFeedRef.current = presentedFeed.length > 0;
-  } else if (presentedFeed.length > 0) {
+    sawFilledFeedRef.current = feedHasContent;
+  } else if (feedHasContent) {
     sawFilledFeedRef.current = true;
   }
   const listMountKey = `${feedThreadKey}:${sawFilledFeedRef.current ? "filled" : "empty"}`;

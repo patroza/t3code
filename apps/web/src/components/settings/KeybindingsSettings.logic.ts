@@ -13,6 +13,21 @@ import {
 
 import { shortcutKeyFromEvent } from "../../keybindings";
 import { isMacPlatform } from "../../lib/utils";
+import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
+
+const usageCommandOrder = new Map<KeybindingCommand, number>(
+  [
+    "usage.open" as KeybindingCommand,
+    ...METRIC_OPTIONS.map((option) => option.command),
+    ...WINDOW_OPTIONS.map((option) => option.command),
+  ].map((command, index) => [command, index]),
+);
+
+function compareUsageCommands(left: KeybindingCommand, right: KeybindingCommand): number | null {
+  const leftIndex = usageCommandOrder.get(left);
+  const rightIndex = usageCommandOrder.get(right);
+  return leftIndex !== undefined && rightIndex !== undefined ? leftIndex - rightIndex : null;
+}
 
 export type KeybindingSource = "Default" | "Custom" | "Project";
 
@@ -204,7 +219,9 @@ export function buildKeybindingRows(
   });
 
   rowsWithConflicts.sort((left, right) => {
-    const commandCompare = left.command.localeCompare(right.command);
+    const commandCompare =
+      compareUsageCommands(left.command, right.command) ??
+      left.command.localeCompare(right.command);
     if (commandCompare !== 0) return commandCompare;
     return left.key.localeCompare(right.key);
   });
@@ -277,13 +294,18 @@ export function buildKeybindingCommandOptions(
   for (const binding of keybindings) {
     commands.add(binding.command);
   }
-  return [...commands].toSorted((left, right) =>
-    commandLabel(left).localeCompare(commandLabel(right)),
+  return [...commands].toSorted(
+    (left, right) =>
+      compareUsageCommands(left, right) ?? commandLabel(left).localeCompare(commandLabel(right)),
   );
 }
 
 export function commandLabel(command: KeybindingCommand): string {
   if (command === "thread.copyReference") return "Pull Request: Copy Link or Thread ID";
+  const usageMetric = METRIC_OPTIONS.find((option) => option.command === command);
+  if (usageMetric) return `Usage: ${usageMetric.label}`;
+  const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);
+  if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
   const raw = String(command);
   if (raw === "editor.openFavorite") return "Open in Preferred Application";
   if (raw.startsWith("script.") && raw.endsWith(".run")) {

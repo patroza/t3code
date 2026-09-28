@@ -7,6 +7,7 @@ import { ActivityIndicator, Animated, Platform, Pressable, View } from "react-na
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
+import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import {
   brandTitleOffset,
   CompactBrandTitle,
@@ -109,6 +110,7 @@ export function WorkspaceConnectionTitle(props: {
 }) {
   const status = useDelayedConnectionStatus();
   const size = props.size ?? "navbar";
+  const { scale } = useAndroidControlSizing();
 
   if (status === null) {
     return props.grow ? (
@@ -130,26 +132,28 @@ export function WorkspaceConnectionTitle(props: {
         hitSlop={8}
         onPress={props.onPress}
         className="flex-row items-center gap-2"
-        style={{ flexShrink: 1, marginLeft: props.statusOffset ?? 0 }}
+        style={[
+          { flexShrink: 1, marginLeft: props.statusOffset ?? 0 },
+          Platform.OS === "android" && { gap: 7 * scale },
+        ]}
       >
         {status.showsProgress ? (
-          <ActivityIndicator colorClassName={"accent-icon-muted"} size="small" />
+          <ActivityIndicator
+            colorClassName={"accent-icon-muted"}
+            size={Platform.OS === "android" ? Math.round(20 * scale) : "small"}
+          />
         ) : (
           <SymbolView
             name="wifi.slash"
-            size={size === "pageTitle" ? 17 : 15}
+            size={Math.round((size === "pageTitle" ? 17 : 15) * scale)}
             tintColorClassName={"accent-icon-muted"}
             type="monochrome"
           />
         )}
         <Text
-          className={
-            size === "pageTitle"
-              ? "text-[20px] font-t3-bold text-foreground-muted"
-              : "text-[16px] font-t3-bold text-foreground-muted"
-          }
+          className="font-t3-bold text-foreground-muted"
           numberOfLines={1}
-          style={{ flexShrink: 1 }}
+          style={{ flexShrink: 1, fontSize: (size === "pageTitle" ? 20 : 16) * scale }}
         >
           {status.label}
         </Text>

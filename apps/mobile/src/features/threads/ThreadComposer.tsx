@@ -600,14 +600,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         : null,
     [aiUsageSnapshot, currentModelOption, currentModelSelection.model],
   );
-  const currentModelIconNode = (
-    <ProviderUsageIcon
-      provider={currentModelOption?.providerDriver}
-      size={14}
-      marker={threadUsage?.marker ?? null}
-    />
-  );
-
   const currentUsageNote = threadUsage
     ? (threadUsage.item.windows
         .map((w) => (typeof w.percent === "number" ? `${w.percent}%` : null))
@@ -1038,7 +1030,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       <ComposerInlineControl
                         accessibilityLabel="Model and reasoning settings"
                         emphasized
-                        iconNode={currentModelIconNode}
+                        renderIcon={(size) => (
+                          <ProviderUsageIcon
+                            provider={currentModelOption?.providerDriver}
+                            size={size}
+                            marker={threadUsage?.marker ?? null}
+                          />
+                        )}
                         label={
                           currentUsageNote
                             ? `${currentModelOption?.label ?? currentModelSelection.model} · ${currentUsageNote}`

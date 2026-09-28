@@ -119,7 +119,7 @@ const PreviewSetAppearanceTool = safeBrowserTool(
 export const PreviewSnapshotTool = readonlyBrowserTool(
   Tool.make("preview_snapshot", {
     description:
-      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, a PNG screenshot, and a local artifact path when the host supports export. Set includeImage=false for text-only output with the same page metadata. Set save=true to also write the PNG to disk and get screenshotPath back. To show the user a screenshot, embed the exported path or screenshotPath as ![alt](path); the image in the tool result is not saved anywhere unless save=true or the host already exported a path.",
+      "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, a PNG screenshot, and a local artifact path when the host supports export. The text is capped near 20 KB and lists what it omitted; use preview_evaluate to read more. Set includeImage=false for text-only output with the same page metadata. Set save=true to also write the PNG to disk and get screenshotPath back; with includeImage=false, save=true returns only the url and screenshotPath. To show the user a screenshot, embed the exported path or screenshotPath as ![alt](path); the image in the tool result is not saved anywhere unless save=true or the host already exported a path.",
     parameters: Schema.Struct({
       ...PreviewAutomationTabTargetInput.fields,
       includeImage: Schema.optional(
@@ -131,7 +131,7 @@ export const PreviewSnapshotTool = readonlyBrowserTool(
       save: Schema.optional(
         Schema.Boolean.annotate({
           description:
-            "Write the screenshot PNG to disk and return its absolute path as screenshotPath. Defaults to false.",
+            "Write the screenshot PNG to disk and return its absolute path as screenshotPath. With includeImage=false, return only the url and screenshotPath. Defaults to false.",
         }),
       ),
     }),

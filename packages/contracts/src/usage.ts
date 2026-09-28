@@ -1,46 +1,45 @@
 /**
  * Usage reporting contract.
  *
- * Each environment scans the provider CLIs' own on-disk session transcripts
- * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`,
- * `~/.grok/sessions/**\/updates.jsonl`, `~/.kimi/sessions/**\/wire.jsonl`)
- * rather than relying on T3 Code's own orchestration projections, so usage
- * stays complete even for turns that were never driven through T3 Code. This
- * mirrors the approach `ccusage` takes.
+ * Each environment scans native session files and databases, including work
+ * driven outside T3 Code. Source status describes gaps in local coverage.
  *
- * Environments return pre-aggregated `(day, hourStart?, provider, model)`
+ * Environments return pre-aggregated `(day, hourStart?, provider, model, sourcePath?)`
  * buckets. Raw transcript records never cross the wire.
  *
  * @module usage
  */
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ForwardCompatibleArray, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * Bumped whenever the shape of {@link UsageSummary} changes incompatibly. The
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  *
- * Adding a provider to {@link UsageProviderKind} is deliberately *not* such a
- * change. An older environment simply reports no buckets for the new provider,
- * and those payloads still decode here. Bumping would instead drop that
- * environment's Claude and Codex usage too, until every environment in a fleet
- * had been upgraded — a real undercount traded for a signal about providers
- * that environment may not even run.
+ * Adding providers or other array-element variants is additive: unknown
+ * entries are skipped on decode and do not require a version bump.
  */
-export const USAGE_CONTRACT_VERSION = 5 as const;
+export const USAGE_CONTRACT_VERSION = 6 as const;
 
 /**
  * Oldest {@link UsageSummary} version a current client will still merge.
  *
- * v5 adds `grok` (and this fork's `kimi`) to {@link UsageProviderKind}; v4
- * Claude/Codex buckets remain valid, so mixed-version environments keep those
- * totals instead of treating every older server as stale.
+ * v5/v6 add providers and optional source attribution; v4 Claude/Codex
+ * buckets remain valid in mixed-version environments.
  */
 export const USAGE_MERGE_COMPATIBLE_SINCE = 4 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex", "grok", "kimi"]);
+export const UsageProviderKind = Schema.Literals([
+  "claude",
+  "codex",
+  "grok",
+  "kimi",
+  "cursor",
+  "opencode",
+  "antigravity",
+]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -101,6 +100,8 @@ export const UsageBucket = Schema.Struct({
   hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
   model: TrimmedNonEmptyString,
+  /** Source directory, so overlapping multi-home environments merge once per source. */
+  sourcePath: Schema.optional(TrimmedNonEmptyString),
   totals: UsageTokenTotals,
   costUsd: Schema.Number,
   /**
@@ -159,6 +160,8 @@ export const UsageSource = Schema.Struct({
    */
   distinctSessions: NonNegativeInt,
   message: Schema.NullOr(TrimmedNonEmptyString),
+  /** An action the client can offer to make this source available. */
+  action: Schema.optionalKey(Schema.Literal("enableCursorKeychain")),
 });
 export type UsageSource = typeof UsageSource.Type;
 
@@ -202,8 +205,8 @@ export const UsageSummary = Schema.Struct({
   timeZone: TrimmedNonEmptyString,
   sinceDay: UsageDay,
   untilDay: UsageDay,
-  buckets: Schema.Array(UsageBucket),
-  sources: Schema.Array(UsageSource),
+  buckets: ForwardCompatibleArray(UsageBucket),
+  sources: ForwardCompatibleArray(UsageSource),
   pricing: UsagePricing,
   /** Wall-clock cost of the scan, surfaced in diagnostics. */
   scanDurationMs: NonNegativeInt,

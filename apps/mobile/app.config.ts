@@ -228,7 +228,7 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "1.3.0",
+  version: "1.3.1",
   // Development manifests resolve on every launch, so avoid fingerprint's
   // expensive native-project calculation there. Preview and production stay
   // fingerprinted so OTAs only reach binaries with matching native projects.
