@@ -387,7 +387,14 @@ describe("PreviewAutomationHosts desktop operations", () => {
       closest: () => wrapper,
       executeJavaScript: async () => null,
     };
-    vi.stubGlobal("document", { hasFocus: () => false, querySelectorAll: () => [webview] });
+    vi.stubGlobal(
+      "document",
+      Object.assign(new EventTarget(), {
+        hasFocus: () => false,
+        visibilityState: "visible",
+        querySelectorAll: () => [webview],
+      }),
+    );
     const response = deferred<PreviewAutomationResponse>();
     mocks.respond.mockImplementationOnce(async ({ input }) => response.resolve(input));
 
