@@ -37,6 +37,7 @@ import {
   PrStatusTooltipContent,
   resolveThreadPr,
   terminalStatusFromRunningIds,
+  synchronizeTerminalPulse,
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
   useLinkedThreadPullRequest,
@@ -397,7 +398,7 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   separate: "Keep separate",
 };
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
-  "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
+  "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-0.75 text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
 
 function SidebarThreadDetailPrewarmer({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
@@ -880,7 +881,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     },
     [attemptArchiveThread, threadRef],
   );
-  const rowButtonRender = useMemo(() => <div role="button" tabIndex={0} />, []);
 
   return (
     <SidebarMenuSubItem
@@ -891,15 +891,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       onMouseLeave={handleMouseLeave}
       onBlurCapture={handleBlurCapture}
     >
-      <SidebarMenuSubButton
-        render={rowButtonRender}
-        size="sm"
-        isActive={isActive}
+      {/* A thread row is the legacy sidebar's own control (a focusable div that hosts nested
+          links and buttons), not a SidebarMenuSubButton, so it owns its look here. */}
+      <div
+        role="button"
+        tabIndex={0}
+        data-active={isActive}
+        data-slot="sidebar-menu-sub-button"
+        data-sidebar="menu-sub-button"
+        data-size="sm"
         data-testid={`thread-row-${thread.id}`}
-        className={`${resolveThreadRowClassName({
-          isActive,
-          isSelected,
-        })} relative isolate${isFileDragOver ? " ring-1 ring-inset ring-primary/70" : ""}`}
+        className={cn(
+          "relative isolate flex h-8 w-full min-w-0 cursor-pointer select-none items-center gap-2 overflow-hidden rounded-md px-2 text-left text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring group-data-[collapsible=icon]:hidden [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-muted-foreground",
+          isActive
+            ? "bg-sidebar-row-active font-medium text-sidebar-foreground hover:bg-sidebar-row-active"
+            : isSelected
+              ? "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active"
+              : "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+          isFileDragOver && "ring-1 ring-inset ring-primary/70",
+        )}
         onClick={handleRowClick}
         onDoubleClick={handleRowDoubleClick}
         onKeyDown={handleRowKeyDown}
@@ -1014,7 +1024,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   <button
                     type="button"
                     aria-label={`Open localhost:${discoveredPorts[0]?.port ?? ""}`}
-                    className="inline-flex cursor-pointer items-center justify-center text-emerald-600 outline-hidden focus-visible:ring-1 focus-visible:ring-ring dark:text-emerald-400"
+                    className="inline-flex cursor-pointer items-center justify-center text-success-foreground outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
                     onClick={handleOpenDiscoveredPort}
                   />
                 }
@@ -1040,7 +1050,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 }
               >
                 <TerminalIcon
-                  className={`size-3 ${terminalStatus.pulse ? "animate-status-pulse" : ""}`}
+                  className={`size-3 ${terminalStatus.pulse ? "motion-safe:animate-status-pulse" : ""}`}
+                  onAnimationStart={synchronizeTerminalPulse}
                 />
               </TooltipTrigger>
               <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>
@@ -1058,7 +1069,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 data-thread-selection-safe
                 data-testid={`thread-archive-confirm-${thread.id}`}
                 aria-label={`Confirm archive ${thread.title}`}
-                className="absolute top-1/2 right-1 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center rounded-md bg-destructive/12 px-2 text-[10px] font-medium text-destructive transition-colors hover:bg-destructive/18 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-destructive/40"
+                className="absolute top-1/2 right-1 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center rounded-md bg-destructive/12 px-2 text-3xs font-medium text-destructive transition-colors hover:bg-destructive/18 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-destructive/40"
                 onPointerDown={stopPropagationOnPointerDown}
                 onClick={handleConfirmArchiveClick}
               >
@@ -1128,7 +1139,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       render={
                         <span
                           aria-label={jumpLabel}
-                          className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+                          className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-3xs font-medium tracking-tight text-foreground shadow-sm"
                         />
                       }
                     >
@@ -1138,7 +1149,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   </Tooltip>
                 ) : (
                   <span
-                    className={`text-[10px] tabular-nums ${
+                    className={`text-3xs tabular-nums ${
                       isHighlighted ? "text-foreground" : "text-secondary-label"
                     }`}
                   >
@@ -1151,7 +1162,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             </span>
           </div>
         </div>
-      </SidebarMenuSubButton>
+      </div>
     </SidebarMenuSubItem>
   );
 });
@@ -2708,7 +2719,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               {project.displayName}
             </span>
             {project.groupedProjectCount > 1 ? (
-              <span className="shrink-0 text-secondary-label text-[10px]">
+              <span className="shrink-0 text-secondary-label text-3xs">
                 {project.groupedProjectCount} projects
               </span>
             ) : null}
@@ -3766,7 +3777,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               )}
               {hasDraft ? <ComposerDraftDot /> : null}
             </div>
-            <span className="flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground/55">
+            <span className="flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground/55">
               <span className="truncate">{project.displayName}</span>
               {environment?.label ? (
                 <>
@@ -3804,7 +3815,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
           {props.jumpLabel ? (
             <span
               aria-hidden
-              className="pointer-events-none absolute top-1/2 right-1.5 z-10 -translate-y-1/2 rounded-md border border-border/70 bg-background/95 px-1.5 py-0.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+              className="pointer-events-none absolute top-1/2 right-1.5 z-10 -translate-y-1/2 rounded-md border border-border/70 bg-background/95 px-1.5 py-0.5 font-mono text-xs font-medium tracking-tight text-foreground shadow-sm"
             >
               {props.jumpLabel}
             </span>
@@ -3844,7 +3855,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               render={
                 <span
                   aria-label={project.displayName}
-                  className={`inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none ${badgeColorClass}`}
+                  className={`inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded px-1 text-xs font-semibold leading-none ${badgeColorClass}`}
                 />
               }
             >
@@ -3913,7 +3924,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
             </div>
             {/* Cross-project recency rows: project · server, matching mobile +
                 Sidebar V2's environment context (icon when remote). */}
-            <span className="flex min-w-0 items-center gap-1 truncate text-[10px] text-muted-foreground/60">
+            <span className="flex min-w-0 items-center gap-1 truncate text-xs text-muted-foreground/60">
               <span className="truncate">{project.displayName}</span>
               {environment?.label ? (
                 <>
@@ -3978,7 +3989,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                   <button
                     type="button"
                     aria-label={`Open localhost:${discoveredPorts[0]?.port ?? ""}`}
-                    className="inline-flex size-5 items-center justify-center text-emerald-600 dark:text-emerald-400"
+                    className="inline-flex size-5 items-center justify-center text-primary"
                     onClick={handleOpenDiscoveredPort}
                   />
                 }
@@ -3994,7 +4005,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                 render={
                   <span
                     aria-label={props.jumpLabel}
-                    className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+                    className="inline-flex h-5 items-center rounded-full border border-border/80 bg-background/90 px-1.5 font-mono text-xs font-medium tracking-tight text-foreground shadow-sm"
                   />
                 }
               >
@@ -4074,7 +4085,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
               </Tooltip>
             ) : null}
             <span
-              className={`text-[10px] tabular-nums text-muted-foreground/55 ${
+              className={`text-xs tabular-nums text-muted-foreground/55 ${
                 !isThreadRunning
                   ? "transition-opacity group-hover/recent-thread:opacity-0 group-focus-within/recent-thread:opacity-0"
                   : ""
@@ -4089,7 +4100,7 @@ const SidebarRecentThreadRow = memo(function SidebarRecentThreadRow(props: {
                 <button
                   type="button"
                   aria-label={`Confirm archive ${thread.title}`}
-                  className="absolute right-0 h-5 rounded-md bg-destructive/12 px-2 text-[10px] font-medium text-destructive"
+                  className="absolute right-0 h-5 rounded-md bg-destructive/12 px-2 text-xs font-medium text-destructive"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -4336,7 +4347,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
         <>
           {settledRecencyLayout.groups.map((group) => (
             <div key={group.id} data-testid={`sidebar-v1-settled-recency-${group.id}`}>
-              <div className="mb-0.5 px-2 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/45 first:pt-1">
+              <div className="mb-0.5 px-2 pt-2 text-xs font-medium uppercase tracking-wider text-muted-foreground/45 first:pt-1">
                 {group.label}
               </div>
               <SidebarMenuSub className="mx-0 w-full translate-x-0">
@@ -4398,7 +4409,7 @@ const SidebarRecentThreads = memo(function SidebarRecentThreads(props: {
       <>
         {recencyGroups.map((group) => (
           <SidebarGroup key={group.id}>
-            <div className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-sidebar-muted-foreground/70">
+            <div className="mb-1 px-2 text-xs font-medium uppercase tracking-wider text-sidebar-muted-foreground/70">
               {group.label}
             </div>
             <SidebarMenuSub className="mx-0 w-full translate-x-0">

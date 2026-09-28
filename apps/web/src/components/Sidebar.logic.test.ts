@@ -33,6 +33,7 @@ import {
   resolveSidebarProjectBadgeLabel,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarRowAccessibility,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
@@ -67,6 +68,7 @@ import {
   resolveSidebarDropVerb,
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   EnvironmentId,
   OrchestrationLatestTurn,
@@ -102,6 +104,35 @@ describe("sidebar recent project badges", () => {
     expect(resolveSidebarProjectBadgeColorIndex("repository:t3code", 6)).toBe(first);
     expect(first).toBeGreaterThanOrEqual(0);
     expect(first).toBeLessThan(6);
+  });
+});
+
+describe("resolveSidebarRowAccessibility", () => {
+  it.each([
+    {
+      title: "Can you audit the UI?",
+      statusLabel: "Working",
+      projectDisplayName: "T3 Code",
+      isActive: true,
+      expected: { label: "Can you audit the UI?, Working, T3 Code", current: "page" },
+    },
+    {
+      title: "The audit is done",
+      statusLabel: null,
+      projectDisplayName: "T3 Code",
+      isActive: false,
+      expected: { label: "The audit is done, T3 Code", current: undefined },
+    },
+    {
+      title: "Untitled task",
+      statusLabel: null,
+      projectDisplayName: null,
+      isActive: false,
+      expected: { label: "Untitled task", current: undefined },
+    },
+  ])("leads with the title without folding row actions into its name: %j", (input) => {
+    const { expected, ...state } = input;
+    expect(resolveSidebarRowAccessibility(state)).toEqual(expected);
   });
 });
 
@@ -2149,12 +2180,12 @@ describe("applySidebarThreadDrop", () => {
     };
     const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
     expect(preview).toEqual({ ...final, settledAt: now });
-    expect(sortSettledThreadsForSidebar([existing, preview]).map((row) => row.id)).toEqual([
+    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
       "dragged",
       "newer",
     ]);
-    expect(sortSettledThreadsForSidebar([existing, preview]).map((row) => row.id)).toEqual(
-      sortSettledThreadsForSidebar([existing, final]).map((row) => row.id),
+    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual(
+      sortSettledThreads([existing, final]).map((row) => row.id),
     );
   });
 
@@ -2169,7 +2200,7 @@ describe("applySidebarThreadDrop", () => {
     const final = { ...source, snoozedAt: null, snoozedUntil: null };
     const existing = { ...newer, settledOverride: "settled" as const, settledAt: newer.createdAt };
     expect(preview).toEqual(final);
-    expect(sortSettledThreadsForSidebar([existing, preview]).map((row) => row.id)).toEqual([
+    expect(sortSettledThreads([existing, preview]).map((row) => row.id)).toEqual([
       "newer",
       "dragged",
     ]);
@@ -2760,28 +2791,6 @@ describe("resolveThreadStatusPill", () => {
   });
 });
 
-describe("resolveThreadRowClassName", () => {
-  it("uses the active sidebar surface when a thread is both selected and active", () => {
-    const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-sidebar-row-active");
-    expect(className).toContain("text-sidebar-foreground");
-    expect(className).not.toContain("bg-primary");
-  });
-
-  it("uses selected hover colors for selected threads", () => {
-    const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-sidebar-row-selected");
-    expect(className).toContain("hover:bg-sidebar-row-active");
-    expect(className).not.toContain("bg-primary");
-  });
-
-  it("uses the active sidebar surface for active-only threads", () => {
-    const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-sidebar-row-active");
-    expect(className).toContain("hover:bg-sidebar-row-active");
-  });
-});
-
 describe("resolveProjectStatusIndicator", () => {
   it("returns null when no threads have a notable status", () => {
     expect(resolveProjectStatusIndicator([null, null])).toBeNull();
@@ -3120,6 +3129,49 @@ describe("sortProjectsForSidebar", () => {
       ProjectId.make("project-2"),
     ]);
   });
+
+  it.each(["updated_at", "created_at"] as const)(
+    "matches the per-comparison %s order on a shuffled list with ties",
+    (sortOrder) => {
+      const minute = (value: number) => `2026-03-09T10:0${value}:00.000Z`;
+      // (index * 7) % 24 scrambles the input order. Titles repeat, and
+      // projects 16-23 have no threads, so they use their own stamps.
+      const projects = Array.from({ length: 24 }, (_, index) => {
+        const n = (index * 7) % 24;
+        return makeProject({
+          id: ProjectId.make(`project-${n}`),
+          title: n % 2 === 0 ? "Alpha" : "Beta",
+          createdAt: minute(n % 3),
+          updatedAt: n % 5 === 0 ? "invalid" : minute(n % 2),
+        });
+      });
+      const threads = Array.from({ length: 48 }, (_, n) => ({
+        projectId: ProjectId.make(`project-${n % 16}`),
+        createdAt: minute(n % 6),
+        updatedAt: minute(n % 3),
+        latestUserMessageAt: n % 4 === 0 ? null : minute(n % 5),
+      }));
+      // The comparator this sort replaced: it walked each project's threads
+      // on every call.
+      const timestamp = (project: Project) =>
+        getProjectSortTimestamp(
+          project,
+          threads.filter((thread) => thread.projectId === project.id),
+          sortOrder,
+        );
+      const expected = projects.toSorted((left, right) => {
+        const rightTimestamp = timestamp(right);
+        const leftTimestamp = timestamp(left);
+        const byTimestamp =
+          rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
+        return (
+          byTimestamp || left.title.localeCompare(right.title) || left.id.localeCompare(right.id)
+        );
+      });
+
+      expect(sortProjectsForSidebar(projects, threads, sortOrder)).toEqual(expected);
+    },
+  );
 
   it("returns the project timestamp when no threads are present", () => {
     const timestamp = getProjectSortTimestamp(

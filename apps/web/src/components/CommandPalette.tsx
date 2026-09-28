@@ -475,6 +475,7 @@ function overlayModeForCommand(command: string | null): SearchOverlayMode | null
 }
 
 export function CommandPalette({ children }: { children: ReactNode }) {
+  const navigate = useNavigate();
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
     mode: "command",
@@ -553,6 +554,13 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         });
         return;
       }
+      if (command === "usage.open") {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        void navigate({ to: "/usage" });
+        return;
+      }
       const mode = overlayModeForCommand(command);
       if (mode === null) {
         return;
@@ -566,9 +574,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   }, [
     appearanceMode,
     keybindings,
+    navigate,
     previewOpen,
     resolvedTheme,
     setAppearanceMode,
+    setOpen,
     terminalOpen,
     theme,
     themeHalves,
@@ -1412,7 +1422,7 @@ function OpenCommandPaletteDialog(props: {
             sortOrder: clientSettings.sidebarThreadSortOrder,
             icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
             renderTrailingContent: () => (
-              <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-medium text-[10px] text-muted-foreground uppercase tracking-wide">
+              <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-medium text-xs text-muted-foreground uppercase tracking-wide">
                 <ArchiveIcon className="size-3" />
                 Archived
               </span>
@@ -2056,6 +2066,7 @@ function OpenCommandPaletteDialog(props: {
     searchTerms: ["usage", "use", "tokens", "cost", "spend", "limits", "stats", "analytics"],
     title: "Open usage",
     icon: <ChartNoAxesColumnIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
     },

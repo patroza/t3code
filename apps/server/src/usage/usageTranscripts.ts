@@ -12,9 +12,19 @@ export interface UsageRecord {
   readonly provider: UsageProviderKind;
   readonly timestampMs: number;
   readonly model: string;
+  /**
+   * Rate-table key when the provider's display name carries tiers the table
+   * does not know, such as Cursor's `claude-opus-5-5-high`. Defaults to `model`.
+   */
+  readonly rateModel?: string;
   readonly sessionId: string;
   readonly totals: UsageTokenTotals;
   readonly reportedCostUsd: number | null;
+  /**
+   * Whether the request ran in fast mode, which bills at a model-specific
+   * multiple of the standard rate. Only Claude Code records this.
+   */
+  readonly fast: boolean;
   /**
    * Key for cross-file de-duplication, or `null` when the record is inherently
    * unique and needs no dedup.
@@ -146,6 +156,7 @@ export function parseClaudeLine(line: string): UsageRecord | null {
       reasoningTokens: 0,
     },
     reportedCostUsd: typeof cost === "number" && Number.isFinite(cost) ? cost : null,
+    fast: usageRecord["speed"] === "fast",
     dedupeKey,
   };
 }
@@ -305,6 +316,7 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     totals,
     // Codex does not report cost in the rollout.
     reportedCostUsd: null,
+    fast: false,
     // Events surviving the fork-copy suppression above are unique to this
     // rollout, so they need no global dedup.
     dedupeKey: null,
@@ -434,6 +446,7 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
         sessionId,
         totals: grokTotalsToUsage(topLevel),
         reportedCostUsd: grokCostTicksToUsd(topLevel.costUsdTicks),
+        fast: false,
         // No prompt id means we cannot tell two same-second updates apart.
         dedupeKey: promptId === null ? null : `${sessionId}:${promptId}:grok`,
       },
@@ -480,6 +493,7 @@ export function parseGrokLine(line: string): readonly UsageRecord[] {
       sessionId,
       totals,
       reportedCostUsd,
+      fast: false,
       dedupeKey: promptId === null ? null : `${sessionId}:${promptId}:${entry.model}`,
     });
   }

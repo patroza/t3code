@@ -73,6 +73,7 @@ interface ClientConnection {
   readonly environmentId: PreviewAutomationHost["environmentId"];
   readonly supportedOperations: ReadonlySet<PreviewAutomationOperation>;
   readonly focused: boolean;
+  readonly liveTabs: NonNullable<PreviewAutomationHostFocus["liveTabs"]>;
   readonly focusOrder: number;
   readonly queue: Queue.Queue<PreviewAutomationStreamEvent, Cause.Done>;
 }
@@ -387,6 +388,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       environmentId: host.environmentId,
       supportedOperations: new Set(host.supportedOperations ?? PREVIEW_AUTOMATION_V1_OPERATIONS),
       focused: false,
+      liveTabs: [],
       focusOrder: 0,
       queue,
     };
@@ -450,6 +452,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       clients.set(host.clientId, {
         ...currentHost,
         focused: host.focused,
+        liveTabs: host.liveTabs ?? currentHost.liveTabs,
         focusOrder: host.focused ? focusSequence : currentHost.focusOrder,
       });
       return { ...current, clients, focusSequence };
@@ -513,8 +516,16 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
           claimedConnection.connectionId;
       // Keep a provider session on one physical runtime so a multi-step
       // interaction cannot jump between independent cookie/DOM state. An
-      // explicit thread claim intentionally overrides that pin; this lets a
-      // headless bridge select its own host before dispatching a turn.
+      // explicit thread claim overrides that pin so a headless bridge can
+      // select its own host. A live assignment is not silently moved to a
+      // newer client. New sessions prefer the live tab owner.
+      const ownsTargetTab = (host: ClientConnection, visibleOnly = false) =>
+        host.liveTabs.some(
+          (tab) =>
+            tab.threadId === input.scope.threadId &&
+            (!visibleOnly || tab.visible === true) &&
+            (input.tabId === undefined || tab.tabId === input.tabId),
+        );
       const connection =
         hasLiveClaim && supportsOperation(claimedConnection, input.operation)
           ? claimedConnection
@@ -532,7 +543,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
                     )
                     .sort(
                       (left, right) =>
-                        right.supportedOperations.size - left.supportedOperations.size ||
+                        Number(ownsTargetTab(right, true)) - Number(ownsTargetTab(left, true)) ||
+                        Number(ownsTargetTab(right)) - Number(ownsTargetTab(left)) ||
                         Number(right.focused) - Number(left.focused) ||
                         right.focusOrder - left.focusOrder,
                     )[0];

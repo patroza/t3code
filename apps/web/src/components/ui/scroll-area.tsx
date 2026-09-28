@@ -31,6 +31,7 @@ function ScrollArea({
   chainVerticalScroll = false,
   chainHorizontalScroll = false,
   radius = "inherit",
+  viewportTabIndex,
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
   scrollFade?: boolean;
@@ -43,6 +44,8 @@ function ScrollArea({
   chainHorizontalScroll?: boolean;
   /** The viewport clips to the parent's radius; "none" for a region flush to an edge. */
   radius?: "inherit" | "none";
+  /** Override Base UI's focusable viewport when focusable descendants provide scroll access. */
+  viewportTabIndex?: number;
 }) {
   return (
     <ScrollAreaPrimitive.Root
@@ -54,8 +57,9 @@ function ScrollArea({
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
+        {...(viewportTabIndex === undefined ? {} : { tabIndex: viewportTabIndex })}
         className={cn(
-          "h-full max-h-[inherit] overflow-auto overscroll-contain rounded-[inherit] outline-none transition-shadows focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-has-overflow-x:overscroll-x-contain",
+          "h-full max-h-[inherit] overflow-auto overscroll-contain rounded-[inherit] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-has-overflow-x:overscroll-x-contain",
           chainVerticalScroll && "overscroll-y-auto",
           chainHorizontalScroll && "overscroll-x-auto data-has-overflow-x:overscroll-x-auto",
           scrollFade &&

@@ -19,8 +19,7 @@ Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
 50 MiB each, subject to the environment's upload support and limit. The agent
 receives them on the environment's machine. Provider and model limits still
 apply, including images already in the conversation. A video attachment gives
-the agent a file path; it does not enable native video input. Antigravity does
-not accept video attachments.
+the agent a file path; it does not enable native video input.
 
 Uploads begin when you add an attachment. All uploads must finish before the
 message can send. Retry or remove a failed upload. On web and desktop, reloading
@@ -36,9 +35,10 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 ## Send while the agent is working
 
 A message sent during a running turn is queued on the server and shown as a
-chip above the composer. The queue drains in order when the turn finishes.
-Use **Send now** to steer the queued message into the current turn, or **Edit**
-to pull it back into the composer.
+chip above the composer. The queue drains in order when the turn finishes,
+including while you have another thread open. Use **Send now** to steer the
+queued message into the current turn, or **Edit** to pull it back into the
+composer.
 
 In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
 behavior or **Steer** to send new messages immediately into the current turn.
@@ -46,8 +46,8 @@ This setting applies to the current client. Messages already queued keep their
 place on the server.
 
 Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to
-send the oldest queued chip now. Change `thread.steerQueuedMessage` in
-**Settings → Keybindings** to use another shortcut. It leaves the current draft
+send the oldest queued chip now. Change that shortcut in **Settings →
+Keybindings** if you want a different binding. It leaves the current draft
 in the composer and waits if the agent needs an approval or an answer.
 
 ## Queue messages offline on mobile

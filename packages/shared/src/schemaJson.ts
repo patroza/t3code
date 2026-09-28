@@ -1,7 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -181,7 +180,7 @@ const parseLenientJsonGetter = SchemaGetter.onSome((input: string) => {
   stripped = stripped.replace(/,(\s*[}\]])/g, "$1");
 
   return decodeJsonString(stripped).pipe(
-    Effect.map(Option.some),
+    Effect.asSome,
     Effect.mapError((error) => error.issue),
   );
 });

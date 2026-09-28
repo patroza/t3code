@@ -1040,11 +1040,7 @@ const preWarmImpl = (
       const handle = yield* spawner.spawn(command);
       yield* handle.exitCode;
     }),
-  ).pipe(
-    Effect.timeoutOption(PRE_WARM_TIMEOUT),
-    Effect.asVoid,
-    Effect.catch(() => Effect.void),
-  );
+  ).pipe(Effect.timeoutOption(PRE_WARM_TIMEOUT), Effect.ignore);
 
 const windowsToWslPathImpl = (
   distro: string | null,

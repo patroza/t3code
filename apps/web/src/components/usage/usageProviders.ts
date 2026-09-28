@@ -1,6 +1,15 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 
-import { ClaudeAI, GrokIcon, type Icon, KimiIcon, OpenAI } from "../Icons";
+import {
+  AntigravityIcon,
+  ClaudeAI,
+  CursorIcon,
+  GrokIcon,
+  type Icon,
+  KimiIcon,
+  OpenAI,
+  OpenCodeIcon,
+} from "../Icons";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -13,8 +22,8 @@ type UsageProviderPresentation = {
  * Declaration order is reused by every chart, table, legend, and skeleton, so
  * adding a provider only requires its contract support and one entry here.
  *
- * All four have to stay distinguishable side by side in a stacked band, so
- * Kimi's warmer orange is kept clear of Claude's.
+ * Stacked bands have to stay distinguishable side by side, so Kimi's warmer
+ * orange is kept clear of Claude's.
  */
 export const PROVIDER_PRESENTATION = {
   codex: {
@@ -38,6 +47,9 @@ export const PROVIDER_PRESENTATION = {
     color: "#ff6a3d",
     mark: KimiIcon,
   },
+  cursor: { label: "Cursor", color: "#8b8b8b", mark: CursorIcon },
+  opencode: { label: "OpenCode", color: "#5b9bbd", mark: OpenCodeIcon },
+  antigravity: { label: "Antigravity", color: "#8c7bd1", mark: AntigravityIcon },
 } satisfies Record<UsageProviderKind, UsageProviderPresentation>;
 
 /** Stable provider reading order across charts, summaries, tables, and hover rows. */

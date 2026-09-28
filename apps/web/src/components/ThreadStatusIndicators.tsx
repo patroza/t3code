@@ -24,7 +24,7 @@ import {
   TerminalIcon,
 } from "lucide-react";
 import { useRender } from "@base-ui/react/use-render";
-import { useMemo, type MouseEvent, type ReactElement } from "react";
+import { useMemo, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -341,7 +341,7 @@ export function ThreadPullRequestsMiniList({
               {snapshot?.title ?? line.link.repository}
             </span>
             {line.stack ? (
-              <span className="ml-auto shrink-0 pl-1 text-[10px]">
+              <span className="ml-auto shrink-0 pl-1 text-3xs">
                 {line.stack.kind === "native" ? "stack" : "chain"} · {line.stack.size}
               </span>
             ) : null}
@@ -674,6 +674,17 @@ export function terminalStatusFromRunningIds(
   };
 }
 
+/** Align newly started pulses with the document clock without a timer or frame loop. */
+export function synchronizeTerminalPulse(event: AnimationEvent<SVGSVGElement>) {
+  if (event.animationName !== "status-pulse") return;
+
+  for (const animation of event.currentTarget.getAnimations()) {
+    if ("animationName" in animation && animation.animationName === "status-pulse") {
+      animation.startTime = 0;
+    }
+  }
+}
+
 export function ThreadWorktreeIndicator({
   thread,
   onCreateSession,
@@ -751,7 +762,7 @@ export function ThreadPlanModeIndicator({
           />
         }
       >
-        <PencilRulerIcon className="size-3 text-blue-600 dark:text-blue-400" />
+        <PencilRulerIcon className="size-3 text-primary" />
       </TooltipTrigger>
       <TooltipPopup side="top">Plan-only thread</TooltipPopup>
     </Tooltip>
@@ -810,7 +821,7 @@ export function ComposerDraftDot({ className }: { className?: string }) {
     <span
       aria-label="Unsent draft"
       data-testid="composer-draft-dot"
-      className={cn("size-1.5 shrink-0 rounded-full bg-blue-500", className)}
+      className={cn("size-1.5 shrink-0 rounded-full bg-primary", className)}
     />
   );
 }
@@ -850,7 +861,7 @@ export function ThreadStatusLabel({
         render={
           <span
             aria-label={status.label}
-            className={`inline-flex items-center gap-1 text-[10px] ${status.colorClass}`}
+            className={`inline-flex items-center gap-1 text-3xs ${status.colorClass}`}
           />
         }
       >
@@ -969,7 +980,8 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
             }
           >
             <TerminalIcon
-              className={`size-3 ${terminalStatus.pulse ? "animate-status-pulse" : ""}`}
+              className={`size-3 ${terminalStatus.pulse ? "motion-safe:animate-status-pulse" : ""}`}
+              onAnimationStart={synchronizeTerminalPulse}
             />
           </TooltipTrigger>
           <TooltipPopup side="top">{terminalStatus.label}</TooltipPopup>
