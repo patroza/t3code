@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { DiscordBotConfig } from "../config.ts";
-import { BrowserRuntime } from "./BrowserRuntime.ts";
+import { BrowserRuntime, BrowserRuntimeError } from "./BrowserRuntime.ts";
 
 const SUPPORTED_OPERATIONS = [
   "status",
@@ -38,6 +38,46 @@ export class BrowserOperationTimeoutError extends Error {
     this.name = "BrowserOperationTimeoutError";
     this.timeoutMs = timeoutMs;
   }
+}
+
+const NON_JSON_RESULT_MESSAGE = "Browser result could not be returned because it is not JSON.";
+
+/**
+ * RPC encodes `result` as JSON. Playwright can hand back Dates, NaN, or class
+ * instances, and Effect rejects those while sending the response. That defect
+ * used to kill the whole host and drop the thread onto another browser.
+ * Round-trip through JSON first. Values that cannot be encoded fail this call
+ * instead.
+ */
+export function browserAutomationResult(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    const encoded = JSON.stringify(value);
+    if (typeof encoded !== "string") {
+      throw new BrowserRuntimeError(NON_JSON_RESULT_MESSAGE);
+    }
+    return JSON.parse(encoded) as unknown;
+  } catch (cause) {
+    if (cause instanceof BrowserRuntimeError) throw cause;
+    throw new BrowserRuntimeError(NON_JSON_RESULT_MESSAGE, { cause });
+  }
+}
+
+export function browserResponseAfterDeliveryFailure(
+  response: PreviewAutomationResponse,
+  cause: unknown,
+): PreviewAutomationResponse {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return {
+    clientId: response.clientId,
+    connectionId: response.connectionId,
+    requestId: response.requestId,
+    ok: false,
+    error: {
+      _tag: "PreviewAutomationExecutionError",
+      message: `Browser result could not be delivered. ${detail}`.slice(0, 500),
+    },
+  };
 }
 
 export function browserOperationDeadlineMs(timeoutMs: number): number {
@@ -122,10 +162,12 @@ export class BrowserAutomationHost {
     } as const;
     let response: PreviewAutomationResponse;
     try {
-      const result = await withBrowserOperationDeadline(
-        this.#runtime.handle(event.request),
-        event.request.timeoutMs,
-        () => this.#runtime.interrupt(event.request),
+      const result = browserAutomationResult(
+        await withBrowserOperationDeadline(
+          this.#runtime.handle(event.request),
+          event.request.timeoutMs,
+          () => this.#runtime.interrupt(event.request),
+        ),
       );
       response = { ...responseBase, ok: true, ...(result === undefined ? {} : { result }) };
     } catch (cause) {

@@ -60,7 +60,10 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import type { DiscordBotConfig } from "../config.ts";
 import { preferredModelSelection } from "../config.ts";
-import { BrowserAutomationHost } from "../browser/BrowserAutomationHost.ts";
+import {
+  BrowserAutomationHost,
+  browserResponseAfterDeliveryFailure,
+} from "../browser/BrowserAutomationHost.ts";
 import { formatThreadTitle } from "../presentation/messages.ts";
 import { normalizeWorkspacePath } from "../presentation/mentions.ts";
 import { followOrchestrationThread } from "./DiscordThreadFollower.ts";
@@ -631,11 +634,25 @@ export const makeT3Session = (botConfig: DiscordBotConfig) =>
                         }
                         return response;
                       }).pipe(
-                        Effect.flatMap((response) =>
-                          response === null
-                            ? Effect.void
-                            : connected.client[WS_METHODS.previewAutomationRespond](response),
-                        ),
+                        Effect.flatMap((response) => {
+                          if (response === null) return Effect.void;
+                          const respond = connected.client[WS_METHODS.previewAutomationRespond];
+                          // A single result that fails schema encoding must not end the
+                          // host stream. The broker would drop the thread claim and the
+                          // next call would land on a different browser.
+                          return respond(response).pipe(
+                            Effect.catchCause((cause) =>
+                              Effect.logWarning(
+                                "Discord browser response was not delivered; returning an error for this call.",
+                                { requestId: response.requestId, cause },
+                              ).pipe(
+                                Effect.andThen(
+                                  respond(browserResponseAfterDeliveryFailure(response, cause)),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
                       ),
                     ),
                     Effect.catchCause((cause) =>
