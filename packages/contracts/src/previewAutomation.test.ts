@@ -4,7 +4,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { PreviewAutomationResponse, jsonValueFromUnknown } from "./previewAutomation.ts";
 
-const encodeResponse = Schema.encodeUnknownSync(Schema.toCodecJson(PreviewAutomationResponse));
+const responseCodec = Schema.toCodecJson(PreviewAutomationResponse);
+const encodeResponse = Schema.encodeUnknownSync(responseCodec);
+const decodeResponse = Schema.decodeUnknownSync(responseCodec);
+
+function encodedResult(input: unknown): unknown {
+  return decodeResponse(encodeResponse(input)).result;
+}
 
 const responseBase = {
   clientId: "discord-browser-operator-default",
@@ -15,12 +21,12 @@ const responseBase = {
 
 describe("PreviewAutomationResponse JSON codec", () => {
   it("encodes a Date and a non-finite number as JSON", () => {
-    const encoded = encodeResponse({
-      ...responseBase,
-      result: { seen: new Date("2026-09-30T07:40:54.000Z"), width: Number.NaN, keep: "board" },
-    });
-
-    expect(encoded.result).toEqual({
+    expect(
+      encodedResult({
+        ...responseBase,
+        result: { seen: new Date("2026-09-30T07:40:54.000Z"), width: Number.NaN, keep: "board" },
+      }),
+    ).toEqual({
       seen: "2026-09-30T07:40:54.000Z",
       width: null,
       keep: "board",
@@ -31,7 +37,7 @@ describe("PreviewAutomationResponse JSON codec", () => {
     const cycle: { self?: unknown; board: string } = { board: "flowchart" };
     cycle.self = cycle;
 
-    expect(encodeResponse({ ...responseBase, result: cycle }).result).toEqual({
+    expect(encodedResult({ ...responseBase, result: cycle })).toEqual({
       board: "flowchart",
       self: "[Circular]",
     });
