@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off -- Playwright evaluate returns Date instances; this case checks they become JSON strings.
 import { describe, expect, it } from "vite-plus/test";
 
 import {
