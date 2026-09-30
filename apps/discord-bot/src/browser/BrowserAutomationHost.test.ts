@@ -8,7 +8,6 @@ import {
   BrowserOperationTimeoutError,
   withBrowserOperationDeadline,
 } from "./BrowserAutomationHost.ts";
-import { BrowserRuntimeError } from "./BrowserRuntime.ts";
 
 describe("browser automation host", () => {
   it("reserves time for delivering the response to the broker", () => {
@@ -38,10 +37,10 @@ describe("browser automation host", () => {
     expect(browserAutomationResult(undefined)).toBeUndefined();
   });
 
-  it("fails the call when the result cannot be encoded as JSON", () => {
-    const cycle: { self?: unknown } = {};
+  it("projects a cycle onto JSON so the response can be sent", () => {
+    const cycle: { self?: unknown; board: string } = { board: "flowchart" };
     cycle.self = cycle;
-    expect(() => browserAutomationResult(cycle)).toThrow(BrowserRuntimeError);
+    expect(browserAutomationResult(cycle)).toEqual({ board: "flowchart", self: "[Circular]" });
   });
 
   it("replaces an undeliverable response with an execution error", () => {
