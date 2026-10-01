@@ -155,12 +155,14 @@ export default mergeConfig(
               "src/assets/AssetAccess.test.ts",
               "src/bootstrap.test.ts",
               "src/cli/app.test.ts",
+              "src/git/GitManager.test.ts",
               "src/observability/HeapSnapshot.test.ts",
               "src/orchestration/Layers/CheckpointReactor.test.ts",
               "src/provider/Layers/ClaudeCapabilitiesProbe.test.ts",
               "src/provider/Layers/GrokAdapter.test.ts",
               "src/provider/Layers/ProviderRegistry.test.ts",
               "src/terminal/NodePtyAdapter.test.ts",
+              "src/vcs/GitVcsDriverCore.test.ts",
               "src/workspace/WorkspaceEntries.test.ts",
             ],
           },
@@ -182,6 +184,12 @@ export default mergeConfig(
               // real os module and the mock never applies — the CLI then
               // connects to the live Linux desktop socket.
               "src/cli/app.test.ts",
+              // Real git with per-repo gpg.program / core.hooksPath fixtures.
+              // Under isolate:false a sibling can leak git env so signing never
+              // fails, or `git hook run post-checkout` ignores a non-executable
+              // leftover hook (`cannot find a hook named post-checkout`).
+              "src/git/GitManager.test.ts",
+              "src/vcs/GitVcsDriverCore.test.ts",
               // Real git in a temp cwd. Under isolate:false a sibling can leave
               // a .git / unparseable HEAD and `git: false` / init-between-turns
               // fail on CI (`existsSync(.git)` true, `could not parse HEAD`).
