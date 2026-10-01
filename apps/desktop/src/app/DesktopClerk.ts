@@ -3,12 +3,20 @@ import { storage } from "@clerk/electron/storage";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import { codexAuthDeliveryUrl, readCodexAuthHandoff } from "@t3tools/shared/codexAuthHandoff";
+import { receiveCodexAuthCallback, CodexAuthCallbackError } from "./CodexAuthCallback.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
+import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
+import { HostProcessArguments } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopDeepLinks from "./DesktopDeepLinks.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
@@ -46,7 +54,10 @@ export class DesktopClerk extends Context.Service<
     readonly configure: Effect.Effect<
       void,
       never,
-      DesktopDeepLinks.DesktopDeepLinks | ElectronApp.ElectronApp | Scope.Scope
+      | DesktopDeepLinks.DesktopDeepLinks
+      | ElectronApp.ElectronApp
+      | ElectronWindow.ElectronWindow
+      | Scope.Scope
     >;
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
@@ -84,6 +95,18 @@ function createDesktopClerkBridge(stateDir: string, isDevelopment: boolean) {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const electronApp = yield* ElectronApp.ElectronApp;
+  const shell = yield* ElectronShell.ElectronShell;
+
+  // Electron scopes the single-instance lock to the userData directory and
+  // creates that directory when the lock is acquired. The SDK bridge takes
+  // the lock at creation, so userData must already point at the real
+  // directory here — under the default productName-derived path, acquiring
+  // the lock would create "T3 Code (Alpha)" and make the legacy-install
+  // detection in resolveUserDataPath match on fresh installs.
+  const userDataPath = yield* DesktopAppIdentity.resolveUserDataPath;
+  yield* electronApp.setPath("userData", userDataPath);
+
   const bridge = yield* Effect.acquireRelease(
     Effect.try({
       try: () => createDesktopClerkBridge(environment.stateDir, environment.isDevelopment),
@@ -109,6 +132,7 @@ export const make = Effect.gen(function* () {
   return DesktopClerk.of({
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
       const deepLinks = yield* DesktopDeepLinks.DesktopDeepLinks;
       // Capture ambient services for Electron event callbacks, which cannot yield.
       const context = yield* Effect.context<never>();
@@ -124,16 +148,76 @@ export const make = Effect.gen(function* () {
         return yield* Effect.interrupt;
       }
 
+      const startProviderAuthHandoff = (value: string | undefined) => {
+        if (!value) return false;
+        const request = readCodexAuthHandoff(value, environment.isDevelopment);
+        if (!request) return false;
+        void runPromise(
+          Effect.gen(function* () {
+            yield* electronApp.whenReady;
+            yield* Effect.tryPromise({
+              try: () =>
+                receiveCodexAuthCallback(
+                  request.authorizationUrl,
+                  (url) => runPromise(shell.openExternal(url)),
+                  (callbackUrl) => codexAuthDeliveryUrl(request, callbackUrl),
+                ),
+              catch: () =>
+                new CodexAuthCallbackError({
+                  detail:
+                    "Could not receive hosted web ChatGPT sign-in. Retry or use the redirect URL in the web app.",
+                }),
+            });
+          }).pipe(
+            Effect.catch(() => Effect.logWarning("Could not complete ChatGPT desktop handoff.")),
+          ),
+        );
+        return true;
+      };
+      const resumeProviderAuth = (value: string | undefined) => {
+        const destination = providerAuthReturnUrl(value);
+        const expectedOrigin = `${ElectronProtocol.getDesktopScheme(environment.isDevelopment)}://app`;
+        if (!destination?.startsWith(`${expectedOrigin}/`)) return false;
+        void runPromise(
+          Effect.gen(function* () {
+            const mainWindow = yield* electronWindow.currentMainOrFirst;
+            if (Option.isNone(mainWindow)) return;
+            yield* Effect.promise(() => mainWindow.value.loadURL(destination));
+            yield* electronWindow.reveal(mainWindow.value);
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not return to provider setup", cause),
+            ),
+          ),
+        );
+        return true;
+      };
+
+      const args = yield* HostProcessArguments;
+      args.some((value) => startProviderAuthHandoff(value));
+
       // Register before readiness so cold-start and second-instance deep links
       // are not dropped. Deep-link processing itself queues until start().
-      yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[] = []) => {
-        void runPromise(deepLinks.handleArgv(argv));
-      });
-
-      // macOS delivers custom URL scheme activations through open-url.
+      // ChatGPT / provider-auth URLs win over thread deep links and Clerk
+      // callbacks; anything else that looks like a t3code thread/project link
+      // goes to DesktopDeepLinks. Leave remaining open-url events for Clerk.
       yield* electronApp.on("open-url", (event: { preventDefault?: () => void }, url: string) => {
+        if (startProviderAuthHandoff(url) || resumeProviderAuth(url)) {
+          event.preventDefault?.();
+          return;
+        }
+        const isDesktopDeepLink =
+          Option.isSome(DesktopDeepLinks.parseDesktopThreadDeepLink(url)) ||
+          Option.isSome(DesktopDeepLinks.parseDesktopProjectDeepLink(url));
+        if (!isDesktopDeepLink) return;
         event.preventDefault?.();
         void runPromise(deepLinks.handleUrl(url));
+      });
+      yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[] = []) => {
+        if (argv?.some((value) => startProviderAuthHandoff(value) || resumeProviderAuth(value))) {
+          return;
+        }
+        void runPromise(deepLinks.handleArgv(argv));
       });
 
       // Packaged builds own the OS protocol handler. Skip in development so a
@@ -144,7 +228,7 @@ export const make = Effect.gen(function* () {
 
       // Initial argv may already contain a deep link (direct CLI invocation or
       // protocol launch on Linux/Windows).
-      yield* deepLinks.handleArgv(process.argv);
+      yield* deepLinks.handleArgv(args);
     }).pipe(Effect.withSpan("desktop.clerk.configure")),
   });
 });

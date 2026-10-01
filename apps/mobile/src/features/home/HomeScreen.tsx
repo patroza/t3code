@@ -310,8 +310,8 @@ export function HomeScreen(props: HomeScreenProps) {
     (event: GestureResponderEvent, started: boolean) => {
       const { changedTouches, touches } = event.nativeEvent;
       swipeRowActivation.trackTouches(
-        started ? changedTouches.map((touch) => touch.identifier) : [],
-        touches.map((touch) => touch.identifier),
+        started ? changedTouches.map((touch) => String(touch.identifier)) : [],
+        touches.map((touch) => String(touch.identifier)),
       );
     },
     [swipeRowActivation],
@@ -985,35 +985,20 @@ export function HomeScreen(props: HomeScreenProps) {
     );
   }
 
-  const listHeader = Platform.OS === "ios" ? null : <HomeTopContentSpacer />;
+  const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
 
   // Project scoping lives in the header filter menu (no inline chip row on
   // mobile — the menu is the one filter surface).
   const v2ListHeader = listHeader;
 
-  const v2SnoozedCount = threadListV2Layout.snoozedCount;
+  // Use the v2 project scope for its empty state. Snoozed threads need no
+  // special empty state: their shelf header is a list row even while collapsed.
   const v2ListEmpty =
     v2PendingTasks.length > 0 ? null : hasSearchQuery &&
-      threadSearch.isPending ? null : hasSearchQuery ? (
-      v2SnoozedCount > 0 ? (
-        <EmptyState
-          title={
-            v2SnoozedCount === 1 ? "1 matching thread snoozed" : `All matching threads snoozed`
-          }
-          detail={`Threads matching "${props.searchQuery}" are snoozed and return when their wake time passes.`}
-          variant={Platform.OS === "android" ? "plain" : undefined}
-        />
-      ) : (
-        <EmptyState
-          title="No results"
-          detail={`No threads matching "${props.searchQuery}".`}
-          variant={Platform.OS === "android" ? "plain" : undefined}
-        />
-      )
-    ) : v2SnoozedCount > 0 ? (
+      threadSearch.isPending ? undefined : hasSearchQuery ? (
       <EmptyState
-        title={v2SnoozedCount === 1 ? "1 thread snoozed" : `${v2SnoozedCount} threads snoozed`}
-        detail="Snoozed threads return when their wake time passes."
+        title="No results"
+        detail={`No threads matching "${props.searchQuery}".`}
         variant={Platform.OS === "android" ? "plain" : undefined}
       />
     ) : v2ScopedProjectGroup !== null ? (

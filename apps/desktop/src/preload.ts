@@ -182,6 +182,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       items,
       ...(position === undefined ? {} : { position }),
     }),
+  receiveProviderAuthCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
+  cancelProviderAuthCallback: (url: string) =>
+    ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   pickOpenWithApplication: () => ipcRenderer.invoke(IpcChannels.PICK_OPEN_WITH_APPLICATION_CHANNEL),
   resolveOpenWithPresentations: () =>
