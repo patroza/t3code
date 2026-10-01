@@ -426,6 +426,8 @@ describe("shouldReopenFinalizedDelivery", () => {
         currentAssistantMessageId: "assistant-1",
         turnId: "turn-1",
         nextAssistantMessageId: "assistant-2",
+        lastFinalizedText: "I'll check the spec.",
+        nextText: "The box is outside the spec: max is 240 × 80 × 60.",
       }),
     ).toBe(true);
   });
@@ -437,6 +439,20 @@ describe("shouldReopenFinalizedDelivery", () => {
         currentAssistantMessageId: "assistant-1",
         turnId: "turn-1",
         nextAssistantMessageId: "assistant-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not reopen a new assistant id that repeats the posted final", () => {
+    const answer = "The box is outside the spec: max is 240 × 80 × 60.";
+    expect(
+      shouldReopenFinalizedDelivery({
+        finalizedTurnId: "turn-1",
+        currentAssistantMessageId: "assistant-1",
+        turnId: "turn-1",
+        nextAssistantMessageId: "assistant-2",
+        lastFinalizedText: answer,
+        nextText: answer,
       }),
     ).toBe(false);
   });
@@ -763,6 +779,21 @@ describe("finalize accept-without-ack idempotency", () => {
   it("normalizes Working markers and whitespace", () => {
     expect(normalizeDiscordContentForIdempotency("Hello\n\n_Working.._\n")).toBe("Hello");
     expect(normalizeDiscordContentForIdempotency("  a   b  ")).toBe("a b");
+  });
+
+  it("strips stats footer and T3 link so a second finalize with new stats can adopt", () => {
+    const body = "Yes, from the specs only. 201 × 80 × 60 is Langgut.";
+    const first = `${body}\n\n_\`grok-4.7\` · 37s · 149k_ · [T3](https://t3vm/?thread=abc)`;
+    const second = `${body}\n\n_\`grok-4.7\` · 31s · 157k_ · [T3](https://t3vm/?thread=abc)`;
+    expect(normalizeDiscordContentForIdempotency(first)).toBe(body);
+    expect(normalizeDiscordContentForIdempotency(second)).toBe(body);
+    expect(
+      findAlreadyPostedFinalChunkIds({
+        botUserId: "bot",
+        finalChunks: [second],
+        recentMessages: [{ id: "m1", authorId: "bot", content: first }],
+      }),
+    ).toEqual(["m1"]);
   });
 
   it("finds contiguous bot final chunks among recent messages", () => {

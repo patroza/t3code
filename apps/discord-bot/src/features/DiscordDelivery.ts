@@ -153,12 +153,29 @@ export function excludeFinalizedAssistants<
   }
   return assistants.filter((assistant) => {
     const idx = messages.findIndex((message) => message.id === assistant.id);
-    if (idx > finalizedIdx) return true;
+    if (idx > finalizedIdx) {
+      // Grok/ACP often opens a second assistant id with the same body. A new
+      // id that does not grow the answer must not reopen Discord finalize.
+      return !isDuplicateFinalizedText(assistant.text ?? "", lastFinalizedText);
+    }
     if (assistant.id === lastFinalizedAssistantId) {
       return isGrownFinalizedText(assistant.text ?? "", lastFinalizedText);
     }
     return false;
   });
+}
+
+/** True when a later bubble is the same Discord final we already posted. */
+export function isDuplicateFinalizedText(
+  currentText: string,
+  lastFinalizedText: string | null,
+): boolean {
+  const current = currentText.trimEnd();
+  const prior = lastFinalizedText?.trimEnd() ?? "";
+  if (current === "" || prior === "") return false;
+  if (current === prior) return true;
+  if (current === `${prior}\n\n${prior}`) return true;
+  return false;
 }
 
 /** True when current text is a clear expansion of a prior premature final. */
@@ -360,9 +377,13 @@ export function deliveryTextFromAssistants(
   assistants: ReadonlyArray<{ readonly text: string }>,
   mode: "progress" | "answer",
 ): string {
-  const texts = assistants
-    .map((message) => message.text.trimEnd())
-    .filter((text) => text.trim() !== "");
+  const texts: string[] = [];
+  for (const message of assistants) {
+    const text = message.text.trimEnd();
+    if (text.trim() === "") continue;
+    if (texts.at(-1) === text) continue;
+    texts.push(text);
+  }
   if (texts.length === 0) return "";
   if (mode === "progress" || texts.length === 1) return texts.join("\n\n").trimEnd();
 
@@ -430,6 +451,13 @@ export function decideAssistantDelivery(input: {
   let state = input.state;
   if (state.phase === "finalized") {
     if (assistants.length === 0) {
+      return {
+        state,
+        intent: { _tag: "noop", reason: "epoch-finalized" },
+      };
+    }
+    const nextAnswer = deliveryTextFromAssistants(assistants, "answer");
+    if (isDuplicateFinalizedText(nextAnswer, state.lastFinalizedText)) {
       return {
         state,
         intent: { _tag: "noop", reason: "epoch-finalized" },

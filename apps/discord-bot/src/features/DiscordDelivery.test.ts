@@ -8,6 +8,7 @@ import {
   deliveryTextFromAssistants,
   excludeFinalizedAssistants,
   initialDeliveryEpochState,
+  isDuplicateFinalizedText,
   isGrownFinalizedText,
   retainUnfinalizedStreamText,
   shouldRecreateTip,
@@ -194,6 +195,13 @@ describe("assistantMessagesForDelivery", () => {
     });
     expect(assistants.map((a) => a.id)).toEqual(["a2"]);
     expect(deliveryTextFromAssistants(assistants, "answer")).toBe("Yep — here. What do you need?");
+  });
+
+  it("collapses consecutive identical assistant bubbles before joining progress text", () => {
+    const answer = "The box is outside the spec: max is 240 × 80 × 60.";
+    expect(deliveryTextFromAssistants([{ text: answer }, { text: answer }], "progress")).toBe(
+      answer,
+    );
   });
 
   it("stale lastFinalized outside tip still allows in-progress stream of current turn", () => {
@@ -410,6 +418,27 @@ describe("excludeFinalizedAssistants", () => {
       ),
     ).toBe(true);
   });
+
+  it("drops a later assistant id whose body matches the already-posted final", () => {
+    const answer = "The box is outside the spec: max is 240 × 80 × 60.";
+    expect(isDuplicateFinalizedText(answer, answer)).toBe(true);
+    expect(isDuplicateFinalizedText(`${answer}\n\n${answer}`, answer)).toBe(true);
+    expect(
+      excludeFinalizedAssistants({
+        messages: [
+          msg("u1", "user", "240:81:60?"),
+          msg("a1", "assistant", answer),
+          msg("a2", "assistant", answer),
+        ],
+        assistants: [
+          { id: "a1", text: answer },
+          { id: "a2", text: answer },
+        ],
+        lastFinalizedAssistantId: "a1",
+        lastFinalizedText: answer,
+      }).map((a) => a.id),
+    ).toEqual([]);
+  });
 });
 
 describe("decideAssistantDelivery epoch FSM", () => {
@@ -442,6 +471,31 @@ describe("decideAssistantDelivery epoch FSM", () => {
       presentationFull: true,
     });
     expect(lateFinal.intent).toEqual({ _tag: "noop", reason: "epoch-finalized" });
+  });
+
+  it("does not re-finalize when a second assistant id repeats the same body", () => {
+    const answer = "Yes, from the specs only. 201 × 80 × 60 is Langgut.";
+    let state = beginDeliveryEpoch(initialDeliveryEpochState());
+    const first = settleFinalize(state, {
+      turnId: "t1",
+      assistants: [{ id: "a1", text: answer }],
+    });
+    expect(first.intent._tag).toBe("finalize");
+    state = first.state;
+
+    const duplicate = decideAssistantDelivery({
+      state,
+      turnId: "t1",
+      turnInProgress: false,
+      assistants: [
+        { id: "a1", text: answer },
+        { id: "a2", text: answer },
+      ],
+      streaming: false,
+      presentationFull: true,
+      messages: [{ id: "u1" }, { id: "a1" }, { id: "a2" }],
+    });
+    expect(duplicate.intent).toEqual({ _tag: "noop", reason: "epoch-finalized" });
   });
 
   it("settle grace: first idle snapshot streams, second finalizes", () => {
