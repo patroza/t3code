@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Schema, SchemaTransformation } from "effect";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
@@ -628,17 +628,54 @@ export const PreviewAutomationStreamEvent = Schema.Union([
 ]);
 export type PreviewAutomationStreamEvent = typeof PreviewAutomationStreamEvent.Type;
 
+const CIRCULAR_JSON = "[Circular]";
+
+/**
+ * Preview results cross the RPC as JSON. Playwright hands back Dates, NaN,
+ * bigints, and cycles, and the JSON codec rejects those while sending the
+ * response. Project them here so the host stream stays up: a Date becomes an
+ * ISO string, a non-finite number becomes null, a bigint becomes a string,
+ * and a cycle becomes "[Circular]".
+ */
+export function jsonValueFromUnknown(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  const seen = new WeakSet<object>();
+  const encoded = JSON.stringify(value, (_key, current: unknown) => {
+    if (typeof current === "bigint") return current.toString();
+    if (typeof current === "object" && current !== null) {
+      if (seen.has(current)) return CIRCULAR_JSON;
+      seen.add(current);
+    }
+    return current;
+  });
+  if (typeof encoded !== "string") return undefined;
+  return JSON.parse(encoded) as unknown;
+}
+
+const JsonValueFromUnknown = Schema.Unknown.pipe(
+  Schema.decodeTo(
+    Schema.Unknown,
+    SchemaTransformation.transform({
+      decode: (wire) => wire,
+      encode: (value) => {
+        const json = jsonValueFromUnknown(value);
+        return json === undefined ? null : json;
+      },
+    }),
+  ),
+);
+
 export const PreviewAutomationResponse = Schema.Struct({
   clientId: PreviewAutomationClientId,
   connectionId: PreviewAutomationConnectionId,
   requestId: TrimmedNonEmptyString,
   ok: Schema.Boolean,
-  result: Schema.optional(Schema.Unknown),
+  result: Schema.optional(JsonValueFromUnknown),
   error: Schema.optional(
     Schema.Struct({
       _tag: TrimmedNonEmptyString,
       message: Schema.String,
-      detail: Schema.optional(Schema.Unknown),
+      detail: Schema.optional(JsonValueFromUnknown),
     }),
   ),
 });

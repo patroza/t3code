@@ -2,6 +2,7 @@ import * as NodeTimersPromises from "node:timers/promises";
 
 import {
   type EnvironmentId,
+  jsonValueFromUnknown,
   type PreviewAutomationHost,
   type PreviewAutomationHostFocus,
   type PreviewAutomationResponse,
@@ -10,7 +11,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { DiscordBotConfig } from "../config.ts";
-import { BrowserRuntime, BrowserRuntimeError } from "./BrowserRuntime.ts";
+import { BrowserRuntime } from "./BrowserRuntime.ts";
 
 const SUPPORTED_OPERATIONS = [
   "status",
@@ -40,27 +41,9 @@ export class BrowserOperationTimeoutError extends Error {
   }
 }
 
-const NON_JSON_RESULT_MESSAGE = "Browser result could not be returned because it is not JSON.";
-
-/**
- * RPC encodes `result` as JSON. Playwright can hand back Dates, NaN, or class
- * instances, and Effect rejects those while sending the response. That defect
- * used to kill the whole host and drop the thread onto another browser.
- * Round-trip through JSON first. Values that cannot be encoded fail this call
- * instead.
- */
+/** Same projection the response schema encodes, applied before the RPC send. */
 export function browserAutomationResult(value: unknown): unknown {
-  if (value === undefined) return undefined;
-  try {
-    const encoded = JSON.stringify(value);
-    if (typeof encoded !== "string") {
-      throw new BrowserRuntimeError(NON_JSON_RESULT_MESSAGE);
-    }
-    return JSON.parse(encoded) as unknown;
-  } catch (cause) {
-    if (cause instanceof BrowserRuntimeError) throw cause;
-    throw new BrowserRuntimeError(NON_JSON_RESULT_MESSAGE, { cause });
-  }
+  return jsonValueFromUnknown(value);
 }
 
 export function browserResponseAfterDeliveryFailure(
