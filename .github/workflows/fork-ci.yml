@@ -130,7 +130,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # GitHub-hosted `vp run test` after the a97a4a9d18 weld overruns 10m
+    # (install ~2.5m; the suite was still running when the job timed out).
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6

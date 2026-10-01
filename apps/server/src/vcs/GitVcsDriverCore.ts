@@ -3189,6 +3189,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
     let preparation: VcsWorktreePreparation = { _tag: "ready", attempts: 0 };
     if (hasPostCheckoutHook) {
+      // `git hook run` ignores a non-executable hook (`cannot find a hook
+      // named post-checkout`). Worktree checkout can drop the +x bit when
+      // the source recorded the blob without it (`core.filemode=false`).
+      yield* fileSystem.chmod(postCheckoutHook, 0o755).pipe(Effect.ignore);
       const checkedOutRef = (yield* runGitStdout(
         "GitVcsDriver.createWorktree.resolveHead",
         worktreePath,

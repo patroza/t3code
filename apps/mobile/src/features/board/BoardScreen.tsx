@@ -282,7 +282,7 @@ const BoardColumnView = memo(function BoardColumnView(props: {
             <Text className="text-center text-sm text-foreground-tertiary">No threads</Text>
           </View>
         }
-        ListFooterComponent={props.footer ? <>{props.footer}</> : null}
+        ListFooterComponent={props.footer ? <>{props.footer}</> : undefined}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 24 }}
       />

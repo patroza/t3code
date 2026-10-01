@@ -1239,6 +1239,9 @@ export interface DesktopBridge {
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
   ) => Promise<T | null>;
+  /** Receives a local OAuth code for a sign-in owned by a remote environment. */
+  receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
+  cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
   pickOpenWithApplication: () => Promise<DesktopApplicationSelection | null>;
   resolveOpenWithPresentations: () => Promise<readonly OpenWithEntryPresentation[]>;
