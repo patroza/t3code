@@ -339,7 +339,7 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 /**
  * Active sidebar rows report resolved PR state upward so hide-settled /
  * settled-shelf classification can auto-settle merged/closed PRs the same way
- * Sidebar V2 and the board do. Settled history rows skip reporting.
+ * Sidebar V2 does. Settled history rows skip reporting.
  */
 type SidebarChangeRequestStateReporter = (
   threadKey: string,
@@ -4747,7 +4747,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               </Tooltip>
             )}
           </div>
-          {/* Compact chrome: Threads|Board + view/filter menu. */}
+          {/* Compact chrome: Threads + view/filter menu. */}
           <div className="mt-1.5 flex items-center gap-1 px-0.5">
             <ToggleGroup
               className="min-w-0 flex-1"
@@ -5684,7 +5684,7 @@ export default function LegacySidebar() {
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
   // PR states stream in per-row (rows own the VCS subscriptions); a merged or
   // closed PR auto-settles its thread on the next classification pass — same
-  // path Sidebar V2 and the board use so hide-settled matches across surfaces.
+  // path Sidebar V2 uses so hide-settled matches across surfaces.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
     ReadonlyMap<string, "open" | "closed" | "merged">
   >(() => new Map());

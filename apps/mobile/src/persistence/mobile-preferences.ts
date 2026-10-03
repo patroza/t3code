@@ -49,7 +49,7 @@ export interface Preferences {
    */
   readonly recentWorkEnabled?: boolean;
   /**
-   * Multi-select home/board environment filter. Empty or omitted = all
+   * Multi-select home environment filter. Empty or omitted = all
    * environments. Device-local (no client-settings sync).
    */
   readonly selectedEnvironmentIds?: readonly string[];

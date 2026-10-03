@@ -2214,7 +2214,6 @@ function OpenCommandPaletteDialog(props: {
     });
   }, [browseNavigation, clearOpenIntent, openIntent, pushPaletteView]);
 
-
   actionItems.push({
     kind: "action",
     value: "action:theme-editor",

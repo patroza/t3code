@@ -1065,7 +1065,6 @@ function ThreadNavigationSidebarPane(
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization: false,
-        showProjectFilter: true,
         threadGrouping: options.listMode === "threads" ? options.threadGrouping : undefined,
         onThreadGroupingChange: options.listMode === "threads" ? setThreadGrouping : undefined,
         ...(options.listMode === "threads"
@@ -1150,7 +1149,7 @@ function ThreadNavigationSidebarPane(
             // Connection status swaps into the title slot so reconnects
             // surface in the header instead of shifting the list. The fork's
             // list-mode title is passed through: the helper's default brand
-            // lockup would otherwise overwrite "Board" / "Threads".
+            // lockup would otherwise overwrite "Threads".
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth: props.width,
               trailingItemCount: nativeHeaderItems.length,
@@ -1165,66 +1164,65 @@ function ThreadNavigationSidebarPane(
             }),
             ...(NATIVE_LIQUID_GLASS_SUPPORTED
               ? {
-                    headerTransparent: true,
-                    headerStyle: { backgroundColor: "transparent" },
-                  }
+                  headerTransparent: true,
+                  headerStyle: { backgroundColor: "transparent" },
+                }
               : {}),
-            headerSearchBarOptions:
-              {
-                    ref: searchBarRef,
-                    autoCapitalize: "none",
-                    hideNavigationBar: false,
-                    // Keep the search bar pinned under the title — UIKit's default
-                    // hidesSearchBarWhenScrolling collapses it on scroll.
-                    hideWhenScrolling: false,
-                    obscureBackground: false,
-                    placeholder: "Search",
-                    placement: "stacked",
-                    onCancelButtonPress: () => {
-                      props.onSearchQueryChange("");
-                    },
-                    onChangeText: (event) => {
-                      props.onSearchQueryChange(event.nativeEvent.text);
-                    },
-                  },
+            headerSearchBarOptions: {
+              ref: searchBarRef,
+              autoCapitalize: "none",
+              hideNavigationBar: false,
+              // Keep the search bar pinned under the title — UIKit's default
+              // hidesSearchBarWhenScrolling collapses it on scroll.
+              hideWhenScrolling: false,
+              obscureBackground: false,
+              placeholder: "Search",
+              placement: "stacked",
+              onCancelButtonPress: () => {
+                props.onSearchQueryChange("");
+              },
+              onChangeText: (event) => {
+                props.onSearchQueryChange(event.nativeEvent.text);
+              },
+            },
             unstable_headerRightItems: () => nativeHeaderItems,
           }}
         />
         <View className="flex-1">
-            <SwipeableScrollGateProvider enabled={swipeEnabled}>
-              <GestureDetector gesture={sidebarScrollGesture}>
-                <LegendList
-                  data={listItems}
-                  drawDistance={500}
-                  estimatedItemSize={64}
-                  extraData={listExtraData}
-                  getItemType={(item) => item.type}
-                  itemsAreEqual={sidebarItemsAreEqual}
-                  keyExtractor={(item) => item.key}
-                  renderItem={renderListItem}
-                  automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
-                  contentInsetAdjustmentBehavior={
-                    NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
-                  }
-                  contentContainerStyle={[
-                    styles.threadListContent,
-                    Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
-                    {
-                      paddingBottom: Math.max(insets.bottom, 16) + 16,
-                      paddingTop: 6,
-                    },
-                  ]}
-                  keyboardDismissMode="on-drag"
-                  keyboardShouldPersistTaps="handled"
-                  {...scrollGateHandlers}
-                  recycleItems
-                  scrollEventThrottle={16}
-                  showsVerticalScrollIndicator={false}
-                  style={styles.threadList}
-                  ListEmptyComponent={listEmpty}
-                />
-              </GestureDetector>
-            </SwipeableScrollGateProvider>
+          <SwipeableScrollGateProvider enabled={swipeEnabled}>
+            <GestureDetector gesture={sidebarScrollGesture}>
+              <LegendList
+                data={listItems}
+                drawDistance={500}
+                estimatedItemSize={64}
+                extraData={listExtraData}
+                getItemType={(item) => item.type}
+                itemsAreEqual={sidebarItemsAreEqual}
+                keyExtractor={(item) => item.key}
+                renderItem={renderListItem}
+                automaticallyAdjustsScrollIndicatorInsets={NATIVE_LIQUID_GLASS_SUPPORTED}
+                contentInsetAdjustmentBehavior={
+                  NATIVE_LIQUID_GLASS_SUPPORTED ? "automatic" : "never"
+                }
+                contentContainerStyle={[
+                  styles.threadListContent,
+                  Platform.OS === "android" ? { paddingHorizontal: 0 } : null,
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16) + 16,
+                    paddingTop: 6,
+                  },
+                ]}
+                keyboardDismissMode="on-drag"
+                keyboardShouldPersistTaps="handled"
+                {...scrollGateHandlers}
+                recycleItems
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator={false}
+                style={styles.threadList}
+                ListEmptyComponent={listEmpty}
+              />
+            </GestureDetector>
+          </SwipeableScrollGateProvider>
         </View>
       </>
     );
@@ -1343,7 +1341,7 @@ function ThreadNavigationSidebarPane(
             </View>
           </View>
 
-          {(
+          {
             <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
               <SymbolView
                 name="magnifyingglass"
@@ -1368,7 +1366,7 @@ function ThreadNavigationSidebarPane(
                 value={props.searchQuery}
               />
             </View>
-          )}
+          }
         </View>
       )}
     </View>

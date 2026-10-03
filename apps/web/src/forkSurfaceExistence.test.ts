@@ -40,8 +40,9 @@ describe("fork surface existence (anti stack-drop)", () => {
     expect(sidebarV2).toContain("Settled shelf");
     expect(sidebarV2).toMatch(/New thread|new thread/i);
     expect(sidebarV2).toContain("sidebar-pinned-divider");
-    expect(sidebarV2).toContain("sidebar-snoozed-shelf-toggle");
-    expect(sidebarV2).toContain("sidebar-settled-shelf-toggle");
+    expect(sidebarV2).toContain("sidebar-${shelf}-shelf-toggle");
+    expect(sidebarV2).toContain('marker="snoozed-header"');
+    expect(sidebarV2).toContain('marker="settled-header"');
     expect(sidebarV2).toContain("attemptPin");
     expect(sidebarV2).toContain("attemptUnpin");
   });
@@ -257,10 +258,7 @@ describe("fork surface existence (anti stack-drop)", () => {
   });
 
   it("every thread surface filters through the shared ownership predicate", () => {
-    // The Board shipped reading the same thread atom as the sidebar but never
-    // applying the ownership filter, so a sidebar filtered to Mine sat beside
-    // a board showing everyone's threads. Both must go through the one
-    // predicate rather than each re-deriving the call.
+    // Thread lists must apply the shared ownership preference consistently.
     const sidebar = readSrc("components/Sidebar.tsx");
     for (const source of [sidebar]) {
       expect(source).toContain("useOwnershipFilter()");

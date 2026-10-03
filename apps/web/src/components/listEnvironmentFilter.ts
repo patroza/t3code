@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 /**
- * Multi-select environment filter shared by Threads and Board.
+ * Multi-select environment filter shared by both sidebar layouts.
  * Empty selection means all environments.
  */
 export function matchesEnvironmentFilter(
@@ -48,7 +48,7 @@ export function resolveSelectedEnvironmentIds(
   return next.length === selectedEnvironmentIds.length ? selectedEnvironmentIds : next;
 }
 
-/** Main list surface: combined thread list vs Board. */
+/** Main list surface: combined thread list. */
 export type WebListMode = "threads";
 
 export const WEB_LIST_MODES = ["threads"] as const satisfies readonly WebListMode[];
@@ -97,7 +97,7 @@ export const LIST_ENVIRONMENT_FILTER_STORAGE_KEY = "t3code:list:environment-filt
 /** Persists surface mode. Legacy values `recent` / `projects` decode as `threads`. */
 export const LIST_MODE_STORAGE_KEY = "t3code:list:mode:v1";
 export const LIST_THREAD_GROUPING_STORAGE_KEY = "t3code:list:thread-grouping:v1";
-/** Sidebar Threads project scope; Board keeps its own storage key. */
+/** Sidebar Threads project scope. */
 export const LIST_PROJECT_FILTER_STORAGE_KEY = "t3code:list:project-filter:v1";
 export const LIST_PROJECT_FILTER_ALL = "all";
 /**
@@ -161,7 +161,7 @@ export type ListProjectFilterStored = typeof ListProjectFilterSchema.Type;
 export const ListHideSettledSchema = Schema.Boolean;
 
 /** Accepts legacy `recent` / `projects` and maps them to the combined Threads surface. */
-const WebListModeStored = Schema.Literals(["threads", "board", "recent", "projects"]);
+const WebListModeStored = Schema.Literals(["threads", "recent", "projects"]);
 export const WebListModeSchema = WebListModeStored.pipe(
   Schema.decodeTo(
     Schema.Literals(["threads"]),

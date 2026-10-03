@@ -3195,7 +3195,7 @@ describe("sortLogicalProjectsForSidebar", () => {
 
 describe("resolveSidebarV2TopStatus", () => {
   it("shows monitoring as its own calm status, not as Working", () => {
-    // Board cards read this. Folding monitoring into Working gave a watch loop
+    // Sidebar rows read this. Folding monitoring into Working gave a watch loop
     // the active-progress shimmer, which is what the v1 pill (pulse: false) and
     // the v2 sidebar row both deliberately avoid.
     const monitoring = resolveSidebarV2TopStatus({ status: "monitoring", isUnread: false });

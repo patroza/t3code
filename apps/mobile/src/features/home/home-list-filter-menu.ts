@@ -68,8 +68,6 @@ export function buildHomeListFilterMenu(props: {
    * never sets this — its layout ignores those controls.
    */
   readonly listOrganization?: boolean;
-  /** When false, hide the project scope submenu (Board uses its own control). */
-  readonly showProjectFilter?: boolean;
   /**
    * Threads surface: hide settled threads. When provided, the menu offers a
    * toggle (recency/none default on; project defaults off at the call site).
@@ -130,7 +128,7 @@ export function buildHomeListFilterMenu(props: {
     });
   }
 
-  if (props.showProjectFilter !== false && props.projects.length > 0) {
+  if (props.projects.length > 0) {
     items.push({
       type: "submenu",
       title: "Project",

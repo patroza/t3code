@@ -80,8 +80,8 @@ describe("mobile surface existence (anti stack-drop)", () => {
   it("keeps list-mode titles under the connection-status title swap", () => {
     // Upstream's connection-aware header hardcodes the brand lockup and the
     // literal "Threads" (#5372). This fork's headers show a list-mode title
-    // (Threads / Projects / Board), so every surface that adopts the swap has
-    // to pass its own title through — a plain adoption silently renames Board
+    // (Threads), so every surface that adopts the swap has
+    // to pass its own title through — a plain adoption silently renames Threads
     // and Projects to "Threads", which is exactly what slipped through once.
     const sidebar = NodeFS.readFileSync(
       NodePath.join(root, "features/threads/ThreadNavigationSidebar.tsx"),

@@ -96,11 +96,6 @@ const isolatedUnitTestFiles = [
   "src/components/ProjectFavicon.test.tsx",
   "src/components/ProviderUpdateEnvironmentRows.test.tsx",
   "src/components/ServerUpdateAction.test.tsx",
-  // BoardCard now opens PRs through useOpenPrLink → environmentServerConfigsAtom.
-  // Under isolate:false a sibling's stub `../../state/server` mock (no that
-  // export) binds first and CI dies with "No environmentServerConfigsAtom
-  // export is defined on the mock" — Fork CI on b4ad10f8 failed twice this way.
-  "src/components/board/BoardCard.test.tsx",
   // Mocks `~/lib/assistantTextSelection` and `../ui/toast`; under
   // isolate:false those modules are already bound and citation Range/CSS
   // highlight fixtures never attach.
@@ -183,7 +178,7 @@ const isolatedUnitTestFiles = [
   // Button leak as ProjectIconPickerDialog.test.tsx.
   "src/components/usage/UsagePage.test.tsx",
   // Partial `../../state/server` mock (`serverEnvironment` only). Isolate so
-  // it cannot steal the module from BoardCard / openPullRequestLink.
+  // it cannot steal the module from openPullRequestLink.
   "src/components/usage/UsagePage.refresh.test.tsx",
   "src/connection/storage.test.ts",
   "src/contextMenuFallback.test.ts",

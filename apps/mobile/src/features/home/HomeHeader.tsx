@@ -77,7 +77,6 @@ export function HomeHeader(props: HomeHeaderProps) {
     onOwnershipFilterChange: props.onOwnershipFilterChange,
     onOwnershipRelationChange: props.onOwnershipRelationChange,
     listOrganization: false,
-    showProjectFilter: true,
     threadGrouping: props.listMode === "threads" ? props.threadGrouping : undefined,
     onThreadGroupingChange: props.listMode === "threads" ? props.onThreadGroupingChange : undefined,
     ...(props.listMode === "threads"
@@ -93,12 +92,7 @@ export function HomeHeader(props: HomeHeaderProps) {
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[
-          filterMenu.items,
-          props.listMode,
-          headerTitle,
-          headerWidth,
-        ]}
+        optionsVersion={[filterMenu.items, props.listMode, headerTitle, headerWidth]}
         options={{
           // The iOS Home header owns the native title, so the connection
           // status has to swap in here. The list-mode title is passed
@@ -117,10 +111,10 @@ export function HomeHeader(props: HomeHeaderProps) {
           headerTintColor: iconColor,
           ...(NATIVE_LIQUID_GLASS_SUPPORTED
             ? {
-                  headerTransparent: true,
-                  headerStyle: { backgroundColor: "transparent" },
-                  scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
-                }
+                headerTransparent: true,
+                headerStyle: { backgroundColor: "transparent" },
+                scrollEdgeEffects: HEADER_SCROLL_EDGE_EFFECTS,
+              }
             : {}),
           unstable_headerRightItems: () => [
             ...alternateModes.map((mode) =>
@@ -148,37 +142,37 @@ export function HomeHeader(props: HomeHeaderProps) {
           // fallback so a reapply cannot clobber options that toolbar owns.
           ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
             ? {
-                  unstable_headerToolbarItems: () => [
-                    createNativeMailSearchToolbarItem({
-                      composeButtonId: "home-new-task",
-                      composeSystemImageName: "square.and.pencil",
-                      filterMenu,
-                      filterButtonId: "home-filter",
-                      filterSystemImageName: hasCustomListOptions
-                        ? "line.3.horizontal.decrease.circle.fill"
-                        : "line.3.horizontal.decrease",
-                      onComposePress: props.onStartNewTask,
-                      onSearchTextChange: props.onSearchQueryChange,
-                      placeholder: "Search",
-                      searchTextChangeId: "home-search-text",
-                      showsSearchDismissButton: true,
-                    }),
-                  ],
-                }
-            : {
-                  headerSearchBarOptions: {
-                    ref: searchBarRef,
-                    autoCapitalize: "none" as const,
-                    hideNavigationBar: false,
+                unstable_headerToolbarItems: () => [
+                  createNativeMailSearchToolbarItem({
+                    composeButtonId: "home-new-task",
+                    composeSystemImageName: "square.and.pencil",
+                    filterMenu,
+                    filterButtonId: "home-filter",
+                    filterSystemImageName: hasCustomListOptions
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease",
+                    onComposePress: props.onStartNewTask,
+                    onSearchTextChange: props.onSearchQueryChange,
                     placeholder: "Search",
-                    onCancelButtonPress: () => {
-                      props.onSearchQueryChange("");
-                    },
-                    onChangeText: (event: { nativeEvent: { text: string } }) => {
-                      props.onSearchQueryChange(event.nativeEvent.text);
-                    },
+                    searchTextChangeId: "home-search-text",
+                    showsSearchDismissButton: true,
+                  }),
+                ],
+              }
+            : {
+                headerSearchBarOptions: {
+                  ref: searchBarRef,
+                  autoCapitalize: "none" as const,
+                  hideNavigationBar: false,
+                  placeholder: "Search",
+                  onCancelButtonPress: () => {
+                    props.onSearchQueryChange("");
                   },
-                }),
+                  onChangeText: (event: { nativeEvent: { text: string } }) => {
+                    props.onSearchQueryChange(event.nativeEvent.text);
+                  },
+                },
+              }),
         }}
       />
 
